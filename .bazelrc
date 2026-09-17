@@ -302,9 +302,9 @@ build:remote --jobs=80
 # Silicon hosts, so much of the release path can be debugged locally
 # (e.g. `datalib_http_bin` cross-builds to a fully-static ELF from
 # a mac). The `bazel build ... (musl static)` step in test.yml gates
-# the full musl dist on every PR. The impersonating curl is not built
-# by bazel at all under any config: it is fetched, one prebuilt
-# archive per triple (see //third-party/curl-impersonate).
+# the full musl dist on every PR. The two curl shims are not built
+# by bazel at all under any config: they are fetched, one prebuilt
+# archive per triple (see //third-party/latchkey-curl-shims).
 #
 # The resulting binaries are statically linked against musl libc (no
 # DT_NEEDED entries at all — verify with `file`, which should say

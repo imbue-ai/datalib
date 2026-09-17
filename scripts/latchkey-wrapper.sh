@@ -3,8 +3,8 @@
 # beside the datalib binaries: in the .app's `Resources/binaries/` (with
 # the runtime one level up) and in the release tarball (with the runtime
 # a sibling directory). It runs the bundled Node + latchkey tree and
-# points `LATCHKEY_CURL` at the dispatch curl sitting next to it (which
-# routes marked requests to the impersonator sibling) — so `latchkey
+# points `LATCHKEY_CURL` at the router curl sitting next to it (which
+# hands marked requests to the impersonator sibling) — so `latchkey
 # curl`, `services register` and `auth set` work against
 # Cloudflare-protected hosts with no Node, npm, or env setup on the
 # host. An externally-set `LATCHKEY_CURL` wins; `DATALIB_RUNTIME_DIR`
@@ -60,8 +60,8 @@ if [ -z "$entry" ]; then
     exit 1
 fi
 
-if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-dispatch" ]; then
-    LATCHKEY_CURL="$here/latchkey-curl-dispatch"
+if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-router" ]; then
+    LATCHKEY_CURL="$here/latchkey-curl-router"
     export LATCHKEY_CURL
 fi
 

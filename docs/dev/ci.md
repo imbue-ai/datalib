@@ -68,7 +68,7 @@ keep a release from replaying anything a laptop or a PR run wrote:
 
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
-| contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml`, `intel-curl-smoke.yml` | the same |
+| contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
 | release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
 
 Two BuildBuddy *organizations*, each on its own subdomain

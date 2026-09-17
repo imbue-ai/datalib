@@ -102,14 +102,14 @@ or a machine whose `chatgpt` service you would rather not deregister.
 `chatgpt.com` is fronted by Cloudflare's managed-challenge system,
 which fingerprints TLS handshakes. To clear the challenge, requests go
 out through a Chrome-impersonating curl — the bundled
-`curl-impersonate`, reached via the dispatch curl
+`curl-impersonate`, reached via the router curl
 (`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
-downloader finds the dispatch itself; to set it by hand, point it at
-the **dispatch**, which brings the impersonator along as a sibling:
+downloader finds the router itself; to set it by hand, point it at
+the **router**, which brings the impersonator along as a sibling:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
+bazelisk build //third-party/latchkey-curl-shims
+export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
 chatgpt-ingest --out ~/backups/chatgpt_api
 ```
 

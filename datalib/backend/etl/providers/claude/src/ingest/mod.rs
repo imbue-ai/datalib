@@ -164,7 +164,7 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {

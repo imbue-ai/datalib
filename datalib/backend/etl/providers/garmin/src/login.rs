@@ -18,7 +18,7 @@ const CLIENT_ID: &str = "GCM_ANDROID_DARK";
 
 /// The SSO pages sit behind Cloudflare's bot wall, so every request to
 /// them goes out impersonated (Chrome's TLS fingerprint and user agent,
-/// set by the dispatch curl) and with a browser's navigation headers.
+/// set by the router curl) and with a browser's navigation headers.
 const SSO_HEADERS: &[&str] = &[
     "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language: en-US,en;q=0.9",

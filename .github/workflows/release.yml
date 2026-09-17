@@ -1,9 +1,7 @@
 # Builds the `//datalib/backend:dist` bins on every supported
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
-# per-triple tarball to a GitHub Release. The `x86_64-apple-darwin`
-# leg is curl-only: it publishes just the `curl-<triple>.tar.gz`
-# tarball (see the matrix `curl-only` flag below).
+# per-triple tarball to a GitHub Release.
 # The `macos-app` job additionally builds, signs, and notarizes the
 # Datalib desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
@@ -59,23 +57,14 @@ jobs:
         # ~30s analysis pass versus the gnu legs' shared-config
         # optimization described above the build steps.
         #
-        # `curl-only`: build and publish only the curl tarball
-        # (`//datalib/backend:curl_dist` -> `curl-<triple>.tar.gz`),
-        # skipping the full datalib tarball. Used for
-        # x86_64-apple-darwin, where curl-tarball consumers (e.g. the
-        # minds latchkey gateway on Intel macs) need a native binary
-        # but nothing installs the full toolchain (scripts/install.sh
-        # only maps Darwin/arm64).
+        # No x86_64-apple-darwin leg: nothing installs the full toolchain
+        # there (scripts/install.sh only maps Darwin/arm64), and the
+        # curl shims an Intel mac needs ship from
+        # github.com/imbue-ai/latchkey-curl-shims.
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-14  # Apple Silicon
             bazel-config: ""
-          - triple: x86_64-apple-darwin
-            # GitHub's Intel macOS runner (macos-13 retired 2025-12;
-            # macos-15-intel is supported through Aug 2027).
-            runs-on: macos-15-intel
-            bazel-config: ""
-            curl-only: true
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
             bazel-config: ""
@@ -135,15 +124,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake
 
-      # The macos-15-intel image (unlike macos-14) doesn't ship cmake —
-      # v0.23.1's Intel leg died with "is `cmake` not installed?" back
-      # when the impersonating curl was compiled here. Today that leg
-      # builds only `:curl_dist`, which needs no cmake (the impersonating
-      # curl is a fetched archive and the dispatch is std-only Rust), so
-      # this step is kept for the full-dist legs, where protobuf-src
-      # needs it. Homebrew on Intel macs installs to /usr/local/bin,
-      # which is on bazel's default strict action PATH. Guarded so an
-      # image that gains cmake later doesn't fail on "already installed".
+      # protobuf-src needs cmake. Guarded so an image that gains or
+      # loses it doesn't fail on "already installed".
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
@@ -218,15 +200,7 @@ jobs:
       # below catches any future regression where stamping gets
       # silently disabled.
       - name: Build dist bins
-        env:
-          CURL_ONLY: ${{ matrix.curl-only }}
-        run: |
-          set -euo pipefail
-          targets="//datalib/backend:dist //datalib/backend:curl_dist"
-          if [[ "${CURL_ONLY}" == "true" ]]; then
-              targets="//datalib/backend:curl_dist"
-          fi
-          bazel build ${targets} -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
+        run: bazel build //datalib/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
 
       # musl legs only: refuse to publish anything that isn't fully
       # static. A regression here (say, a new crate sneaking in a
@@ -246,8 +220,8 @@ jobs:
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
               bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin \
-              bazel-bin/datalib/backend/etl/latchkey_curl_impersonate \
-              bazel-bin/datalib/backend/etl/latchkey_curl_dispatch \
+              bazel-bin/third-party/latchkey-curl-shims/curl-impersonate \
+              bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router \
               bazel-bin/third-party/doltlite/doltlite; do
               echo "--- ${bin}"
               file -L "${bin}"
@@ -270,11 +244,7 @@ jobs:
       # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
       # suffix, or a mismatched tag — fails the release before any
       # tarball is staged.
-      #
-      # Skipped on curl-only legs: datalib_dag isn't built there, and
-      # the curl bins' `--version` speaks curl, not the tag.
       - name: Assert release binary reports tag version
-        if: matrix.curl-only != true
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -301,7 +271,6 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
-          CURL_ONLY: ${{ matrix.curl-only }}
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
@@ -317,87 +286,61 @@ jobs:
               fi
           }
 
-          # The full tarball is skipped on curl-only legs — nothing
-          # installs the full toolchain there (scripts/install.sh has no
-          # mapping for those hosts), and //datalib/backend:dist
-          # wasn't built.
-          if [[ "${CURL_ONLY}" != "true" ]]; then
-              stage="datalib-${version}-${TRIPLE}"
-              mkdir -p "${stage}"
+          stage="datalib-${version}-${TRIPLE}"
+          mkdir -p "${stage}"
 
-              # Map bazel output paths -> public installed names. Add a line
-              # here when you add a binary to //datalib/backend:dist.
-              # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
-              # datalib-http resolves them via sibling lookup (see
-              # http/src/worker.rs resolve_bin) — and the impersonator's
-              # installed name must stay in sync with `SIBLING_NAMES` in
-              # datalib/backend/etl/src/latchkey.rs (datalib-step
-              # resolves it via a sibling lookup at runtime).
-              cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
-              cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
-              cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
-              cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
-              cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
-              # Not under datalib/backend/ — the doltlite shell is
-              # third-party C. `//datalib/backend:bin` reaches it via a
-              # second `root_paths` entry; here the path is just spelled
-              # out. //tools:dist_names_test compares the two.
-              cp bazel-bin/third-party/doltlite/doltlite "${stage}/datalib-doltlite"
-              cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
-              cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
-              cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
-              cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
-              chmod +x "${stage}"/*
+          # Map bazel output paths -> public installed names. Add a line
+          # here when you add a binary to //datalib/backend:dist.
+          # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
+          # datalib-http resolves them via sibling lookup (see
+          # http/src/worker.rs resolve_bin) — and the two curl shims keep
+          # theirs: datalib-step looks for `latchkey-curl-router` next to
+          # itself (datalib/backend/etl/src/latchkey.rs) and the router
+          # looks for `curl-impersonate` next to itself.
+          cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
+          cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
+          cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
+          cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
+          cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
+          # Not under datalib/backend/ — the doltlite shell is
+          # third-party C. `//datalib/backend:bin` reaches it via a
+          # second `root_paths` entry; here the path is just spelled
+          # out. //tools:dist_names_test compares the two.
+          cp bazel-bin/third-party/doltlite/doltlite "${stage}/datalib-doltlite"
+          cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
+          cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
+          cp bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router "${stage}/latchkey-curl-router"
+          cp bazel-bin/third-party/latchkey-curl-shims/curl-impersonate "${stage}/curl-impersonate"
+          chmod +x "${stage}"/*
 
-              # The bundled Node + qmd + latchkey trees, beside the
-              # binaries: `runtime/` is where the resolver looks first,
-              # so a tarball user runs both tools without Node, npm or
-              # npx on the host — the same trees the .app ships,
-              # lockfile-pinned by Bazel. The `latchkey` launcher runs
-              # the bundled one with the dispatch curl beside it.
-              #
-              # Not on the musl legs: the Bazel Node is a glibc build
-              # (nodejs.org ships no musl one), and a "fully static"
-              # tarball must not carry a binary that needs a libc.
-              if [[ "${TRIPLE}" != *musl* ]]; then
-                  scripts/stage_runtime.sh "${stage}/runtime"
-                  install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
-                  # Smoke the staged tree on the runner (same triple as
-                  # the artifact): the Node runs, and qmd loads from it.
-                  # latchkey is left out — its `--version` initializes
-                  # a keyring, which a bare runner has none of.
-                  "${stage}/runtime/node/bin/node" --version
-                  "${stage}/runtime/node/bin/node" \
-                      "${stage}"/runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
-              fi
-
-              tarball="datalib-${TRIPLE}.tar.gz"
-              tar -czf "${tarball}" "${stage}"
-              checksum "${tarball}"
-
-              echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-              echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
+          # The bundled Node + qmd + latchkey trees, beside the
+          # binaries: `runtime/` is where the resolver looks first,
+          # so a tarball user runs both tools without Node, npm or
+          # npx on the host — the same trees the .app ships,
+          # lockfile-pinned by Bazel. The `latchkey` launcher runs
+          # the bundled one with the router curl beside it.
+          #
+          # Not on the musl legs: the Bazel Node is a glibc build
+          # (nodejs.org ships no musl one), and a "fully static"
+          # tarball must not carry a binary that needs a libc.
+          if [[ "${TRIPLE}" != *musl* ]]; then
+              scripts/stage_runtime.sh "${stage}/runtime"
+              install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
+              # Smoke the staged tree on the runner (same triple as
+              # the artifact): the Node runs, and qmd loads from it.
+              # latchkey is left out — its `--version` initializes
+              # a keyring, which a bare runner has none of.
+              "${stage}/runtime/node/bin/node" --version
+              "${stage}/runtime/node/bin/node" \
+                  "${stage}"/runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
           fi
 
-          # The curl-only tarball: just the dispatch curl + the impersonator it
-          # fronts (see //datalib/backend:curl_dist). Its own inner
-          # dir + stable, un-versioned filename, parallel to the main
-          # tarball above. Consumers like the minds latchkey gateway pull
-          # this instead of the full toolchain. The two public names here
-          # (`latchkey-curl-{dispatch,impersonate}`) are what those
-          # consumers resolve by; keep the impersonator name in sync with
-          # `SIBLING_NAMES` in datalib/backend/etl/src/latchkey.rs.
-          curl_stage="curl-${version}-${TRIPLE}"
-          mkdir -p "${curl_stage}"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
-          chmod +x "${curl_stage}"/*
-          curl_tarball="curl-${TRIPLE}.tar.gz"
-          tar -czf "${curl_tarball}" "${curl_stage}"
-          checksum "${curl_tarball}"
+          tarball="datalib-${TRIPLE}.tar.gz"
+          tar -czf "${tarball}" "${stage}"
+          checksum "${tarball}"
 
-          echo "curl_tarball=${curl_tarball}" >> "$GITHUB_OUTPUT"
-          echo "curl_sha256=${curl_tarball}.sha256" >> "$GITHUB_OUTPUT"
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
       # Plain `gh` instead of softprops/action-gh-release (an
       # individually-owned action; see the macos-app job's SUPPLY CHAIN
@@ -412,20 +355,12 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           TARBALL: ${{ steps.stage.outputs.tarball }}
           SHA256: ${{ steps.stage.outputs.sha256 }}
-          CURL_TARBALL: ${{ steps.stage.outputs.curl_tarball }}
-          CURL_SHA256: ${{ steps.stage.outputs.curl_sha256 }}
         run: |
           set -euo pipefail
           if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
               gh release create "$REF_NAME" --verify-tag --notes "" || true
           fi
-          # Curl-only legs stage no full tarball, so TARBALL/SHA256 are
-          # empty there; upload whatever the stage step produced.
-          files=("$CURL_TARBALL" "$CURL_SHA256")
-          if [[ -n "${TARBALL:-}" ]]; then
-              files=("$TARBALL" "$SHA256" "${files[@]}")
-          fi
-          gh release upload "$REF_NAME" --clobber "${files[@]}"
+          gh release upload "$REF_NAME" --clobber "$TARBALL" "$SHA256"
 
   # Build, sign, and notarize the Datalib desktop app (Tauri) and
   # attach the dmg to the GitHub Release. Deliberately NOT gated on the
@@ -559,8 +494,7 @@ jobs:
               //datalib/backend/datalib_step:datalib_step \
               //datalib/backend/applets:datalib_applet \
               //datalib/backend/migrate_config:datalib_migrate_config_bin \
-              //datalib/backend/etl:latchkey_curl_dispatch \
-              //datalib/backend/etl:latchkey_curl_impersonate \
+              //third-party/latchkey-curl-shims \
               //datalib/tauri:bundled_node \
               //third-party/qmd/runtime:qmd_tree \
               //third-party/latchkey/runtime:latchkey_tree

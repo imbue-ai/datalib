@@ -290,7 +290,7 @@ async fn download_one_file(
 
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
     // Slack file hosts (files.slack.com) are CF-fronted; mark the request so
-    // the dispatch curl routes it to the impersonating curl. The helper
+    // the router curl hands it to the impersonating curl. The helper
     // supplies `[--account <acct>] curl`, so this fetch runs as the same
     // identity as the API calls that discovered the file.
     let mut cmd = latchkey_curl_command(latchkey)?;

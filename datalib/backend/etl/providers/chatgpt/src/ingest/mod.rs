@@ -116,7 +116,7 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
@@ -677,7 +677,7 @@ async fn download_one_file(
     // (which uses `-o <path>`) and side-steps any binary-stdio
     // weirdness. The tempfile is deleted automatically.
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    // The signed CDN URL is CF-fronted; mark the request so the dispatch
+    // The signed CDN URL is CF-fronted; mark the request so the router
     // curl routes it to the impersonating curl. The helper supplies
     // `[--account <acct>] curl`, so the blob fetch runs as the same
     // identity as the API calls that discovered it.

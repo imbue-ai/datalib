@@ -2,8 +2,8 @@
 #
 # Ships the release tarball whole: the binaries (`datalib-dag`,
 # `datalib-step`, `datalib-http`, `datalib-migrate-config`,
-# `datalib-applet`, `datalib-doltlite`, `latchkey-curl-dispatch`,
-# `latchkey-curl-impersonate`), the bundled `runtime/` (Node plus the
+# `datalib-applet`, `datalib-doltlite`, `latchkey-curl-router`,
+# `curl-impersonate`), the bundled `runtime/` (Node plus the
 # lockfile-pinned `qmd` and `latchkey` package trees the binaries resolve
 # beside themselves) and the `latchkey` launcher — so users register
 # services and run syncs from a single container with no Node, npm or
@@ -49,9 +49,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Runtime deps only:
 #   ca-certificates  TLS roots for HTTPS calls the binaries make
 #   curl             debugging + healthchecks, and the system curl the
-#                    dispatch curl execs for hosts that need no
+#                    router curl execs for hosts that need no
 #                    impersonation (the others go to our bundled
-#                    `latchkey-curl-impersonate`)
+#                    `curl-impersonate`)
 #   tini             PID 1 that reaps zombies and forwards signals; the
 #                    Rust binaries don't fork, but the pipeline spawns
 #                    the bundled `node` for the qmd indexer and latchkey
@@ -105,7 +105,7 @@ RUN set -eux; \
     mv "$staged" /opt/datalib; \
     rm -rf /tmp/release; \
     for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
-               datalib-http latchkey-curl-dispatch latchkey-curl-impersonate \
+               datalib-http latchkey-curl-router curl-impersonate \
                datalib-doltlite latchkey; do \
         test -x "/opt/datalib/$bin"; \
         ln -sfn "/opt/datalib/$bin" "/usr/local/bin/$bin"; \
@@ -185,13 +185,13 @@ RUN set -eux; \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
 
-# LATCHKEY_CURL points latchkey at the dispatch curl (which routes
+# LATCHKEY_CURL points latchkey at the router curl (which hands
 # marked requests to the impersonator sibling; datalib-step also sets
 # this internally via sibling resolution, but exporting it means a user
 # running `latchkey curl ...` directly inside the container goes
 # through the same curl — add `-H 'X-Imbue-Impersonate: 1'` to make
 # such a request impersonate).
-ENV LATCHKEY_CURL=/usr/local/bin/latchkey-curl-dispatch
+ENV LATCHKEY_CURL=/usr/local/bin/latchkey-curl-router
 
 WORKDIR /data
 

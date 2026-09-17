@@ -1,0 +1,112 @@
+# The two curl shims for the target platform, picked from the six
+# per-triple archives MODULE.bazel pins and copied here under their
+# public names. Nothing is compiled: both binaries are built and
+# released by github.com/imbue-ai/latchkey-curl-shims (see
+# docs/dev/curl_impersonate.md for what they do and why we fetch that
+# repo's builds rather than upstream's).
+#
+# The output names are load-bearing. The router finds the impersonator
+# only as a `curl-impersonate` sibling of itself, and
+# `datalib_etl::latchkey::ensure_curl_router` finds the router under
+# `latchkey-curl-router`, in runfiles or next to the running binary.
+# `bazelisk build //third-party/latchkey-curl-shims` puts both side by
+# side in bazel-bin/third-party/latchkey-curl-shims/.
+
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+
+# Linux needs the libc told apart: `@platforms//` has no libc constraint,
+# so the musl release builds carry `//platforms:musl` (see that file) and
+# everything else `//platforms:unknown`.
+config_setting(
+    name = "darwin_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "darwin_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64_gnu",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "//platforms:unknown",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64_gnu",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+        "//platforms:unknown",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "//platforms:musl",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+        "//platforms:musl",
+    ],
+)
+
+copy_file(
+    name = "latchkey_curl_router",
+    src = select({
+        ":darwin_aarch64": "@latchkey_curl_shims_aarch64_apple_darwin//:latchkey-curl-router",
+        ":darwin_x86_64": "@latchkey_curl_shims_x86_64_apple_darwin//:latchkey-curl-router",
+        ":linux_x86_64_gnu": "@latchkey_curl_shims_x86_64_unknown_linux_gnu//:latchkey-curl-router",
+        ":linux_aarch64_gnu": "@latchkey_curl_shims_aarch64_unknown_linux_gnu//:latchkey-curl-router",
+        ":linux_x86_64_musl": "@latchkey_curl_shims_x86_64_unknown_linux_musl//:latchkey-curl-router",
+        ":linux_aarch64_musl": "@latchkey_curl_shims_aarch64_unknown_linux_musl//:latchkey-curl-router",
+    }),
+    out = "latchkey-curl-router",
+    is_executable = True,
+    visibility = ["//visibility:public"],
+)
+
+copy_file(
+    name = "curl_impersonate",
+    src = select({
+        ":darwin_aarch64": "@latchkey_curl_shims_aarch64_apple_darwin//:curl-impersonate",
+        ":darwin_x86_64": "@latchkey_curl_shims_x86_64_apple_darwin//:curl-impersonate",
+        ":linux_x86_64_gnu": "@latchkey_curl_shims_x86_64_unknown_linux_gnu//:curl-impersonate",
+        ":linux_aarch64_gnu": "@latchkey_curl_shims_aarch64_unknown_linux_gnu//:curl-impersonate",
+        ":linux_x86_64_musl": "@latchkey_curl_shims_x86_64_unknown_linux_musl//:curl-impersonate",
+        ":linux_aarch64_musl": "@latchkey_curl_shims_aarch64_unknown_linux_musl//:curl-impersonate",
+    }),
+    out = "curl-impersonate",
+    is_executable = True,
+    visibility = ["//visibility:public"],
+)
+
+# Both shims, so `bazelisk build //third-party/latchkey-curl-shims`
+# stages the pair and anything that needs them as runfiles names one
+# label.
+filegroup(
+    name = "latchkey-curl-shims",
+    srcs = [
+        ":curl_impersonate",
+        ":latchkey_curl_router",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -115,38 +115,35 @@ http_archive(
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
-# `curl-impersonate`, the Chrome-impersonating curl that
-# `latchkey-curl-dispatch` execs for Cloudflare-fronted hosts. Built
-# from source by .github/workflows/curl-impersonate.yml (upstream commit
-# and release tag in third-party/curl-impersonate/pin.env) and published
-# as a release of this repo; these are that release's tarballs, one per
-# triple release.yml ships. //third-party/curl-impersonate selects the
-# one for the target platform. Why our own build rather than upstream's
-# prebuilts, and how to bump: docs/dev/curl_impersonate.md.
+# The two curl shims latchkey uses for Cloudflare-fronted hosts:
+# `latchkey-curl-router` (the `curl` that `LATCHKEY_CURL` points at) and
+# `curl-impersonate` (upstream, presenting Chrome's TLS fingerprint).
+# Both are built and released by github.com/imbue-ai/latchkey-curl-shims,
+# one tarball per triple release.yml ships; //third-party/latchkey-curl-shims
+# selects the pair for the target platform. What each binary does and
+# how to bump: docs/dev/curl_impersonate.md.
 #
-# The sha256s come from the SHA256SUMS the workflow publishes with the
-# release. `//third-party/curl-impersonate:pin_test` checks the tag
-# below against pin.env.
-CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
+# The sha256s come from the SHA256SUMS published with the release.
+LATCHKEY_CURL_SHIMS_RELEASE = "v0.2.0"
 
 [
     http_archive(
-        name = "curl_impersonate_%s" % triple.replace("-", "_"),
-        urls = ["https://github.com/imbue-ai/datalib/releases/download/%s/curl-impersonate-%s.tar.gz" % (
-            CURL_IMPERSONATE_RELEASE,
+        name = "latchkey_curl_shims_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/imbue-ai/latchkey-curl-shims/releases/download/%s/latchkey-curl-shims-%s.tar.gz" % (
+            LATCHKEY_CURL_SHIMS_RELEASE,
             triple,
         )],
         sha256 = sha,
-        strip_prefix = "curl-impersonate-%s" % triple,
-        build_file_content = 'exports_files(["curl-impersonate"])',
+        strip_prefix = "latchkey-curl-shims-%s" % triple,
+        build_file_content = 'exports_files(["latchkey-curl-router", "curl-impersonate"])',
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
-        ("x86_64-apple-darwin", "8b4271c1b98efa7e9cbc8e093e5927ca5f88cd5663db7f5750becd8a7aaa8d95"),
-        ("x86_64-unknown-linux-gnu", "908b1e3c0cdcd645e29d157a43845b1df22ce482478d62d07df5c02c28ea1dfc"),
-        ("aarch64-unknown-linux-gnu", "9098cb004d74e028ea159abf1224a45696f9359dec16b999e5749e14ee674018"),
-        ("x86_64-unknown-linux-musl", "eef9c448b0f9e4d0d67924969ae9afe9d84b0e7f43275b5a132b1dba77116d71"),
-        ("aarch64-unknown-linux-musl", "c2bb9bd8caa1c5aafaa3a04f7be30bf166b7a98290aba83427323255b8bc582f"),
+        ("aarch64-apple-darwin", "69c6ec03f185af10a73cba431b961ff749064bf3cec6bf661f8127ab78a83252"),
+        ("x86_64-apple-darwin", "18ef87db3cf5ef07895b64fd9031812a149f19100f710d6d5ddce887f78fbab0"),
+        ("x86_64-unknown-linux-gnu", "ba27a9d322c8f07004e0e9b3e753063424b4a471729300500ce857414e4aefe9"),
+        ("aarch64-unknown-linux-gnu", "88f68e3df5e7625032d07bb6c5f183779d439bbcdc0b6f6aaa70a29db14d59ac"),
+        ("x86_64-unknown-linux-musl", "ca5473ac80092741ecc0d8b4cc477292563c5c2f29eaed2c88b7afe945595739"),
+        ("aarch64-unknown-linux-musl", "171d09c68a1139c69122847ee1dbe9e68cac794ad0fa469d9c574d92677d8a28"),
     ]
 ]
 

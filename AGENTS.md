@@ -56,7 +56,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
 - [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
-- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl; read before touching `latchkey_curl_dispatch.rs` or the pin.
+- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl and the router in front of it, fetched from `latchkey-curl-shims`; read before touching `latchkey.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
@@ -517,7 +517,7 @@ find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 ## Auth (web API)
 
 Downloaders reach Cloudflare-fronted hosts through `latchkey curl`, which
-injects the session credential, routed via `latchkey-curl-dispatch` to
+injects the session credential, routed via `latchkey-curl-router` to
 the bundled `curl-impersonate` (`docs/dev/curl_impersonate.md`). If the
 credential is missing or expired, `latchkey auth set <service>` fixes
 it; if Cloudflare still 403s, the IP/UA may be flagged — wait it out or
