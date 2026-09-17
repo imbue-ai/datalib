@@ -113,20 +113,36 @@ jobs:
           docker run --rm -v "${PWD}:/src" -w /src -e HOME=/tmp/not-root "${IMAGE}:sha-${GITHUB_SHA::12}" \
               bash .devcontainer/smoke_test.sh
 
+      # Pushed as a second export from the layers the build just cached,
+      # compressed with zstd rather than the gzip `docker push` would use:
+      # the runner spends the pull decompressing, and zstd decompresses
+      # several times faster. `--load` above is still the gzip form,
+      # because the smoke test needs the image in the local daemon.
       - name: Push
+        env:
+          BUILDKIT_PROGRESS: plain
         run: |
           set -euo pipefail
-          docker push "${IMAGE}:sha-${GITHUB_SHA::12}"
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-              version="${GITHUB_REF#refs/tags/v}"
-              docker tag "${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:${version}"
-              docker push "${IMAGE}:${version}"
+              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
           fi
           if [[ "${{ github.event_name }}" == "push" || "${{ inputs.publish_latest }}" == "true" ]]; then
-              docker tag "${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:latest"
-              docker push "${IMAGE}:latest"
-              echo "moved :latest to sha-${GITHUB_SHA::12}"
+              tags+=("${IMAGE}:latest")
           fi
+          names=$(IFS=,; echo "${tags[*]}")
+          docker buildx build \
+              --file .devcontainer/Dockerfile \
+              --platform linux/amd64 \
+              --build-arg PREFETCH_OUTPUT_BASE=true \
+              --build-arg WARM_BAZEL_CACHE=false \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --cache-from type=gha,scope=devcontainer,version=3 \
+              --output "type=image,\"name=${names}\",push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
+              .
+          printf 'pushed %s\n' "${tags[@]}"
+          [[ " ${tags[*]} " == *" ${IMAGE}:latest "* ]] && echo "moved :latest to sha-${GITHUB_SHA::12}" || true
 
       # GHCR keeps every pushed version. Keep the newest few `sha-` builds
       # (enough to roll `latest` back by hand) and drop the rest; the
