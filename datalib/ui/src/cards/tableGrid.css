@@ -20,7 +20,17 @@
 
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
-.tg-identity { display: inline-flex; align-items: center; gap: 8px; }
+.tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+/* The label is what the eye lands on: the id beside it gives way first. */
+.tg-identity > span:first-of-type { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
+.tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The tree cell: indent, chevron, then the column's own drawing, which
+   gives way before the chevron does. One flex row, so the cell's own
+   ellipsis never swallows the lot — an overflowing inline-block is
+   replaced whole by it. */
+.tg-tree { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.tg-tree > .slick-tree-toggle { flex: 0 0 auto; }
+.tg-tree > .slick-tree-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tg-brand { width: 18px; height: 18px; object-fit: contain; }
 .tg-parent { font-weight: 600; }
 .tg-mark {
@@ -277,3 +287,15 @@
 /* Text selection and a two-line clamp both want the cell's box to be
    the text's box, which the theme's flex centring is not. */
 .slick-cell .datalib-clamp-2 { line-height: 1.25; }
+
+/* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+.slick-menu-item:has(.menu-slot-separator) {
+  padding: 0;
+  margin: 4px 0;
+  border-top: 1px solid var(--datalib-border);
+  min-height: 0;
+  height: 0;
+  pointer-events: none;
+}
+.menu-slot-separator { display: none; }
+.slick-menu-content.menu-danger { color: var(--datalib-log-error); }

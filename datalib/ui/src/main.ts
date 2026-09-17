@@ -11,7 +11,6 @@ import "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css"
 
 function applyThemeMode(mode: "light" | "dark") {
   document.documentElement.dataset.theme = mode;
-  document.documentElement.setAttribute("data-ag-theme-mode", mode);
 }
 
 function setupSystemThemeSync() {

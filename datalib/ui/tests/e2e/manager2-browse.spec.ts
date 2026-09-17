@@ -7,9 +7,9 @@
 // with that type's columns. Every link is in a different file.
 
 import { test, expect, type Page } from "@playwright/test";
-import { searchAndSettle, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import { searchAndSettle, SEARCH_ROWS, TABLE_ROWS, searchHeader, type GridApi } from "./grid-helpers";
 
-const ROWS = '.ag-grid-scrolling-rows [role="row"]';
+const ROWS = TABLE_ROWS;
 const SEARCH = '[data-testid="search-input"]';
 
 /// The fixture root declares the `unified_index` group (as a real root
@@ -87,7 +87,7 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 /// Name cell — that cell also renders the directory name beside the
 /// label.
 const groupRowOf = (page: Page, groupId: string) =>
-  page.locator(`${ROWS}[row-id="group:${groupId}"]`);
+  page.locator(`${ROWS}[data-key="group:${groupId}"]`);
 const browseButton = (page: Page, groupId: string) =>
   groupRowOf(page, groupId).getByRole("button", { name: /^Browse/ });
 

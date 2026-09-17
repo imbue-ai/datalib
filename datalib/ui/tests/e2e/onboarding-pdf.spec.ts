@@ -18,6 +18,7 @@ import {
   stampsBefore,
   statusOf,
   SEARCH_ROWS,
+  TABLE_ROWS,
   searchGrid,
   type GridApi,
 } from "./grid-helpers";
@@ -128,7 +129,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The scaffold's one group is the table's whole content, and its
     // three entries are under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
-    await expect(page.locator(".ag-row")).toHaveCount(1);
+    await expect(page.locator(TABLE_ROWS)).toHaveCount(1);
     await expandGroup(page, "unified_index");
     for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);

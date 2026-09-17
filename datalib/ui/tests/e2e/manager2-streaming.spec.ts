@@ -109,7 +109,7 @@ async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
       const status: Record<string, string | null> = {};
       const activity: Record<string, string> = {};
       for (const id of ids) {
-        const row = deepQuery(`.ag-row[row-id="${CSS.escape(id)}"]`);
+        const row = deepQuery(`.slick-row[data-key="${CSS.escape(id)}"]`);
         status[id] =
           row?.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null;
         activity[id] =

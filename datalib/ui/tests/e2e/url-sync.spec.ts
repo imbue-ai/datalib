@@ -33,7 +33,7 @@ test.describe("URL reflects app state", () => {
 
     const beforePath = await page.evaluate(() => location.pathname);
 
-    // Selection visibly applies (row gets ag-row-selected class).
+    // Selection visibly applies (the row's cells carry the class).
     await selectRowByUuid(page, rowId);
 
     const afterPath = await page.evaluate(() => location.pathname);

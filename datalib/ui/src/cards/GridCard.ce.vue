@@ -27,7 +27,7 @@ import type {
   SlickDraggableGrouping,
   SlickEventData,
 } from "@slickgrid-universal/common";
-import { typedSlickColumns, groupTitle } from "./slickColumns";
+import { typedColumns, groupTitle } from "./typedColumns";
 import {
   fetchAccounts,
   fetchQmdState,
@@ -909,10 +909,11 @@ watch(
     // Nothing declared yet: the card's own two columns alone are not a
     // grid worth building.
     if (specs.length === 0) return;
-    const typed = typedSlickColumns<SearchRow>(specs, {
+    const typed = typedColumns<SearchRow>(specs, {
       rows: () => rows.value,
       overrides: columnOverrides,
       groupable: true,
+      filterable: true,
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];

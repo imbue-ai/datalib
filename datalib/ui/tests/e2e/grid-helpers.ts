@@ -1,9 +1,10 @@
-// The search grid is a SlickGrid inside the grid card's shadow root
-// (Playwright's locators pierce that). Its rows carry `data-row` — the
+// Every grid is a SlickGrid inside a card's shadow root (Playwright's
+// locators pierce that). The search grid's rows carry `data-row` — the
 // index the grid renders them at — and nothing naming the record, so a
 // row is found by asking the card's grid api (`window.__fwGridApi`,
-// see cards/GridCard.ce.vue) where a uuid's row is. The Manage grid is
-// still AG Grid, with its own selectors further down.
+// see cards/GridCard.ce.vue) where a uuid's row is. The typed table
+// viewer's rows (the Manage tree, the commit history) carry their key
+// as `data-key`; those helpers are further down.
 
 import { expect, type Locator, type Page } from "@playwright/test";
 
@@ -225,18 +226,35 @@ export async function searchAndSettle(
   });
 }
 
-// ── The Pipeline table's rows ────────────────────────────────────────
+// ── The typed table viewer's rows ─────────────────────────────────────
 
-/// A Pipeline row, by the step id `getRowId` keys on. A step under a
+/// The rows of any `TableGrid` on the page — the Manage tree, the
+/// commit history — scoped by a caller that has more than one open.
+export const TABLE_ROWS = ".tg-grid .slick-row";
+/// The right-click menu the grid appends to <body>, and its entries.
+export const TABLE_MENU = ".slick-context-menu";
+/// An entry by its text — the text beside the icon slot, which reads as
+/// a bullet when the entry has no icon, so the whole item never matches
+/// an anchored pattern.
+export const menuEntry = (page: Page, entry: string | RegExp) =>
+  page
+    .locator(`${TABLE_MENU} .slick-menu-item`)
+    .filter({ has: page.locator(".slick-menu-content").filter({ hasText: entry }) });
+/// The class an entry carries when it cannot be taken.
+export const MENU_DISABLED = /slick-menu-item-disabled/;
+/// A row the grid has selected: its cells carry the class.
+export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
+
+/// A Pipeline row, by the key its record carries. A step under a
 /// group has a row only while the group is open — see `expandGroup`.
 export const pipelineRow = (page: Page, id: string) =>
-  page.locator(`.ag-row[row-id="${id}"]`);
+  page.locator(`${TABLE_ROWS}[data-key="${id}"]`);
 
 /// A group's row. Keyed `group:<id>` because an applet may share the
 /// group's id (`unified_index` does) and both are rows.
 export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
 
-/// Open a group so the steps under it have rows. Idempotent, and the
+/// Open a tree row so the rows under it exist. Idempotent, and the
 /// grid remembers what was opened across a remount — which `settle`
 /// does — so one call per group per test is enough.
 ///
@@ -244,16 +262,17 @@ export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${i
 /// table, and a click that lands on the chevron of a row the grid is
 /// about to replace opens nothing; the row that takes its place is
 /// folded again, and a check on its own would wait on it forever.
-export async function expandGroup(page: Page, id: string): Promise<void> {
-  const row = groupRow(page, id);
-  await expect(row, `group ${id} should have a row`).toBeVisible();
+export async function expandRow(row: Locator, what: string): Promise<void> {
+  await expect(row, `${what} should have a row`).toBeVisible();
   await expect(async () => {
-    const closed = row.locator(".ag-group-contracted:not(.ag-hidden)");
+    const closed = row.locator(".slick-tree-toggle.collapsed");
     if ((await closed.count()) > 0) await closed.click({ timeout: 1_000 });
-    await expect(row.locator(".ag-group-expanded:not(.ag-hidden)")).toBeVisible({
-      timeout: 1_000,
-    });
-  }, `group ${id} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
+    await expect(row.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
+  }, `${what} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
+}
+
+export async function expandGroup(page: Page, id: string): Promise<void> {
+  await expandRow(groupRow(page, id), `group ${id}`);
 }
 
 /// One entry of a Manage row's right-click menu, opened on its Status
@@ -263,7 +282,7 @@ export function rowMenuEntry(page: Page, row: Locator, entry: string | RegExp) {
   return {
     open: async () => {
       await row.locator('[col-id="status"]').click({ button: "right" });
-      const option = page.locator(".ag-menu-option", { hasText: entry });
+      const option = menuEntry(page, entry);
       await expect(option).toBeVisible({ timeout: 2_000 });
       return option;
     },
@@ -351,7 +370,7 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
     const sample = () => {
       for (const id of ids) {
         const el = deepQuery(
-          `.ag-row[row-id="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
+          `.slick-row[data-key="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
         );
         const s = el?.getAttribute("aria-label");
         const seen = (log[id] ??= []);
