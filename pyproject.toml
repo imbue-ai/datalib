@@ -15,7 +15,7 @@ package = false
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14.0",
+    "ruff>=0.16.7",
     "pyright>=1.1.400",
 ]
 
