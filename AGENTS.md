@@ -23,11 +23,9 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs) — why config validation returns diagnostics, not an error; read before changing validation.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete, commented config.
-- [`docs/dev/plans/groups_and_functions.md`](docs/dev/plans/groups_and_functions.md) — built: a step is `(group, function)`, its id is the tree it writes. Read before touching step ids, the wizard, or `datalib-step`'s dispatch.
-- [`docs/dev/plans/completed/step_identity.md`](docs/dev/plans/completed/step_identity.md) — why a step's id is its one output tree.
+- [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. Read before touching step ids, the wizard, or `datalib-step`'s dispatch.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md), [`streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md) — a consumer starting before its producer finishes; partly built. Read §"The hazard" and §"The sink contract" before any consumer reads a store or deletes on an empty read.
 - [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — built: the run store `system/runs.sqlite`, also the app server's log.
-- [`docs/dev/pipeline_dag_architecture.md`](docs/dev/pipeline_dag_architecture.md) — design history; the runner README is current.
 - [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
 
 **Data architecture**
@@ -43,14 +41,13 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
 - [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md), [`multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposals; the second measures bytes at rest (§4) before you touch how text is stored.
-- [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`](docs/dev/provider_migration_dolt_diff_and_cas_edge.md) — the finished CAS-blob + incremental-render port; edge cases still apply.
 
 **UI**
 
 - [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system; the dactal view bridge.
 - [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout, `LAYOUT_VERSION`, the render preview golden, and the sanitizer allowlist every emitted tag must be in. Read before changing how a message looks.
 - [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md) — built: the typed table viewer and live `table_changed` frames.
-- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field offers a native picker; read before adding a source to the wizard. Its design is [`plans/source_wizard.md`](docs/dev/plans/source_wizard.md) (partly built).
+- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field offers a native picker; read before adding a source to the wizard. Its design record — what shipped, what is still open — is [`plans/source_wizard.md`](docs/dev/plans/source_wizard.md).
 - [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's index-state columns (built) and selective re-indexing (proposal).
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
 
@@ -90,7 +87,7 @@ message.
 
 ## Prose can be stale — verify claims against the tree
 
-The docs, `TODO.md`, and this repo's commit messages are detailed and
+The docs and this repo's commit messages are detailed and
 well-argued, and that is what makes a wrong one dangerous: a
 well-reasoned paragraph reads as evidence. **Before reporting any "we
 now do X" or "X still needs doing" claim as current fact, verify it

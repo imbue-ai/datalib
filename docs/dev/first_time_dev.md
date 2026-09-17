@@ -12,24 +12,10 @@ just want to *run* the released tools against your own data, start with the
 #    build driver.
 brew install bazel cmake
 
-# 2. (Nothing to do here any more.) This step used to be
-#    `mkdir -p ~/.cache/qmd/models`, because `.bazelrc` bind-mounted that
-#    directory into every sandboxed action and a missing one failed the
-#    build. qmd's three GGUF models are now fetched by a build action
-#    (`//third-party/qmd_models`) and reach both the fixture's index
-#    genrule and the materialized demo root as ordinary bazel inputs, so neither
-#    `bazel test //...` nor `bazelisk run //datalib:dev_tng` needs
-#    anything in your home directory. The app you build still downloads
-#    models there at sync time, as a user's would.
-
-# 3. (Nothing to check here any more.) The build used to need host
-#    `npx` on Bazel's pinned PATH, because `qmd-indexer` shelled out to
-#    `npx -y @tobilu/qmd@<v>`. Node and the qmd package tree are now
-#    Bazel inputs (`//third-party/qmd/runtime`), staged into a
-#    `DATALIB_RUNTIME_DIR` layout by the fixture genrule — verified by
-#    building it with neither `node` nor `npx` on PATH. A host Node is
-#    still needed to RUN the shipped CLI (it shells out to latchkey and
-#    qmd at sync time), just not to build the repo.
+# That is all: qmd's models and Node are Bazel inputs, so the build needs
+# nothing in your home directory. A host Node is needed to RUN the
+# shipped CLI (it shells out to latchkey and qmd at sync time), not to
+# build the repo.
 ```
 
 ### Linux iteration via devcontainer
@@ -214,8 +200,8 @@ as a subprocess. The built-in steps live in the `datalib-step` binary
 and `grid_index` loads them into
 `<root>/unified_index/grid_index/db.doltlite_db`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
-[`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
-DAG design.
+[`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
+for the runner's rules.
 
 To run one by hand, build `//datalib/backend:bin` — it stages every
 shipped binary under its public dash-separated name in a single

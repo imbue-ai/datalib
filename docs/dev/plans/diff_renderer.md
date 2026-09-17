@@ -28,7 +28,7 @@ holds one row per rendered document in `markdowns` (title, dates,
 `grid_rows` (author, timestamp, the full `text`, and the
 `markdown_uuid` it belongs to), the document's outgoing `edges`, and
 `render_inputs` — what raw rows the document was rendered from
-([`render_inputs.md`](render_inputs.md)). It does **not** hold the
+([`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)). It does **not** hold the
 `.md` file's bytes, nor a hash of them; the file is on disk beside the
 store and is the only copy.
 
@@ -135,7 +135,7 @@ in `markdowns` makes "did this document change?" exact, lets a tool
 verify the file on disk still matches the store, and does not conflict
 with the no-per-run-stamp rule: it is derived from content, so an
 unchanged document writes the same value. The "no fingerprint" decision
-in `render_inputs.md` was about using a hash to *skip writes*; this
+behind `render_inputs` was about using a hash to *skip writes*; this
 uses one to *name what was written*.
 
 ## What a diff of one document is

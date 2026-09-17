@@ -449,10 +449,9 @@ fn space_of_dir(dir: &str) -> String {
 /// TODO(problem-sink): a shape we don't recognize is dropped silently.
 /// `None` is the right *value* for `created_at`, but nothing anywhere
 /// records that we discarded something upstream actually sent — that is
-/// only half of R1 ("drop, count, log; never abort, never hide"). When
-/// the problem sink exists (see
-/// `docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
-/// report `{field, reason: CoercionFailed, sample}` here as well as
+/// only half of R1 ("drop, count, log; never abort, never hide"). The
+/// problem sink is `render_problems` (`datalib_schema::render_problems`);
+/// report `{field, reason: CoercionFailed, sample}` there as well as
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
 /// timestamp to unix millis, or `None` on any shape we don't recognize.

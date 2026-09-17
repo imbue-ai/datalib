@@ -120,8 +120,8 @@ is one its processors declare.
 ## Looking at the output
 
 ```sh
-bazelisk run //datalib/ui:chat_preview     # rewrite the golden
-open datalib/ui/tests/goldens/chat_preview.html
+bazelisk run //datalib/ui:render_preview     # rewrite the golden
+open datalib/ui/tests/goldens/render_preview.html
 ```
 
 `src/samples.rs` holds a corpus that hits every layout this crate can
@@ -137,7 +137,7 @@ controls and the copy buttons you are clicking are the app's own code.
 That is also why that file is plain JavaScript: the preview can inline
 it without a bundler.
 
-`//datalib/ui:chat_preview_test` regenerates the page and diffs it, so
+`//datalib/ui:render_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
 
 ## The UI sanitizes what you emit

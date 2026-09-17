@@ -120,9 +120,8 @@ emits the table DDL, two index DDLs, the `BulkUpsertable` impl, and the
 
 The consumer-side sibling. Where the three above derive the raw-store wire
 shape, this covers flat typed tables whose columns use portable
-MySQL/Dolt/SQLite types (`VARCHAR(n)`, `LONGTEXT`, `INT`). It replaced the
-old `schemas/codegen.py` JSON-Schema path, making the struct the single
-source of truth the same way `schema_raw.rs` already was.
+MySQL/Dolt/SQLite types (`VARCHAR(n)`, `LONGTEXT`, `INT`), with the struct
+as the single source of truth the same way `schema_raw.rs` is.
 
 - `#[portable_table(table = "grid_rows", primary_key = "uuid")]` — both keys
   required; `primary_key` accepts a comma-separated list for composite keys.

@@ -9,8 +9,8 @@ each layer you adopt buys better incrementality, progress reporting,
 or failure handling.
 
 This doc is the contract from the command's point of view. The
-runner/scheduler side (edge derivation, skipping, retry, subtree
-poisoning) is in `pipeline_dag_architecture.md`.
+runner/scheduler side (staleness, retry, what a dropped entry costs)
+is in `datalib/backend/dag/README.md`.
 
 ## The config entry
 

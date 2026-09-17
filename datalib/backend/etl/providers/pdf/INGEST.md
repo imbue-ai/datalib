@@ -148,7 +148,7 @@ It is still a hint. A writer that renumbers objects (Acrobat
 nothing visual moved, so it splits where it ideally would have merged.
 That direction is deliberate — a false split costs a duplicate row,
 where a false merge would hide a document — and it is why the primary
-key stays `blake3`. `download/content_hash.rs` has the full account of
+key stays `blake3`. `src/ingest/content_hash.rs` has the full account of
 what survives and what does not.
 
 **`author` is populated more often than it is meaningful.** Of the 10

@@ -27,7 +27,7 @@ fixtures/
 │   ├── conversations.json     listing index
 │   └── conversations/<id>.json   per-conversation node tree (message mapping with parent/children)
 │
-├── github_api/                event-store JSONL written by `download/github_web.py`.
+├── github_api/                event-store JSONL.
 │   └── <entity>/{created,updated}/events.jsonl
 │   Entities: self_identity, pull_request, issue_comment, pr_review,
 │   pr_review_comment. Repo: `enterprise-d/replicator-firmware`. Two PRs
@@ -35,7 +35,7 @@ fixtures/
 │   review comments — #42 has a Riker → Picard reply pair anchored to
 │   src/replicator/tea.c:17 to exercise `in_reply_to_id` tree-rebuilding.
 │
-├── gitlab_api/                event-store JSONL written by `download/gitlab_web.py`.
+├── gitlab_api/                event-store JSONL.
 │   └── <entity>/{created,updated}/events.jsonl
 │   Entities: self_identity, merge_request, discussion. Project:
 │   `enterprise-d/holodeck`. Two MRs (!17 merged; !18 open) with a mix
@@ -43,7 +43,7 @@ fixtures/
 │   `position.new_path`/`new_line`) and free-form discussions
 │   (`individual_note: true`) so consumers see both shapes.
 │
-├── notion_web/                event-store JSONL written by `download/notion_web.py`.
+├── notion_web/                event-store JSONL.
     └── <entity>/{created,updated}/events.jsonl
     Mirrors Notion's native recordMap tables 1:1 (one entity per
     `KNOWN_TABLES` entry in `notion_web.py`). Workspace:
@@ -165,11 +165,9 @@ bazelisk build //tests/fixtures:ingested_tng
 the orchestrator inserts rows in primary-key order, and the tar
 normalizes mtime/uid/gid.
 
-This section used to claim a clean rebuild produces byte-identical
-outputs, "(verified)". That is too strong. Measured 2026-08-20 by
-running the full pipeline into two fresh roots more than a clock second
-apart — do it that way, since two runs inside the same second can agree
-by luck, which is how the original claim survived:
+A clean rebuild is not byte-identical. Measure it by running the full
+pipeline into two fresh roots more than a clock second apart — two runs
+inside the same second can agree by luck:
 
 | | byte-stable? |
 |---|---|
@@ -179,7 +177,7 @@ by luck, which is how the original claim survived:
 
 **The table contents are the property worth relying on, and they hold.**
 Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
-runs agree byte for byte. `//datalib/backend/core:fixture_db_snapshot_test`
+runs agree byte for byte. `//datalib/backend/unified_index:fixture_db_snapshot_test`
 is an insta snapshot of exactly that, which is why it can exist at all.
 
 The **file** cannot be byte-stable, and no amount of `--now` pinning will
@@ -199,17 +197,6 @@ stable:
   identity does. Its `markdowns` row carries nothing HEAD-derived, so
   the row stays stable while the page moves.
 
-Notion's rendered pages used to be nondeterministic too — two runs
-emitted the same blocks in a different order. That was
-`event_store::load_latest_by_key` returning a `HashMap`: the
-synthesizer packs its records into `results` arrays, so the replayed
-`/children` listing came back shuffled, the downloader's BFS wrote
-different `blocks.page_order` values every run, and render faithfully
-reproduced whichever order it was handed. It now returns a `Vec` in
-first-seen (document) order. Note the bug was invisible within a single
-process — Rust's hash seed is per-process, so "render twice and compare"
-would have passed; catching it needs either two processes or an explicit
-order assertion (`records_come_back_in_stream_order`).
 
 Bazel keys its action cache on *inputs*, so the residue costs
 reproducibility and cross-machine cache sharing, not day-to-day rebuild
@@ -217,10 +204,7 @@ churn.
 
 **Reading the doltlite_db.** It is not a SQLite *file* — a
 `.doltlite_db` is a prolly-tree store, and a consumer linking stock
-libsqlite3 cannot open one at all (`file is not a database`). This
-paragraph used to say such a consumer "gets the same table schemas
-without the `dolt_*` SQL functions", which is false and was one of two
-places in the docs that told a reader stock SQLite would work.
+libsqlite3 cannot open one at all (`file is not a database`).
 
 What is true: link doltlite (via `//third-party/doltlite:sqlite3`) and
 a plain `SELECT` works, alongside the full version-control surface. A
@@ -243,7 +227,7 @@ is needed; the sync binary statically links doltlite via
 ## Maintenance
 
 These fixtures are **hand-edited** at every layer. When you change
-any provider parser or `schemas/grid_rows.schema.json`:
+any provider parser or `GridRow`:
 
 1. Run `uv run pytest tests/test_fixtures.py` —
    the parser tests will break first if a new required field is added.
@@ -256,12 +240,7 @@ any provider parser or `schemas/grid_rows.schema.json`:
    with whatever the HTTP backend (`datalib/backend/http`) returns
    on the matching route.
 
-**Golden snapshots.** There are none, despite what this section used to
-describe. `tests/test_snapshots.py`, `tests/snapshot_extensions.py`, and
-`tests/__snapshots__/` do not exist in the tree (checked 2026-08-20);
-`tests/` contains only `fixtures/`, and `bazelisk query //tests/...`
-lists no snapshot target. `AGENTS.md` carries a second copy of the same
-instruction, telling you to run `bazelisk test //tests:test_snapshots`.
+**Golden snapshots.** There are none; `tests/` holds only `fixtures/`.
 
 What does assert on the fixture today: `:ingested_tng_test` (row counts,
 per-provider coverage, three-run idempotence), each provider's own insta
