@@ -105,7 +105,7 @@ async fn snapshot_grid_rows_and_documents() {
     let rows = sqlx::query(
         "SELECT uuid, provider, kind, source_label, created_at, author, account, \
                 project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
-                message_index, entire_chat, text, slack_link, qmd_path, \
+                message_index, entire_chat, text, qmd_path, \
                 source_url, git_sha, upstream_id, upstream_entity_kind, upstream_scope, \
                 notion_page_uuid, \
                 notion_block_uuid, markdown_uuid, byte_size, item_count \
@@ -144,7 +144,6 @@ async fn snapshot_grid_rows_and_documents() {
                 "text_len": text.chars().count(),
                 "text_sha": digest(&text),
                 "entire_chat": entire_chat,
-                "slack_link": r.try_get::<Option<String>, _>("slack_link").ok().flatten(),
                 "qmd_path": r.try_get::<Option<String>, _>("qmd_path").ok().flatten(),
                 "source_url": stable_source_url(
                     r.try_get::<Option<String>, _>("source_url").ok().flatten(),

@@ -140,7 +140,6 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         } else {
             title.clone()
         },
-        slack_link: None,
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
@@ -185,7 +184,6 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
             text: text.clone(),
-            slack_link: None,
             qmd_path: meta.qmd_path.map(str::to_string),
             source_url: source_url.clone(),
             git_sha: None,

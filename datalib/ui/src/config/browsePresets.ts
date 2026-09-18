@@ -92,7 +92,7 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
   return [...ALWAYS.slice(0, -1), ...extra, "snippet"];
 }
 
-/// A diff group (`docs/dev/plans/diff_renderer.md`) is not a source
+/// A diff group (`docs/dev/plans/completed/diff_renderer.md`) is not a source
 /// type the catalog offers, so it is not in `EXTRA`: its rows are the
 /// underlying source's, and what a browse of one is for is *what
 /// changed* — every row that did, not one per document, with the two

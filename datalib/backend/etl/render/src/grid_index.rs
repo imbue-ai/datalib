@@ -1216,6 +1216,8 @@ async fn insert_grid_row(
         .execute(&mut **conn)
         .await
         .with_context(|| format!("release moved grid_row {}", row.uuid))?;
+    // Audited: `insert_sql` is built from `GridRow`'s associated consts,
+    // never from row data; every value is bound.
     row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
         datalib_etl::bulk::insert_sql::<GridRow>(),
     )))
@@ -1313,7 +1315,6 @@ mod insert_round_trip_tests {
             message_index: Some(3),
             entire_chat: "/chat/conv-1701".into(),
             text: "Tea. Earl Grey. Hot.".into(),
-            slack_link: Some("https://example.test/archives/C1/p1".into()),
             qmd_path: Some("chats/conv-1701.md".into()),
             source_url: Some("https://claude.ai/chat/conv-1701".into()),
             git_sha: Some("0123456789abcdef".into()),
@@ -1423,7 +1424,6 @@ mod id_claim_tests {
             message_index: None,
             entire_chat: format!("/chat/{markdown_uuid}"),
             text: String::new(),
-            slack_link: None,
             qmd_path: None,
             source_url: None,
             git_sha: None,
@@ -1558,7 +1558,6 @@ mod write_lock_tests {
             message_index: None,
             entire_chat: format!("/chat/{uuid}"),
             text: format!("body for {uuid}"),
-            slack_link: None,
             qmd_path: Some(format!("chats/{uuid}.md")),
             source_url: None,
             git_sha: None,

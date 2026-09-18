@@ -20,6 +20,20 @@ describe("problemLabel", () => {
       problemLabel({ field: "text", reason: "deliberate_loss", rule: "pdf.strip_chrome" }),
     ).toBe("`text` was trimmed by the rule pdf.strip_chrome");
   });
+  it("has a sentence for every reason the fetch and render stages report", () => {
+    expect(problemLabel({ field: null, reason: "fetch_failed", rule: null })).toBe(
+      "this record could not be fetched from the source",
+    );
+    expect(problemLabel({ field: null, reason: "render_failed", rule: null })).toBe(
+      "this record could not be rendered",
+    );
+    expect(problemLabel({ field: "label", reason: "not_found", rule: null })).toBe(
+      "`label` is not there upstream",
+    );
+    expect(problemLabel({ field: "channel", reason: "forbidden", rule: null })).toBe(
+      "`channel` cannot be read with this credential",
+    );
+  });
   it("shows a word it does not know rather than hiding it", () => {
     // A store written by a newer build can carry a reason this one lacks.
     expect(

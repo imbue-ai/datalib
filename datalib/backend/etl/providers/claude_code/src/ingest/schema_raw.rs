@@ -40,16 +40,17 @@ pub struct TranscriptRow {
 /// by the `uuid` Claude Code gave it. The payload is the line as
 /// written. Only `user`, `assistant` and `system` records land here;
 /// the rest are bookkeeping and fold into the transcript row.
+///
+/// `transcript_id` is the one promoted column: the writer composes it
+/// (`<session_id>#<agent_id>` for a subagent) and the render's diff
+/// buckets on it. Everything else a reader wants — `sessionId`,
+/// `type`, `timestamp`, `parentUuid`, `isSidechain` — is in the
+/// payload; query it as `payload->>'$.type'`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "records")]
 pub struct RecordRow {
     pub id_and_payload: WirePayload,
     pub transcript_id: String,
-    pub session_id: String,
-    pub record_type: String,
-    pub timestamp: Option<String>,
-    pub parent_uuid: Option<String>,
-    pub is_sidechain: i64,
 }
 
 pub const RECORDS_TRANSCRIPT_INDEX_DDL: &str =

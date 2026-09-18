@@ -204,7 +204,7 @@ pure given the raw store, and both are the right place for §4's tests.
     - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
     - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
     - `qmd_path` — the path to the rendered `.md`, relative to the data root.
-    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `slack_link`, `git_sha`, …) so the UI can link sideways as well as out.
+    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
 optional: anything durably keyed on a row — feedback today,
@@ -441,20 +441,32 @@ Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
-**Status: R1's sink is built for the grid-row, parse and render
-stages and on screen; R2's middle category is what the sink makes
-possible and is followed where the sink is wired; R3–R7 are adopted in
-principle and not built.** The sink is the `problems` table
-(`datalib_problems`), one row per problem per record, in the source's
-render store, copied into the unified index, counted on the Manage row
-and shown on the document. How it is wired at each stage:
+**Status: R1's sink is built for every stage — fetch, parse, render
+and grid row — and on screen, though most providers do not yet route
+a per-record fetch failure into it; R2's middle category is what the
+sink makes possible and is followed where the sink is wired; R3–R7 are
+adopted in principle and not built.** The sink is the `problems` table
+(`datalib_problems`), one row per problem per record: a fetch problem
+starts in the source's raw store, everything else in its render
+store, and the render store carries the raw store's rows forward so
+one store holds the source's whole list. From there it is copied into
+the unified index, counted on the Manage row and shown on the
+document. How it is wired at each stage:
 
 | stage | how a problem gets in | swept by |
 | --- | --- | --- |
+| fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
+| fetch, a configured entry upstream does not have | `download_problems::report`, in the raw store, keyed `config:<setting>:<value>` | the next run's report, which replaces the last one's whole |
+| fetch, a listing or phase the run could not do | `download_problems::report_run`, in the raw store, keyed `listing:<name>` / `phase:<name>` | likewise, every run |
+| fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id (`render.rs`, `replace_stage_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
 | parse, no document yet | `RenderCtx::report_unparsed` with a `ReadScope` | the tables the parse read whole |
 | render, whole document | `RenderCtx::report_document_failed` | the document, when it next renders |
+
+The fetch-stage rows are the download side's; the rule for writing
+one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
+and how they travel is [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
 
 The design and what is still open are
 [`plans/problem_visibility.md`](plans/problem_visibility.md); the
@@ -806,7 +818,7 @@ the renderer must say what its sections are (`RenderedMarkdown.sections`,
 concatenated they are the `.md`) rather than leaving the driver to
 parse them back — the one thing a renderer written before diff groups
 may lack, and the degradation is documented: its documents diff as one
-block. [`plans/diff_renderer.md`](plans/diff_renderer.md) is the
+block. [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) is the
 design record.
 
 ### Render-side partial-progress visibility

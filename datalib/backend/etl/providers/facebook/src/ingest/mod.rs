@@ -245,13 +245,14 @@ async fn upsert_and_prune(
 
     let rows: Vec<(&String, String)> = rows.iter().map(|(id, v)| (id, v.to_string())).collect();
     for chunk in rows.chunks(INSERT_CHUNK) {
-        let mut sql = format!("INSERT OR REPLACE INTO {table} (id, payload) VALUES ");
+        let mut sql = format!("INSERT INTO {table} (id, payload) VALUES ");
         for i in 0..chunk.len() {
             if i > 0 {
                 sql.push(',');
             }
             sql.push_str("(?, jsonb(?))");
         }
+        sql.push_str(" ON CONFLICT(id) DO UPDATE SET payload = excluded.payload");
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (id, payload) in chunk {
             q = q.bind((*id).clone()).bind(payload.clone());

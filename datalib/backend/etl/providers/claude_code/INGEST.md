@@ -63,9 +63,14 @@ nothing — the same call `airvisual` and `fsindex` made):
   versions and models seen, the cloud session id and org, the PR
   links, and a count of every line type.
 - **`records`** — one row per content record, keyed by the `uuid`
-  Claude Code gave it, with `transcript_id`, `session_id`,
-  `record_type`, `timestamp`, `parent_uuid` and `is_sidechain`
-  promoted. The payload is the line as written.
+  Claude Code gave it, with one promoted column, `transcript_id`: the
+  writer composes it and the render's diff buckets on it. The payload
+  is the line as written, and everything else a reader wants —
+  `sessionId`, `type`, `timestamp`, `parentUuid`, `isSidechain` — is
+  read off it (`payload->>'$.type'`); nothing in the tree queries
+  those in SQL, so there is no index over them yet. Add an expression
+  index over `payload->>'$.…'` the first time a query needs one, not a
+  stored copy.
 
 The bookkeeping lines fold into the transcript row and are not rows of
 their own; `attachment` records are counted and dropped. A content

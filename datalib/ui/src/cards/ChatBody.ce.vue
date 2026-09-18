@@ -392,7 +392,7 @@ onMounted(() => {
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
 }
-/* A diff group's document (docs/dev/plans/diff_renderer.md): a whole
+/* A diff group's document (docs/dev/plans/completed/diff_renderer.md): a whole
    section wrapped by what happened to it between the two commits, and
    inside a modified one the words that moved. The tints sit over the
    card background so they read in either colour scheme. */

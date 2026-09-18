@@ -126,10 +126,6 @@ pub struct GridRow {
     /// time.
     #[col(sql = "LONGTEXT")]
     pub text: String,
-    /// `slack://channel?team=…&id=…&message=…` (or the https equivalent),
-    /// behind the 'Open in Slack' context-menu item. Slack rows only.
-    #[col(sql = "VARCHAR(512)")]
-    pub slack_link: Option<String>,
     /// The rendered Markdown file for this row's thread, relative to the
     /// data root, so the preview pane can load it with no glob and no
     /// frontmatter scan. Set on every row; child rows inherit their parent's.
@@ -232,7 +228,7 @@ pub struct GridRow {
     /// How this row differs between the two commits its diff group
     /// compares — a `DiffStatus` spelling, bound as text. **NULL on
     /// every real source's row**; non-NULL is what marks a row as
-    /// coming from a diff tree. See `docs/dev/plans/diff_renderer.md`.
+    /// coming from a diff tree. See `docs/dev/plans/completed/diff_renderer.md`.
     #[col(sql = "VARCHAR(16)")]
     pub diff_status: Option<String>,
     /// For a `modified` row: the names of the columns whose value
