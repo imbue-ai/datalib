@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor};
-use datalib_schema::problems::{ProblemRow, Severity, METRIC};
+use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -330,6 +330,16 @@ pub fn render_source(
     }
     store.commit_batch()?;
     let raw_commit = one_consumed_commit(&name, &consumed);
+    // What the download could not do, carried into this store so it
+    // travels on with the documents: the raw store's `problems` at the
+    // commit this run rendered from, re-minted under this source's id.
+    if let Some(raw_db) = raw_db.as_deref() {
+        let rows = fetch_problems_of(raw_db, raw_commit.as_deref(), &name)
+            .with_context(|| format!("read the download's problems for {name}"))?;
+        store
+            .replace_stage_problems(Stage::Fetch, &rows)
+            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
+    }
 
     // A full render in which every processor read its store walked
     // everything, so whatever it did not produce is gone. A processor
@@ -575,6 +585,66 @@ fn reverse_lookup(
         );
         Ok((Some(to), Some(stale)))
     })();
+    blocking(pool.close());
+    result
+}
+
+/// The raw store's `problems` at `commit` (HEAD when the run consumed
+/// none), each minted again under `source_id` — the download did not
+/// know it — with the stamps the download gave them. Empty when there
+/// is no store, nothing committed, or a store from before the table.
+fn fetch_problems_of(
+    raw_db: &Path,
+    commit: Option<&str>,
+    source_id: &str,
+) -> Result<Vec<ProblemRow>> {
+    use datalib_schema::problems::{Problem, Scope};
+    if !raw_db.exists() {
+        return Ok(Vec::new());
+    }
+    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, commit))
+        .with_context(|| format!("open {} for its problems", raw_db.display()))?
+    else {
+        return Ok(Vec::new());
+    };
+    let pool = reader.pool().clone();
+    let result = blocking(async {
+        let rows = match sqlx::query("SELECT * FROM pinned_problems WHERE stage = ?")
+            .bind(Stage::Fetch.as_str())
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => Vec::new(),
+            Err(e) => return Err(e).context("read the raw store's problems"),
+        };
+        rows.iter()
+            .map(|r| {
+                let raw = ProblemRow::from_row(r)?;
+                Ok(ProblemRow {
+                    first_seen_at_utc: raw.first_seen_at_utc.clone(),
+                    last_seen_at_utc: raw.last_seen_at_utc.clone(),
+                    tz_offset: raw.tz_offset.clone(),
+                    ..ProblemRow::new(
+                        source_id,
+                        raw.stage,
+                        Scope::Entity(&raw.scope_key),
+                        raw.item_uuid.as_deref(),
+                        raw.outcome,
+                        Problem {
+                            reason: raw.reason,
+                            field: raw.field.clone(),
+                            path: raw.path.clone(),
+                            rule: raw.rule.clone(),
+                            sample: raw.sample.clone(),
+                            severity: Some(raw.severity),
+                        },
+                        None,
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    });
     blocking(pool.close());
     result
 }

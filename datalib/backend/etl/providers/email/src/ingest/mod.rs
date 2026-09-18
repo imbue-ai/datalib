@@ -379,7 +379,7 @@ async fn run_sync(
                     "no mailbox with this label path; check spelling / parent path",
                 ));
         }
-        datalib_etl::download_problems::report(&summary.problems);
+        datalib_etl::download_problems::report(db.pool(), &summary.problems).await;
         info!(
             event = "jmap_label_filter",
             requested = opts.only_mailbox_labels.len(),

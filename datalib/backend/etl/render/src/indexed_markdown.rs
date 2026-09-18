@@ -25,7 +25,7 @@ use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
-use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, DDL as PROBLEMS_DDL};
+use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, DDL as PROBLEMS_DDL};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
 
@@ -701,6 +701,33 @@ impl IndexedMarkdownStore {
                         sample.subject, sample.measured_at_utc
                     )
                 })?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Replace every row of one stage with `rows`, stamps carried as
+    /// they are. How the fetch stage reaches this store: the render
+    /// step reads the raw store's `problems` at the commit it rendered
+    /// from — the complete truth about what the download could not do
+    /// — and hands them here whole, so there is nothing to sweep.
+    pub fn replace_stage_problems(&self, stage: Stage, rows: &[ProblemRow]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM problems WHERE stage = ?")
+                .bind(stage.as_str())
+                .execute(&mut **conn)
+                .await
+                .with_context(|| format!("clear {} problems", stage.as_str()))?;
+            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            for row in rows {
+                // Audited: `sql` is built from `ProblemRow`'s associated
+                // consts, never from row data; all values bound.
+                row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("insert problem {}", row.problem_uuid))?;
             }
             Ok(())
         })

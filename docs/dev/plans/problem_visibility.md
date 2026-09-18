@@ -1,9 +1,11 @@
 # Problem visibility: every error and warning a step meets, shown to the user
 
-**Status: proposal (2026-09-18). Nothing in §3 onward is built.**
-§1 is an audit checked against `137cb5c1` (the tree after #502
-landed); every "we have" claim names the file it was read in. Where
-this doc and the tree disagree, the tree wins.
+**Status: built through PR 5 (2026-09-18), with a tail.** §1 is the
+audit as it stood at `137cb5c1`, before any of this landed — read it
+as the record of what was true then, not as a description of the
+tree. §3 says per PR what landed and what is still open: the
+per-provider fetch migration, R3's lossy-rules table, R4's drop
+budget. Where this doc and the tree disagree, the tree wins.
 
 ## 0. What we want
 
@@ -345,11 +347,39 @@ store, the index, a steady-state re-run and a from-scratch rebuild.
 Still open: `Problem::lossy` has no callers, so R3's table cannot be
 generated yet.
 
-**PR 5 — the fetch stage.** `record_object_attempt` writes and clears
-per §D5; the raw → render copy; then the provider migrations, one
-commit each, tracked as a checklist in this doc.
+**PR 5 — the fetch stage.** Done, minus the provider tail. Every raw
+store has a `problems` table (`doltlite_raw::SHARED_DDL`);
+`record_object_attempt`'s failure arm writes the entity's fetch row
+(`Reason::FetchFailed`, an error when the record never fetched, a
+warning when an earlier fetch left a copy) and both success paths clear
+it; the render step reads the raw store's rows at the commit it
+rendered from and replaces its own fetch-stage rows with them, minted
+again under the source's id; the ingest step reports its store's
+counts. On the fixture this immediately recorded two things that were
+only log lines before — a Claude attachment with no bytes and the
+facebook video deliberately absent from the export — and
+`ingested_tng_test` pins both beside the poisoned reply.
 
-**Later, not in this plan:** R4's drop budget (a run that drops more
+Also on it: `download_problems::report` — a configured label,
+channel or conversation id upstream does not have or will not show —
+which was one `warn!` per entry and is now also a row keyed
+`config:<setting>:<value>`, replaced whole each run so a corrected
+config clears it (claude, slack, email, gmail).
+
+**The provider tail, still open.** A provider that `warn!`s and
+`continue`s past a per-record fetch failure records nothing until it
+calls `record_object_error`. The mechanism is proven by the four that
+already do (`chatgpt`, `claude`, `garmin`, `notion`) and by
+`blob_cas`, which every attachment-bearing provider reaches. Left to
+migrate, in the order the practices doc gives (biggest surfaces first):
+`slack`, `email`, `github`, `gitlab`, `linkedin`, `google_takeout`,
+`beeper`, `signal`, `whatsapp`, `sms_backup_restore`, `contacts`,
+`airvisual`, `yolink`, `fsindex`, `media`, `pdf`, `facebook` (its
+non-media rows), `claude_code`. One commit each; the test is that the
+provider's fixture, given one unfetchable record, produces the row.
+
+**Later, not in this plan:** R3's table (`Problem::lossy` still has
+no callers); R4's drop budget (a run that drops more
 than a fraction stops), which needs the counts from PR 1 and a
 decision about the threshold; a per-message marker in the body rather
 than only the banner; problems on `edges`.

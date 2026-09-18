@@ -1025,6 +1025,7 @@ dependencies = [
  "chrono",
  "clap",
  "datalib-obs",
+ "datalib-problems",
  "datalib-qmd-indexer",
  "datalib-runtime",
  "datalib-table",

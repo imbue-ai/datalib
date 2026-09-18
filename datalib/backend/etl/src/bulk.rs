@@ -97,6 +97,23 @@ where
         q.execute(&mut **tx)
             .await
             .with_context(|| format!("bulk_upsert_bookkeeping {bk_table}"))?;
+        // A record that fetched has no fetch problem any more.
+        let mut clear = String::from(
+            "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (",
+        );
+        clear.push_str(&vec!["?"; chunk.len()].join(","));
+        clear.push(')');
+        // Audited: a `?,?,?` run sized from `chunk.len()`; every value
+        // bound.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(clear))
+            .bind(datalib_problems::ScopeKind::Entity.as_str())
+            .bind(datalib_problems::Stage::Fetch.as_str());
+        for id in chunk {
+            q = q.bind(format!("{table}:{id}"));
+        }
+        q.execute(&mut **tx)
+            .await
+            .with_context(|| format!("clear fetch problems for {table}"))?;
     }
     Ok(())
 }
