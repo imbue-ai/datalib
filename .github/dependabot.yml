@@ -1,7 +1,14 @@
 # Dependabot: keeps the pins current, so a fixed advisory reaches us as a
-# PR rather than as a red `deny` job. Every ecosystem that has a lockfile
-# in the tree is here; the `deny` job in test.yml is what fails the build
-# in between.
+# PR rather than as a red `deny` job. The `deny` job in test.yml is what
+# fails the build in between.
+#
+# Not every lockfile in the tree is here. The backend's Cargo.lock and
+# requirements.txt are inputs to bzlmod extensions, so a bump to either
+# also has to repin MODULE.bazel.lock (`bazel mod deps
+# --lockfile_mode=update`) — which Dependabot cannot do, so every such PR
+# fails at analysis. Those two are bumped by hand (tools/repin_cargo.sh;
+# AGENTS.md § "Python deps"). The tauri Cargo.lock is outside Bazel and
+# stays.
 #
 # Actions are pinned to full commit SHAs (a tag can be moved; a SHA
 # cannot), and Dependabot keeps the SHA and the `# vN` comment in step.
@@ -9,66 +16,63 @@
 # The two npm trees under third-party/ are the packages the shipped
 # binaries run (see MODULE.bazel); a bump there also bumps the Rust
 # version constants (`//tools:version_pins_test` says which), so those
-# PRs need a hand.
+# PRs need a hand. tools/lint's pyright is pinned beside the pip one
+# for the same reason.
+#
+# Monthly, a few PRs at a time: every PR is a full CI run on the shared
+# BuildBuddy executors, and the day this was enabled fourteen cold runs
+# started at once and made every merge-gating run that hour slow.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
 
-  - package-ecosystem: cargo
-    directory: /datalib/backend
-    schedule:
-      interval: weekly
-    # Cargo.lock only: a bump that changes a manifest range is a
-    # decision, a lockfile refresh is maintenance. After merging one,
-    # `CARGO_BAZEL_REPIN=1` (tools/repin_cargo.sh) is what crate_universe
-    # needs to see the new lock.
-    versioning-strategy: lockfile-only
-    groups:
-      cargo-minor-and-patch:
-        update-types: ["minor", "patch"]
   - package-ecosystem: cargo
     directory: /datalib/tauri
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     versioning-strategy: lockfile-only
 
   - package-ecosystem: npm
     directory: /datalib/ui
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 3
     groups:
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
   - package-ecosystem: npm
     directory: /datalib/tauri
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
   - package-ecosystem: npm
     directory: /tools/lint
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
   - package-ecosystem: npm
     directory: /third-party/qmd/runtime
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
   - package-ecosystem: npm
     directory: /third-party/latchkey/runtime
     schedule:
-      interval: weekly
-
-  - package-ecosystem: pip
-    directory: /
-    schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
 
   - package-ecosystem: docker
     directory: /datalib/docker
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
   - package-ecosystem: docker
     directory: /.devcontainer
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 1
