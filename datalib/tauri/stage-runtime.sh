@@ -6,7 +6,11 @@
 # user-facing `latchkey` launcher beside the sidecar binaries, and
 # — on a signing build — codesign everything that will be notarized.
 # The staging itself is `scripts/stage_runtime.sh`, shared with the
-# release tarball; this file is only what the .app adds on top.
+# release tarball; this file is only what the .app adds on top. The
+# .app's tree is staged `--no-symlinks`: Tauri copies resources file by
+# file and drops every link, and the pnpm layout is nothing but links.
+# `check-app.sh` runs the bundled tools after `tauri build` to prove
+# the copy survived.
 #
 # Signing: when $APPLE_SIGNING_IDENTITY is set (same convention as
 # tauri.conf.json's beforeBuildCommand), the node binary and every
@@ -23,7 +27,7 @@ runtime_dir="$script_dir/runtime"
 
 log() { printf '>>> stage-runtime: %s\n' "$*" >&2; }
 
-"$repo_root/scripts/stage_runtime.sh" "$runtime_dir"
+"$repo_root/scripts/stage_runtime.sh" "$runtime_dir" --no-symlinks
 
 # The third-party notices, shipped under Contents/Resources/licenses/
 # (tauri.conf.json lists the directory).
@@ -59,8 +63,6 @@ if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     rm -f "$entitlements"
     # Every native library in the trees must be signed for notarization.
     # *.so: node-llama-cpp names its Mach-O dylibs libggml-*.so.
-    # `-type f` so the pnpm store's symlinks are signed once, through
-    # the real file, rather than once per link.
     find "$runtime_dir/latchkey" "$runtime_dir/qmd" \
         \( -name '*.node' -o -name '*.dylib' -o -name '*.so' \) -type f -print0 |
         while IFS= read -r -d '' lib; do

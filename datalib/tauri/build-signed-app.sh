@@ -199,6 +199,9 @@ codesign --verify --deep --strict "$app_bundle"
 xcrun stapler validate "$app_bundle"
 # The end-to-end Gatekeeper check: fails unless signed AND notarized.
 spctl --assess --type execute "$app_bundle"
+# Signed and notarized is not the same as runs: the bundled Node and
+# both JS trees have to start from inside the .app.
+"$here/check-app.sh" "$app_bundle"
 
 echo
 echo "Signed + notarized:"

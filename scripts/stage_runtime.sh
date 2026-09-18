@@ -11,7 +11,7 @@
 # this and then codesigns), and a checkout can stage one anywhere and
 # point `DATALIB_RUNTIME_DIR` at it.
 #
-#   scripts/stage_runtime.sh <dest> [--cuda <cuda-dest>]
+#   scripts/stage_runtime.sh <dest> [--cuda <cuda-dest>] [--no-symlinks]
 #
 # Layout staged (and expected by the Rust resolver — keep in sync):
 #
@@ -32,6 +32,17 @@
 # qmd's own fallback exists for, throwing at init on driverless
 # machines, and nobody has asked for it.
 #
+# `--no-symlinks` rewrites each JS tree into npm's flat layout
+# (scripts/hoist_node_modules.py), which has no links at all. The .app
+# needs it: Tauri's resource bundler copies regular files only, and the
+# pnpm layout reaches every package through a link
+# (`node_modules/latchkey -> .aspect_rules_js/latchkey@<v>/…`), so a
+# tree bundled with its links dropped has every byte and no entry
+# script. Dereferencing the links is not a fix — Node finds a package's
+# dependencies beside where it really lives, and a copy lives nowhere
+# — hence the rewrite. Not combinable with `--cuda`, whose overlay is
+# laid out for the store.
+#
 # Everything staged here comes out of Bazel. That is the whole design:
 # this script downloads nothing and resolves nothing. Four targets:
 #
@@ -51,27 +62,32 @@
 # its Bazel tree is built from, so a pin that moves in one place fails
 # the build rather than staging a directory nothing will look in.
 #
-# Build-host requirements: bazelisk (or bazel) and rsync. No Node, no
-# npm, no C toolchain — the native modules arrive prebuilt inside their
+# Build-host requirements: bazelisk (or bazel) and rsync, plus python3
+# for `--no-symlinks`. No Node, no npm, no C toolchain — the native modules arrive prebuilt inside their
 # npm tarballs (see the better-sqlite3 13 note in MODULE.bazel). Trees
 # are staged for the HOST platform; cross builds are not supported.
 
 set -euo pipefail
 
+usage() { echo "usage: $0 <dest> [--cuda <cuda-dest>] [--no-symlinks]" >&2; exit 2; }
+
 runtime_dir=""
 cuda_dir=""
+no_symlinks=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cuda)
-            [[ $# -ge 2 ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            [[ $# -ge 2 ]] || usage
             cuda_dir="$2"; shift 2 ;;
-        -*) echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2 ;;
+        --no-symlinks) no_symlinks=1; shift ;;
+        -*) usage ;;
         *)
-            [[ -z "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            [[ -z "$runtime_dir" ]] || usage
             runtime_dir="$1"; shift ;;
     esac
 done
-[[ -n "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+[[ -n "$runtime_dir" ]] || usage
+[[ -z "$no_symlinks" || -z "$cuda_dir" ]] || usage
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
@@ -88,6 +104,7 @@ else
     fail "neither bazelisk nor bazel found on PATH"
 fi
 command -v rsync >/dev/null 2>&1 || fail "rsync not found on PATH"
+[[ -z "$no_symlinks" ]] || command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH (--no-symlinks needs it)"
 
 # ---------------------------------------------------------------------------
 # Version pins, grepped from the Rust sources (see header).
@@ -125,10 +142,10 @@ bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
 # ---------------------------------------------------------------------------
 
 # rsync rather than cp: `-a` keeps the pnpm store's relative symlinks as
-# symlinks (dereferencing them would triple the bundle — every package
-# would be copied once per dependent), `--delete` clears whatever a
-# previous stage left behind, and `--chmod` makes the copy writable
-# since Bazel's outputs are read-only and codesign has to rewrite them.
+# symlinks (`--no-symlinks` rewrites the tree afterwards, once every
+# prune is done), `--delete` clears whatever a previous stage left
+# behind, and `--chmod` makes the copy writable since Bazel's outputs
+# are read-only and codesign has to rewrite them.
 stage_tree() { # kind, version, source node_modules dir
     local dest="$runtime_dir/$1/$2/node_modules"
     log "staging $1@$2"
@@ -226,6 +243,15 @@ done
 [[ "$kept" == 1 ]] || fail "the $cpu_binding binding is not in the staged qmd tree"
 # The links into the dropped store dirs now dangle; sweep them.
 find "$qmd_modules" -type l ! -exec test -e {} \; -exec rm -f {} + 2>/dev/null || true
+
+# After every prune, so a dropped package is not carried into the flat
+# tree. The smoke test below then runs against the tree that ships.
+if [[ -n "$no_symlinks" ]]; then
+    python3 "$script_dir/hoist_node_modules.py" "$qmd_modules"
+    python3 "$script_dir/hoist_node_modules.py" "$runtime_dir/latchkey/$latchkey_version/node_modules"
+    links="$(find "$runtime_dir" -type l | wc -l | tr -d ' ')"
+    [[ "$links" == 0 ]] || fail "$links symlinks survived --no-symlinks"
+fi
 
 # Assert the two entry points the Rust resolver will look for actually
 # resolve. Without this the staging can be subtly wrong — a moved entry,

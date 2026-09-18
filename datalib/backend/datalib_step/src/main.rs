@@ -135,9 +135,9 @@ enum Cmd {
     /// latchkey in place — the tree beside the binaries when one is
     /// shipped, else the release asset `runtime.manifest` names,
     /// fetched sha256-verified into `~/.cache/datalib/runtime` — and
-    /// run `qmd --version` through it. What every sync does on its
-    /// first `qmd` or `latchkey`, runnable ahead of time. Needs no data
-    /// root.
+    /// run `qmd --version` and `latchkey --version` through it. What
+    /// every sync does on its first `qmd` or `latchkey`, runnable ahead
+    /// of time. Needs no data root.
     PullRuntime,
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
@@ -452,9 +452,22 @@ async fn run_function(
 /// the report names the tree that will serve the next sync and proves
 /// its Node starts.
 fn pull_runtime() -> Result<String> {
-    let mut cmd = datalib_runtime::qmd::qmd_command(datalib_runtime::qmd::DEFAULT_QMD_VERSION)?;
+    let qmd = version_through_runtime(datalib_runtime::qmd::qmd_command(
+        datalib_runtime::qmd::DEFAULT_QMD_VERSION,
+    )?)?;
     let root = datalib_runtime::node_runtime::runtime_root()
         .context("no runtime root after a successful resolution")?;
+    let latchkey = version_through_runtime(datalib_runtime::node_runtime::latchkey_command()?)?;
+    Ok(format!(
+        "runtime: {}\nqmd --version: {qmd}\nlatchkey --version: {latchkey}",
+        root.display()
+    ))
+}
+
+// Both tools, because a tree can hold one and not the other, and
+// because this is what the .app's post-bundle check runs
+// (`datalib/tauri/check-app.sh`).
+fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     let out = cmd
         .arg("--version")
         .output()
@@ -466,11 +479,7 @@ fn pull_runtime() -> Result<String> {
         out.status,
         String::from_utf8_lossy(&out.stderr).trim()
     );
-    Ok(format!(
-        "runtime: {}\nqmd --version: {}",
-        root.display(),
-        String::from_utf8_lossy(&out.stdout).trim()
-    ))
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// The two index steps have one reader each — the `unified_index`

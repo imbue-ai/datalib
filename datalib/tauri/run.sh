@@ -49,6 +49,7 @@ target_dir="$(cargo metadata --no-deps --format-version 1 \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 app_bundle="$target_dir/debug/bundle/macos/Datalib.app"
 if [[ -d "$app_bundle" ]]; then
+  "$here/check-app.sh" "$app_bundle"
   exec open -n "$app_bundle" --args "$@"
 fi
 
