@@ -67,13 +67,11 @@ pub struct TranscriptMeta {
     pub record_counts: BTreeMap<String, usize>,
 }
 
+/// One content record: the key Claude Code gave it and the line as
+/// written. Everything else about it stays in `raw`.
 #[derive(Debug, Clone)]
 pub struct ParsedRecord {
     pub uuid: String,
-    pub parent_uuid: Option<String>,
-    pub record_type: String,
-    pub timestamp: Option<String>,
-    pub is_sidechain: bool,
     pub raw: Value,
 }
 
@@ -141,17 +139,7 @@ pub fn parse_transcript(
             if record_type == "user" && meta.first_prompt.is_none() {
                 meta.first_prompt = first_prompt(&v);
             }
-            records.push(ParsedRecord {
-                uuid,
-                parent_uuid: str_field(&v, "parentUuid"),
-                record_type: record_type.to_string(),
-                timestamp: str_field(&v, "timestamp"),
-                is_sidechain: v
-                    .get("isSidechain")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                raw: v,
-            });
+            records.push(ParsedRecord { uuid, raw: v });
             stats.records += 1;
             continue;
         }
@@ -383,7 +371,7 @@ mod tests {
         );
         let t = parse_transcript(&text, "p/s1/subagents/agent-a9.jsonl", None).unwrap();
         assert_eq!(t.transcript_id(), "s1#a9");
-        assert!(t.records[0].is_sidechain);
+        assert_eq!(t.records[0].raw["isSidechain"], json!(true));
         assert_eq!(
             agent_id_from_path("p/s1/subagents/agent-a9.jsonl"),
             Some("a9")

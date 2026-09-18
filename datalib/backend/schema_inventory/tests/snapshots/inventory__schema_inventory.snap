@@ -1201,11 +1201,6 @@ records
     id
     payload
     transcript_id
-    session_id
-    record_type
-    timestamp
-    parent_uuid
-    is_sidechain
 transcripts
     id
     payload

@@ -214,11 +214,6 @@ fn push_rows(
                 payload: r.raw.to_string(),
             },
             transcript_id: transcript_id.clone(),
-            session_id: parsed.session_id.clone(),
-            record_type: r.record_type.clone(),
-            timestamp: r.timestamp.clone(),
-            parent_uuid: r.parent_uuid.clone(),
-            is_sidechain: i64::from(r.is_sidechain),
         });
     }
 }
