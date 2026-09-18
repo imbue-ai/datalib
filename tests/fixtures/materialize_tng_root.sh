@@ -9,8 +9,10 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   unified_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_index/qmd_index/qmd/index.sqlite QMD index (from qmd-index.tar).
-#   unified_index/qmd_models/          the three qmd GGUFs, linked in from
-#                                      bazel outputs (`:qmd_models`).
+#   unified_index/qmd_models/          the qmd GGUFs this target carries,
+#                                      linked in from bazel outputs (all
+#                                      three, or the embedding model alone
+#                                      — see the two targets in BUILD.bazel).
 #   unified_index/qmd_index/qmd/models -> ../../qmd_models
 #   config.toml                        { data_root }, every source as a
 #                                      render-only group, the two fan-ins,
@@ -102,13 +104,19 @@ command = "'$APPLET_BIN' unified_index"
 EOF
 } > "$OUT_ROOT/config.toml"
 
-# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, fetched
-# by //third-party/qmd_models), so this no longer depends on the developer having run
+# qmd's GGUF models. They arrive as bazel inputs (fetched by
+# //third-party/qmd_models), so this no longer depends on the developer having run
 # qmd at least once — which it used to, refusing with a "populate the
 # shared cache first" message. That check existed because letting qmd
 # download 2.2 GB silently is a multi-minute stall that masquerades as a
 # hang; taking the models from bazel removes the stall instead of
 # reporting it.
+#
+# The embedding model is required: every search embeds the query. The
+# other two are staged when this target carries them and reported when
+# it does not; `materialize_tng_root_embed_only` leaves them out on
+# purpose, and its caller sets DATALIB_QMD_MODELS_NO_FETCH so nothing
+# fetches them into the root behind its back.
 #
 # Two details, both deliberate:
 #
@@ -123,15 +131,21 @@ EOF
 #     sibling and the expected path points at it.
 MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
 mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_index/qmd"
+EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
+src="$(rlocation "$EMBED_MODEL")" || src=""
+if [[ -z "$src" || ! -s "$src" ]]; then
+  echo "ERROR: qmd embedding model not found in runfiles: $EMBED_MODEL" >&2
+  echo "  (is //third-party/qmd_models:embeddinggemma still in this target's \`data\`?)" >&2
+  exit 3
+fi
+ln -sfn "$src" "$MODELS_DIR/$(basename "$EMBED_MODEL")"
 for entry in \
-  "_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
   "_main/third-party/qmd_models/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
   "_main/third-party/qmd_models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
   src="$(rlocation "$entry")" || src=""
   if [[ -z "$src" || ! -s "$src" ]]; then
-    echo "ERROR: qmd model not found in runfiles: $entry" >&2
-    echo "  (is \`:qmd_models\` still in materialize_tng_root's \`data\`?)" >&2
-    exit 3
+    echo "note: $(basename "$entry") is not in this target's runfiles; not staged" >&2
+    continue
   fi
   ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done
