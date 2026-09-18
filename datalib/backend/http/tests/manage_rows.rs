@@ -116,14 +116,14 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(
         types,
         [
+            "actions",
             "identity",
             "identity",
             "status",
             "chips",
             "chips",
             "timestamp",
-            "timeseries",
-            "actions"
+            "timeseries"
         ]
     );
     let rows = by_key(&got);

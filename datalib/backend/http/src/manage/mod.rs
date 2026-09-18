@@ -90,6 +90,8 @@ impl Phase {
 /// The columns the rows carry, in the order the screen shows them.
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
+        ColumnSpec::new("actions", "Actions", ColumnType::Actions)
+            .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
         ColumnSpec::new("name", "Name", ColumnType::Identity)
             .describe("What the config calls it; its id — the folder under the data root — beside it when they differ.")
             .editable(),
@@ -104,8 +106,6 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
-        ColumnSpec::new("actions", "Actions", ColumnType::Actions)
-            .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
     ]
 }
 
