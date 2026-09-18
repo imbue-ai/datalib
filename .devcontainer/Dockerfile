@@ -18,7 +18,7 @@
 # tag, and on demand — as
 # `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>`, `:X.Y.Z` and
 # `:latest`. It does not wait on any other release job.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
