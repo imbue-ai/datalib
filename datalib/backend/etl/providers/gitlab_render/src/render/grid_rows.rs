@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{MergeRequestRow, NoteRow, NoteSection};
 
@@ -56,7 +56,7 @@ pub fn rows_for_mr(
     stanza: &str,
     mr: &MergeRequestRow,
     notes: &[NoteRow],
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let qmd = super::render::mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
     let entire_chat = format!("/chat/{}", mr.uuid);

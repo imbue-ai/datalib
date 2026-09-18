@@ -41,6 +41,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
 - [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md), [`multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposals; the second measures bytes at rest (§4) before you touch how text is stored.
+- [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — proposal, with an audit of what the `render_problems` sink does and does not cover: per-instance ids, severity, the copy into the index, the Manage counts and the document banner.
 
 **UI**
 

@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
 
@@ -85,7 +85,7 @@ pub fn rows_for_pr(
     pr: &PullRequestRow,
     comments: &[CommentRow],
     stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let qmd = super::render::pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
     let entire_chat = format!("/chat/{}", pr.uuid);

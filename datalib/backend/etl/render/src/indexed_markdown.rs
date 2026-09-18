@@ -25,9 +25,9 @@ use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
+use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
-use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
@@ -48,7 +48,7 @@ fn store_ddl() -> Vec<&'static str> {
         .iter()
         .chain(MARKDOWNS_DDL.iter())
         .chain(EDGES_DDL.iter())
-        .chain(RENDER_PROBLEMS_DDL.iter())
+        .chain(PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
@@ -337,7 +337,7 @@ impl IndexedMarkdownStore {
                 crate::grid_index::delete_document_rows(conn, markdown_uuid)
                     .await
                     .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-                sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+                sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(markdown_uuid)
                     .execute(&mut **conn)
@@ -595,11 +595,7 @@ fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
 }
 
 impl IndexedMarkdownStore {
-    async fn sweep_problems(
-        &self,
-        markdown_uuid: &str,
-        problems: &[RenderProblemRow],
-    ) -> Result<()> {
+    async fn sweep_problems(&self, markdown_uuid: &str, problems: &[ProblemRow]) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
         // Read the prior `first_seen_at_utc` for every uuid about to be
@@ -609,7 +605,7 @@ impl IndexedMarkdownStore {
         // `first_seen_at_utc` a synonym for `last_seen_at_utc`, and "this has
         // been broken since Tuesday" would be unanswerable.
         let seen: HashMap<String, String> = sqlx::query(
-            "SELECT uuid, first_seen_at_utc FROM render_problems \
+            "SELECT problem_uuid, first_seen_at_utc FROM problems \
              WHERE scope_kind = ? AND scope_key = ?",
         )
         .bind(ScopeKind::Markdown.as_str())
@@ -620,7 +616,7 @@ impl IndexedMarkdownStore {
         .into_iter()
         .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
         .collect::<Result<_>>()?;
-        sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+        sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
             .bind(ScopeKind::Markdown.as_str())
             .bind(markdown_uuid)
             .execute(&mut **conn)
@@ -636,14 +632,14 @@ impl IndexedMarkdownStore {
     async fn insert_problems(
         &self,
         conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-        problems: &[RenderProblemRow],
+        problems: &[ProblemRow],
         seen: &HashMap<String, String>,
     ) -> Result<()> {
         let now = datalib_time::split_stamp(&self.now);
         for p in problems {
-            let stamped = RenderProblemRow {
+            let stamped = ProblemRow {
                 first_seen_at_utc: seen
-                    .get(&p.uuid)
+                    .get(&p.problem_uuid)
                     .cloned()
                     .unwrap_or_else(|| now.utc.clone()),
                 last_seen_at_utc: now.utc.clone(),
@@ -652,14 +648,14 @@ impl IndexedMarkdownStore {
             };
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
-            let sql = datalib_etl::bulk::insert_sql::<RenderProblemRow>();
-            // Audited: `sql` is built from `RenderProblemRow`'s
+            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            // Audited: `sql` is built from `ProblemRow`'s
             // associated consts, never from row data; all values bound.
             stamped
                 .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
                 .execute(&mut **conn)
                 .await
-                .with_context(|| format!("insert render_problem {}", p.uuid))?;
+                .with_context(|| format!("insert problem {}", p.problem_uuid))?;
         }
         Ok(())
     }
@@ -714,16 +710,12 @@ impl IndexedMarkdownStore {
     /// deserialize has no `markdown_uuid` to hang off. Swept by the
     /// raw-store entity id instead, so they clear when that entity is
     /// next parsed successfully.
-    pub fn put_entity_problems(
-        &self,
-        entity_id: &str,
-        problems: &[RenderProblemRow],
-    ) -> Result<()> {
+    pub fn put_entity_problems(&self, entity_id: &str, problems: &[ProblemRow]) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
             let seen: HashMap<String, String> = sqlx::query(
-                "SELECT uuid, first_seen_at_utc FROM render_problems \
+                "SELECT problem_uuid, first_seen_at_utc FROM problems \
                  WHERE scope_kind = ? AND scope_key = ?",
             )
             .bind(ScopeKind::Entity.as_str())
@@ -734,7 +726,7 @@ impl IndexedMarkdownStore {
             .into_iter()
             .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
             .collect::<Result<_>>()?;
-            sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+            sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
                 .bind(ScopeKind::Entity.as_str())
                 .bind(entity_id)
                 .execute(&mut **conn)
@@ -882,16 +874,22 @@ impl IndexedMarkdownStore {
         })
     }
 
-    pub fn problem_counts(&self) -> Result<HashMap<String, i64>> {
+    /// Whole-store counts by severity: what the step reports at its
+    /// end. A severity this build cannot name is an error — the store
+    /// was written by a newer build and a silent zero would read as
+    /// clean.
+    pub fn problem_counts(&self) -> Result<HashMap<Severity, i64>> {
         blocking(async {
-            let rows =
-                sqlx::query("SELECT outcome, COUNT(*) FROM render_problems GROUP BY outcome")
-                    .fetch_all(&self.pool)
-                    .await
-                    .context("count problems")?;
+            let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
+                .fetch_all(&self.pool)
+                .await
+                .context("count problems")?;
             let mut out = HashMap::new();
             for r in rows {
-                out.insert(r.try_get::<String, _>(0)?, r.try_get::<i64, _>(1)?);
+                let word: String = r.try_get(0)?;
+                let severity = Severity::parse(&word)
+                    .with_context(|| format!("problems.severity: unknown spelling {word:?}"))?;
+                out.insert(severity, r.try_get::<i64, _>(1)?);
             }
             Ok(out)
         })
@@ -916,9 +914,8 @@ impl IndexedMarkdownStore {
 mod tests {
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     use datalib_schema::providers::Provider;
-    use datalib_schema::render_problems::Stage;
-    use datalib_schema::render_problems::{Outcome, Problem, Reason};
 
     fn store(dir: &Path) -> IndexedMarkdownStore {
         IndexedMarkdownStore::open(dir).expect("open store")
@@ -974,7 +971,7 @@ mod tests {
         dir: &Path,
         markdown_uuid: &str,
         _label: &str,
-        problems: Vec<RenderProblemRow>,
+        problems: Vec<ProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
@@ -1222,25 +1219,16 @@ mod tests {
         assert_eq!(bytes, Some(140), "the later write wins");
     }
 
-    fn problem(uuid: &str, scope: &str) -> RenderProblemRow {
-        RenderProblemRow {
-            uuid: uuid.into(),
-            scope_key: scope.into(),
-            scope_kind: ScopeKind::Markdown.as_str().into(),
-            source_id: "src".into(),
-            stage: Stage::GridRow.as_str().into(),
-            outcome: Outcome::Nulled.as_str().into(),
-            problems: serde_json::to_string(&vec![Problem::field(
-                "created_at",
-                Reason::CoercionFailed,
-                "not-a-date",
-            )])
-            .unwrap(),
-            first_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
-            last_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
-            tz_offset: None,
-            render_version: 7,
-        }
+    fn problem(uuid: &str, scope: &str) -> ProblemRow {
+        ProblemRow::new(
+            "src",
+            Stage::GridRow,
+            Scope::Markdown(scope),
+            Some(uuid),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "not-a-date"),
+            Some(7),
+        )
     }
 
     /// The write path has no skip of its own: the same document written
@@ -1394,14 +1382,17 @@ mod tests {
             &doc_with(root, "md-2", "fp-1", vec![problem("row-b", "md-2")]),
         )
         .unwrap();
-        assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(2));
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            Some(2)
+        );
 
         // A second run that only reprocesses md-2, and finds it clean.
         s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
 
         let counts = s.problem_counts().unwrap();
         assert_eq!(
-            counts.get("nulled").copied(),
+            counts.get(&Severity::Warning).copied(),
             Some(1),
             "md-2's problem cleared; md-1's must not have — it was never looked at"
         );
@@ -1446,7 +1437,7 @@ mod tests {
         assert!(!first.md_path.exists(), "the old file is gone");
         assert!(!empty.md_path.exists(), "and so is the one just written");
         assert_eq!(
-            s.problem_counts().unwrap().get("nulled").copied(),
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
             Some(1),
             "the record of why every row went stays"
         );
@@ -1464,7 +1455,10 @@ mod tests {
             &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
         )
         .unwrap();
-        assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(1));
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            Some(1)
+        );
 
         s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
         assert!(
