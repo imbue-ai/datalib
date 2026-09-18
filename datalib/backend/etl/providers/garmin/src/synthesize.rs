@@ -17,7 +17,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::ingest::api::{base_url, req_get, req_get_bytes};
-use crate::ingest::{daily_path, date, ACTIVITY_PAGE, ITEM_KINDS, WEIGHT_CHUNK_DAYS};
+use crate::ingest::{
+    daily_path, date, item_listing_path, ACTIVITY_PAGE, ITEM_KINDS, ITEM_PAGE, WEIGHT_CHUNK_DAYS,
+};
 use datalib_etl_garmin_config::DEFAULT_REFRESH_DAYS;
 
 /// The spec file. Everything is optional but the account and the two
@@ -211,25 +213,32 @@ impl Synthesizer for GarminSynth {
         }
 
         for kind in ITEM_KINDS {
-            let path = match *kind {
-                "personal_records" => format!(
-                    "/personalrecord-service/personalrecord/prs/{}",
-                    urlencoding::encode(&display_name)
-                ),
-                "gear" => match &profile_pk {
-                    Some(pk) => format!("/gear-service/gear/filterGear?userProfilePk={pk}"),
-                    None => continue,
-                },
-                "badges" => "/badge-service/badge/earned".to_string(),
-                "workouts" => "/workout-service/workouts?start=0&limit=1000".to_string(),
-                "goals" => {
-                    "/goal-service/goal/goals?status=active&start=0&limit=1000&sortOrder=asc"
-                        .to_string()
-                }
-                _ => unreachable!(),
+            let items = spec.items.get(kind.name).cloned().unwrap_or_default();
+            let path = |offset: usize| {
+                item_listing_path(kind.name, &display_name, profile_pk.as_deref(), offset)
             };
-            let items = spec.items.get(*kind).cloned().unwrap_or_default();
-            put(get(&path), json_response(&Value::Array(items)))?;
+            if !kind.paged {
+                if let Some(p) = path(0) {
+                    put(get(&p), json_response(&Value::Array(items)))?;
+                }
+                continue;
+            }
+            // Pages until the first short one; a full last page makes
+            // the walk ask for one more, which is empty.
+            let mut offset = 0usize;
+            loop {
+                let chunk: Vec<Value> =
+                    items.iter().skip(offset).take(ITEM_PAGE).cloned().collect();
+                let full = chunk.len() == ITEM_PAGE;
+                put(
+                    get(&path(offset).expect("paged kinds need no profile")),
+                    json_response(&Value::Array(chunk)),
+                )?;
+                if !full {
+                    break;
+                }
+                offset += ITEM_PAGE;
+            }
         }
 
         Ok(SynthesizeReport {
