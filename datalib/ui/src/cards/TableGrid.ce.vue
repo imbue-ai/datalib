@@ -25,7 +25,7 @@ import type { ColumnSpec } from "@/api";
 import { formatRelative } from "@/config/timeFormat";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
-import { typedColumns } from "./typedColumns";
+import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { timestampFields } from "./cellRenderers";
 
@@ -224,7 +224,7 @@ function isDark(): boolean {
 }
 
 function options(): GridOption {
-  const first = props.columns[0]?.field ?? "";
+  const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
     enableHtmlRendering: false,
@@ -270,7 +270,7 @@ function options(): GridOption {
       ? {
           enableTreeData: true,
           treeDataOptions: {
-            columnId: first,
+            columnId: treeField,
             parentPropName: PARENT,
             collapsedPropName: COLLAPSED,
             initialSort: { columnId: ORDER, direction: "ASC" },

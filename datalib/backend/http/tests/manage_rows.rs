@@ -117,13 +117,13 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         types,
         [
             "identity",
+            "actions",
             "identity",
             "status",
             "chips",
             "chips",
             "timestamp",
-            "timeseries",
-            "actions"
+            "timeseries"
         ]
     );
     let rows = by_key(&got);
