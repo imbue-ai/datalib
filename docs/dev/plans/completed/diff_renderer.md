@@ -2,7 +2,7 @@
 
 **Status: built (2026-09-18) — every step of "Order of work".** Kept as
 the record of what was decided and why; the reference for how a diff
-group works is [`config_model.md`](../config_model.md) and the code it
+group works is [`config_model.md`](../../config_model.md) and the code it
 names. The contacts diff
 group in the TNG fixture is the working example
 (`tests/fixtures/run_sync_pipeline.py`, `ingested_tng_test`'s
@@ -122,7 +122,7 @@ to compare against.
 
 ## How the step computes it
 
-The render driver ([`render.rs`](../../../datalib/backend/datalib_step/src/render.rs),
+The render driver ([`render.rs`](../../../../datalib/backend/datalib_step/src/render.rs),
 `render_source`) already does everything but the subtraction. For a
 `diff` group it runs the source type's render processors — the same
 `plan_render` the source's own render step uses — with a sink that
@@ -202,7 +202,7 @@ re-fetched.
 ## What the diff tree holds
 
 **`grid_rows` gains two nullable columns**, following the checklist in
-[`grid_rows.md`](../grid_rows.md) §"Adding a column":
+[`grid_rows.md`](../../grid_rows.md) §"Adding a column":
 
 | column | values |
 |---|---|
@@ -262,7 +262,7 @@ pub sections: Vec<Section>,   // concatenated, they are the .md
 
 In `chat-common` this is `render_markdown` collecting the per-item
 strings it already builds one at a time
-([`render.rs`](../../../datalib/backend/etl/chat-common/src/render.rs),
+([`render.rs`](../../../../datalib/backend/etl/chat-common/src/render.rs),
 `render_item`) into a `Vec` and joining at the end; `contact-common`
 the same. The frontmatter and title are one uuid-less section, diffed
 as text. Those two crates cover most providers in one edit each. A

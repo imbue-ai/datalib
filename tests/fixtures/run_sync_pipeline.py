@@ -568,7 +568,7 @@ inputs = [{rendered_list}]"""
 
 
 # The diff group each source gets, by the source's id — the delta
-# between its first ingest and its second (`docs/dev/plans/diff_renderer.md`).
+# between its first ingest and its second (`docs/dev/plans/completed/diff_renderer.md`).
 DIFF_GROUPS = {"tng_contacts": "tng_contacts-diff", "slack": "slack-diff"}
 
 

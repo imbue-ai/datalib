@@ -2,7 +2,7 @@
 //! twice — the buckets that moved between two raw commits, at the later
 //! one and then at the earlier — into a collecting sink, the two sides
 //! subtracted (`datalib_etl_render::diff`), and the result written as
-//! one ordinary render tree. `docs/dev/plans/diff_renderer.md`.
+//! one ordinary render tree. `docs/dev/plans/completed/diff_renderer.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
