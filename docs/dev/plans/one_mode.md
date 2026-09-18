@@ -9,11 +9,10 @@ measurement, wipe-at-end for ingest, `Policy::Never`,
 `always_clear_before_ingest`, `--start-over`) and 7 (`render_inputs`)
 are still to do; each item below says which. §"Testing it without a
 provider" is how to check the rule without a real source, also not
-built. This is the design that
-[`render_inputs.md`](render_inputs.md) and the
-[deletion-record audit](deletion_record_audit_2026_09_11.md) turned out
-to be reaching for. Read this first; those two are now the mechanism
-for one of its rules and the measurement that motivated it.
+built. This is the design that `render_inputs`
+([`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md))
+turned out to be reaching for: that table is the mechanism for one of
+its rules.
 
 ## The problem, in one paragraph
 
@@ -180,7 +179,7 @@ document with no rows. The units, per step:
 | API ingest (claude, chatgpt, slack, email, github, gitlab, notion, …) | one page: its entity rows, edge rows, bookkeeping | already a transaction (`bulk_upsert_in_tx`; #7's "per-page transaction discipline") |
 | mirror ingest (lightroom, apple_photos, whatsapp) | one table: upsert from the source, prune not-in-source | **not**: drop-all is its own transaction, then create+copy per table |
 | scan ingest (pdf, fsindex, media) | one file's rows | reset before the walk is its own transaction |
-| render | one document: `markdowns`, `grid_rows`, `edges`, `render_problems`, `render_inputs` | **not**: bare statements under the write lock |
+| render | one document: `markdowns`, `grid_rows`, `edges`, `problems`, `render_inputs` | **not**: bare statements under the write lock |
 | render, end of run | the prune and the cursor | the prune is bare statements; the cursor is a file |
 | grid_index | the whole load, prune, cursors | already one transaction |
 
@@ -188,7 +187,7 @@ A run that spans tables leaves a cross-table partial state visible to
 a consumer pinned mid-run: this run's messages against last run's
 chats, a thread whose replies are not in yet. That is already true of
 per-page ingest today, renderers already tolerate a dangling reference
-(`render_problems` records it), and "what the step believes so far" is
+(`problems` records it), and "what the step believes so far" is
 a truthful description of it. Accepted, and said here so nobody
 re-litigates it as a bug.
 
@@ -223,7 +222,7 @@ Against the audit, finding by finding:
 | 2.5 wipers protected by omission | nothing to protect |
 | 2.6 streaming ingests already honour it | they are the model for everyone else |
 
-And against `render_inputs.md`: the one route it could not fix — "a
+And against `render_inputs`: the one route it could not fix — "a
 checkpoint taken mid-wipe" — is closed, because there is no mid-wipe.
 Its `render_inputs` table becomes the mechanism for rule 2 on the
 render side: the buckets a run declared are "what I enumerated", and
@@ -324,7 +323,7 @@ change the answer:
 > the last run is the same as one cold render of the raw store at cₙ.
 
 "The same" means the logical content: `markdowns` without
-`rendered_at`, `grid_rows`, `edges`, `render_problems` without its two
+`rendered_at`, `grid_rows`, `edges`, `problems` without its two
 timestamps, and the bytes of every `.md` file. Not the doltlite file
 and not its commit hashes, which chain off a wall-clock initial commit
 (`tests/fixtures/README.md`, "byte-stable?").
@@ -516,8 +515,8 @@ for each table T in the raw store, for each row r:
 A failure names the table, the row and the mutation — "changing
 `users.display_name` did not re-render thread X" — which is the fix
 in one line. It needs nothing per provider beyond `plan_render` and
-the raw store the fixture already builds; `render_inputs.md` step 3
-sketches the same loop and, once that lands, the harness compares
+the raw store the fixture already builds; the `render_inputs` design
+sketched the same loop and, once that lands, the harness compares
 against declared inputs rather than bucket queries with no other
 change.
 

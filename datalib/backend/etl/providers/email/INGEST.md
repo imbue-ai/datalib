@@ -157,7 +157,7 @@ Fastmail doesn't 429 us in practice — JMAP's batch shape (one
 methodCalls envelope = one HTTP request, regardless of how many
 created/updated ids it carries) keeps the request count tame. There's
 no in-process backoff loop today. If a future server returns 429,
-model the loop on `chatgpt/src/extract/api.rs`.
+model the loop on `chatgpt/src/ingest/api.rs`.
 
 ## Sample data
 

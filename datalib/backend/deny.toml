@@ -1,0 +1,70 @@
+# cargo-deny policy for the backend workspace — run by the `deny` job in
+# .github/workflows/test.yml, and by hand with
+#
+#     cd datalib/backend && cargo deny check
+#
+# Four checks. `advisories` is the one that matters: a RustSec advisory
+# against anything in Cargo.lock fails the build (the same lockfile
+# crate_universe resolves every Bazel crate from, so this covers the
+# Bazel-only crates too). `bans` refuses wildcard and git dependencies
+# and only warns on duplicate versions; `sources` allows crates.io and
+# nothing else; `licenses` is an allow list.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Unmaintained crates with no upgrade path on our side: each is a
+# transitive dependency of something we chose for other reasons. Listed
+# here, with the chain, so the next person can tell a new advisory from
+# an old one; remove an entry the day the parent crate drops it.
+ignore = [
+    # candle-core -> gemm -> paste. Archived by its author; candle has
+    # not moved off it. Only linked by the perseus provider.
+    { id = "RUSTSEC-2024-0436", reason = "paste, via candle-core's gemm; no replacement in candle 0.10" },
+    # indicatif -> number_prefix. A byte-formatting helper; indicatif
+    # still depends on it.
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix, via indicatif" },
+    # pdf-inspector -> lopdf -> ttf-parser (font parsing for the pdf
+    # provider). lopdf has not moved to skrifa.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via pdf-inspector's lopdf" },
+]
+
+[bans]
+# 56 duplicate versions at the time of writing (tokenizers x2, lopdf
+# x2, axum 0.7 + 0.8, thiserror 1 + 2, ...). Worth trimming, not worth
+# gating: a warn keeps the list visible in every run.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+version = 2
+# The workspace's own crates are `publish = false`; they are MIT (../../LICENSE)
+# but there is nothing to check them against.
+private = { ignore = true }
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+]
+confidence-threshold = 0.8

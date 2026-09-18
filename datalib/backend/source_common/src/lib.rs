@@ -195,8 +195,7 @@ impl RenderCommon {
 /// already on this machine. Every method table a provider accepts
 /// declares one ([`IngestMethods`]), and a step's reach is read off its
 /// written params against that list — so the Manage row's "Download" /
-/// "Import", the wizard's credentials section and
-/// `DATALIB_DAG_RESET_AND_REDOWNLOAD` all answer from one place.
+/// "Import" and the wizard's credentials section answer from one place.
 #[derive(
     Debug,
     Clone,

@@ -36,7 +36,21 @@ pub fn columns() -> Vec<ColumnSpec> {
             )
             .hidden(),
         ColumnSpec::new("channel", "Channel", ColumnType::Text),
-        ColumnSpec::new("when", "Time", ColumnType::Datetime),
+        ColumnSpec::new("created_at", "Created", ColumnType::Datetime).describe(
+            "When the thing came into being, as the source wrote it: a message's own \
+             stamp; for a document, the earliest moment in it.",
+        ),
+        // Off by default in the unified grid, where most rows are
+        // messages with nothing here; a Browse of one source names it,
+        // and there — one row per thread — it is the column that says
+        // which are still alive.
+        ColumnSpec::new("modified_at", "Modified", ColumnType::Datetime)
+            .describe(
+                "When it last changed, as the source wrote it: the last message of a \
+                 thread, a PR's updated_at, a page's last_edited_time. Empty on a row \
+                 not known to have changed since it was created.",
+            )
+            .hidden(),
         ColumnSpec::new("snippet", "Contents", ColumnType::Text),
         ColumnSpec::new("author", "Author", ColumnType::Text),
         ColumnSpec::new("account", "Account", ColumnType::Text).hidden(),
@@ -47,6 +61,17 @@ pub fn columns() -> Vec<ColumnSpec> {
                 "What is being counted depends on the row's Type: rows for a Table, files \
                  for a Source Size, pages for a PDF.",
             )
+            .hidden(),
+        // Set only on a diff group's rows; a real source's rows carry
+        // null in both, and the grid colours a row off the first.
+        ColumnSpec::new("diff_status", "Change", ColumnType::Text)
+            .describe(
+                "How this row differs between the two commits its diff group compares: \
+                 added, removed, modified or unchanged. Empty on every real source's rows.",
+            )
+            .hidden(),
+        ColumnSpec::new("diff_changed_columns", "Changed columns", ColumnType::Text)
+            .describe("For a modified row, the columns whose value differs.")
             .hidden(),
     ]
 }
@@ -132,25 +157,33 @@ impl Sources {
                 .or_else(|| Some(row.provider.clone()).filter(|p| !p.is_empty())),
             detail: None,
         });
-        // Datalib's own rows — each source's storage report — are filed
-        // under datalib rather than under the source they measure.
-        let label = if row.source_id == datalib_source_id() {
+        row.source_ref = Some(self.identity(&row.source_id));
+    }
+
+    /// The source as the grid shows it: the name the config gives the
+    /// group, or its id when the config does not name it. Datalib's own
+    /// rows — each source's storage report — are filed under datalib
+    /// rather than under the source they measure.
+    pub fn identity(&self, source_id: &str) -> Identity {
+        let datalib = source_id == datalib_source_id();
+        let label = if datalib {
             "Datalib".to_string()
         } else {
-            group
+            self.groups
+                .get(source_id)
                 .and_then(|g| g.name.clone())
-                .unwrap_or_else(|| row.source_id.clone())
+                .unwrap_or_else(|| source_id.to_string())
         };
-        row.source_ref = Some(Identity {
-            id: row.source_id.clone(),
+        Identity {
+            id: source_id.to_string(),
             label,
             icon: None,
-            detail: Some(if row.source_id == datalib_source_id() {
+            detail: Some(if datalib {
                 "Datalib's own row, not a source's data".to_string()
             } else {
-                format!("Stored in {}/", row.source_id)
+                format!("Stored in {source_id}/")
             }),
-        });
+        }
     }
 }
 
@@ -164,6 +197,110 @@ mod tests {
             source: source.into(),
             source_id: source_id.into(),
             ..Default::default()
+        }
+    }
+
+    /// The specs name `SearchRow` fields as strings, and the viewer
+    /// draws whatever key that string finds — a spec for a field that
+    /// was renamed away draws an empty column and nothing complains.
+    /// So: every spec names a key the row serializes, holding a value
+    /// its type can draw; and every key without a spec is one this
+    /// list says is not a column, so a new field has to be placed.
+    #[test]
+    fn every_column_names_a_wire_field_of_the_type_it_declares() {
+        let mut row = SearchRow {
+            uuid: "u".into(),
+            conversation_uuid: "c".into(),
+            markdown_uuid: Some("m".into()),
+            message_index: Some(0),
+            snippet: "s".into(),
+            sender: "who".into(),
+            created_at: Some("2026-06-02T13:00:00-07:00".into()),
+            modified_at: Some("2026-06-03T09:30:00-07:00".into()),
+            is_document: true,
+            conversation_name: "n".into(),
+            project: "p".into(),
+            account: "a".into(),
+            org_uuid: "o".into(),
+            org_name: "Org".into(),
+            entire_chat: "/chat/c".into(),
+            source: "Slack".into(),
+            provider: "slack".into(),
+            provider_ref: None,
+            source_ref: None,
+            source_id: "slack".into(),
+            kind: "k".into(),
+            author: "who".into(),
+            channel: "#c".into(),
+            source_url: "https://x".into(),
+            notion_page_uuid: "n".into(),
+            upstream_id: "1".into(),
+            upstream_entity_kind: "message".into(),
+            byte_size: Some(1),
+            item_count: Some(1),
+            diff_status: Some("modified".into()),
+            diff_changed_columns: Some("text".into()),
+            score: Some(0.5),
+        };
+        Sources::read(Path::new("/nonexistent")).resolve(&mut row);
+        let wire = serde_json::to_value(&row).unwrap();
+        let wire = wire.as_object().unwrap();
+
+        // Row identity, joins and facets the grid reads without a
+        // column of their own.
+        const NOT_A_COLUMN: &[&str] = &[
+            "uuid",
+            "conversation_uuid",
+            "markdown_uuid",
+            "message_index",
+            "sender",
+            "entire_chat",
+            "source",
+            "provider",
+            "source_id",
+            "org_uuid",
+            "source_url",
+            "notion_page_uuid",
+            "upstream_id",
+            "upstream_entity_kind",
+            "is_document",
+        ];
+        let specs = columns();
+        for spec in &specs {
+            let value = wire
+                .get(&spec.field)
+                .unwrap_or_else(|| panic!("column `{}` names no SearchRow field", spec.field));
+            let fits = match spec.r#type {
+                ColumnType::Text => value.is_string(),
+                ColumnType::Count | ColumnType::Bytes => value.is_i64(),
+                ColumnType::Number => value.is_number(),
+                ColumnType::Datetime | ColumnType::Timestamp => value
+                    .as_str()
+                    .is_some_and(|s| datalib_time::validate_iso_offset(s).is_ok()),
+                ColumnType::Identity => value.get("id").is_some() && value.get("label").is_some(),
+                other => panic!("column `{}`: no rule for {other:?} here yet", spec.field),
+            };
+            assert!(
+                fits,
+                "column `{}` is {:?} but the row holds {value}",
+                spec.field, spec.r#type
+            );
+        }
+        for key in wire.keys() {
+            assert!(
+                specs.iter().any(|s| s.field == *key) || NOT_A_COLUMN.contains(&key.as_str()),
+                "SearchRow.{key} has no column and is not listed as not-a-column"
+            );
+        }
+        for key in NOT_A_COLUMN {
+            assert!(
+                wire.contains_key(*key),
+                "NOT_A_COLUMN names `{key}`, which is gone"
+            );
+            assert!(
+                !specs.iter().any(|s| s.field == *key),
+                "`{key}` is both a column and not one"
+            );
         }
     }
 

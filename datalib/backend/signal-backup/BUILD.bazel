@@ -5,15 +5,16 @@ load("@rules_rust_prost//:defs.bzl", "rust_prost_library")
 
 exports_files(["Cargo.toml"])
 
-# Vendored Signal-Android protos. See proto/PROTO_PROVENANCE.md for
-# upstream SHA + license. Two files because Signal splits the
-# "envelope" (LocalArchive.proto: metadata + files sidecar) from the
-# frame stream itself (Backup.proto: BackupInfo + Frame).
+# The Signal backup wire format, generated from upstream's compiled
+# descriptor rather than vendored (Signal-Android is AGPL-3.0; see
+# proto/PROTO_PROVENANCE.md). Two files because Signal splits the
+# "envelope" (local_archive.proto: metadata + files sidecar) from the
+# frame stream itself (backup.proto: BackupInfo + Frame).
 proto_library(
     name = "signal_backup_proto",
     srcs = [
-        "proto/Backup.proto",
-        "proto/LocalArchive.proto",
+        "proto/backup.proto",
+        "proto/local_archive.proto",
     ],
     strip_import_prefix = "/datalib/backend/signal-backup/proto",
 )

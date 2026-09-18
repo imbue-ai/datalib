@@ -3,6 +3,7 @@ name = "datalib-etl-sms-backup-restore"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_etl_sms_backup_restore"
@@ -23,7 +24,7 @@ uuid = { workspace = true, features = ["v5"] }
 # The "SMS Backup & Restore" Android app exports flat, attribute-heavy
 # XML (`<smses>` / `<calls>`); quick-xml pull-parses it. MMS part bytes
 # are inlined as base64 in the `data` attribute, decoded via `base64`.
-quick-xml = "0.36"
+quick-xml = "0.41"
 base64 = "0.22"
 sha2 = { workspace = true }
 tracing = "0.1"

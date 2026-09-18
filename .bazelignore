@@ -10,3 +10,4 @@ datalib/backend/target
 # worktree's symlinked external repos and fails to load (`@rules_license`,
 # `zlib+`, …).
 .claude
+datalib/tauri/node_modules

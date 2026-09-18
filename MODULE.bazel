@@ -115,38 +115,48 @@ http_archive(
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
-# `curl-impersonate`, the Chrome-impersonating curl that
-# `latchkey-curl-dispatch` execs for Cloudflare-fronted hosts. Built
-# from source by .github/workflows/curl-impersonate.yml (upstream commit
-# and release tag in third-party/curl-impersonate/pin.env) and published
-# as a release of this repo; these are that release's tarballs, one per
-# triple release.yml ships. //third-party/curl-impersonate selects the
-# one for the target platform. Why our own build rather than upstream's
-# prebuilts, and how to bump: docs/dev/curl_impersonate.md.
+# The two curl shims latchkey uses for Cloudflare-fronted hosts:
+# `latchkey-curl-router` (the `curl` that `LATCHKEY_CURL` points at) and
+# `curl-impersonate` (upstream, presenting Chrome's TLS fingerprint).
+# Both are built and released by github.com/imbue-ai/latchkey-curl-shims,
+# one tarball per triple release.yml ships; //third-party/latchkey-curl-shims
+# selects the pair for the target platform. What each binary does and
+# how to bump: docs/dev/curl_impersonate.md.
 #
-# The sha256s come from the SHA256SUMS the workflow publishes with the
-# release. `//third-party/curl-impersonate:pin_test` checks the tag
-# below against pin.env.
-CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
+# The sha256s come from the SHA256SUMS published with the release, and
+# each tarball's build provenance attestation was verified with
+# `gh attestation verify` before its sum was written here.
+LATCHKEY_CURL_SHIMS_RELEASE = "v0.2.1"
 
 [
     http_archive(
-        name = "curl_impersonate_%s" % triple.replace("-", "_"),
-        urls = ["https://github.com/imbue-ai/datalib/releases/download/%s/curl-impersonate-%s.tar.gz" % (
-            CURL_IMPERSONATE_RELEASE,
+        name = "latchkey_curl_shims_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/imbue-ai/latchkey-curl-shims/releases/download/%s/latchkey-curl-shims-%s.tar.gz" % (
+            LATCHKEY_CURL_SHIMS_RELEASE,
             triple,
         )],
         sha256 = sha,
-        strip_prefix = "curl-impersonate-%s" % triple,
-        build_file_content = 'exports_files(["curl-impersonate"])',
+        strip_prefix = "latchkey-curl-shims-%s" % triple,
+        # The two binaries, and the notices the shims' release packs beside
+        # the impersonator (curl, BoringSSL, nghttp2/3, ngtcp2, brotli, zstd,
+        # zlib): the release tarball and the .app carry them under licenses/
+        # (see //third-party:bundled_licenses).
+        build_file_content = """
+exports_files(["latchkey-curl-router", "curl-impersonate"])
+filegroup(
+    name = "licenses",
+    srcs = glob(["LICENSE-*"]),
+    visibility = ["//visibility:public"],
+)
+""",
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
-        ("x86_64-apple-darwin", "8b4271c1b98efa7e9cbc8e093e5927ca5f88cd5663db7f5750becd8a7aaa8d95"),
-        ("x86_64-unknown-linux-gnu", "908b1e3c0cdcd645e29d157a43845b1df22ce482478d62d07df5c02c28ea1dfc"),
-        ("aarch64-unknown-linux-gnu", "9098cb004d74e028ea159abf1224a45696f9359dec16b999e5749e14ee674018"),
-        ("x86_64-unknown-linux-musl", "eef9c448b0f9e4d0d67924969ae9afe9d84b0e7f43275b5a132b1dba77116d71"),
-        ("aarch64-unknown-linux-musl", "c2bb9bd8caa1c5aafaa3a04f7be30bf166b7a98290aba83427323255b8bc582f"),
+        ("aarch64-apple-darwin", "d309479b0d96ebe192fbc9ed5cb685923462af6eb939c0f1aa0358b6a0e39db1"),
+        ("x86_64-apple-darwin", "9bd9eb94e9588ce4d093e3472e711c68f02af601d8875f85127d9301a9c82d2f"),
+        ("x86_64-unknown-linux-gnu", "0f50df271b06bab4dd6c7c2cfbd1259cc527150d5b0beebb3e0e9dec0d6a41dd"),
+        ("aarch64-unknown-linux-gnu", "54025b77c407a821f870eaad6f76ad4578e174a936ed6758b92148d9d38a315d"),
+        ("x86_64-unknown-linux-musl", "c7cd5e7710d3f1e79f4b7116175afead3eb61cf1c674605f64e9fe910701c0e4"),
+        ("aarch64-unknown-linux-musl", "260093c5b7df73a89690101c822924fb8337234f629277e241bcfb8f24d198e3"),
     ]
 ]
 
@@ -205,82 +215,9 @@ LIGHTROOM_DB_DIFF_COMMIT = "733187a5216ccf631a92969a8fc147a4885353df"
     ]
 ]
 
-# qmd's GGUF models, as build inputs instead of build-time downloads.
-#
-# Three files, and the three code paths that load them are worth knowing
-# apart, because "qmd needs 2.2 GB of models" is true of the shipped app
-# and not of any one thing here:
-#
-#   embeddinggemma        `qmd embed` (the fixture index genrule) and
-#                         every search — the applet's daemon embeds the
-#                         query text.
-#   query-expansion 1.7B  only the applet's CLI FALLBACK, which shells
-#                         out to `qmd query` (auto-expanding) when the
-#                         long-lived `qmd mcp` daemon fails.
-#   qwen3-reranker        nothing, today. Both query paths disable
-#                         reranking (`"rerank": false` in daemon.rs,
-#                         `--no-rerank` in runner.rs). It is here so a
-#                         data root materialized for the e2e suite holds
-#                         what a real one does, and so flipping that flag
-#                         is a code change rather than a surprise
-#                         download.
-#
-# Why bazel fetches them rather than qmd: inside the action a download is
-# invisible on a laptop, where `~/.cache/qmd/models` is warm forever
-# after the first build, and a cold download on CI, where the published
-# devcontainer is built on the `-slim` prod variant that omits the models
-# and every job gets a fresh container. On 2026-09-03 one of those drew a
-# `429 Too Many Requests` from HuggingFace's CDN and failed a
-# merge-gating build (invocation e846f2cf, 1468s in the action before it
-# gave up). As bazel inputs the bytes are integrity-pinned, land in the
-# repository cache, and are shared by every worktree on the machine — and
-# nothing in `bazel test //...` reaches HuggingFace at all.
-#
-# Pinned to repo REVISIONS rather than `main`: HuggingFace serves
-# `resolve/main/...` as a moving pointer, so a re-quantized re-upload
-# would otherwise change what we embed with. With the revision pinned,
-# such a change is a `git` edit here.
-#
-# `downloaded_file_path` is load-bearing, not cosmetic. node-llama-cpp
-# decides a model is already cached by looking for the filename it would
-# itself have downloaded to — `hf_<owner>_<file>`, see
-# `findMatchingFilesInDirectory` in its `resolveModelFile.js`. Name a
-# file anything else and it downloads its own copy next to ours.
-#
-# The sha256s are HuggingFace's own LFS oids for each blob, which are
-# sha256 of the content — cross-checked against `shasum -a 256` of a warm
-# `~/.cache/qmd/models` before being written down here.
-[
-    http_file(
-        name = "qmd_model_%s" % short,
-        urls = ["https://huggingface.co/%s/resolve/%s/%s" % (repo, rev, basename)],
-        sha256 = sha,
-        downloaded_file_path = "hf_%s_%s" % (repo.split("/")[0], basename),
-    )
-    for short, repo, rev, basename, sha in [
-        (
-            "embeddinggemma",
-            "ggml-org/embeddinggemma-300M-GGUF",
-            "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
-            "embeddinggemma-300M-Q8_0.gguf",
-            "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
-        ),
-        (
-            "query_expansion",
-            "tobil/qmd-query-expansion-1.7B-gguf",
-            "7816de0b72572c6c860ca1eddf97ba9e7fb8cc65",
-            "qmd-query-expansion-1.7B-q4_k_m.gguf",
-            "000dfb1c06efa6a049e9f64ba921c3740e2454f62abab6fa10e77bd30bb2bcc0",
-        ),
-        (
-            "reranker",
-            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
-            "a02f48bb4f057028298c21fa033da2b30d7742d5",
-            "qwen3-reranker-0.6b-q8_0.gguf",
-            "22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48",
-        ),
-    ]
-]
+# qmd's GGUF models are fetched by a build action, not a repository
+# rule: see //third-party/qmd_models. As `http_file` repositories they were
+# downloaded whenever `//...` was analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.3.2")
@@ -317,7 +254,7 @@ use_repo(pip, "py_pip")
 bazel_dep(name = "rules_rust", version = "0.73.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
-# parses Signal-Android's `Backup.proto`. We use the Bazel-native prost
+# parses Signal-Android's backup format. We use the Bazel-native prost
 # codegen path (rules_rust_prost) instead of a `prost-build` build.rs:
 # codegen runs as a Bazel action driven by `rust_prost_library`, so the
 # crate stays build.rs-free and the generated code is reproducible /

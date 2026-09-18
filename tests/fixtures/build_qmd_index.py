@@ -42,7 +42,7 @@ Args (positional):
     5: path to the Node binary (@nodejs_host//:node_bin)
     6: path to the linked `@tobilu/qmd` package dir, used to locate the
        root of the pnpm store it lives in
-    7: path to the embedding GGUF (@qmd_model_embeddinggemma//file)
+    7: path to the embedding GGUF (//third-party/qmd_models:embeddinggemma)
 """
 
 from __future__ import annotations
@@ -159,12 +159,6 @@ def main() -> int:
         qmd_version,
         "--models-dir",
         str(models_dir),
-        # `qmd pull` fetches the query-expansion and reranker models for
-        # interactive querying, which this fixture never does — and it
-        # would delete and re-download the model we just staged, because
-        # it treats a cached file whose HuggingFace etag it cannot
-        # confirm as stale. Skipping it is what keeps the action offline.
-        "--no-pull",
     ]
     r = subprocess.run(cmd, env=env, check=False)
     if r.returncode != 0:

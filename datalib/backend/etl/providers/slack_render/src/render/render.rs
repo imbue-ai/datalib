@@ -12,8 +12,8 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 ///     output directory. A v3 tree cannot be updated in place; the
 ///     render step discards it wholesale. See
 ///     `DataProcessor::render_version`.
-/// v5: a `ts` we cannot parse is a null `when_ts` instead of a
+/// v5: a `ts` we cannot parse is a null `created_at` instead of a
 ///     real-looking `1970-01-01T00:00:00` — see
 ///     `docs/dev/data_architecture_parse_and_render.md` §6. Any document
 ///     holding such a row renders differently, so stale docs must go.
@@ -50,7 +50,7 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
@@ -227,11 +227,15 @@ fn build_item(m: &Message, root: &Message, labels: Labels<'_>) -> NormalizedChat
         ItemKind::Attachment
     };
     let msg_id = datalib_etl_slack::ids::message(&m.team_id, &m.channel_id, &m.ts);
+    // A `ts` is the message's identity as well as its time; one that
+    // will not parse is a record with a name and no place in time.
+    let mut problems = Vec::new();
+    let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
         message_uuid: msg_id.uuid.clone(),
         author_id: m.user_id.clone().unwrap_or_else(|| "unknown".into()),
         author_display,
-        date_ms: ts_to_ms(&m.ts),
+        date_ms,
         text: (!body.trim().is_empty()).then_some(body),
         kind,
         attachments,
@@ -245,6 +249,7 @@ fn build_item(m: &Message, root: &Message, labels: Labels<'_>) -> NormalizedChat
             msg_id.natural_key.clone(),
         )),
         is_aside: false,
+        problems,
     }
 }
 

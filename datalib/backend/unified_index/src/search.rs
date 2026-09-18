@@ -19,7 +19,13 @@ pub struct SearchRow {
     /// without a `REV:` field, or any row whose underlying entity isn't
     /// event-shaped). See data_architecture_ingestion.md §"Entities
     /// without a time-shape".
-    pub when: Option<String>,
+    pub created_at: Option<String>,
+    /// When the thing last changed, where the source says; null for a
+    /// row not known to have changed since `created_at`.
+    pub modified_at: Option<String>,
+    /// True on the row that is a whole rendered document, false on a
+    /// row inside one. `is:document` in the search bar.
+    pub is_document: bool,
     pub conversation_name: String,
     pub project: String,
     pub account: String,
@@ -60,12 +66,9 @@ pub struct SearchRow {
     pub author: String,
     /// Slack channel display name for Slack rows; empty otherwise.
     pub channel: String,
-    /// Deep-link URL to open this row in Slack; empty for non-Slack rows.
-    /// Legacy column — new rows carry their public URL in `source_url`.
-    pub slack_link: String,
     /// Public URL for the row's source artifact (Slack permalink,
     /// LinkedIn post, …); empty when the producer set none. The grid's
-    /// "Open source" action prefers this and falls back to `slack_link`.
+    /// "Open source" action follows it.
     pub source_url: String,
     /// For Notion rows: the page-level UUID the row belongs to. Empty
     /// otherwise. Used by right-click "Filter by Notion Page".
@@ -87,6 +90,13 @@ pub struct SearchRow {
     /// How many things this row counts — rows in a measured table,
     /// pages in a PDF. `None` for a row that is a single thing.
     pub item_count: Option<i64>,
+    /// How the row differs between the two commits its diff group
+    /// compares (`datalib_schema::diff_status::DiffStatus`). `None` on
+    /// every real source's rows — the one thing that says a row is
+    /// from a diff tree.
+    pub diff_status: Option<String>,
+    /// For a modified row, the columns that differ, `|`-joined.
+    pub diff_changed_columns: Option<String>,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

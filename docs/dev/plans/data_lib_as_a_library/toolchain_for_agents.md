@@ -230,7 +230,7 @@ from one that doesn't exist.
 
 **c. `grid_rows` is missing a `labels` column.** Map a document-shaped
 corpus onto the union table and the core lands cleanly — id → `uuid` /
-`upstream_id`, author → `author`, created → `when_ts`, space → `project`,
+`upstream_id`, author → `author`, created → `created_at`, space → `project`,
 team → `channel`, body → `text`, url → `source_url`, title →
 `conversation_name` and `markdowns.title`, cross-refs → the `edges`
 table. Exactly one field has nowhere to go: a set of tags. Every
@@ -277,7 +277,7 @@ and multi-step composition. Four things to package it:
 1. A page — "datalib-dag as a pipeline harness" — opening with a config
    containing no datalib providers at all.
 2. A ~40-line stdlib `dag_step.py` a skill vendors rather than reading
-   a spec for: parse `--params`/`--inputs`, read
+   a spec for: read `--params-file`, parse `--inputs`, read
    `DATALIB_DAG_CHANGED_INPUTS`, emit progress/outcome, hash a tree for
    the fallback version.
 3. A one-screen primitives index — `fswalk`, `file_checkpoint`,
@@ -320,7 +320,7 @@ outputs = ["tickets/rendered_md"]
 [steps.params.map]         # → the unified grid_rows core
 title   = "$.title"
 text    = ["$.description", "$.body"]   # first present wins
-when_ts = "$.updatedAt"
+created_at = "$.updatedAt"
 author  = "$.assignee.name"
 project = "$.team.key"
 labels  = "$.labels"

@@ -28,7 +28,7 @@ const SOURCE_LABEL: &str = "WhatsApp";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Whatsapp,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "WhatsApp Chat".to_string(),
@@ -174,8 +174,8 @@ const MESSAGE_ROWID_TABLES: &[&str] = &["message_text", "message_media"];
 
 /// Ask doltlite what changed since the cursor, resolved to chat JIDs.
 async fn scan_diff(db_path: &Path, range: RawRange<'_>) -> Result<DiffScan> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-    let head = range.pin(&pool).await?;
+    let reader = datalib_etl::doltlite_raw::open_reader(db_path, range.pin).await?;
+    let head = reader.as_ref().map(|r| r.pin().clone());
 
     // Both refs, or neither: with no commit to scan *to* there is nothing
     // committed to diff against, and cold-starting is the only honest answer.
@@ -186,7 +186,8 @@ async fn scan_diff(db_path: &Path, range: RawRange<'_>) -> Result<DiffScan> {
         (Some(from), Some(to)) => {
             let from = datalib_etl::pin::Pin::at(from).context("render cursor")?;
             let started = std::time::Instant::now();
-            let changed = changed_chats(&pool, &from, to).await?;
+            let pool = reader.as_ref().expect("a head means a reader").pool();
+            let changed = changed_chats(pool, &from, to).await?;
             DiffScan {
                 changed: Some(changed),
                 head: Some(to.commit().to_string()),
@@ -199,7 +200,9 @@ async fn scan_diff(db_path: &Path, range: RawRange<'_>) -> Result<DiffScan> {
             elapsed: None,
         },
     };
-    pool.close().await;
+    if let Some(reader) = reader {
+        reader.close().await;
+    }
     Ok(scan)
 }
 

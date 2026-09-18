@@ -134,7 +134,9 @@ impl DataProcessor for ClaudeExportIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        let session = ctx
+            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
+            .await;
         let s = ingest::export::ingest(ingest::export::IngestOptions {
             db,
             input_path: self.input_path.clone(),

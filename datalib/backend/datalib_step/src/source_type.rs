@@ -53,10 +53,17 @@ pub enum SourceType {
     Chatgpt,
     /// Claude.ai over the API, or an unpacked export; one raw store.
     Claude,
+    /// Claude Code sessions, read off the store Claude Code keeps on
+    /// this machine. Not a method of `claude`: a session and a
+    /// claude.ai chat never overlap, so they share no store to dedupe in.
+    ClaudeCode,
     /// Contacts over CardDAV, or from `.vcf` files. Served by the
     /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,
     Email,
+    /// A "Download your information" export, unpacked. The JSON flavour;
+    /// the HTML one is not read.
+    Facebook,
     Fsindex,
     /// Garmin Connect, over the API the Connect phone app uses.
     Garmin,

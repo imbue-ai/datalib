@@ -6,10 +6,20 @@ exports_files(["package.json"])
 # The latchkey CLI and its 6 transitive packages, materialized from
 # pnpm-lock.yaml. Sibling of //third-party/qmd/runtime:qmd_tree, and the
 # same trade: every tarball is integrity-checked and no install script
-# runs. `datalib/tauri/stage-runtime.sh` copies this into the .app's
-# `Contents/Resources/runtime/`, so what gets codesigned and notarized
-# under our Developer ID is exactly what the lockfile names.
+# runs. `scripts/stage_runtime.sh` copies this into the release
+# tarball's `runtime/` and the .app's `Contents/Resources/runtime/`, so
+# what ships — and what gets codesigned and notarized under our
+# Developer ID — is exactly what the lockfile names.
 npm_link_all_packages(name = "node_modules")
+
+# The `latchkey` package dir inside the store: an anchor a launcher can
+# `rlocation` and walk up from to find the store root (same role as the
+# qmd sibling's `qmd_package_dir`).
+alias(
+    name = "latchkey_package_dir",
+    actual = "node_modules/latchkey/dir",
+    visibility = ["//visibility:public"],
+)
 
 # The ENTIRE package store, for the same reason the qmd sibling exports
 # the whole thing: latchkey resolves its dependencies from directories

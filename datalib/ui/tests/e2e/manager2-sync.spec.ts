@@ -30,14 +30,15 @@ import {
   statusWord,
   statusOf,
   TERMINAL,
+  TABLE_ROWS,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const PDF_DIR = process.env.FW_E2E_PDF_FIXTURE_DIR;
+const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
+const PDF_DIR = process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR;
 
 /// This spec's own data root, asked of the backend rather than read
 /// from the environment.
@@ -112,7 +113,7 @@ test.describe("a real sync, driven from the grid", () => {
 
   test.skip(
     !STEP_BIN || !PDF_DIR,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
   );
 
   // A step's `command` is split shell-style, so a binary path is
@@ -188,6 +189,9 @@ ${applets()}`;
     const docsWas = await lastSyncedOf(page, "docs/ingest");
     await syncBtn(page, "docs/ingest").click();
     expect(await settle(page, "docs/ingest", docsWas)).toBe("Succeeded");
+    // `settle` ends on a remount; the cell is read once it is painted,
+    // not on the way to being.
+    await expect.poll(() => statusOf(page, "docs/ingest")).not.toBeNull();
     const docsStatus = await statusOf(page, "docs/ingest");
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
@@ -423,19 +427,19 @@ ${applets()}`;
     /// Rows top to bottom, each with the exact stamp it claims — read
     /// off `title`, so the check is against instants rather than the
     /// prose the cell renders — and its depth in the tree, off the
-    /// `ag-row-level-N` class AG Grid puts on every row.
+    /// `slick-tree-level-N` class on the tree cell.
     type Seen = { id: string; level: number; stamp: string | null };
     const ordering = async (): Promise<Seen[]> =>
-      page.locator(".ag-grid-scrolling-rows .ag-row").evaluateAll((rows) =>
+      page.locator(TABLE_ROWS).evaluateAll((rows) =>
         rows
           .sort(
             (a, b) =>
-              Number((a as HTMLElement).getAttribute("aria-rowindex")) -
-              Number((b as HTMLElement).getAttribute("aria-rowindex")),
+              Number((a as HTMLElement).getAttribute("data-row")) -
+              Number((b as HTMLElement).getAttribute("data-row")),
           )
           .map((r) => ({
-            id: r.getAttribute("row-id") ?? "",
-            level: Number(/ag-row-level-(\d+)/.exec(r.className)?.[1] ?? "0"),
+            id: r.getAttribute("data-key") ?? "",
+            level: Number(/slick-tree-level-(\d+)/.exec(r.querySelector(".tg-tree")?.className ?? "")?.[1] ?? "0"),
             stamp:
               r.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
           })),
@@ -482,7 +486,7 @@ ${applets()}`;
       ).toBe(true);
     };
 
-    const header = page.locator('.ag-header-cell[col-id="last_synced"]');
+    const header = page.locator('.tg-grid .slick-header-column[col-id="last_synced"]');
 
     await header.click(); // ascending — oldest first
     const asc = siblingSets(await ordering());

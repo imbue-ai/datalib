@@ -57,6 +57,7 @@ copy_to_bin(
     ) + [
         "index.html",
         "package.json",
+        "tools/thirdPartyNotices.ts",
         "tsconfig.json",
         "vite.config.ts",
     ],
@@ -121,7 +122,7 @@ _E2E_DATA = [
     # fixture config names its binary by absolute path — so it has to be
     # in the runfiles or every grid spec sees an empty page.
     "//datalib/backend/applets:datalib_applet",
-    "//tests/fixtures:materialize_tng_root",
+    "//tests/fixtures:materialize_tng_root_embed_only",
     # The step host, for the spec that drives a real sync. The fixture
     # root is a temp dir with nothing on PATH and no `binary_dir`, so a
     # step's `command:` has to name an absolute path — which means the
@@ -184,8 +185,8 @@ _E2E_DATA = [
     "@nodejs_host//:node_bin",
     "//third-party/qmd/runtime:qmd_tree",
     "//third-party/qmd/runtime:package.json",
-    # The anchor `FW_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above is what
-    # actually materializes the 277-package store.
+    # The anchor `DATALIB_TEST_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above
+    # is what actually materializes the 277-package store.
     "//third-party/qmd/runtime:qmd_package_dir",
 ]
 
@@ -199,13 +200,17 @@ _E2E_ENV = {
     # declared, still in the runfiles, and `rlocation` misses it at run
     # time. Through `rlocationpath` the same mistake is an analysis-time
     # error naming the label.
-    "FW_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
-    "FW_E2E_DAG_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_dag_bin)",
-    "FW_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
-    "FW_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root)",
-    "FW_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
-    "FW_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-    "FW_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
+    "DATALIB_TEST_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
+    "DATALIB_TEST_E2E_DAG_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_dag_bin)",
+    "DATALIB_TEST_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
+    "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root_embed_only)",
+    # The fixture root carries the embedding model alone (see that
+    # target); this keeps the applet from fetching the other two into
+    # it at start. Inherited by everything run_e2e.sh spawns.
+    "DATALIB_QMD_MODELS_NO_FETCH": "1",
+    "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
+    "DATALIB_TEST_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    "DATALIB_TEST_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
     # The store's location has to be anchored on a GENERATED artifact,
     # not derived from the source `package.json` above. In the runfiles
     # tree that package.json is a symlink back into the source dir, so
@@ -216,7 +221,7 @@ _E2E_ENV = {
     # `bazel run` it did not, and the documented
     # `--update-snapshots` workflow failed with "qmd package store not
     # in runfiles". `qmd_package_dir` exists precisely as this anchor.
-    "FW_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+    "DATALIB_TEST_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
@@ -361,6 +366,7 @@ copy_to_bin(
         allow_empty = False,
     ) + [
         "package.json",
+        "tools/thirdPartyNotices.ts",
         "tsconfig.json",
         "vite.config.ts",
     ],
@@ -429,11 +435,11 @@ _RENDER_PREVIEW_DATA = [
 ]
 
 _RENDER_PREVIEW_ENV = {
-    "FW_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/qmd_md.tar)",
-    "FW_GOLDEN_RLOC": "$(rlocationpath tests/goldens/render_preview.html)",
-    "FW_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-    "FW_PREVIEW_JS_RLOC": "$(rlocationpath :render_preview_script)",
-    "FW_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/chat-common:render_chat_samples)",
+    "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/qmd_md.tar)",
+    "DATALIB_TEST_GOLDEN_RLOC": "$(rlocationpath tests/goldens/render_preview.html)",
+    "DATALIB_TEST_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    "DATALIB_TEST_PREVIEW_JS_RLOC": "$(rlocationpath :render_preview_script)",
+    "DATALIB_TEST_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/chat-common:render_chat_samples)",
 }
 
 sh_binary(

@@ -62,6 +62,9 @@ rust_binary(
         "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",
         "//datalib/backend/etl/providers/google_takeout_render:datalib_etl_google_takeout_render",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",
+        "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
+        "//datalib/backend/etl/providers/facebook_render:datalib_etl_facebook_render",
+        "//datalib/backend/etl/providers/facebook_config:datalib_etl_facebook_config",
         "//datalib/backend/etl/providers/linkedin:datalib_etl_linkedin",
         "//datalib/backend/etl/providers/linkedin_render:datalib_etl_linkedin_render",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
@@ -82,6 +85,9 @@ rust_binary(
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
         "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
+        "//datalib/backend/etl/providers/claude_code:datalib_etl_claude_code",
+        "//datalib/backend/etl/providers/claude_code_render:datalib_etl_claude_code_render",
+        "//datalib/backend/etl/providers/claude_code_config:datalib_etl_claude_code_config",
         "//datalib/backend/etl/providers/sms_backup_restore:datalib_etl_sms_backup_restore",
         "//datalib/backend/etl/providers/sms_backup_restore_render:datalib_etl_sms_backup_restore_render",
         "//datalib/backend/etl/providers/sms_backup_restore_config:datalib_etl_sms_backup_restore_config",
@@ -93,6 +99,8 @@ rust_binary(
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/fetch:datalib_fetch",
+        "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
@@ -139,4 +147,26 @@ insta_update(
     name = "ingest_methods.update",
     test = ":datalib_step_unittests",
     test_args = ["ui_mirror_matches_the_declarations"],
+)
+
+# A release tarball with no `runtime/` fetches the runtime its manifest
+# names on first use, sha256-verified, and refuses one that hashes
+# wrong — through the real binary and the real resolver, against a
+# local stand-in for the release.
+rust_test(
+    name = "runtime_fetch_test",
+    size = "medium",
+    srcs = ["tests/runtime_fetch.rs"],
+    data = [":datalib_step"],
+    edition = "2021",
+    env = {
+        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+    },
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:tar",
+        "@datalib_crates//:tempfile",
+    ],
 )

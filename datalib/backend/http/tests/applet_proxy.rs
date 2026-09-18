@@ -81,8 +81,9 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 "Slack Thread"
             })
             .source_label("Slack")
+            .is_document(index.is_none())
             .channel(Some(channel.to_string()))
-            .when_ts(Some(when.to_string()))
+            .created_at(Some(when.to_string()))
             .author(author.map(str::to_string))
             .message_index(index)
             .conversation_uuid(md)
@@ -117,11 +118,14 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 md_path: tree.join(format!("{md}.md")),
                 render_version: 1,
                 rows,
+                sections: Vec::new(),
                 edges: Vec::new(),
                 problems: Vec::new(),
             },
         )
         .unwrap();
+    // The applet reads at HEAD, as the render step leaves it.
+    store.commit("test").unwrap();
     store.close();
 }
 
@@ -320,7 +324,14 @@ async fn forwards_the_callers_content_type_verbatim() {
     let (port, seen) =
         one_shot_server(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}");
     let resp = tokio::task::spawn_blocking(move || {
-        datalib_http::applets::forward(port, "POST", "/thing?a=1", Some("text/csv"), b"a,b\n1,2")
+        datalib_http::applets::forward(
+            port,
+            "POST",
+            "/thing?a=1",
+            Some("text/csv"),
+            b"a,b\n1,2",
+            Some("s3cret"),
+        )
     })
     .await
     .unwrap()
@@ -336,6 +347,10 @@ async fn forwards_the_callers_content_type_verbatim() {
     // hardcoded `application/json` used to be.
     assert!(req.contains("Content-Type: text/csv\r\n"), "{req:?}");
     assert!(req.contains("Content-Length: 7\r\n"), "{req:?}");
+    assert!(
+        req.contains("X-Datalib-Applet-Secret: s3cret\r\n"),
+        "{req:?}"
+    );
     assert!(req.ends_with("a,b\n1,2"), "{req:?}");
 }
 
@@ -345,7 +360,7 @@ async fn preserves_an_arbitrary_status_and_type() {
         b"HTTP/1.1 418 I'm a teapot\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nshort and stout",
     );
     let resp = tokio::task::spawn_blocking(move || {
-        datalib_http::applets::forward(port, "GET", "/teapot", None, b"")
+        datalib_http::applets::forward(port, "GET", "/teapot", None, b"", None)
     })
     .await
     .unwrap()

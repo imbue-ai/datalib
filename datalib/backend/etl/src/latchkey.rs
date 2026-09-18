@@ -4,43 +4,33 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const DISPATCH_BIN: &str = "latchkey-curl-dispatch";
-/// Where we publish the resolved dispatch curl for the `latchkey` CLI.
+const ROUTER_BIN: &str = "latchkey-curl-router";
+/// Where we publish the resolved router curl for the `latchkey` CLI.
 const CURL_ENV_VAR: &str = "LATCHKEY_CURL";
 /// Set by latchkey's callers to route every request through a gateway.
 const GATEWAY_ENV_VAR: &str = "LATCHKEY_GATEWAY";
-// Cargo emits the binary as `latchkey-curl-dispatch` (dashes — from
-// `[[bin]] name = "latchkey-curl-dispatch"` in Cargo.toml). Bazel emits it
-// as `latchkey_curl_dispatch` (underscores — the `rust_binary` target
-// name). Try both under `_main/` (bzlmod's main-repo canonical name).
-const RUNFILES_PATHS: &[&str] = &[
-    "_main/datalib/backend/etl/latchkey_curl_dispatch",
-    "_main/datalib/backend/etl/latchkey-curl-dispatch",
-];
-
-// Filenames to look for next to `current_exe()`: the cargo/release dash
-// form and the bazel underscore form. (The release tarball drops the
-// `datalib-` prefix; see .github/workflows/release.yml's stage step
-// and //datalib/backend:dist.)
-const SIBLING_NAMES: &[&str] = &["latchkey-curl-dispatch", "latchkey_curl_dispatch"];
+/// A developer's explicit override, consulted after `LATCHKEY_CURL`.
+const ROUTER_ENV_VAR: &str = "DATALIB_CURL_ROUTER";
+/// Where `//third-party/latchkey-curl-shims` puts the router under
+/// `_main/` (bzlmod's main-repo canonical name).
+const RUNFILES_PATH: &str = "_main/third-party/latchkey-curl-shims/latchkey-curl-router";
 
 static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "could not locate {DISPATCH_BIN}; set $DATALIB_CURL_DISPATCH or $LATCHKEY_CURL, \
-     or build it (`cargo build -p datalib-etl --bin latchkey-curl-dispatch` \
-     or `bazel build //datalib/backend/etl:latchkey_curl_dispatch`)"
+    "could not locate {ROUTER_BIN}; set ${ROUTER_ENV_VAR} or ${CURL_ENV_VAR}, \
+     or fetch it (`bazel build //third-party/latchkey-curl-shims`)"
 )]
-pub struct CurlDispatchNotFound;
+pub struct CurlRouterNotFound;
 
-/// Ensure `LATCHKEY_CURL` points at the in-tree dispatch curl and return
+/// Ensure `LATCHKEY_CURL` points at the bundled router curl and return
 /// its resolved path. Idempotent — the first call resolves and caches;
 /// later calls are a `OnceLock` read.
-pub fn ensure_curl_dispatch() -> Result<PathBuf, CurlDispatchNotFound> {
+pub fn ensure_curl_router() -> Result<PathBuf, CurlRouterNotFound> {
     match RESOLVED.get_or_init(resolve) {
         Some(path) => {
-            if should_export_curl_dispatch(
+            if should_export_curl_router(
                 std::env::var_os(CURL_ENV_VAR).as_deref(),
                 std::env::var_os(GATEWAY_ENV_VAR).as_deref(),
             ) {
@@ -48,7 +38,7 @@ pub fn ensure_curl_dispatch() -> Result<PathBuf, CurlDispatchNotFound> {
             }
             Ok(path.clone())
         }
-        None => Err(CurlDispatchNotFound),
+        None => Err(CurlRouterNotFound),
     }
 }
 
@@ -56,48 +46,39 @@ fn is_gateway_mode(gateway: Option<&OsStr>) -> bool {
     matches!(gateway, Some(value) if !value.is_empty())
 }
 
-/// Whether [`ensure_curl_dispatch`] should point `LATCHKEY_CURL` at the
-/// dispatch curl it resolved. Two reasons not to:
-fn should_export_curl_dispatch(existing_curl: Option<&OsStr>, gateway: Option<&OsStr>) -> bool {
+/// Whether [`ensure_curl_router`] should point `LATCHKEY_CURL` at the
+/// router curl it resolved. Two reasons not to:
+fn should_export_curl_router(existing_curl: Option<&OsStr>, gateway: Option<&OsStr>) -> bool {
     existing_curl.is_none() && !is_gateway_mode(gateway)
 }
 
 fn resolve() -> Option<PathBuf> {
-    if let Some(p) = env_path("LATCHKEY_CURL") {
+    if let Some(p) = env_path(CURL_ENV_VAR) {
         return Some(p);
     }
-    if let Some(p) = env_path("DATALIB_CURL_DISPATCH") {
+    if let Some(p) = env_path(ROUTER_ENV_VAR) {
         return Some(p);
     }
     if let Some(p) = from_runfiles() {
         return Some(p);
     }
-    if let Some(p) = from_workspace_walk() {
-        return Some(p);
-    }
     if let Some(p) = from_exe_dir() {
         return Some(p);
     }
-    which_on_path(DISPATCH_BIN)
+    which_on_path(ROUTER_BIN)
 }
 
-/// Look for the dispatch curl next to `current_exe()`. This is how an
-/// installed release (e.g. `~/.local/bin/datalib-step`)
-/// finds its bundled `latchkey-curl-dispatch` sibling without
-/// needing `~/.local/bin` on `PATH` or any env override. Follow the
-/// symlink that scripts/install.sh resolved to so we look in the real
-/// install dir, not a shim dir.
+/// Look for the router curl next to `current_exe()`. This is how an
+/// installed release (e.g. `~/.local/bin/datalib-step`) finds its
+/// bundled `latchkey-curl-router` sibling without needing `~/.local/bin`
+/// on `PATH` or any env override. Follow the symlink that
+/// scripts/install.sh resolved to so we look in the real install dir,
+/// not a shim dir.
 fn from_exe_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    let dir = exe.parent()?;
-    for name in SIBLING_NAMES {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    let candidate = exe.parent()?.join(ROUTER_BIN);
+    candidate.is_file().then_some(candidate)
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
@@ -115,50 +96,8 @@ fn from_runfiles() -> Option<PathBuf> {
     // compile time (which only happens when this crate is built by
     // rules_rust under Bazel — cargo builds it without that env var).
     let rf = runfiles::Runfiles::create().ok()?;
-    for path in RUNFILES_PATHS {
-        let p = rf.rlocation(path)?;
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
-}
-
-fn from_workspace_walk() -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // Bazel sets these for `bazel run` / `bazel test`. BUILD_WORKING_DIRECTORY
-    // is where the user invoked bazel from (usually workspace root);
-    // BUILD_WORKSPACE_DIRECTORY is the workspace root itself.
-    for var in ["BUILD_WORKING_DIRECTORY", "BUILD_WORKSPACE_DIRECTORY"] {
-        if let Some(v) = std::env::var_os(var) {
-            roots.push(PathBuf::from(v));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd);
-    }
-    // CARGO_MANIFEST_DIR of *this* crate (the etl crate) — useful for
-    // tests that cargo runs with arbitrary CWDs.
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-
-    for root in roots {
-        let mut cur: Option<&std::path::Path> = Some(&root);
-        while let Some(dir) = cur {
-            for rel in [
-                "datalib/backend/target/debug",
-                "datalib/backend/target/release",
-                "target/debug",
-                "target/release",
-            ] {
-                let candidate = dir.join(rel).join(DISPATCH_BIN);
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-            cur = dir.parent();
-        }
-    }
-    None
+    let p = rf.rlocation(RUNFILES_PATH)?;
+    p.exists().then_some(p)
 }
 
 fn which_on_path(bin: &str) -> Option<PathBuf> {
@@ -179,46 +118,40 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// pin).
 pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
-/// Entry script of the `latchkey` npm package inside a staged runtime
-/// tree (its package.json `bin` target), equivalent to what
-/// `npx latchkey` execs.
-const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
-
-/// `std::process::Command` for `latchkey`. Sets `LATCHKEY_CURL` to the
-/// shim on first call. If the shim can't be found, logs a warning and
-/// returns the `Command` anyway — callers may still succeed against
-/// non-CF endpoints.
-pub fn latchkey_command() -> std::process::Command {
+/// `std::process::Command` for `latchkey` from the staged runtime tree
+/// (`datalib_runtime::node_runtime::latchkey_command` decides; the
+/// error says where it looked). Sets `LATCHKEY_CURL` to the router on
+/// first call. If the router can't be found, logs a warning and returns
+/// the `Command` anyway — callers may still succeed against non-CF
+/// endpoints.
+pub fn latchkey_command() -> anyhow::Result<std::process::Command> {
     warn_if_missing();
-    datalib_runtime::node_runtime::bundled_command("latchkey", LATCHKEY_VERSION, LATCHKEY_ENTRY_REL)
-        .unwrap_or_else(|| {
-            datalib_runtime::node_runtime::npx_command(&format!("latchkey@{LATCHKEY_VERSION}"))
-        })
+    Ok(datalib_runtime::node_runtime::latchkey_command()?)
 }
 
-pub fn latchkey_tokio_command() -> tokio::process::Command {
-    tokio::process::Command::from(latchkey_command())
+pub fn latchkey_tokio_command() -> anyhow::Result<tokio::process::Command> {
+    Ok(tokio::process::Command::from(latchkey_command()?))
 }
 
 pub fn latchkey_curl_command(
     settings: &datalib_source_common::LatchkeySettings,
-) -> tokio::process::Command {
-    let mut cmd = latchkey_tokio_command();
+) -> anyhow::Result<tokio::process::Command> {
+    let mut cmd = latchkey_tokio_command()?;
     if let Some(account) = settings.account() {
         cmd.arg("--account").arg(account);
     }
     cmd.arg("curl");
-    cmd
+    Ok(cmd)
 }
 
 fn warn_if_missing() {
-    // In gateway mode the gateway supplies its own dispatch curl, so a
+    // In gateway mode the gateway supplies its own router curl, so a
     // missing local one costs nothing and the warning would be misleading.
     if is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()) {
         return;
     }
-    if let Err(e) = ensure_curl_dispatch() {
-        tracing::warn!(error = %e, "running latchkey without the in-tree curl shim; Cloudflare-protected endpoints will likely 403");
+    if let Err(e) = ensure_curl_router() {
+        tracing::warn!(error = %e, "running latchkey without the bundled curl router; Cloudflare-protected endpoints will likely 403");
     }
 }
 
@@ -230,13 +163,13 @@ mod tests {
         OsStr::new(value)
     }
 
-    /// With no gateway and nothing preset, we publish our dispatch curl --
+    /// With no gateway and nothing preset, we publish our router curl --
     /// the standalone app's configuration, where `latchkey curl` makes the
     /// request to the third party itself.
     #[test]
-    fn exports_dispatch_curl_when_latchkey_talks_to_the_third_party() {
-        assert!(should_export_curl_dispatch(None, None));
-        assert!(should_export_curl_dispatch(None, Some(os(""))));
+    fn exports_router_curl_when_latchkey_talks_to_the_third_party() {
+        assert!(should_export_curl_router(None, None));
+        assert!(should_export_curl_router(None, Some(os(""))));
     }
 
     /// `--account` is a latchkey **global** option: placed after the
@@ -249,7 +182,9 @@ mod tests {
         let settings = datalib_source_common::LatchkeySettings {
             account: Some("thad@imbue.com".to_string()),
         };
-        let cmd = latchkey_curl_command(&settings);
+        // SAFETY: the test reads the env for no other reason.
+        unsafe { std::env::set_var(datalib_runtime::node_runtime::ALLOW_NPX_ENV, "1") };
+        let cmd = latchkey_curl_command(&settings).expect("npx fallback enabled above");
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -271,7 +206,10 @@ mod tests {
     /// so latchkey resolves the single stored credential itself.
     #[test]
     fn no_account_configured_passes_no_selector() {
-        let cmd = latchkey_curl_command(&datalib_source_common::LatchkeySettings::default());
+        // SAFETY: the test reads the env for no other reason.
+        unsafe { std::env::set_var(datalib_runtime::node_runtime::ALLOW_NPX_ENV, "1") };
+        let cmd = latchkey_curl_command(&datalib_source_common::LatchkeySettings::default())
+            .expect("npx fallback enabled above");
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -284,23 +222,20 @@ mod tests {
     /// A caller's explicit `LATCHKEY_CURL` always wins.
     #[test]
     fn never_overrides_an_explicit_setting() {
-        assert!(!should_export_curl_dispatch(
-            Some(os("/usr/bin/curl")),
-            None
-        ));
-        assert!(!should_export_curl_dispatch(
+        assert!(!should_export_curl_router(Some(os("/usr/bin/curl")), None));
+        assert!(!should_export_curl_router(
             Some(os("/usr/bin/curl")),
             Some(os("http://127.0.0.1:9"))
         ));
     }
 
-    /// In gateway mode the gateway's own dispatch curl makes the request
+    /// In gateway mode the gateway's own router curl makes the request
     /// that reaches the third party. Putting one on the client hop instead
     /// would consume the marker header there and impersonate the hop to the
     /// gateway, leaving the one that matters unimpersonated.
     #[test]
     fn leaves_latchkey_curl_alone_in_gateway_mode() {
-        assert!(!should_export_curl_dispatch(
+        assert!(!should_export_curl_router(
             None,
             Some(os("http://127.0.0.1:9"))
         ));

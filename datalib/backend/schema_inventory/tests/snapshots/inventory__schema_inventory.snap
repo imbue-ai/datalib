@@ -1189,6 +1189,30 @@ sms_messages_bookkeeping
     volatile_payload
     tz_offset
 
+== claude_code/raw ==
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+records
+    id
+    payload
+    transcript_id
+transcripts
+    id
+    payload
+    session_id
+    agent_id
+    cwd
+    git_branch
+    title
+    started_at
+    updated_at
+    rel_path
+
 == whatsapp/raw ==
 wa_media_files
     blake3
@@ -1345,6 +1369,21 @@ garmin_wellness_files_bookkeeping
     volatile_payload
     tz_offset
 
+== facebook/raw ==
+media_blobs
+    id
+    owner_id
+    uri
+    blake3
+media_blobs_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+
 == unified_index/grid ==
 edges
     edge_uuid
@@ -1358,9 +1397,13 @@ grid_rows
     provider
     kind
     source_label
-    when_ts
-    when_ts_utc
-    when_offset
+    created_at
+    created_at_utc
+    created_offset
+    modified_at
+    modified_at_utc
+    modified_offset
+    is_document
     author
     account
     project
@@ -1372,7 +1415,6 @@ grid_rows
     message_index
     entire_chat
     text
-    slack_link
     qmd_path
     source_url
     git_sha
@@ -1384,6 +1426,8 @@ grid_rows
     markdown_uuid
     byte_size
     item_count
+    diff_status
+    diff_changed_columns
 markdowns
     markdown_uuid
     source_id
@@ -1391,11 +1435,29 @@ markdowns
     kind
     title
     created_at
-    updated_at
+    modified_at
     md_path
     upstream_cursor
     renderer_version
     bucket_key
+problems
+    problem_uuid
+    source_id
+    stage
+    severity
+    outcome
+    reason
+    scope_kind
+    scope_key
+    item_uuid
+    field
+    path
+    rule
+    sample
+    first_seen_at_utc
+    last_seen_at_utc
+    tz_offset
+    render_version
 render_cursor
     source_id
     raw_commit
@@ -1406,18 +1468,6 @@ render_inputs
     bucket_key
     input_table
     input_id
-render_problems
-    uuid
-    scope_key
-    scope_kind
-    source_id
-    stage
-    outcome
-    problems
-    first_seen_at_utc
-    last_seen_at_utc
-    tz_offset
-    render_version
 source_cursors
     source_id
     store_commit

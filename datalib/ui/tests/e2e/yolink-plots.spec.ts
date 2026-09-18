@@ -89,7 +89,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 15_000 });
   await clickRowByUuid(page, pageRow!.uuid);

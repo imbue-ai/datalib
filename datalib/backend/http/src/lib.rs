@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::services::ServeDir;
 
 pub mod applets;
 pub mod auth;
@@ -47,9 +46,8 @@ pub use boot::build_state;
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Data root on disk — drives the static `/api/media/*` mount and
-    /// the `accounts.json` lookup. The SQL store is reached through
-    /// [`AppState::repo`].
+    /// Data root on disk — the `accounts.json` lookup and the config
+    /// path. The SQL store is reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
     /// The two stores this process owns and writes: filed feedback and
     /// the sync job queue, one doltlite file each.
@@ -135,14 +133,6 @@ pub fn user_bin_dir() -> Option<PathBuf> {
 }
 
 pub fn router(state: AppState) -> Router {
-    // Slack image attachments are symlinked into
-    // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
-    // QMD-embedded `![](...)` URLs resolve.
-    let media_dir = datalib_core::layout::media_dir(&state.root);
-    // Served attachments are re-materializable from the raw blob CAS, so mark
-    // the tree as derived cache for `--exclude-caches` backups. Here rather
-    // than in a pipeline step because no step owns the dir.
-    datalib_core::layout::mark_derived_cache(&media_dir);
     // Cloned out before `state` is moved into `with_state` below.
     let api_token = state.api_token.clone();
     Router::new()
@@ -198,7 +188,6 @@ pub fn router(state: AppState) -> Router {
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
         .route("/applet/{id}/", any(proxy_applet_root))
-        .nest_service("/api/media", ServeDir::new(media_dir))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
         // into `index.html`.
@@ -290,13 +279,23 @@ async fn submit_feedback(
 /// A broken applet is named rather than merely absent, since an empty
 /// gallery looks the same as a config that never saved.
 async fn get_frontend(State(s): State<AppState>) -> Json<applets::FrontendView> {
-    // Pick up a config edit before answering. Cheap when nothing moved (one
-    // `stat`), blocking when it did, since a rebuild execs one child per
-    // applet. That it *reads* the store here is why `crate::watch` must not
-    // treat a read as a change — the two would drive each other.
+    // A read. The applet list is the registry's business: a saved config
+    // reconciles it in the writer, a hand edit through the watcher. What a
+    // read still checks is the store's own files — a `PUT /api/lib`, a
+    // file dropped in by hand — which costs a `stat` and restarts nothing.
+    // That it reads the store is why `crate::watch` must not treat a read
+    // as a change.
     let registry = s.applets.clone();
-    let _ = tokio::task::spawn_blocking(move || registry.refresh_if_config_changed()).await;
+    let _ = tokio::task::spawn_blocking(move || registry.rescan_if_store_changed()).await;
     Json(s.applets.frontend_view())
+}
+
+/// The registry reconciles on the writer's thread, before the writer
+/// answers, so the applets a saved config names are up by the time the
+/// client hears the save succeeded.
+async fn reload_applets(s: &AppState) {
+    let registry = s.applets.clone();
+    let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
 }
 
 async fn get_module(
@@ -320,7 +319,9 @@ async fn proxy_applet(
     Path((id, rest)): Path<(String, String)>,
     req: axum::extract::Request,
 ) -> Response<Body> {
-    proxy_impl(s, id, format!("/{rest}"), req).await
+    // The extractor percent-decoded `rest`; put it back the way it came,
+    // since the proxy writes the request line by hand.
+    proxy_impl(s, id, format!("/{}", applets::encode_path(&rest)), req).await
 }
 
 async fn proxy_applet_root(
@@ -361,19 +362,13 @@ async fn proxy_impl(
     let target = format!("{path}{query}");
     let registry = s.applets.clone();
     let result = tokio::task::spawn_blocking(move || {
-        // A card may reference an applet added since boot, and an
-        // applet whose params changed must not keep serving the old
-        // ones — so the same refresh guards the data path.
-        registry.refresh_if_config_changed();
+        // A read: the applet is there or it is not. A config change
+        // reaches the registry through its writers or the watcher.
         registry.proxy(&id, &method, &target, content_type.as_deref(), &body)
     })
     .await;
     match result {
-        Ok(Ok(r)) => Response::builder()
-            .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
-            .header(header::CONTENT_TYPE, r.content_type)
-            .body(Body::from(r.body))
-            .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response")),
+        Ok(Ok(r)) => proxied_response(r),
         // The applet is configured but not answering. Hand the card
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
@@ -384,6 +379,22 @@ async fn proxy_impl(
             &format!("proxy task: {e}"),
         ),
     }
+}
+
+/// An applet's answer, as the browser gets it. What an applet serves is
+/// data — a rendered plot page, an attachment out of a render tree — and
+/// a document among it must not run in the app's origin, where it would
+/// hold the session: it gets the same sandbox the DACTAL page does.
+fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
+    let mut resp = Response::builder()
+        .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    if embed::is_scriptable_document(&r.content_type) {
+        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DOCUMENT_SANDBOX_CSP);
+    }
+    resp.header(header::CONTENT_TYPE, r.content_type)
+        .body(Body::from(r.body))
+        .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
 }
 
 fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
@@ -837,13 +848,23 @@ async fn put_config(
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("put_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    let tmp = path.with_extension("tmp");
-    if let Err(e) = std::fs::write(&tmp, req.text.as_bytes()) {
+    // One temp name per write, or two PUTs landing together write one
+    // file and the second rename finds it gone. The `.tmp` suffix is what
+    // the root watcher ignores, so it stays.
+    let tmp = path.with_file_name(format!(
+        "config.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
         tracing::error!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -852,6 +873,7 @@ async fn put_config(
         tracing::error!("put_config: rename {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    reload_applets(&s).await;
     Ok(Json(verdict))
 }
 
@@ -883,7 +905,7 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     let path = s.config_path();
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
+        datalib_core::layout::create_data_root(parent).map_err(|e| {
             tracing::error!("init_config: mkdir {}: {e}", parent.display());
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
@@ -893,17 +915,15 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     // `create_new` is the whole point: the existence check and the
     // write are one syscall, so this can never overwrite a config that
     // arrived between them.
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match owner_only_options().create_new(true).open(&path) {
         Ok(mut f) => {
             use std::io::Write;
             f.write_all(text.as_bytes()).map_err(|e| {
                 tracing::error!("init_config: write {}: {e}", path.display());
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
+            drop(f);
+            reload_applets(&s).await;
             Ok(Json(InitConfigResponse {
                 created: true,
                 path: path.display().to_string(),
@@ -922,6 +942,30 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// `OpenOptions` for a file only this user may read. The config holds
+/// every source's credentials, so it is never left at the umask's mercy.
+fn owner_only_options() -> std::fs::OpenOptions {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
+}
+
+/// Create (or truncate) `path` owner-only and write `bytes` to it. A
+/// file that already exists keeps its mode: `mode` applies at creation.
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = owner_only_options()
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
@@ -1124,6 +1168,9 @@ pub struct DagRecord {
     pub last_runs: std::collections::HashMap<String, DagStepRun>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
+    /// step id → the errors and warnings its store held the last time
+    /// it counted, in whichever run that was.
+    pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
 }
 
 pub async fn dag_record(root: &std::path::Path) -> DagRecord {
@@ -1133,7 +1180,7 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
     // Racy by nature — a run could start a microsecond later — but the
     // answer is only ever used to say "that open record belongs to a
     // run that died", where being one poll stale costs nothing.
-    let live = datalib_dag::lock::FileLock::runner_is_held(root);
+    let live = datalib_dag::lock::runner_is_held(root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1186,11 +1233,15 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
         })
         .collect();
 
+    let problems =
+        manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
+
     DagRecord {
         run,
         states,
         last_runs,
         progress,
+        problems,
     }
 }
 
@@ -1206,6 +1257,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         states,
         last_runs,
         progress,
+        problems: _,
     } = dag_record(&s.root).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
@@ -1351,17 +1403,16 @@ async fn pipeline_storage(
     Query(p): Query<StorageParams>,
 ) -> Json<usage::PipelineStorage> {
     if flag_is_set(p.refresh.as_deref()) {
-        usage::sample_on_demand(&s.usage, &s.app, s.root.clone()).await;
+        usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
     let steps = usage::declared_trees(&s.config_path());
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-/// A job as the API serves it: the row, plus the two answers every
-/// reader used to derive from `state` for itself — and derived
-/// differently. `active` is [`SyncJobRow::is_active`] (a job told to
-/// stop is active until the worker stamps it finished); `stopping` is
-/// that wind-down.
+/// A job as the API serves it: the row, plus two verdicts on its
+/// `state` that every reader needs and none should compute for itself.
+/// `active` is [`SyncJobRow::is_active`] (a job told to stop is active
+/// until the worker stamps it finished); `stopping` is that wind-down.
 #[derive(Debug, Serialize)]
 pub struct SyncJobView {
     #[serde(flatten)]
@@ -1587,7 +1638,7 @@ struct RunLogParams {
     #[serde(default)]
     step: Option<String>,
     /// Only lines after this `seq` — how a client tails: remember the
-    /// last `seq` it saw and ask again on the next `run_store_changed` frame.
+    /// last `seq` it saw and ask again on the next `log` frame.
     #[serde(default)]
     after_seq: Option<i64>,
     #[serde(default)]
@@ -1665,6 +1716,43 @@ fn repo_err_to_status(e: RepoError) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A document an applet serves is sandboxed on the way out; JSON is
+    /// left alone. The header, not the body, is what a browser reads.
+    #[test]
+    fn proxied_documents_are_sandboxed_and_data_is_not() {
+        let html = proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: "text/html; charset=utf-8".into(),
+            body: b"<script>1</script>".to_vec(),
+        });
+        assert_eq!(html.status(), StatusCode::OK);
+        let csp = html
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(csp.starts_with("sandbox "), "{csp:?}");
+        assert!(!csp.contains("allow-same-origin"), "{csp:?}");
+        assert_eq!(
+            html.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff"
+        );
+
+        let json = proxied_response(applets::ProxyResponse {
+            status: 200,
+            content_type: "application/json".into(),
+            body: b"{}".to_vec(),
+        });
+        assert!(json
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .is_none());
+        assert_eq!(
+            json.headers().get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff"
+        );
+    }
 
     /// The rate is the slope of a series' two newest samples; the ages
     /// are how long a running step has gone without a metric moving and

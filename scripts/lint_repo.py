@@ -12,16 +12,21 @@ instead from `bazel run //:precommit` and as a plain step in
      targets, so a new script can't silently escape ruff and pyright.
   3. MODULE.bazel.lock must match the commit, because bazel repairs it
      silently and CI aborts on it.
-  4. Render code must not read a doltlite content table unpinned, since
-     an unpinned read returns uncommitted rows once producers stream.
-  5. Render code must not open a doltlite store writably: `open` writes on
-     the way in, and the render step does not own the store it reads.
-  6. A download must take its store as an input rather than opening one.
   7. Every target tagged `manual` must be named by a `build_test` in the
      same package, because `bazel test //...` never builds a `manual`
      target and one can stop compiling in silence.
   8. A provider that keeps a sync cursor must record the config the
      cursor was taken under, or widening that config is a silent no-op.
+  9. The README's source grid and docs/user/getting_your_data.md name
+     every source type, link to each other, and stay alphabetical.
+
+Checks 4, 5 and 6 — a render read must be pinned, a reader must not
+open writably, a download takes its store rather than opening one —
+were regexes standing in for types. The types exist now: a writer's
+handle holds the file's lock for its life, so a second open is refused
+rather than colliding later; `open_reader` pins at open and hands back
+a `Reader`; the shared loaders take a mandatory `Reads`. See
+datalib/backend/etl/README.md, "Connection pools".
 
 Check 1: why it exists
 ----------------------
@@ -317,11 +322,9 @@ def main() -> int:
     rc = _check_no_sandbox(root)
     rc |= _check_python_coverage(root)
     rc |= _check_module_lock_committed(root)
-    rc |= _check_unpinned_render_reads(root)
-    rc |= _check_render_opens_read_only(root)
-    rc |= _check_download_takes_a_store(root)
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_cursor_records_its_scope(root)
+    rc |= _check_source_grid(root)
     return rc
 
 
@@ -332,16 +335,13 @@ def main() -> int:
 # device list -- is never consulted again. Widen it and the next run
 # resumes from the cursor as if nothing happened: the mail that already
 # sat outside the old filter never *changed*, so no change feed will ever
-# name it. Slack was the first to hit this (#103), then every provider
-# with a cursor was swept -- and Gmail, added afterwards, missed the sweep
-# and mirrored nothing after its filter was removed (2026-09-15).
-#
-# The fix each time is `datalib_etl::scope_config`: record the
-# scope-affecting config beside the cursor, diff it next run, backfill
-# what widened. This keeps a new cursor from arriving without it. The
-# signal is the one primitive every cursor write bottoms out in; the
-# recorder is either `store` or `store_if_satisfied`. Per provider crate,
-# because a wrapper in `db.rs` is called from `mod.rs`.
+# name it. The rule: a provider that keeps a cursor records the
+# scope-affecting config beside it through `datalib_etl::scope_config`
+# (`store` or `store_if_satisfied`), diffs it next run, and backfills
+# what widened. This check keeps a new cursor from arriving without the
+# record. The signal is the one primitive every cursor write bottoms out
+# in. Per provider crate, because a wrapper in `db.rs` is called from
+# `mod.rs`.
 #
 # docs/dev/data_architecture_ingestion.md, "When the cursor swallows a
 # config change", is the rule and the table of who records what.
@@ -422,345 +422,115 @@ def _check_cursor_records_its_scope(root: Path) -> int:
     return 1
 
 
-# --- Check 6: a download takes the store, it does not open one -------
+# --- Check 9: the README's source grid matches the docs ---------------
 #
-# Two live connections to one `.doltlite_db` make each other's
-# `dolt_commit` fail -- `dolt_commit` takes the store lock without waiting
-# and reports whoever holds it as "commit conflict: another connection
-# committed to this branch". `doltlite_raw::open` commits three times on
-# the way in, so a second opener fails there, in `open` itself.
-#
-# The old shape had every `fetch` take `db: Option<RawDb>` and open its
-# own store when the caller passed `None`. That pool was never closed, so
-# a caller that then read the store back overlapped with it -- and since
-# sqlx closes connections on a background task, whether the two actually
-# collided came down to timing. It passed on a quiet laptop and failed on
-# a loaded CI runner.
-#
-# So the handle is now an input: one opener per store, and it is whoever
-# also closes it. This keeps it that way.
-_OPTIONAL_STORE_FIELD = re.compile(r"\bpub db: Option<\s*RawDb\s*>")
-
-
-def _check_download_takes_a_store(root: Path) -> int:
-    bad: list[str] = []
-    for rel in _git_ls_files(root, "datalib/backend/etl/providers"):
-        if not rel.endswith(".rs") or "/src/ingest/" not in rel:
-            continue
-        text = (root / rel).read_text(encoding="utf-8", errors="replace")
-        for lineno, line in enumerate(text.splitlines(), 1):
-            if _OPTIONAL_STORE_FIELD.search(line):
-                bad.append(f"{rel}:{lineno}: {line.strip()}")
-    if not bad:
-        print("OK: every download takes its store as an input.")
-        return 0
-    print("ERROR: a download options struct opens its own store:", file=sys.stderr)
-    for b in bad:
-        print(f"  - {b}", file=sys.stderr)
-    print(
-        "\nAn optional store handle means `fetch` opens one when the caller\n"
-        "passes None, and nothing closes it. A caller that then reads the\n"
-        "store back has two live connections on one file, and one of the\n"
-        "two `dolt_commit`s fails with `commit conflict`.\n"
-        "Make the field `pub db: RawDb` and let the caller own it.\n"
-        "See datalib/backend/etl/README.md.",
-        file=sys.stderr,
-    )
-    return 1
-
-
-# --- Check 5: a reader must not open a store writably -----------------
-#
-# `doltlite_raw::open` (and `open_derived`) is not a read: it asks
-# `dolt_status`, seals a dirty working tree into a rescue commit, reconciles
-# the schema, and commits with `-Am`, which takes whatever else was dirty
-# with it. The step that owns a store wants all of that. Anyone else opening
-# it this way while the owner is writing fails the owner's in-flight commit
-# (`dolt_status` from a second connection -- #400) and seals its half-written
-# batch on its behalf, which pinning cannot protect against because the torn
-# rows are then genuinely committed.
-#
-# `open_reader` is the read path. This keeps every reader on it: render
-# reading a raw store, and the applets and the http server reading a render
-# store or the index.
-_WRITABLE_OPEN = re.compile(
-    r"\b(?:RawDb|BlobCas|dr|doltlite_raw|datalib_etl::doltlite_raw)::open(?:_derived)?\("
+# The README shows one cell per source, each linking to its section of
+# docs/user/getting_your_data.md; that doc has one `## ` section per
+# source, opening with its `type = "…"`. Both are hand-kept, and the
+# markdown table the grid replaced had quietly dropped three sources.
+# So: every type all_sources.toml or the wizard's catalog knows has a
+# section, every section has a cell, every cell's anchor and image
+# resolve, and both lists are alphabetical.
+_GRID_CELL = re.compile(
+    r'<a href="docs/user/getting_your_data\.md#([^"]+)">(.*?)<br><b>(.*?)</b></a>',
+    re.DOTALL,
 )
+_GRID_IMAGE = re.compile(r'(?:src|srcset)="([^"]+)"')
+_DOC_TYPE_LINE = re.compile(r'^`type = "([a-z_]+)"`', re.MULTILINE)
+_CATALOG_TYPE = re.compile(r'\btype: "([a-z_]+)"')
 
 
-def _reader_sources(root: Path) -> list[str]:
-    readers = [
-        p
-        for p in _git_ls_files(root, "datalib/backend/applets")
-        + _git_ls_files(root, "datalib/backend/http")
-        if p.endswith(".rs") and "/tests/" not in p
-    ]
-    return _render_sources(root) + readers
+def _github_slug(heading: str) -> str:
+    """GitHub's anchor for a heading: lowercase, punctuation dropped,
+    spaces to hyphens. Backticks count as punctuation."""
+    text = heading.strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text)
+    return re.sub(r"\s", "-", text)
 
 
-def _check_render_opens_read_only(root: Path) -> int:
+def _readme_grid(root: Path) -> str:
+    text = (root / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Supported data sources")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def _doc_sections(root: Path) -> list[tuple[str, str, list[str]]]:
+    """(heading, slug, types declared in that section), in file order."""
+    text = (root / "docs/user/getting_your_data.md").read_text(encoding="utf-8")
+    sections: list[tuple[str, str, list[str]]] = []
+    for chunk in re.split(r"^## ", text, flags=re.MULTILINE)[1:]:
+        heading, _, body = chunk.partition("\n")
+        sections.append((heading, _github_slug(heading), _DOC_TYPE_LINE.findall(body)))
+    return sections
+
+
+def _known_source_types(root: Path) -> set[str]:
+    with open(root / "docs/user/config_examples/all_sources.toml", "rb") as fh:
+        groups = tomllib.load(fh).get("groups", [])
+    types = {g["type"] for g in groups if "type" in g}
+    catalog = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
+    types.update(_CATALOG_TYPE.findall(catalog))
+    return types
+
+
+def _check_source_grid(root: Path) -> int:
     bad: list[str] = []
-    for rel in _reader_sources(root):
-        # A `ingest/db.rs` is a download file that render calls into. Its
-        # opens are the download step's, and the download step owns the store
-        # it is writing -- only check 4 has anything to say about these.
-        if rel in _RENDER_REACHABLE_LOADERS:
-            continue
-        text = (root / rel).read_text(encoding="utf-8", errors="replace")
-        # Test modules build the stores they then read, so they need `open`.
-        body = _without_test_module(text)
-        for lineno, line in enumerate(body.splitlines(), 1):
-            if _WRITABLE_OPEN.search(line):
-                bad.append(f"{rel}:{lineno}: {line.strip()}")
+    grid = _readme_grid(root)
+    cells = _GRID_CELL.findall(grid)
+    sections = _doc_sections(root)
+    slugs = {slug for _, slug, _ in sections}
+
+    for anchor, _, label in cells:
+        if anchor not in slugs:
+            bad.append(
+                f'README cell "{label}" links to #{anchor}, which is not a heading'
+            )
+    for path in _GRID_IMAGE.findall(grid):
+        if not (root / path).is_file():
+            bad.append(f"README grid image {path} does not exist")
+
+    linked = {anchor for anchor, _, _ in cells}
+    declared: dict[str, str] = {}
+    for heading, slug, types in sections:
+        if not types:
+            bad.append(
+                f'getting_your_data.md "## {heading}" opens with no `type = "…"` line'
+            )
+        for t in types:
+            declared[t] = slug
+        if types and slug not in linked:
+            bad.append(
+                f'getting_your_data.md "## {heading}" has no cell in the README grid'
+            )
+    for t in sorted(_known_source_types(root) - set(declared)):
+        bad.append(f"source type `{t}` has no section in getting_your_data.md")
+
+    labels = [re.sub(r"&amp;", "&", label) for _, _, label in cells]
+    if labels != sorted(labels, key=str.casefold):
+        bad.append("README grid cells are not in alphabetical order")
+    headings = [h for h, _, _ in sections]
+    if headings != sorted(headings, key=str.casefold):
+        bad.append("getting_your_data.md sections are not in alphabetical order")
+
     if not bad:
-        print("OK: no reader opens a doltlite store writably.")
+        print(
+            f"OK: README grid has {len(cells)} sources, each with a section in "
+            "getting_your_data.md, and every known type is among them."
+        )
         return 0
-    print("ERROR: a reader opens a doltlite store writably:", file=sys.stderr)
+    print(
+        "ERROR: the README's source grid and getting_your_data.md disagree:",
+        file=sys.stderr,
+    )
     for b in bad:
         print(f"  - {b}", file=sys.stderr)
     print(
-        "\n`open` rescue-commits, reconciles the schema and commits with -Am --\n"
-        "three writes to a store this code does not own, and its `dolt_status`\n"
-        "probe fails the owner's in-flight commit. Use the read-only path\n"
-        'instead: `open_reader`. See AGENTS.md, "One open per doltlite file".',
+        "\nA source is a cell in README.md § Supported data sources, linking to\n"
+        "`docs/user/getting_your_data.md#<slug>`, and a `## <Name>` section there\n"
+        'opening with a `type = "<type>"` line. Add both, in alphabetical order.',
         file=sys.stderr,
     )
-    return 1
-
-
-# --- Check 4: unpinned content reads in render code ------------------
-#
-# A plain `SELECT` against a doltlite store reads its working set, which
-# is shared across processes and holds rows a writer has not committed.
-# That is harmless today because a render step only runs after its
-# download step has exited, and it stops being harmless the moment the
-# scheduler is allowed to start a consumer early -- the consumer gets a
-# *torn* view, part of one commit and part of a batch still being
-# written, with no error anywhere.
-#
-# The fix is to read the pinned view instead: `datalib_etl::pin::install_views`
-# creates a `pinned_<table>` view over `dolt_at_<table>(...)` once per
-# connection, so a query changes from `FROM users` to `FROM pinned_users`
-# and nothing else. The fix is across ~50 sites in ten crates, and one
-# missed site is a silent data bug -- so this is a ratchet rather than a
-# review question. See `docs/dev/plans/streaming_steps_plan.md`.
-#
-# `EXPECTED_UNPINNED_READS` is the baseline being worked off. Numbers may
-# only go down; a file that reaches zero comes out of the dict. Both
-# directions fail, so the sweep cannot stall silently and new code cannot
-# quietly add a site.
-# Empty, and this time the emptiness is enforced rather than asserted.
-#
-# It was emptied once before on the strength of this regex alone, which only
-# ever saw a literal `FROM <table>`. The reads that went through a shared
-# helper — `format!("... FROM {table}")` — stayed invisible, and for two
-# providers those were the only content reads they did. The dict said done
-# while the rows still came from the working set.
-#
-# What changed is not the check. `load_payloads` and friends now take a
-# mandatory `Reads`, so every call site answers "whose store is this?" and
-# the compiler will not let it be skipped. This dict is now only for a render
-# read that must genuinely be unpinned — and there are none.
-EXPECTED_UNPINNED_READS: dict[str, int] = {}
-
-# `pinned_` is the whole point: a view over `dolt_at_<table>`, so reading it
-# is reading committed state. `dolt_*` are the history vtabs (already
-# committed-only), and `pragma_*` / `sqlite_*` are engine tables with no
-# working set of their own.
-_PINNED_OK_PREFIXES = ("pinned_", "dolt_", "pragma_", "sqlite_")
-
-# The blob CAS is deliberately read unpinned, and pinning it would be worse
-# rather than merely redundant: entities are committed *after* the blobs they
-# name, so an entities pin can reference a blob committed later than any CAS
-# pin a reader sampled. Content addressing is what makes the unpinned read
-# safe -- a row is keyed by the blake3 of its own bytes. See `BlobCas::get`.
-_UNPINNED_BY_DESIGN = ("cas_objects",)
-
-# A table named directly after FROM or JOIN. A `{placeholder}` does not
-# match (it starts with `{`), which is what makes a pinned site invisible
-# here, and neither does `FROM (` for a subquery.
-_TABLE_READ = re.compile(r"\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)")
-
-# The other half used to be counted here: a shared helper building
-# `FROM {table}` at runtime, which no regex over the call site can resolve.
-# Those helpers now take a mandatory `Reads` argument, so the compiler asks
-# the question at every call and it cannot be forgotten into passing.
-#
-# What is left for this file is the escape hatch. `Reads::Own` means "I own
-# this store and am reading what I wrote" — true on the download side, and
-# never true in render code.
-_OWN_READ = re.compile(r"Reads::Own\b")
-
-
-# Loaders that live in `ingest/db.rs` but are called from render. Their SQL
-# is bespoke rather than going through a `Reads`-taking helper, so neither the
-# regex nor the compiler sees them -- which is how this check printed "every
-# render read is pinned" twice while five providers read their whole content
-# from the working set.
-#
-# Listing them by hand is unsatisfying, and it is still better than the two
-# things it replaced: a file glob that could not reach them, and a claim that
-# they did not exist. An entry leaves when its loader takes a pin.
-_RENDER_REACHABLE_LOADERS: dict[str, tuple[str, ...]] = {
-    "datalib/backend/etl/providers/notion/src/ingest/db.rs": (
-        "load_comment_anchors",
-        "load_page_markdown",
-        "load_comments",
-        "load_user_names",
-        "load_blobs_by_page",
-    ),
-    "datalib/backend/etl/providers/linkedin/src/ingest/photos.rs": (
-        "load_photo_blobs",
-    ),
-    "datalib/backend/etl/providers/pdf/src/ingest/db.rs": (
-        "scan_root",
-        "convertible_documents",
-    ),
-    "datalib/backend/etl/providers/claude/src/ingest/db.rs": (
-        "load_conversations_from",
-        "first_user_uuid_from",
-    ),
-    "datalib/backend/etl/providers/github/src/ingest/db.rs": (
-        "load_self_identity",
-        "load_pull_requests",
-        "load_children",
-    ),
-    "datalib/backend/etl/providers/gitlab/src/ingest/db.rs": (
-        "load_self_identity",
-        "load_merge_requests",
-        "load_discussions",
-    ),
-    "datalib/backend/etl/providers/contacts/src/ingest/db.rs": (
-        "load_all_for_render_and_index_md",
-    ),
-}
-
-
-def _render_sources(root: Path) -> list[str]:
-    # Most providers keep render under `src/render*`, but not all: linkedin
-    # renders from `src/posts.rs` and `src/connections.rs`, which is how two
-    # writable opens and five unpinned reads sat outside this check.
-    extra = ("/src/posts.rs", "/src/connections.rs")
-    files = [
-        p
-        for p in _git_ls_files(root, "datalib/backend/etl/providers")
-        if p.endswith(".rs")
-        and "/tests/" not in p
-        and ("/src/render" in p or p.endswith(extra))
-    ]
-    return files + [f for f in _RENDER_REACHABLE_LOADERS if (root / f).is_file()]
-
-
-def _unpinned_reads(root: Path, rel: str) -> list[tuple[int, str]]:
-    text = (root / rel).read_text(encoding="utf-8", errors="replace")
-    # For a `ingest/db.rs` only the render-reachable loaders count: the rest
-    # of that file is the download step reading the store it is writing, which
-    # must stay unpinned.
-    if rel in _RENDER_REACHABLE_LOADERS:
-        return _loader_reads(text, _RENDER_REACHABLE_LOADERS[rel])
-
-    # Test modules seed the stores they then render from, and a seed is
-    # the writer's `DELETE FROM` / `INSERT`, not a render read.
-    body = _without_test_module(text)
-    out: list[tuple[int, str]] = []
-    for lineno, line in enumerate(body.splitlines(), 1):
-        for table in _TABLE_READ.findall(line):
-            if (
-                not table.startswith(_PINNED_OK_PREFIXES)
-                and table not in _UNPINNED_BY_DESIGN
-            ):
-                out.append((lineno, table))
-        if _OWN_READ.search(line):
-            out.append((lineno, "Reads::Own"))
-    return out
-
-
-def _loader_reads(text: str, loaders: tuple[str, ...]) -> list[tuple[int, str]]:
-    """Unpinned table reads inside the named functions only."""
-    out: list[tuple[int, str]] = []
-    for fn in loaders:
-        start = text.find(f"fn {fn}")
-        if start < 0:
-            continue
-        end = text.find("\n    }\n", start)
-        body = text[start : end if end > 0 else len(text)]
-        base = text[:start].count("\n") + 1
-        for offset, line in enumerate(body.splitlines()):
-            for table in _TABLE_READ.findall(line):
-                if (
-                    not table.startswith(_PINNED_OK_PREFIXES)
-                    and table not in _UNPINNED_BY_DESIGN
-                ):
-                    out.append((base + offset, f"{fn}: {table}"))
-            # A render-reachable loader must take the mode from its caller,
-            # never name it. `Reads::Own` elsewhere in these files is the
-            # download step reading what it wrote, which is correct.
-            if _OWN_READ.search(line):
-                out.append((base + offset, f"{fn}: Reads::Own"))
-    return out
-
-
-def _check_unpinned_render_reads(root: Path) -> int:
-    actual = {
-        rel: len(hits)
-        for rel in _render_sources(root)
-        if (hits := _unpinned_reads(root, rel))
-    }
-    if actual == EXPECTED_UNPINNED_READS:
-        total = sum(actual.values())
-        if not actual:
-            print(
-                f"OK: {len(_RENDER_REACHABLE_LOADERS)} listed loader(s) and every "
-                "render file read a pinned view."
-            )
-        else:
-            print(
-                f"OK: {total} unpinned render read(s) in "
-                f"{len(actual)} file(s), matching the baseline -- "
-                "still to pin, not yet safe to stream from."
-            )
-        return 0
-
-    added = {
-        rel: n for rel, n in actual.items() if n > EXPECTED_UNPINNED_READS.get(rel, 0)
-    }
-    fixed = {
-        rel: n for rel, n in EXPECTED_UNPINNED_READS.items() if n > actual.get(rel, 0)
-    }
-
-    if added:
-        print("ERROR: unpinned content read(s) added in render code:", file=sys.stderr)
-        for rel in sorted(added):
-            was = EXPECTED_UNPINNED_READS.get(rel, 0)
-            print(f"  - {rel}: {was} -> {added[rel]}", file=sys.stderr)
-            for lineno, table in _unpinned_reads(root, rel):
-                print(f"      {rel}:{lineno}: {table}", file=sys.stderr)
-        print(
-            "\nA plain SELECT reads doltlite's working set, so it can return\n"
-            "rows the producer has not committed. Read the pinned view instead:\n"
-            "`FROM pinned_<table>`, with `datalib_etl::pin::install_views` called\n"
-            "once where the store is opened for reading.\n"
-            "See docs/dev/plans/streaming_steps_plan.md.",
-            file=sys.stderr,
-        )
-
-    if fixed:
-        print(
-            "\nERROR: unpinned read(s) fixed without updating the baseline:",
-            file=sys.stderr,
-        )
-        for rel in sorted(fixed):
-            print(
-                f"  - {rel}: {fixed[rel]} -> {actual.get(rel, 0)}",
-                file=sys.stderr,
-            )
-        print(
-            "\nGood news, but the ratchet has to move with it. Update\n"
-            "EXPECTED_UNPINNED_READS in scripts/lint_repo.py (drop the entry\n"
-            "entirely when it reaches zero).",
-            file=sys.stderr,
-        )
-
     return 1
 
 

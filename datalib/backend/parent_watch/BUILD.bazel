@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# Exit when the parent process is gone, even one that was SIGKILLed.
+# The applet, `datalib-http`, the runner and nothing else link it; std
+# only, so Bazel-only like the `<p>_config` crates, and a change here
+# rebuilds those binaries and nothing that downloads or renders.
+rust_library(
+    name = "datalib_parent_watch",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_parent_watch",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_binary(
+    name = "parent_watch_probe",
+    testonly = True,
+    srcs = ["src/bin/probe.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [":datalib_parent_watch"],
+)
+
+rust_test(
+    name = "parent_watch_test",
+    size = "small",
+    srcs = ["tests/parent_watch_test.rs"],
+    data = [":parent_watch_probe"],
+    edition = "2021",
+    env = {"PARENT_WATCH_PROBE": "$(rootpath :parent_watch_probe)"},
+    deps = [":datalib_parent_watch"],
+)

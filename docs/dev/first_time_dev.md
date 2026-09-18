@@ -12,24 +12,11 @@ just want to *run* the released tools against your own data, start with the
 #    build driver.
 brew install bazel cmake
 
-# 2. (Nothing to do here any more.) This step used to be
-#    `mkdir -p ~/.cache/qmd/models`, because `.bazelrc` bind-mounted that
-#    directory into every sandboxed action and a missing one failed the
-#    build. qmd's three GGUF models are now pinned in MODULE.bazel
-#    (`@qmd_model_*`) and reach both the fixture's index genrule and the
-#    materialized demo root as ordinary bazel inputs, so neither
-#    `bazel test //...` nor `bazelisk run //datalib:dev_tng` needs
-#    anything in your home directory. The app you build still downloads
-#    models there at sync time, as a user's would.
-
-# 3. (Nothing to check here any more.) The build used to need host
-#    `npx` on Bazel's pinned PATH, because `qmd-indexer` shelled out to
-#    `npx -y @tobilu/qmd@<v>`. Node and the qmd package tree are now
-#    Bazel inputs (`//third-party/qmd/runtime`), staged into a
-#    `DATALIB_RUNTIME_DIR` layout by the fixture genrule — verified by
-#    building it with neither `node` nor `npx` on PATH. A host Node is
-#    still needed to RUN the shipped CLI (it shells out to latchkey and
-#    qmd at sync time), just not to build the repo.
+# That is all: qmd's models and Node are Bazel inputs, so the build needs
+# nothing in your home directory — not even to RUN a sync. The binaries
+# shell out to latchkey and qmd through a staged `runtime/` tree (the
+# .app, the tarball and the dev launchers all carry one; see "running
+# one by hand" below), never through a host Node.
 ```
 
 ### Linux iteration via devcontainer
@@ -85,8 +72,7 @@ there is no codegen step.
     │   ├── datalib_step/     datalib-step built-in step commands
     │   └── http/             axum binary
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
-    ├── tauri/                Tauri shell (out of Bazel)
-    └── openhost/             Dockerfile + openhost.toml stubs
+    └── tauri/                Tauri shell (out of Bazel)
 ```
 
 ## Building & testing
@@ -113,7 +99,7 @@ Runs:
   from the `rules_js`-linked `node_modules` and a Bazel-managed Node, and
   the remaining host reach is the Playwright **browser cache** at
   `~/.cache/ms-playwright` (`env_inherit = HOME`). The qmd models used to
-  be a second such reach and are now bazel inputs (`@qmd_model_*`). What
+  be a second such reach and are now bazel outputs (`//third-party/qmd_models`). What
   is left is why it is tagged `requires-network` + `no-sandbox`, and what
   CI has to arrange for explicitly — see [`testing.md`](testing.md).
 
@@ -215,8 +201,8 @@ as a subprocess. The built-in steps live in the `datalib-step` binary
 and `grid_index` loads them into
 `<root>/unified_index/grid_index/db.doltlite_db`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
-[`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the
-DAG design.
+[`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
+for the runner's rules.
 
 To run one by hand, build `//datalib/backend:bin` — it stages every
 shipped binary under its public dash-separated name in a single
@@ -233,14 +219,32 @@ No `--binary-dir` is needed: `datalib-dag` resolves each step's
 bare `datalib-step` in the config finds the sibling binary. Add
 `--sync <step-id>[,<step-id>…]` to run a subset of the graph.
 
+A sync also spawns `latchkey` and `qmd`, which the binaries run from a
+`runtime/` tree (Node plus both package trees, lockfile-pinned by
+Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR` — a
+release install fetches it instead, see `runtime_fetch.md`. The
+`bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;
+for a hand-run binary, stage it once and point at it:
+
+```sh
+scripts/stage_runtime.sh ~/.cache/datalib/staged-runtime
+export DATALIB_RUNTIME_DIR=~/.cache/datalib/staged-runtime
+```
+
+Without a tree the spawn fails with a message naming both fixes. The
+third, `DATALIB_ALLOW_NPX=1`, runs the tool through `npx -y` from the
+live registry instead — a dev-only escape hatch that prints a warning
+every time it fires, because the transitive packages are unpinned and
+their install scripts run.
+
 ### QMD search index (default-on, incremental)
 
 The `qmd_index` step rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
-(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI — the
-app-bundled runtime when one is staged (the Tauri bundle and the Bazel
-fixture genrule both stage one), else `npx -y @tobilu/qmd@<version>` —
-with `XDG_CACHE_HOME=<root>/unified_index/qmd_index` (the step's own tree), so the index lands at `<root>/unified_index/qmd_index/qmd/index.sqlite`
+(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI from the
+staged runtime tree (above) — after `datalib_qmd_models` has put the
+pinned, sha256-verified GGUFs in place, so qmd never fetches a model
+itself — with `XDG_CACHE_HOME=<root>/unified_index/qmd_index` (the step's own tree), so the index lands at `<root>/unified_index/qmd_index/qmd/index.sqlite`
 (the scan root stays `<root>` over the `*/render_markdown/**/*.md` mask), alongside the per-stanza
 `<name>/render_markdown/` trees and `unified_index/grid_index/db.doltlite_db`. This is what the search bar's hybrid / vector
 queries hit (see `datalib/backend/unified_index/src/qmd/`).
@@ -273,12 +277,12 @@ conversation), then asserts a curated stable view against committed
 [insta](https://insta.rs) snapshots. All are tagged `manual` + `external`
 + `no-sandbox`, so they are excluded from `bazel test //...`; they need
 `latchkey` creds for the service and `LATCHKEY_CURL` pointing at the
-dispatch curl (which routes Cloudflare-fronted hosts to the bundled
+router curl (which hands Cloudflare-fronted hosts to the bundled
 `curl-impersonate` next to it — see `docs/dev/curl_impersonate.md`):
 
 ```sh
-bazel build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
+bazel build //third-party/latchkey-curl-shims
+export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
 bazelisk test //datalib/backend/etl/providers/claude:claude_live \
     --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
     --test_env=LATCHKEY_CURL
@@ -302,7 +306,7 @@ edit the struct directly:
 Give each field a `#[col(sql = "…")]` portable type;
 `#[derive(PortableTable)]` produces the matching `CREATE TABLE` DDL (and
 `COLUMNS` / `TABLES` metadata) at compile time. Columns computed at load time
-(e.g. `grid_rows.when_ts_utc`) are declared with
+(e.g. `grid_rows.created_at_utc`) are declared with
 `#[derived(name = "…", sql = "…")]` on the field they trail.
 
 ## Version policy: 7-day burn-in

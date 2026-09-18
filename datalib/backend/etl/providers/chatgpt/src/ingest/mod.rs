@@ -116,7 +116,7 @@ pub struct FetchSummary {
     db = %opts.db.pool().connect_options().get_filename().display()
 ))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
     if opts.control.reset_and_redownload {
@@ -188,6 +188,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let target = datalib_etl::ids::normalize_id_token(raw);
                 match client.get_conversation(&target).await {
                     Ok(full) => {
+                        let full = canonicalize_conversation_payload(&full);
                         let (title, update_time) = title_and_update_time(&full);
                         let payload =
                             serde_json::to_string(&full).context("serialize conversation")?;
@@ -341,6 +342,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.progress.set_message(cid);
             match client.get_conversation(cid).await {
                 Ok(full) => {
+                    let full = canonicalize_conversation_payload(&full);
                     let (title, update_time) = title_and_update_time(&full);
                     let payload = match serde_json::to_string(&full) {
                         Ok(s) => s,
@@ -405,6 +407,34 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
+}
+
+/// Top-level arrays the API returns as a *set*, in an order that varies
+/// between fetches of an unchanged conversation. Sorted before the
+/// write so that an unchanged record serializes identically to itself.
+/// Every other array in the payload is ordered (`mapping.*.children`,
+/// `content.parts`, citations, attachments) and must stay as sent.
+const SET_VALUED_KEYS: &[&str] = &[
+    "safe_urls",
+    "blocked_urls",
+    "disabled_tool_ids",
+    "plugin_ids",
+];
+
+pub(crate) fn canonicalize_conversation_payload(payload: &Value) -> Value {
+    let mut out = payload.clone();
+    for key in SET_VALUED_KEYS {
+        if let Some(bag) = out.get_mut(key).and_then(Value::as_array_mut) {
+            // Sort by the rendered string so mixed types (which would make
+            // `as_str` sort unstable) still get a total order.
+            bag.sort_by_key(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            });
+        }
+    }
+    out
 }
 
 fn title_and_update_time(full: &Value) -> (Option<String>, Option<String>) {
@@ -677,11 +707,11 @@ async fn download_one_file(
     // (which uses `-o <path>`) and side-steps any binary-stdio
     // weirdness. The tempfile is deleted automatically.
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    // The signed CDN URL is CF-fronted; mark the request so the dispatch
+    // The signed CDN URL is CF-fronted; mark the request so the router
     // curl routes it to the impersonating curl. The helper supplies
     // `[--account <acct>] curl`, so the blob fetch runs as the same
     // identity as the API calls that discovered it.
-    let mut cmd = latchkey_curl_command(client.latchkey());
+    let mut cmd = latchkey_curl_command(client.latchkey())?;
     cmd.arg("-fSL")
         .arg("-H")
         .arg(IMPERSONATE_MARKER_HEADER)
@@ -885,5 +915,76 @@ mod tests {
         let just_before = json!(iso_for_epoch(1_710_959_330.1));
         assert!(update_time_secs(&on_boundary).unwrap() >= cutoff);
         assert!(update_time_secs(&just_before).unwrap() < cutoff);
+    }
+
+    // ── unordered bags from the API ──────────────────────────────────
+
+    /// Two fetches of an unchanged conversation must serialize
+    /// identically; the API returns `safe_urls` in a varying order.
+    #[test]
+    fn safe_urls_are_stored_in_a_stable_order() {
+        let one = json!({
+            "conversation_id": "c1",
+            "safe_urls": ["https://openai.com", "https://chatgpt.com"],
+            "blocked_urls": ["https://b.example", "https://a.example"],
+        });
+        let other_order = json!({
+            "conversation_id": "c1",
+            "safe_urls": ["https://chatgpt.com", "https://openai.com"],
+            "blocked_urls": ["https://a.example", "https://b.example"],
+        });
+        assert_eq!(
+            canonicalize_conversation_payload(&one),
+            canonicalize_conversation_payload(&other_order),
+            "the same urls in a different order must canonicalize the same"
+        );
+    }
+
+    /// Sorting, not dropping: a url that goes away is a real change and
+    /// must still show up as one.
+    #[test]
+    fn safe_urls_keep_their_contents() {
+        let full = json!({"safe_urls": ["b", "a", "c"]});
+        let fewer = json!({"safe_urls": ["a", "b"]});
+        assert_eq!(
+            canonicalize_conversation_payload(&full)["safe_urls"],
+            json!(["a", "b", "c"]),
+            "every url is kept, in sorted order"
+        );
+        assert_ne!(
+            canonicalize_conversation_payload(&full),
+            canonicalize_conversation_payload(&fewer),
+            "a removed url must still read as a change"
+        );
+    }
+
+    /// The ordered arrays must not be touched: `children` is branch
+    /// order and `parts` is reading order.
+    #[test]
+    fn canonicalize_leaves_ordered_arrays_alone() {
+        let payload = json!({
+            "mapping": {"root": {"children": ["m2", "m1"], "message": {"content": {"parts": ["z", "a"]}}}},
+        });
+        assert_eq!(canonicalize_conversation_payload(&payload), payload);
+    }
+
+    /// A conversation without the field, with `null` in it (the API
+    /// sends `"plugin_ids": null`), or with something unexpected, passes
+    /// through rather than panicking — this runs on every conversation
+    /// of every sync.
+    #[test]
+    fn canonicalize_tolerates_a_missing_or_odd_field() {
+        let none = json!({"conversation_id": "c1"});
+        assert_eq!(canonicalize_conversation_payload(&none), none);
+        let null = json!({"plugin_ids": null});
+        assert_eq!(canonicalize_conversation_payload(&null), null);
+        let odd = json!({"safe_urls": "not-an-array"});
+        assert_eq!(canonicalize_conversation_payload(&odd), odd);
+        let mixed = json!({"safe_urls": [2, "a", 1]});
+        assert_eq!(
+            canonicalize_conversation_payload(&mixed)["safe_urls"],
+            json!([1, 2, "a"]),
+            "mixed types still get a total order rather than panicking"
+        );
     }
 }

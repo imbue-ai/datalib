@@ -4,7 +4,10 @@ The ingest step of a `garmin` group mirrors one Garmin Connect account
 into a doltlite raw store, over the same API the Garmin Connect phone
 app uses (`connectapi.garmin.com`). There is no public Garmin API for
 individuals; this one is what `garth`, `python-garminconnect` and
-GarminDB all sit on, and the request shapes here are ported from them.
+GarminDB all sit on. The endpoints and query parameters here are the
+same facts those projects observed; the only code ported from any of
+them is the SSO login, from `garth` (MIT). GarminDB is GPL-2.0 and
+nothing was taken from it beyond which URLs exist.
 
 ```
 <data_root>/<group>/ingest/entities.doltlite_db
@@ -65,10 +68,20 @@ Five walks, each with its own cursor in `sync_scope_state`, all bounded
 below by `api.since` (default: a year before the first run) and above
 by the run's local date:
 
+Every prune below has the same gate, stated once here: **a walk deletes
+what its listing did not name only when the listing was an
+enumeration** — an array (every page of it, for the paged ones), with
+no request failing. A 204/404/empty body, an object with no array
+inside, or a page that errored is byte-similar to "everything was
+deleted" and is not read that way: the stored rows stay, the cursor
+stays so the next run walks the window again, and the run records a
+`problems` row keyed `listing:<name>` (see "What a failure leaves"
+below).
+
 1. **Account and devices.** `/userprofile-service/socialProfile` (the
    `displayName` every per-user path needs) and `user-settings` land in
    `garmin_account`; `/device-service/deviceregistration/devices` in
-   `garmin_devices`, pruned to the listing.
+   `garmin_devices`, pruned to the listing when it is one.
 2. **Per-day metrics.** For each metric in `api.metrics` (default: all
    twenty in `DAILY_METRICS`), one request per calendar day from the
    metric's cursor less `refresh_days` (default 7) to today, stored
@@ -79,8 +92,11 @@ by the run's local date:
 3. **Weigh-ins.** `/weight-service/weight/range/<start>/<end>?includeAll=true`
    in 90-day chunks from the cursor less `refresh_days`, flattened one
    row per `samplePk` into `garmin_weigh_ins`. Rows dated inside the
-   walked window that the listing did not name are deleted: the
-   window was listed completely, so their absence is a deletion.
+   walked window that the listing did not name are deleted once every
+   chunk has answered with a `dailyWeightSummaries` array: only then
+   was the window listed completely, and their absence a deletion. A
+   chunk that did not is skipped, the others still land, and the
+   window is neither pruned nor cursored past.
 4. **Activities.** `/activitylist-service/activities/search/activities`
    paged from `startDate=<cursor − refresh_days>`, one row per
    `activityId`. An activity whose listing row is new or whose payload
@@ -90,7 +106,9 @@ by the run's local date:
    the one `.fit` inside the zip stored, and an edge row written
    (`activity_files = false` turns that off). Activities dated a full
    day inside the walked window that the listing did not name are
-   pruned with their details and edges.
+   pruned with their details and edges — once the page walk reached a
+   short page. A walk that stopped on a bad page still upserts the
+   pages it got, and prunes nothing.
 5. **Wellness FIT bundles** (`wellness_files = true`, default off).
    `/download-service/files/wellness/<date>` per day, the zip stored
    as-is: all-day heart rate, stress, steps, body battery and sleep at
@@ -100,14 +118,38 @@ by the run's local date:
 6. **Whole-account listings.** Personal records, gear, earned badges,
    workouts and active goals, each re-read complete every run into
    `garmin_items` (keyed `<kind>#<upstream id>`) and pruned to the
-   listing.
+   listing when it is one. Workouts and goals are paged
+   (`start`/`limit`, `ITEM_PAGE` at a time) to the first short page;
+   the other three answer the whole list in one response.
 
-A phase that fails is logged and counted in `errors=`, and the others
-still run; an auth failure aborts the run, since every phase would
-share it. Inside the per-day walk, a metric that fails ten days in a
-row is abandoned for the run rather than paid for once per day of
-history; the failed days carry the error in their bookkeeping row and
-are re-tried inside the next run's refresh window.
+### What a failure leaves
+
+A phase that fails wholesale is logged, counted in `errors=` and
+`phases_failed=`, and the others still run; an auth failure aborts the
+run, since every phase would share it. The run still exits 0 after a
+failed phase, on purpose: the step driver commits the store and reports
+its problem counts only when the run returns `Ok`, so failing the run
+would hide the rows that say what failed. Every way a run falls short
+is a row in the raw store's `problems` table, which the render step
+carries downstream and the Manage screen counts:
+
+| what | key | when it clears |
+| --- | --- | --- |
+| a day's metric that could not be fetched | `garmin_daily:<metric>#<date>` | the day fetches inside a later refresh window |
+| an activity detail, FIT file or wellness bundle that could not be fetched | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | it fetches |
+| a listing that was not an enumeration | `listing:<devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
+| a phase that failed wholesale | `phase:<devices\|daily\|weight\|activities\|wellness\|items>` | the next run in which it runs |
+
+The `listing:` and `phase:` rows are replaced whole each run
+(`datalib_etl::download_problems::report_run`), so a listing that
+answers again clears its row without anyone doing anything; a row that
+persists keeps its `first_seen_at_utc`. A `warn!` alone is never the
+only record.
+
+Inside the per-day walk, a metric that fails ten days in a row is
+abandoned for the run rather than paid for once per day of history;
+the failed days carry the error in their bookkeeping row and are
+re-tried inside the next run's refresh window.
 
 ### What a second run costs
 
@@ -155,6 +197,13 @@ field that only *looks* like noise is not one.
   long first sync. Trim `api.metrics` or start with a nearer `since`
   and widen it later. Garmin's rate limits are not documented; the
   shared transport backs off on 429 and gives up on the usual budget.
+- **The workout and goal paging is verified only in playback.** Both
+  endpoints take `start`/`limit` (the reference clients page them
+  that way), but whether `start` is a 0-based offset, and what a page
+  past the end answers, has not been watched against a live account
+  with more than `ITEM_PAGE` of either. A wrong reading fails safe:
+  an endpoint that ignores `start` answers the same page twice, the
+  walk stops there as not an enumeration, and prunes nothing.
 - **The playback fixtures assume the default `refresh_days`.** The
   synthesizer writes the weight and activity fixtures for the windows a
   first run and a second run with `refresh_days = 7` ask for; a

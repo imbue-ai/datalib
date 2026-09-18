@@ -52,8 +52,35 @@ fn scrub_presigned(s: &str) -> String {
     out
 }
 
+/// Blank the `Size` cell of a storage table row (`| 658.4 KiB |`): a
+/// store's size on disk wobbles run-to-run at equal row counts, which is
+/// why `source_measurements.bytes` is redacted too. The row's `Count`
+/// cell (`16 rows`, `4 files`) is the signal and stays.
+fn scrub_sizes(s: &str) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let is_size = |cell: &str| {
+        let cell = cell.trim();
+        UNITS.iter().any(|u| {
+            cell.strip_suffix(u)
+                .is_some_and(|n| !n.is_empty() && n.trim_end().parse::<f64>().is_ok())
+        })
+    };
+    s.lines()
+        .map(|line| {
+            if !line.starts_with('|') || !line.split('|').any(is_size) {
+                return line.to_string();
+            }
+            line.split('|')
+                .map(|cell| if is_size(cell) { " <size> " } else { cell })
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn normalize_str(s: &str) -> String {
-    scrub_presigned(&norm_data_root(s))
+    scrub_sizes(&scrub_presigned(&norm_data_root(s)))
 }
 
 /// Redact dolt `commit=<hash>` substrings embedded in a human-readable string.
@@ -77,10 +104,6 @@ fn scrub_commit(s: &str) -> String {
     out.push_str(rest);
     out
 }
-
-/// Keys whose value is an array we want sorted before snapshotting.
-/// Use only for arrays known to be set-like (order is not meaningful).
-const SORTED_ARRAY_KEYS: &[&str] = &["safe_urls"];
 
 const VOLATILE_KEYS: &[&str] = &[
     "_recorded_at",
@@ -175,6 +198,14 @@ const VOLATILE_KEYS: &[&str] = &[
     "dev",
     "last_scan_at_utc",
     "scanner_version",
+    // The offset the clock was in when a stamp above was minted (AGENTS.md
+    // "Timestamp convention"): a property of the machine that baked, not
+    // of the data, and it rides beside stamps that are already redacted.
+    "tz_offset",
+    // The raw-store commit a render store's `render_cursor` row was
+    // rendered from: a dolt hash, so it moves on every run like
+    // `commit_hash`.
+    "raw_commit",
 ];
 
 /// Live counters on an embedded GitHub *repo* object (a PR payload carries the
@@ -198,10 +229,27 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
     map.contains_key("full_name") && map.contains_key("default_branch")
 }
 
+/// A `grid_rows` row of the storage page whose `byte_size` is a store's
+/// size on disk — the same number `source_measurements.bytes` and the
+/// page's `Size` cell carry, redacted for the same reason. A row of any
+/// other kind keeps its `byte_size`: there it measures the content.
+fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        map.get("kind").and_then(Value::as_str),
+        Some("Source Size") | Some("Store")
+    )
+}
+
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
-const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updated_at"])];
+const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
+    ("sync_scope_config", &["updated_at_utc"]),
+    // A store's size on disk wobbles run-to-run at equal row counts
+    // (page layout, chunk ordering), the same way the extract-metrics
+    // `bytes_*` did; `items` carries the signal.
+    ("source_measurements", &["bytes"]),
+];
 
 /// Stores dumped as one row count per table instead of row by row. A
 /// mirror source's store is every table of an application's own
@@ -219,6 +267,31 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updat
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
 const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp"];
+
+/// Tables dumped as a row count inside an otherwise full dump, as
+/// `(stanza, table)`; `"*"` is every stanza. Three reasons a table is
+/// here, none of them "it is big":
+///
+/// - Slack's `channels` and `users` are the workspace-wide listings —
+///   every channel and every member — that `SKIP_PATH_SEGMENTS` keeps
+///   out of the golden as files; the tables must not let them back in.
+/// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
+///   of rows whose values the provider's own fixtures pin; here the
+///   count says the step read the files, and the rendered plots say
+///   what it made of them.
+/// - `render_inputs` and claude_code's `records` repeat, row by row,
+///   what the `.md` files and `grid_rows` beside them already show.
+const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
+    ("tiny-slack", "channels"),
+    ("tiny-slack", "channels_bookkeeping"),
+    ("tiny-slack", "users"),
+    ("tiny-slack", "users_bookkeeping"),
+    ("airvisual", "airvisual_samples"),
+    ("garmin", "garmin_daily"),
+    ("garmin", "garmin_daily_bookkeeping"),
+    ("claude_code", "records"),
+    ("*", "render_inputs"),
+];
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {
@@ -501,6 +574,20 @@ fn manual_e2e_live_sync_golden() {
         prepend_module_to_snapshot => false,
     }, {
         assert_snapshot!("manifest", manifest.join("\n"));
+    });
+
+    // The index is where a problem ends up: a fetch-stage row is copied
+    // raw → render → index, so this one table shows every problem the
+    // run left visible to the grid, under the id it was first minted
+    // with. The rest of the index is the union of the render stores
+    // snapshotted above and is deliberately not dumped again.
+    insta::with_settings!({
+        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        prepend_module_to_snapshot => false,
+        sort_maps => true,
+        description => "unified_index/grid_index/db.doltlite_db#problems",
+    }, {
+        assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
     // ── Second run: incrementality check ──────────────────────────────
@@ -845,9 +932,29 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
+/// The unified index's `problems` table, volatile stamps redacted, ordered
+/// by `problem_uuid` like every dumped table.
+fn index_problems(data_root: &Path) -> Value {
+    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let mut dump = dump_doltlite_db(&db);
+    let mut rows = match &mut dump {
+        Value::Object(map) => map
+            .remove("problems")
+            .unwrap_or_else(|| panic!("{}: no `problems` table", db.display())),
+        other => panic!("{}: dump is not an object: {other}", db.display()),
+    };
+    strip_volatile(&mut rows);
+    rows
+}
+
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison:
-const NON_CONTENT_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
+const NON_CONTENT_TABLES: &[&str] = &[
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "problems",
+];
 
 /// Dump only the entity *content* tables of a doltlite DB for the
 /// --reset-and-redownload stability assertion: drops every
@@ -884,13 +991,14 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         {
             continue;
         }
-        // Doltlite's sidecar `-lock` files are ephemeral and
+        // Doltlite's `-lock` sidecars and our own per-file `.lock`s
+        // (etl README § "Connection pools") are ephemeral and
         // content-free; `CACHEDIR.TAG` is a backup hint asserted
-        // separately. Neither belongs in a golden.
+        // separately. None belongs in a golden.
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock") || n == "CACHEDIR.TAG")
+            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock") || n == "CACHEDIR.TAG")
         {
             continue;
         }
@@ -1173,12 +1281,17 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
         .collect();
 
-    let counts_only =
-        stanza_of(path).is_some_and(|stanza| ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str()));
+    let stanza = stanza_of(path).unwrap_or_default();
+    let store_counts_only = ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str());
+    let table_counts_only = |t: &str| {
+        ROW_COUNT_ONLY_TABLES
+            .iter()
+            .any(|(s, table)| *table == t && (*s == "*" || *s == stanza))
+    };
 
     let mut out = serde_json::Map::new();
     for t in tables {
-        if counts_only {
+        if store_counts_only || table_counts_only(&t) {
             // Golden-test dump: `t` is a table name this test just read out
             // of the store's own `sqlite_master`.
             let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\"")))
@@ -1340,19 +1453,16 @@ fn strip_volatile(v: &mut Value) {
     match v {
         Value::Object(map) => {
             let repo = is_github_repo_object(map);
+            let storage = is_storage_row(map);
             for (k, child) in map.iter_mut() {
                 if VOLATILE_KEYS.contains(&k.as_str())
                     || (repo && REPO_VOLATILE_KEYS.contains(&k.as_str()))
+                    || (storage && k == "byte_size")
                 {
                     *child = Value::String(REDACTED.into());
                     continue;
                 }
                 strip_volatile(child);
-                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
-                    if let Value::Array(items) = child {
-                        items.sort_by_key(|a| a.to_string());
-                    }
-                }
             }
         }
         Value::Array(items) => {
@@ -1411,6 +1521,8 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // wall-clock timestamps. The content-equality is already
         // covered by `deltas` showing few/no rows changed.
         "commit_hash",
+        "raw_commit",
+        "tz_offset",
         // `load.write_lock` timings + the extract-metrics per-db byte sizes
         // are wall-clock / layout jitter; row counts carry the real signal.
         "avg_hold_ms",
@@ -1432,11 +1544,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
                     continue;
                 }
                 strip_volatile_for_incrementality(child);
-                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
-                    if let Value::Array(items) = child {
-                        items.sort_by_key(|a| a.to_string());
-                    }
-                }
             }
         }
         Value::Array(items) => {

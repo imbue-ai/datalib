@@ -10,11 +10,13 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, Response, StatusCode},
+    middleware::{self, Next},
     response::Json,
     routing::{get, post},
     Router,
 };
 mod columns;
+mod problems;
 
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
@@ -70,29 +72,56 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             repo: Arc::new(repo),
             root,
         };
-        let app = Router::new()
-            .route("/search", get(search_handler))
-            .route("/qmd_state", post(qmd_state))
-            .route("/docs", get(list_docs))
-            .route("/chat/{markdown_uuid}", get(chat))
-            .route("/asset/{markdown_uuid}/{*rel}", get(asset))
-            .route(
-                "/health",
-                get(|| async { Json(serde_json::json!({"ok": true})) }),
-            )
-            .with_state(state);
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("bind {addr}"))?;
         // `port` may be 0 ("any"), so the bound one is the listener's.
         let bound = listener.local_addr().context("read the bound address")?;
+        // Outermost, so every route is behind it, `/health` included.
+        let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
+        let app = Router::new()
+            .route("/search", get(search_handler))
+            .route("/qmd_state", post(qmd_state))
+            .route("/docs", get(list_docs))
+            .route("/problems", get(problems::handler))
+            .route("/chat/{markdown_uuid}", get(chat))
+            .route("/asset/{markdown_uuid}/{*rel}", get(asset))
+            .route(
+                "/health",
+                get(|| async { Json(serde_json::json!({"ok": true})) }),
+            )
+            .with_state(state)
+            .layer(middleware::from_fn_with_state(gate, require_gateway));
         eprintln!("datalib-applet unified_index: listening on {bound}");
         // There was nothing to write first, so binding is all this one
         // owes before the gateway may look.
         crate::announce_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
+}
+
+async fn require_gateway(
+    State(gate): State<Arc<crate::gate::Gate>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response<Body> {
+    // Decided in its own block: a borrow of `req` alive across the
+    // `.await` below would make this future `!Send`.
+    let admitted = {
+        let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+        gate.admits(header("host"), header(crate::gate::SECRET_HEADER))
+    };
+    if admitted {
+        return next.run(req).await;
+    }
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"error":"this port answers only to the datalib gateway"}"#,
+        ))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
 fn ensure_models(root: &std::path::Path) {
@@ -118,13 +147,39 @@ fn ensure_models(root: &std::path::Path) {
              continuing with {}/models as-is",
             qmd_dir.display()
         );
-    } else if !datalib_qmd_indexer::models_present(&qmd_dir.join("models")) {
-        eprintln!(
-            "datalib-applet unified_index: model cache cold — the first \
-             semantic search will download models (one-time, shared \
-             across data roots)"
-        );
+        return;
     }
+    // Verify (and on a cold cache, fetch) the pinned models off the
+    // request path: a 2 GB download must not hold up the SQL side of
+    // search, and qmd would otherwise pull unpinned copies itself on
+    // the first semantic query.
+    let effective = datalib_qmd_models::effective_models_dir(&qmd_dir, &models_dir);
+    std::thread::spawn(move || {
+        let models = datalib_qmd_models::PINNED_MODELS;
+        match datalib_qmd_models::ensure_models(
+            &effective,
+            models,
+            datalib_qmd_models::Fetch::from_env(),
+        ) {
+            Ok(outcomes) => {
+                let missing = datalib_qmd_models::missing(models, &outcomes);
+                if !missing.is_empty() {
+                    eprintln!(
+                        "datalib-applet unified_index: not fetching {} into {} \
+                         ({} is set); whatever needs them will fail",
+                        missing.join(", "),
+                        effective.display(),
+                        datalib_qmd_models::NO_FETCH_ENV
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "datalib-applet unified_index: could not provision qmd's models in {} ({e:#}); \
+                 semantic search will fail until `datalib-step pull-models` succeeds",
+                effective.display()
+            ),
+        }
+    });
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +221,13 @@ pub struct ChatResponse {
     pub source_label: Option<String>,
     pub source_url: Option<String>,
     pub body: String,
+    /// What render could not fully do to this document, errors first.
+    /// Drawn above the body.
+    pub problems: Vec<problems::DocProblem>,
+    /// Anything the applet could not read while answering; the document
+    /// still opens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
     /// Outgoing edges from this markdown. The UI uses this to render
     /// the "outgoing destinations" list at the top of the doc preview
     /// AND to resolve `<span data-edge-id>` clicks inside the body to
@@ -237,7 +299,7 @@ async fn search_handler(
                 FreeTextMode::Hybrid => "hybrid",
                 FreeTextMode::Vsearch => "vsearch",
             },
-            "resolved_type": format!("{:?}", parsed.resolved_type),
+            "documents": parsed.documents,
             "filters": parsed.filters.iter()
                 .map(|(k, v)| (format!("{:?}", k), v.clone()))
                 .collect::<Vec<_>>(),
@@ -300,7 +362,9 @@ async fn run_qmd_search(
     // (a path the grid doesn't know about, e.g. a stale render under an old
     // layout) resolve to no rows; flag them loudly so their dropped score is
     // visible. (ERROR level; this file logs via eprintln!.)
-    let ranked = idx.ranked_rows_one_per_doc(&hits, |h| {
+    // An `is:document` search wants the document a hit is in, not the
+    // message it landed on — which the SQL filter would then drop.
+    let ranked = idx.ranked_rows_one_per_doc(&hits, parsed.documents == Some(true), |h| {
         eprintln!(
             "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
             h.path, h.score
@@ -526,17 +590,36 @@ async fn chat(
         .outgoing_edges(&markdown_uuid)
         .await
         .unwrap_or_default();
+    // What render could not fully do to this document, for the banner
+    // above the body. A read that fails is said, not swallowed: the
+    // document still opens, and the banner says the problems could not
+    // be read rather than showing none.
+    let (problems, errors) = match s.repo.document_problems(&markdown_uuid).await {
+        Ok(mut rows) => {
+            problems::sort_for_banner(&mut rows);
+            (
+                rows.into_iter().map(problems::DocProblem::of).collect(),
+                Vec::new(),
+            )
+        }
+        Err(e) => (
+            Vec::new(),
+            vec![format!("could not read this document's problems: {e}")],
+        ),
+    };
     Ok(Json(ChatResponse {
         markdown_uuid,
         name: meta.name,
         account: meta.account,
         project: meta.project,
         channel: meta.channel,
-        created_at: meta.when_ts,
+        created_at: meta.created_at,
         source_label: meta.source_label,
         source_url,
         body,
         outgoing_edges,
+        problems,
+        errors,
     }))
 }
 

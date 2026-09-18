@@ -14,8 +14,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::align::{split, PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, Edition, ParsedPerseus, Section};
@@ -25,7 +25,7 @@ use datalib_etl_perseus::{
     WORK_SHORT, WORK_TITLE, WORK_URN,
 };
 
-/// Synthetic `when_ts` base. Drives the grid's global sort so default
+/// Synthetic `created_at` base. Drives the grid's global sort so default
 /// ordering yields reading order (Book 1 Chapter 1 first).
 fn ts_base() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
@@ -128,7 +128,7 @@ fn render_book(
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
         .into_iter()
         .collect();
@@ -143,6 +143,7 @@ fn render_book(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges,
         problems,
     })
@@ -174,7 +175,7 @@ fn render_chapter(
     let md = render_chapter_md(chapter, edition, alignments);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
     rows.extend(chapter_grid_row(
         book,
@@ -218,6 +219,7 @@ fn render_chapter(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges,
         problems,
     })
@@ -399,7 +401,7 @@ fn book_text_for_grid(book: &Book) -> String {
     book_title(&book.n)
 }
 
-fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
+fn synth_stamp(book_n: &str, ch_n: i64) -> String {
     let bi: i64 = book_n.parse().unwrap_or(0);
     let offset = bi * 10_000 + ch_n;
     render_synth_ts(ts_base() + Duration::seconds(offset))
@@ -411,14 +413,15 @@ fn book_grid_row(
     stanza: &str,
     book: &Book,
     bk_uuid: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
         .provider(Provider::Perseus)
         .kind("Book")
         .source_label("Perseus")
-        .when_ts(Some(synth_when_ts(&book.n, 0)))
+        .is_document(true)
+        .created_at(Some(synth_stamp(&book.n, 0)))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))
@@ -449,7 +452,7 @@ fn chapter_grid_row(
     ch_uuid: &str,
     md_rel: &str,
     stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let ci: i64 = chapter.n.parse().unwrap_or(0);
     let bi: u32 = book.n.parse().unwrap_or(0);
@@ -459,7 +462,8 @@ fn chapter_grid_row(
         .provider(Provider::Perseus)
         .kind(format!("Chapter ({})", edition.id))
         .source_label("Perseus")
-        .when_ts(Some(synth_when_ts(&book.n, ci)))
+        .is_document(true)
+        .created_at(Some(synth_stamp(&book.n, ci)))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))
@@ -491,12 +495,12 @@ fn section_grid_row(
     text: &str,
     idx: i64,
     stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci: u32 = chapter.n.parse().unwrap_or(0);
     let si: u32 = sec.n.parse().unwrap_or(0);
-    let when_ts = {
+    let created_at = {
         let ci_i64: i64 = ci as i64;
         let chapter_secs = bi as i64 * 10_000 + ci_i64;
         let ts = ts_base() + Duration::seconds(chapter_secs) + Duration::milliseconds(idx + 1);
@@ -507,7 +511,7 @@ fn section_grid_row(
         .provider(Provider::Perseus)
         .kind(format!("Section ({})", edition.id))
         .source_label("Perseus")
-        .when_ts(Some(when_ts))
+        .created_at(Some(created_at))
         .author(Some("Thucydides".to_string()))
         .account(Some("Perseus Digital Library".to_string()))
         .project(Some(WORK_TITLE.to_string()))

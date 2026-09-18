@@ -1,6 +1,6 @@
 # `grid_rows` — the union table behind the grid
 
-The AG Grid in `datalib/ui` shows one row per "displayable thing" in
+The grid in `datalib/ui` shows one row per "displayable thing" in
 the mirror: chat conversations, individual messages, content blocks
 (tool_use / tool_result / thinking), Slack threads, Slack messages.
 Rather than have the Rust backend dispatch per-provider — five queries
@@ -8,16 +8,21 @@ unioned in code, with five distinct row builders — every ingest writes a
 denormalized projection into a single Dolt table, **`grid_rows`**, and
 the backend reads it with one query.
 
+The index holds one more table the grid does not read: `problems`,
+every source's render-store `problems` copied in whole by `grid_index`
+and served by the applet at `/problems` — see
+[`plans/problem_visibility.md`](plans/problem_visibility.md).
+
 ## Why a union table
 
 Three forces pushed us this direction:
 
 1. **One source of truth for column semantics.** When the grid grows a
-   new column (`channel`, `slack_link`, …), exactly one schema needs to
+   new column (`channel`, `source_url`, …), exactly one schema needs to
    move. Codegen propagates the change to Rust (both writer and reader
    sides) and TypeScript (consumer side). Drift has historically been
    a recurring bug source.
-2. **One query path on the backend.** `datalib/backend/core/src/db.rs`
+2. **One query path on the backend.** `datalib/backend/unified_index/src/dolt_repo.rs`
    is now a single `SELECT … FROM grid_rows WHERE …` plus a row mapper.
    Adding a provider doesn't add a `push_*` function; it adds rows to the
    table at ingest time. The query/filter/sort logic stays put.
@@ -34,7 +39,7 @@ is the single source of truth, with no codegen step. Each field carries:
 - `#[col(sql = "…")]` — portable DDL type (the SQL subset shared by Dolt
   and MySQL). Nullability is inferred from `Option<T>`.
 - `#[derived(name = "…", sql = "…")]` — a column computed at grid-index time
-  (e.g. `when_ts_utc` / `when_offset`, derived from `when_ts`). Present in
+  (e.g. `created_at_utc` / `created_offset`, derived from `created_at`). Present in
   the DDL but absent from the struct.
 - doc comment — one or two lines saying what the column *means*. How each
   provider fills it in is in [Per-provider mappings](#per-provider-mappings)
@@ -60,11 +65,11 @@ each changed document's row set, and copies the corresponding
 ## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
 `DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
-(account/project/before/after/free-text) plus a kind clause from
-`q.resolved_type` (chat: vs message:), then issues a single SELECT
-against `grid_rows` ordered by `when_ts` ASC with chat rows tie-breaking
-ahead of their messages. The row mapper translates each row into a
-`SearchRow` for the HTTP API.
+(account/project/before/after/free-text) plus `is_document = 1` or
+`= 0` when the query said `is:document` or `-is:document`, then issues
+a single SELECT against `grid_rows` ordered by `created_at` ASC with a
+document row tie-breaking ahead of the rows inside it. The row mapper
+translates each row into a `SearchRow` for the HTTP API.
 
 ## Adding a column
 
@@ -77,10 +82,13 @@ ahead of their messages. The row mapper translates each row into a
 3. Update `unified_index/src/dolt_repo.rs` — both the
    `SEARCH_ROW_COLUMNS` constant and `search_row_from` — and `SearchRow`
    in `unified_index/src/search.rs` if the column should reach the API.
-4. If the grid should display it, add it to `default_columns()` in
-   `datalib/backend/applets/src/unified_index/mod.rs` (the applet's wire
-   contract; a test counts the entries) and to the `SearchRow` type in
-   `datalib/ui/src/api.ts`.
+4. If it should be a grid column, add it to the `SearchRow` type in
+   `datalib/ui/src/api.ts` and declare it in `columns()` in
+   `datalib/backend/applets/src/unified_index/columns.rs`, with its type
+   from `datalib_columns`. The applet declares the columns and the grid
+   draws them by type (`cards/typedColumns.ts`, over the renderers in
+   `cards/cellRenderers.ts`); a width or a hover the type cannot know
+   goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
@@ -92,8 +100,10 @@ ahead of their messages. The row mapper translates each row into a
 2. Wire the new crate into `datalib-step`: add it to the deps of
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
-   download/render step pair in the config. The grid_index step picks
-   up its render store with no further wiring.
+   ingest/render step pair in the config and name the render step in
+   the two fan-ins' `inputs` (the wizard does this for a source it
+   adds); `grid_index` and `qmd_index` read exactly the stores their
+   inputs name.
 3. Add the source label to the consuming bits as needed (icon
    resolution, etc.) — but the query path itself does not change.
 
@@ -170,28 +180,61 @@ they sit beside the shared blob store.
 | notion.page | `Notion Page` (`Notion Database` for a collection_view_page) |
 | notion.heading.h1/h2/h3 | `Notion Heading 1` / `2` / `3` |
 | notion.thread / notion.comment | `Notion Comment Thread` / `Notion Comment` |
+| facebook.post / its one item | `Facebook Post` / `Facebook Post Message` |
+| facebook.album / description / photo | `Facebook Album` / `Facebook Album Message` / `Facebook Photo` |
+| facebook.comments / comment | `Facebook Comments` / `Facebook Comment` (one chat per source, a document per month) |
+| facebook.reactions / reaction | `Facebook Reactions` / `Facebook Reaction` (likewise) |
+| facebook.friend | `Contact` |
 
 `source_label` is the plain product name: `Claude`, `ChatGPT`, `Slack`,
 `GitHub`, `GitLab`, `Notion`.
 
-### `when_ts`
+### `is_document`
 
-| provider.kind | value |
-|---|---|
-| claude.chat | `IFNULL(created_at, updated_at)` |
-| claude.message | `messages.created_at` |
-| claude.block | `blocks.start_timestamp`, else `bump_micros(parent.created_at, block_index+1)` |
-| chatgpt.chat | `IFNULL(create_time, update_time)` |
-| chatgpt.message | `messages.create_time`, else `bump_micros(parent.create_time, msg_idx+1)` |
-| slack.message | `messages.ts`, formatted ISO-8601 UTC |
-| github.pr | `pull_request.updated_at`, else `created_at` |
-| github.comment | `comment.created_at` |
-| gitlab.mr | `merge_request.updated_at`, else `created_at` |
-| gitlab.note | `note.created_at` |
-| notion.page | `block.last_edited_time` (ms epoch → ISO-8601 UTC) |
-| notion.heading | the parent page's `last_edited_time` |
-| notion.thread | the first comment's `created_time` |
-| notion.comment | `comment.created_time` |
+True on exactly one row per rendered markdown document — the row
+whose `uuid` is the document's `markdown_uuid` — and false on every
+row inside it. Every row carries a `markdown_uuid`, so this is not
+"has a document"; it is "opening this row opens a whole document
+rather than a place in one". Each renderer says so through
+`GridRowBuilder::is_document`, and the render store refuses a document
+with any number of them other than one (`document_row` in
+`etl/render/src/grid_index.rs`), so the flag is declared, never
+inferred. A Browse of a source opens on these rows (`is:document`).
+Several sources have more than one document kind: Claude's `Chat` and
+`Project`, Notion's `Notion Page` and `Notion Comment Thread`,
+LinkedIn's `Contact` and `LinkedIn Chat`.
+
+### `created_at` and `modified_at`
+
+Both are the record's own stamps, kept as the source wrote them (see
+the timestamp convention in AGENTS.md); each gets a `_utc` twin and an
+offset column at index time, and `created_at_utc` is what the grid
+sorts on and `before:`/`after:` filter on. The rule for a document
+row is the same everywhere: `created_at` is the earliest moment in
+the document and `modified_at` the latest. For a row inside a
+document, `created_at` is its own stamp and `modified_at` is the edit
+stamp where the source keeps one — **null** otherwise, never a copy
+of `created_at`: null means "not known to have changed since it was
+created". `markdowns.created_at` / `modified_at` are copies of the
+document row's, taken by the render store when it writes the
+document.
+
+| provider.kind | `created_at` | `modified_at` |
+|---|---|---|
+| every chat provider through `chat-common` (chat row) | `min(item.date_ms)` over the bucket | `max` over the items and their reactions |
+| chat-common message / reaction | the item's `date_ms`, else `bump_micros` off the parent | null |
+| claude.project | through chat-common: its sections are anchored to `projects.created_at` (else `updated_at`), so the min/max rule above applies | likewise, the latest section or knowledge doc |
+| github.pr / gitlab.mr | `created_at` | `updated_at` |
+| github.comment / gitlab.note | `created_at` | `updated_at` when it differs from `created_at`, else null |
+| notion.page | `created_time` | `last_edited_time` |
+| notion.thread | the first comment's `created_time` | the latest comment's `last_edited_time` (or `created_time`) |
+| notion.comment | `created_time` | `last_edited_time` when it differs, else null |
+| pdf.document | PDF `CreationDate`, else `ModDate` (the file existed by then) | `ModDate` |
+| pdf.page | the document's `created_at` | null |
+| contacts (vCard) | null — a person has no creation event | `REV:` |
+| linkedin.contact | "Connected On", as midnight UTC | null |
+| yolink / airvisual timeseries, garmin weight | the first sample | the last sample |
+| datalib storage rows | the run's `--now` | the same instant |
 
 ### `author`
 
@@ -228,6 +271,7 @@ resolve against". A source with no login at all (a PDF folder, a
 | slack | the `users` row for `workspaces.self_user_id`: `profile.email`, else real name, else handle, else the bare `U…` id | — | `channels.name` |
 | email | the `accounts` row: `emailAddress` (mbox), `email` (Gmail), else JMAP's `name` — which RFC 8620 defines as the owner's address — else the account id | — | — |
 | linkedin | the `Primary` row of `email_addresses` (else the first, else `profile`'s first + last name); every row of the export, connections included | — | `Connections` for a contact |
+| facebook | `profile_v2.emails.emails[0]` (else `profile_v2.name.full_name`) from `…profile_information`; every row of the export, friends included | — | `Friends` for a contact |
 | github | — | `pull_request.base.repo.full_name` | — |
 | gitlab | — | `merge_request.references.full`, else `project_path` | — |
 | notion | — | — | — |
@@ -349,6 +393,17 @@ a kind here means adding a row to this table.
 job to say: a Table counts rows, a Source Size counts files, a PDF
 document counts pages, a conversation counts messages.
 
+### `diff_status`, `diff_changed_columns`
+
+**NULL on every row a real source renders.** Set only by a diff group
+(`docs/dev/plans/completed/diff_renderer.md`), whose rows are two renders of the
+same source subtracted: `diff_status` is `added`, `removed`, `modified`
+or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
+modified row `diff_changed_columns` names the columns that differ,
+sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
+says a row came from a diff tree; nothing else about the row changes —
+`provider` is still the source's, so its icon and CSS apply.
+
 ## Storage rows: what a source weighs
 
 Every source's render wave ends by measuring its own raw store and
@@ -389,11 +444,11 @@ measurement is one row, keyed on `(source, kind, measured path)` and
 nothing else, so a re-render overwrites it and `dolt_diff` over the
 store reads as "these numbers moved". The series behind it accumulates
 in `source_measurements`, a table in the same per-source
-`indexed_markdown.doltlite_db` that `render_problems` lives in, keyed
+`indexed_markdown.doltlite_db` that `problems` lives in, keyed
 `(subject, measured_at_utc)`.
 
 Putting the series in `grid_rows` instead was considered and rejected
-for four reasons, each specific to that table: `when_ts` is the global
+for four reasons, each specific to that table: `created_at` is the global
 sort key, so every run would bury the user's real data under a few
 hundred fresh measurement rows; `grid_rows.uuid` is contracted to be
 deterministic from the entity, and a series row's id must carry a

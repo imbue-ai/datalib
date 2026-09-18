@@ -38,7 +38,9 @@ pub const KNOWN_FILES: &[KnownFile] = &[
     KnownFile { table: "ad_targeting", export_name: "Ad_Targeting.csv", id_cols: &[], message_shaped: false, note: "Ad-targeting attributes LinkedIn inferred about you." },
     KnownFile { table: "ads_clicked", export_name: "Ads Clicked.csv", id_cols: &[], message_shaped: false, note: "Sponsored posts/ads you clicked, with timestamps." },
     KnownFile { table: "articles", export_name: "Articles/**/*.html", id_cols: &[], message_shaped: false, note: "Long-form articles you published (raw HTML, one row per file)." },
-    KnownFile { table: "comments", export_name: "Comments_<id>.csv", id_cols: &["Link"], message_shaped: false, note: "Comments you left on posts (date, post link, message)." },
+    // `Link` is the post, not the comment: one post can carry many, and
+    // the export gives a comment no id of its own (`Date` can be blank).
+    KnownFile { table: "comments", export_name: "Comments_<id>.csv", id_cols: &[], message_shaped: false, note: "Comments you left on posts (date, post link, message). No natural key: keyed by row hash." },
     KnownFile { table: "company_follows", export_name: "Company Follows.csv", id_cols: &["Organization"], message_shaped: false, note: "Companies/organizations you follow." },
     KnownFile { table: "connections", export_name: "Connections.csv", id_cols: &["URL"], message_shaped: false, note: "Your 1st-degree connections (name, profile URL, company, when connected). Has a Notes: preamble." },
     KnownFile { table: "education", export_name: "Education.csv", id_cols: &[], message_shaped: false, note: "Schools, degrees, and dates from your profile." },

@@ -2,7 +2,7 @@
 //! that write their frontend components into the store.
 //!
 //! An applet is run **once**, as
-//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params …]`,
+//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file …]`,
 //! and owes three things in that order: write its components, bind a port,
 //! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
 //! that line and only then scans the store, so **the line is the signal that
@@ -34,6 +34,9 @@ use std::time::Duration;
 
 use datalib_dag::config::AppletEntry;
 use serde::Serialize;
+use tokio::sync::broadcast;
+
+use crate::watch::RootEvent;
 
 /// The applet's own id, as the gateway knows it. The reference applet
 /// uses it to label its data; anything building an absolute URL should
@@ -44,6 +47,15 @@ pub const ENV_APPLET_ID: &str = "DATALIB_APPLET_ID";
 /// applet that emits absolute URLs must build them from this rather
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = "DATALIB_APPLET_BASE";
+
+/// The secret an applet requires on every request, carried in
+/// [`APPLET_SECRET_HEADER`]. The gateway mints one per process, hands it
+/// to each applet in this variable at spawn, and sends it on everything
+/// it forwards. Without it the applet's loopback port is a second door to
+/// the data the gateway keeps behind the API token, open to any local
+/// process and to a web page that resolves its own hostname to 127.0.0.1.
+pub const ENV_APPLET_SECRET: &str = "DATALIB_APPLET_SECRET";
+pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
 
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
@@ -73,6 +85,7 @@ fn base_command(
     entry: &AppletEntry,
     data_root: &Path,
     binary_dir: Option<&Path>,
+    secret: &str,
 ) -> anyhow::Result<Command> {
     let argv = split_command(&entry.id, &entry.command)?;
     let mut cmd = Command::new(&argv[0]);
@@ -92,6 +105,7 @@ fn base_command(
     cmd.env(datalib_dag::subprocess::ENV_DATA_ROOT, data_root);
     cmd.env(ENV_APPLET_ID, &entry.id);
     cmd.env(ENV_APPLET_BASE, format!("/applet/{}/", entry.id));
+    cmd.env(ENV_APPLET_SECRET, secret);
     for (k, v) in &entry.env {
         cmd.env(k, v);
     }
@@ -162,6 +176,25 @@ fn tail_lines(s: &str, n: usize) -> String {
 
 // The registry
 
+/// The one place a config change reaches the registry from outside a
+/// request: the root watcher says `config.toml` moved, the registry
+/// reconciles. A lagged receiver reloads too — a change may be in the
+/// gap, and a reload of an unchanged file costs a `stat`.
+pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootEvent>) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(RootEvent::ConfigChanged) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let registry = registry.clone();
+                    let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
+}
+
 /// The applets from `config.toml`, the frontend store they write into,
 /// and the child processes behind `/applet/`.
 pub struct AppletRegistry {
@@ -170,7 +203,24 @@ pub struct AppletRegistry {
     /// against a config whose own `binary_dir` may have changed.
     binary_dir_override: Option<PathBuf>,
     state: std::sync::RwLock<RegistryState>,
+    /// Held for the whole of a reload. The writer that just saved the
+    /// config and the watcher that noticed the save both call in; the
+    /// second must wait and then find the file already current, not
+    /// reconcile from the same baseline and kill what the first started.
+    reload: Mutex<()>,
     supervisor: Supervisor,
+    /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
+    /// process starts answers to the same one.
+    secret: String,
+}
+
+fn mint_secret() -> String {
+    // Two v4 UUIDs, the same 244 bits the API token is made of.
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 struct RegistryState {
@@ -223,6 +273,7 @@ impl AppletRegistry {
         binary_dir: Option<PathBuf>,
     ) -> Self {
         let supervisor = Supervisor::default();
+        let secret = mint_secret();
         // Nothing is running yet, so every entry starts and every
         // applet namespace is rebuilt.
         let errors = reconcile(
@@ -231,6 +282,7 @@ impl AppletRegistry {
             &entries,
             &data_root,
             binary_dir.as_deref(),
+            &secret,
         );
         let store = crate::frontend::FrontendStore::scan(&data_root);
         let config_stamp = config_stamp_of(&data_root);
@@ -238,6 +290,7 @@ impl AppletRegistry {
         Self {
             data_root,
             binary_dir_override,
+            reload: Mutex::new(()),
             state: std::sync::RwLock::new(RegistryState {
                 store_stamp,
                 entries,
@@ -247,6 +300,7 @@ impl AppletRegistry {
                 config_stamp,
             }),
             supervisor,
+            secret,
         }
     }
 
@@ -259,7 +313,14 @@ impl AppletRegistry {
         Self::new(entries, data_root.to_path_buf(), binary_dir, resolved)
     }
 
-    pub fn refresh_if_config_changed(&self) {
+    /// Reconcile the running applets with `config.toml` as it is now.
+    /// The two config writers call this before they answer, and
+    /// [`watch_config`] calls it when the watcher reports a hand edit; a
+    /// request never does. Cheap when the file has not moved (one
+    /// `stat` and a store rescan), blocking when it has, since a rebuild
+    /// execs one child per applet.
+    pub fn reload(&self) {
+        let _one_at_a_time = self.reload.lock().unwrap_or_else(|e| e.into_inner());
         let current = config_stamp_of(&self.data_root);
         let (prev_entries, prev_binary_dir) = {
             let Ok(state) = self.state.read() else { return };
@@ -289,6 +350,7 @@ impl AppletRegistry {
             &entries,
             &self.data_root,
             binary_dir.as_deref(),
+            &self.secret,
         );
         let store = crate::frontend::FrontendStore::scan(&self.data_root);
 
@@ -382,7 +444,14 @@ impl AppletRegistry {
                 })
             }
         };
-        forward(port, method, path_and_query, content_type, body)
+        forward(
+            port,
+            method,
+            path_and_query,
+            content_type,
+            body,
+            Some(&self.secret),
+        )
     }
 }
 
@@ -404,6 +473,7 @@ fn reconcile(
     next: &[AppletEntry],
     data_root: &Path,
     binary_dir: Option<&Path>,
+    secret: &str,
 ) -> BTreeMap<String, String> {
     // `port` is also the liveness check, and it reaps: an applet that
     // died since it was started reports gone here and gets started
@@ -441,7 +511,7 @@ fn reconcile(
                 scope.spawn(move || {
                     (
                         entry.id.clone(),
-                        supervisor.start(entry, data_root, binary_dir, &dir),
+                        supervisor.start(entry, data_root, binary_dir, &dir, secret),
                     )
                 })
             })
@@ -522,6 +592,9 @@ fn load_entries(
 struct Running {
     port: u16,
     child: Child,
+    /// The applet's params, in a file only this user can read. Kept
+    /// for as long as the child runs; dropping it deletes the file.
+    _params_file: Option<tempfile::NamedTempFile>,
 }
 
 /// The applet servers, all of them, started at boot and kept running.
@@ -537,8 +610,9 @@ impl Supervisor {
         data_root: &Path,
         binary_dir: Option<&Path>,
         frontend_dir: &Path,
+        secret: &str,
     ) -> Result<u16, String> {
-        let mut cmd = base_command(entry, data_root, binary_dir)
+        let mut cmd = base_command(entry, data_root, binary_dir, secret)
             .map_err(|e| format!("applet {:?}: {e:#}", entry.id))?;
         // `0` means "any port": the child asks the OS for one and
         // reports what it got.
@@ -546,28 +620,37 @@ impl Supervisor {
             .arg("0")
             .arg("--frontend-dir")
             .arg(frontend_dir);
-        if let Some(params) = entry
+        // Params go in an owner-only file, the same way the runner hands
+        // a step its params: they can hold tokens, and argv is public.
+        let params_file = match entry
             .params_json()
             .map_err(|e| format!("applet {:?}: params: {e:#}", entry.id))?
         {
-            cmd.arg("--params").arg(
-                serde_json::to_string(&params)
-                    .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?,
-            );
-        }
+            Some(params) => {
+                let json = serde_json::to_string(&params)
+                    .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
+                let file = datalib_dag::subprocess::write_params_file(
+                    data_root,
+                    &format!("applet_{}", entry.id),
+                    &json,
+                )
+                .map_err(|e| format!("applet {:?}: params file: {e:#}", entry.id))?;
+                cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
+                    .arg(file.path());
+                Some(file)
+            }
+            None => None,
+        };
         // stdin is not an input channel — nothing is ever written to it. It is
         // a liveness pipe: whatever ends us, including a SIGKILL that runs no
         // code at all, the kernel closes the write end and the applet's read
         // end goes to EOF. That is the one signal that survives SIGKILL, which
         // is why the shutdown handler in `main` is not enough by itself.
         //
-        // `DATALIB_APPLET_PARENT_PIPE` is how the applet knows this stdin
-        // means that: an applet is an ordinary program someone may run by
-        // hand, where reading stdin unbidden would swallow a terminal's input
-        // and an immediate EOF from `< /dev/null` would look like a dead
-        // parent.
+        // The env var is how the applet knows this stdin means that; see
+        // `datalib_parent_watch`.
         cmd.stdin(Stdio::piped());
-        cmd.env("DATALIB_APPLET_PARENT_PIPE", "1");
+        cmd.env(datalib_parent_watch::ENV_VAR, "1");
         // stdout is the readiness channel; stderr is the log, captured
         // so a server that dies on startup can say why. Without the
         // latter the only symptom is a readiness failure, which names
@@ -682,7 +765,14 @@ impl Supervisor {
         };
 
         if let Ok(mut map) = self.running.lock() {
-            map.insert(entry.id.clone(), Running { port, child });
+            map.insert(
+                entry.id.clone(),
+                Running {
+                    port,
+                    child,
+                    _params_file: params_file,
+                },
+            );
         }
         Ok(port)
     }
@@ -752,13 +842,62 @@ pub struct ProxyResponse {
     pub body: Vec<u8>,
 }
 
+/// Percent-encode a path the router has already decoded, so it can be
+/// put back on a request line. Every byte outside RFC 3986's `pchar` set
+/// (and `/`) is encoded, `%` included: the router decoded `%2F` and `%0D`
+/// along with everything else, and a bare CR, LF or space here would let
+/// a caller end the request line and write headers of their own.
+pub fn encode_path(decoded: &str) -> String {
+    let mut out = String::with_capacity(decoded.len());
+    for b in decoded.bytes() {
+        let keep = b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            );
+        if keep {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 pub fn forward(
     port: u16,
     method: &str,
     path_and_query: &str,
     content_type: Option<&str>,
     body: &[u8],
+    secret: Option<&str>,
 ) -> Result<ProxyResponse, String> {
+    // The caller encodes; this is the check that it did, because the
+    // request below is written by hand.
+    if path_and_query
+        .bytes()
+        .any(|b| matches!(b, b'\r' | b'\n' | b' '))
+    {
+        return Err(format!(
+            "refusing to forward a malformed target {path_and_query:?}"
+        ));
+    }
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
         .map_err(|e| format!("connect 127.0.0.1:{port}: {e}"))?;
@@ -769,6 +908,9 @@ pub fn forward(
     let mut req = format!(
         "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n"
     );
+    if let Some(secret) = secret {
+        req.push_str(&format!("{APPLET_SECRET_HEADER}: {secret}\r\n"));
+    }
     if !body.is_empty() {
         req.push_str(&format!("Content-Length: {}\r\n", body.len()));
         // Carry the caller's own content type. Hardcoding JSON here
@@ -890,6 +1032,29 @@ mod tests {
             .expect("some path");
         let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
         assert_eq!(parts[0], user);
+    }
+
+    /// A decoded path goes back on the wire encoded: a space, a CR/LF pair
+    /// and a literal `%` must not reach the request line as themselves.
+    #[test]
+    fn encode_path_makes_a_decoded_path_safe_for_a_request_line() {
+        assert_eq!(
+            encode_path("/asset/u/blobs/a b.png"),
+            "/asset/u/blobs/a%20b.png"
+        );
+        assert_eq!(encode_path("/x\r\nEvil: 1"), "/x%0D%0AEvil:%201");
+        assert_eq!(encode_path("/100%"), "/100%25");
+        assert_eq!(encode_path("/search"), "/search");
+        assert_eq!(encode_path("/é"), "/%C3%A9");
+    }
+
+    #[test]
+    fn forward_refuses_an_unencoded_target() {
+        let err = match forward(1, "GET", "/x\r\nEvil: 1", None, b"", None) {
+            Err(e) => e,
+            Ok(_) => panic!("a target with CR/LF in it was forwarded"),
+        };
+        assert!(err.contains("malformed"), "{err}");
     }
 
     #[test]

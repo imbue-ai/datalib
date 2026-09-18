@@ -1,0 +1,52 @@
+[
+  {
+    "timestamp": 12597863400,
+    "media": [],
+    "label_values": [
+      {
+        "label": "Reaction",
+        "value": "Like"
+      },
+      {
+        "label": "URL",
+        "value": "https://www.facebook.com/will.riker/posts/pfbid0RIKER",
+        "href": "https://www.facebook.com/will.riker/posts/pfbid0RIKER"
+      },
+      {
+        "label": "Name",
+        "value": "William Riker"
+      }
+    ],
+    "fbid": "500000000000001"
+  },
+  {
+    "timestamp": 12599136300,
+    "media": [],
+    "label_values": [
+      {
+        "label": "Reaction",
+        "value": "Love"
+      },
+      {
+        "label": "URL",
+        "value": "https://www.facebook.com/photo.php?fbid=200000000000002&set=a.100000000000001",
+        "href": "https://www.facebook.com/photo.php?fbid=200000000000002&set=a.100000000000001"
+      },
+      {
+        "dict": [
+          {
+            "dict": [
+              {
+                "label": "Name",
+                "value": "Guinan"
+              }
+            ],
+            "title": ""
+          }
+        ],
+        "title": "Owner"
+      }
+    ],
+    "fbid": "500000000000002"
+  }
+]

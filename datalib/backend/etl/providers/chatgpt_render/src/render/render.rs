@@ -11,7 +11,8 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
@@ -30,7 +31,7 @@ use datalib_schema::providers::Provider;
 ///     The render step discards it wholesale; see
 ///     `DataProcessor::render_version`.
 /// v6: a message with no `create_time` — and no previous item's stamp to
-///     inherit from — gets a null `when_ts` instead of a real-looking
+///     inherit from — gets a null `created_at` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 /// v8: `account` is the login's email rather than OpenAI's opaque
@@ -39,7 +40,7 @@ pub const RENDER_VERSION: u32 = 8;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
@@ -122,11 +123,14 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         // `create_time` of its own whose messages carry none either
         // genuinely has no time to report, and `None` says so rather
         // than filing the whole thread under 1970.
-        let ms = m
-            .create_time
-            .as_deref()
-            .and_then(iso_to_ms)
-            .or_else(|| last_ms.map(|p| p + 1));
+        let mut problems = Vec::new();
+        let ms = own_stamp_ms(
+            m.create_time.as_deref(),
+            "create_time",
+            iso_to_ms,
+            &mut problems,
+        )
+        .or_else(|| last_ms.map(|p| p + 1));
         last_ms = ms.or(last_ms);
 
         let kind_label = kind_for_role_and_type(m.role.as_deref(), m.content_type.as_deref());
@@ -173,6 +177,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
                 msg_id.natural_key.clone(),
             )),
             is_aside: is_tool_role(m.role.as_deref()),
+            problems,
         });
     }
 
@@ -320,13 +325,10 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
-/// offsets; returns `None` on anything unparseable (callers fall back to
-/// the bumped previous time).
+/// offsets; returns `None` on anything unparseable — the caller records
+/// that through `own_stamp_ms` before falling back to the bumped
+/// previous time.
 fn iso_to_ms(s: &str) -> Option<i64> {
     // Through `datalib-time`, not `chrono` directly: timestamps are a
     // cross-source concept and exactly one crate decides how a string
@@ -344,7 +346,7 @@ mod timestamp_tests {
 
     /// The parse helper must answer `None` for anything it cannot read,
     /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `when_ts`.
+    /// stamp and — when there is none — to a null `created_at`.
     #[test]
     fn iso_to_ms_refuses_to_invent_a_timestamp() {
         assert_eq!(

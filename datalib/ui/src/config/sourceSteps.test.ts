@@ -5,8 +5,13 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFor, type CatalogEntry, type Field } from "./catalog";
 import {
+  appendSource,
+  buildDiffSource,
   buildStep,
+  listGroups,
+  listSteps,
   seedFieldValues,
+  wireIntoFanIns,
   type ConfiguredStep,
   type FieldValues,
 } from "./sourceSteps";
@@ -138,5 +143,79 @@ describe("seedFieldValues", () => {
     // `refresh_window_days` has no default, so it starts empty on
     // create — an int with no default must not pick one up.
     expect(seedFieldValues(SLACK)["api.refresh_window_days"]).toBe("");
+  });
+});
+
+describe("a path field left empty", () => {
+  const CLAUDE_CODE = catalogFor("claude_code")!;
+
+  it("writes the bare method table, not an empty path", () => {
+    // `sessions = {}` is a complete selection: the standard store. A
+    // `path = ""` would send the ingest to the current directory.
+    const out = buildStep({
+      entry: CLAUDE_CODE,
+      group: "claude-code",
+      phase: "download",
+      values: { "sessions.path": "" },
+    });
+    expect(out).toContain("sessions = {}");
+    expect(out).not.toContain('path = ""');
+  });
+
+  it("writes the path once one is typed", () => {
+    const out = buildStep({
+      entry: CLAUDE_CODE,
+      group: "claude-code",
+      phase: "download",
+      values: { "sessions.path": "/backups/claude-projects" },
+    });
+    expect(out).toContain("[steps.params.sessions]");
+    expect(out).toContain('path = "/backups/claude-projects"');
+    expect(out).not.toContain("sessions = {}");
+  });
+});
+
+describe("buildDiffSource", () => {
+  /// What "Compare…" writes reads back as a diff group with its one
+  /// render step reading the source's ingest tree, and the fan-ins name
+  /// the step like any render step's.
+  it("writes a diff group the loader's rules accept", () => {
+    const base = `[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+params.api = {}
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown"]
+`;
+    const built = buildDiffSource({
+      id: "slack-diff",
+      name: "Slack, this week",
+      source: "slack",
+      from: "aaa",
+      to: "bbb",
+      maxDocuments: 50,
+    });
+    expect(built.renderId).toBe("slack-diff/render_markdown");
+    let next = appendSource(base, `${built.groupBody}\n\n${built.stepsBody}`);
+    next = wireIntoFanIns(next, built.renderId);
+    const group = listGroups(next).find((g) => g.id === "slack-diff")!;
+    expect(group.type).toBe("diff");
+    expect(group.name).toBe("Slack, this week");
+    const step = listSteps(next).find((s) => s.id === "slack-diff/render_markdown")!;
+    expect(step.inputs).toEqual(["slack/ingest"]);
+    expect(step.params).toEqual({ diff: { from: "aaa", to: "bbb", max_documents: 50 } });
+    const fanIn = listSteps(next).find((s) => s.id === "unified_index/grid_index")!;
+    expect(fanIn.inputs).toContain("slack-diff/render_markdown");
+    expect(next).toContain('source = "slack"');
   });
 });

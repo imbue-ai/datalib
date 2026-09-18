@@ -125,7 +125,7 @@ struct Thread {
     markdown_uuid: String,
     /// Who wrote the opening message, when, and what it said.
     author: String,
-    when_ts: String,
+    created_at: String,
     text: String,
     /// Messages after the opening one. Zero means there is nothing more
     /// to open, which is what the card keys the "N replies" link on.
@@ -145,8 +145,8 @@ struct ThreadData {
     messages: usize,
 }
 
-fn when_key(when_ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(when_ts)
+fn when_key(created_at: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(created_at)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
@@ -220,15 +220,20 @@ fn read_rows(
     datalib_etl_render::indexed_markdown::blocking(async {
         // The render step owns this store; a reader that opened it
         // writably would rescue-commit its in-flight rows and fail its
-        // commits (AGENTS.md, "One open per doltlite file").
-        let pool = datalib_etl::doltlite_raw::open_reader(store).await?;
+        // commits (datalib/backend/etl/README.md, "Connection pools").
+        // And it reads at HEAD, not the working set, so a render pass in
+        // flight is not half-served.
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(store, None).await? else {
+            return Ok(Vec::new());
+        };
+        let pool = reader.pool();
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
-                        IFNULL(when_ts, ''), IFNULL(author, ''), text \
-                 FROM grid_rows \
+                        IFNULL(created_at, ''), IFNULL(author, ''), text \
+                 FROM pinned_grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await?;
         let out = rows
             .into_iter()
@@ -243,7 +248,7 @@ fn read_rows(
                 ))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
-        pool.close().await;
+        reader.close().await;
         Ok(out)
     })
 }
@@ -289,7 +294,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
                 .map(|(md, t)| Thread {
                     markdown_uuid: md.clone(),
                     author: t.author.clone(),
-                    when_ts: t.when_raw.clone(),
+                    created_at: t.when_raw.clone(),
                     text: preview(&t.text),
                     // Everything after the opening message.
                     replies: t.messages.saturating_sub(1),
@@ -301,8 +306,8 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
     // the order is identical on every request over unchanged data (the
     // directory walk itself is unordered).
     threads.sort_by(|a, b| {
-        when_key(&a.when_ts)
-            .cmp(&when_key(&b.when_ts))
+        when_key(&a.created_at)
+            .cmp(&when_key(&b.created_at))
             .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
     });
     ChannelResponse {
@@ -331,20 +336,26 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         .local_addr()
         .context("read the bound address")?
         .port();
+    let gate = crate::gate::Gate::from_env(bound)?;
     eprintln!("datalib-applet slack: listening on 127.0.0.1:{bound}, tree {tree}");
     // Written and bound, in that order — now the gateway may look.
     crate::announce_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        if let Err(e) = handle(stream, &tree_path, &workspace) {
+        if let Err(e) = handle(stream, &tree_path, &workspace, &gate) {
             eprintln!("datalib-applet slack: request failed: {e:#}");
         }
     }
     Ok(())
 }
 
-fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
+fn handle(
+    mut stream: TcpStream,
+    tree: &Path,
+    workspace: &str,
+    gate: &crate::gate::Gate,
+) -> Result<()> {
     let mut buf = [0u8; 8192];
     let n = stream.read(&mut buf)?;
     let head = String::from_utf8_lossy(&buf[..n]);
@@ -357,40 +368,49 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
         Some((p, q)) => (p, q),
         None => (target, ""),
     };
+    let header = |name: &str| header_value(&head, name);
 
-    let (status, body) = match path {
-        // Level 1.
-        "/channels" => {
-            let resp = channels_response(tree, workspace);
-            warn(&resp.warnings);
-            (200, serde_json::to_string(&resp)?)
-        }
-        // Level 2: one channel's threads, each with its opening
-        // message. Level 3 is the rendered document itself, which the
-        // card opens through `documentView` — no endpoint needed.
-        "/channel" => match query_param(query, "name") {
-            Some(channel) => {
-                let resp = channel_response(tree, &channel);
+    let (status, body) = if !gate.admits(header("host"), header(crate::gate::SECRET_HEADER)) {
+        (
+            401,
+            r#"{"error":"this port answers only to the datalib gateway"}"#.to_string(),
+        )
+    } else {
+        match path {
+            // Level 1.
+            "/channels" => {
+                let resp = channels_response(tree, workspace);
                 warn(&resp.warnings);
                 (200, serde_json::to_string(&resp)?)
             }
-            None => (
-                400,
-                serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
+            // Level 2: one channel's threads, each with its opening
+            // message. Level 3 is the rendered document itself, which the
+            // card opens through `documentView` — no endpoint needed.
+            "/channel" => match query_param(query, "name") {
+                Some(channel) => {
+                    let resp = channel_response(tree, &channel);
+                    warn(&resp.warnings);
+                    (200, serde_json::to_string(&resp)?)
+                }
+                None => (
+                    400,
+                    serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
+                ),
+            },
+            // A readiness probe the gateway may use once it wants something
+            // stronger than "the port accepts".
+            "/health" => (200, r#"{"ok":true}"#.to_string()),
+            _ => (
+                404,
+                serde_json::json!({ "error": format!("no route {path}") }).to_string(),
             ),
-        },
-        // A readiness probe the gateway may use once it wants something
-        // stronger than "the port accepts".
-        "/health" => (200, r#"{"ok":true}"#.to_string()),
-        _ => (
-            404,
-            serde_json::json!({ "error": format!("no route {path}") }).to_string(),
-        ),
+        }
     };
 
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         _ => "Not Found",
     };
     let resp = format!(
@@ -400,6 +420,19 @@ fn handle(mut stream: TcpStream, tree: &Path, workspace: &str) -> Result<()> {
     stream.write_all(resp.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+/// One header's value out of a raw request head, by case-insensitive
+/// name. Only the first request line and its headers are read: the body,
+/// if any, follows the blank line.
+fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines()
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
 }
 
 fn warn(warnings: &[String]) {
@@ -467,8 +500,9 @@ mod tests {
                     "Slack Thread"
                 })
                 .source_label("Slack")
+                .is_document(index.is_none())
                 .channel(Some(channel.to_string()))
-                .when_ts(Some(when.to_string()))
+                .created_at(Some(when.to_string()))
                 .author((!author.is_empty()).then(|| author.to_string()))
                 .message_index(index)
                 .conversation_uuid(md)
@@ -496,31 +530,49 @@ mod tests {
                     md_path: dir.join(format!("{md}.md")),
                     render_version: 1,
                     rows,
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
             )
             .unwrap();
+        // The applet reads at HEAD, as the render step leaves it.
+        store.commit("test").unwrap();
         store.close();
     }
 
     /// Like [`write_thread`], but the caller supplies each message's
-    /// index explicitly — so a test can insert them out of order.
+    /// index explicitly — so a test can insert them out of order. The
+    /// thread row the store requires is written first, stamped with the
+    /// first message's time.
     fn write_thread_rows(dir: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
         use datalib_schema::grid_rows::GridRow;
 
-        let rows: Vec<GridRow> = msgs
-            .iter()
-            .map(|(index, author, text, when)| {
+        let thread = GridRow::builder()
+            .uuid(md)
+            .provider(Provider::Slack)
+            .kind("Slack Thread")
+            .source_label("Slack")
+            .is_document(true)
+            .channel(Some(channel.to_string()))
+            .created_at(msgs.first().map(|m| m.3.to_string()))
+            .conversation_uuid(md)
+            .entire_chat(format!("/chat/{md}"))
+            .text("")
+            .markdown_uuid(Some(md.to_string()))
+            .build()
+            .unwrap();
+        let rows: Vec<GridRow> = std::iter::once(thread)
+            .chain(msgs.iter().map(|(index, author, text, when)| {
                 GridRow::builder()
                     .uuid(format!("{md}-m{index}"))
                     .provider(Provider::Slack)
                     .kind("Slack Message")
                     .source_label("Slack")
                     .channel(Some(channel.to_string()))
-                    .when_ts(Some((*when).to_string()))
+                    .created_at(Some((*when).to_string()))
                     .author(Some((*author).to_string()))
                     .message_index(Some(*index))
                     .conversation_uuid(md)
@@ -529,7 +581,7 @@ mod tests {
                     .markdown_uuid(Some(md.to_string()))
                     .build()
                     .unwrap()
-            })
+            }))
             .collect();
 
         let store = IndexedMarkdownStore::open(dir).unwrap();
@@ -544,11 +596,14 @@ mod tests {
                     md_path: dir.join(format!("{md}.md")),
                     render_version: 1,
                     rows,
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
             )
             .unwrap();
+        // The applet reads at HEAD, as the render step leaves it.
+        store.commit("test").unwrap();
         store.close();
     }
 

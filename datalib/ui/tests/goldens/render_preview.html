@@ -271,6 +271,47 @@ code.hljs {
 .error {
   color: #e35d6a;
 }
+.problems {
+  /* Above the body and the edges: what render could not do to this
+     document is the first thing a reader should see. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.problem {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.25rem 0;
+}
+.problem-severity {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  padding: 0 0.4rem;
+  border-radius: 0.5rem;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.problem-error .problem-severity { color: var(--datalib-log-error); }
+.problem-warning .problem-severity { color: var(--datalib-log-warn); }
+.problem-info .problem-severity { color: var(--datalib-muted); }
+.problem-text { flex: 1 1 auto; min-width: 0; }
+.problem-jump { color: inherit; text-decoration: underline dotted; }
+.problem-sample {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
      and below the meta line. List markers off so the leading arrow
@@ -438,12 +479,49 @@ code.hljs {
    the box. Declared BEFORE the per-provider rules below so their
    `border-left-color` still wins. */
 .chat-body > .msg,
-.chat-body > details.tool-group {
+.chat-body > details.tool-group,
+.chat-body > [class^="diff-"] > .msg,
+.chat-body > [class^="diff-"] > details.tool-group {
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-left-width: 3px;
   border-radius: 8px;
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
+}
+/* A diff group's document (docs/dev/plans/completed/diff_renderer.md): a whole
+   section wrapped by what happened to it between the two commits, and
+   inside a modified one the words that moved. The tints sit over the
+   card background so they read in either colour scheme. */
+.chat-body .diff-added,
+.chat-body .diff-removed,
+.chat-body .diff-modified {
+  border-left: 4px solid;
+  border-radius: 8px;
+  padding: 0.25rem 0.6rem;
+  margin: 0.5rem 0;
+}
+.chat-body .diff-added {
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+.chat-body .diff-removed {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+.chat-body .diff-modified {
+  border-left-color: #eab308;
+  background: rgba(234, 179, 8, 0.07);
+}
+.chat-body ins {
+  background: rgba(34, 197, 94, 0.28);
+  text-decoration: none;
+  border-radius: 2px;
+}
+.chat-body del {
+  background: rgba(239, 68, 68, 0.22);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.7);
+  border-radius: 2px;
 }
 .chat-body .msg--claude {
   border-left-color: var(--datalib-accent, #6366f1);
@@ -783,7 +861,7 @@ code.hljs {
   <button id="expand" type="button">Expand / collapse all</button>
   <span>Click a message to select it.</span>
 </div>
-<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
+<nav class="preview-jump"><a href="#src-beeper">beeper</a><a href="#src-chatgpt-api">chatgpt-api</a><a href="#src-claude-api">claude-api</a><a href="#src-claude-code">claude-code</a><a href="#src-facebook">facebook</a><a href="#src-garmin">garmin</a><a href="#src-github">github</a><a href="#src-gitlab">gitlab</a><a href="#src-google-takeout">google-takeout</a><a href="#src-linkedin">linkedin</a><a href="#src-notion">notion</a><a href="#src-ship-air">ship-air</a><a href="#src-signal">signal</a><a href="#src-slack-diff">slack-diff</a><a href="#src-slack">slack</a><a href="#src-sms-backup-restore">sms-backup-restore</a><a href="#src-tng-contacts-diff">tng_contacts-diff</a><a href="#src-tng-contacts">tng_contacts</a><a href="#src-tng-email">tng_email</a><a href="#src-tng-pdfs">tng_pdfs</a><a href="#src-whatsapp">whatsapp</a><a href="#src-yolink">yolink</a><a href="#src-zz-synthetic">zz-synthetic</a></nav>
 <section class="chat-preview">
 <section class="preview-source" id="src-beeper">
 <h2 class="preview-source-name">beeper <span class="preview-count">5 documents</span></h2>
@@ -1077,7 +1155,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 </div>
 </section>
 <section class="preview-source" id="src-claude-api">
-<h2 class="preview-source-name">claude-api <span class="preview-count">6 documents</span></h2>
+<h2 class="preview-source-name">claude-api <span class="preview-count">7 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">claude-api/render_markdown/1c72c68f-86f5-577e-93a8-53e634460711/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1c72c68f-86f5-577e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -1168,7 +1246,7 @@ coeffs = np.polyfit(x, y, <span class="hljs-number">2</span>)
 <td>Table</td>
 <td><code>claude-api/ingest/entities.doltlite_db#conversations</code></td>
 <td></td>
-<td>3 rows</td>
+<td>4 rows</td>
 <td><span id="m-f8c3b5ad-8324-588c-9ca5-596bce80fc69" data-section-uuid="f8c3b5ad-8324-588c-9ca5-596bce80fc69"><code>f8c3b5ad</code></span></td>
 </tr>
 <tr>
@@ -1336,6 +1414,592 @@ Medical emergencies route directly to Sickbay (Crusher).</p>
 <div id="m-66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" data-section-uuid="66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" class="msg msg--claude">
 <h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time></h2>
 <p>Perfect. Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-api/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="fb0232cd-d04b-5372-b44e-148a47ada7a2">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-4bfa3277-ca76-5472-9181-d964975c6943" data-section-uuid="4bfa3277-ca76-5472-9181-d964975c6943" class="msg msg--claude">
+<h2><span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time></h2>
+<p>Computer, what stardate is it?</p>
+</div>
+<div id="m-dcce3451-eb4f-53dd-bce7-7e0b22d3af16" data-section-uuid="dcce3451-eb4f-53dd-bce7-7e0b22d3af16" class="msg msg--claude">
+<h2><span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time></h2>
+<p>Stardate 47988.1. The chronometer is on ship's time.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-claude-code">
+<h2 class="preview-source-name">claude-code <span class="preview-count">4 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">claude-code/render_markdown/22d0feef-bb67-562b-bb66-4ee0eea9f46f/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="22d0feef-bb67-562b-bb66-4ee0eea9f46f">Scan the emitter logs since stardate 41153.7 for phase drift events. (all)</h1>
+<div id="m-a1e12914-7894-511b-955e-b01fff7b6956" data-section-uuid="a1e12914-7894-511b-955e-b01fff7b6956" class="msg msg--claude_code">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:37+00:00" title="2364-04-11 10:00:37 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<p>Scan the emitter logs since stardate 41153.7 for phase drift events.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3" data-section-uuid="6dd73ad3-3a1d-5a1e-9eeb-f8b6336ef0b3" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:44+00:00" title="2364-04-11 10:00:44 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool use: Grep</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/logs/emitter&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;pattern&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;phase drift&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-96f6ab2e-fb2a-5788-8c45-478ebe787273" data-section-uuid="96f6ab2e-fb2a-5788-8c45-478ebe787273" class="msg msg--claude_code">
+<h2><span class="msg-author">Grep</span> <time class="msg-ts" datetime="2364-04-11T10:00:51+00:00" title="2364-04-11 10:00:51 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool result: Grep</summary>
+<pre><code>logs/emitter/41154.2.log:phase drift 0.12
+logs/emitter/41155.0.log:phase drift 0.24
+logs/emitter/41156.1.log:phase drift 0.31
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0a1befb9-8c38-5e86-8d31-ef769a5583e3" data-section-uuid="0a1befb9-8c38-5e86-8d31-ef769a5583e3" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:58+00:00" title="2364-04-11 10:00:58 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<p>Three drift events since 41153.7, all after the warp core recalibration on 41154.2.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-code/render_markdown/62ba345e-f979-51c5-8906-2d3e2e000233/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="62ba345e-f979-51c5-8906-2d3e2e000233">Why does the replicator return cold Earl Grey? Screenshot attached. (all)</h1>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-e70137f9-e490-580c-9097-e6f23f41e452" data-section-uuid="e70137f9-e490-580c-9097-e6f23f41e452" class="msg msg--claude_code">
+<h2><span class="msg-author">Claude Code</span> <time class="msg-ts" datetime="2364-04-11T14:30:07+00:00" title="2364-04-11 14:30:07 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
+<p>Caveat: the messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</p>
+</div>
+</details>
+<div id="m-1af6fa96-749e-50c0-bb34-8acd1565a8a0" data-section-uuid="1af6fa96-749e-50c0-bb34-8acd1565a8a0" class="msg msg--claude_code">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T14:30:14+00:00" title="2364-04-11 14:30:14 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
+<p>Why does the replicator return cold Earl Grey? Screenshot attached.</p>
+<p><em>[1 image(s) not shown]</em></p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-d91ffda1-54cc-544c-a874-8ee956057eed" data-section-uuid="d91ffda1-54cc-544c-a874-8ee956057eed" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T14:30:21+00:00" title="2364-04-11 14:30:21 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
+<details><summary>Tool use: Bash</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;replicator status --item &#x27;tea, earl grey, hot&#x27;&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-3bc93732-14d5-5448-82e5-37563b80f7c9" data-section-uuid="3bc93732-14d5-5448-82e5-37563b80f7c9" class="msg msg--claude_code">
+<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T14:30:28+00:00" title="2364-04-11 14:30:28 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
+<details><summary>Tool result: Bash (error)</summary>
+<pre><code>error: pattern buffer 3 offline
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-02b2e955-3b51-57e1-ba4a-99734c36f1af" data-section-uuid="02b2e955-3b51-57e1-ba4a-99734c36f1af" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-sonnet-5</span> <time class="msg-ts" datetime="2364-04-11T14:30:35+00:00" title="2364-04-11 14:30:35 UTC">Sat Apr 11th, 2364 at 14:30</time></h2>
+<p>Pattern buffer 3 is offline, so the replicator falls back to buffer 1, whose thermal profile defaults to ambient. Bringing buffer 3 back will fix the temperature.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-code/render_markdown/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>claude-code — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>What</th>
+<th>Size</th>
+<th>Count</th>
+<th>Id</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source Size</td>
+<td><code>claude-code/ingest</code></td>
+<td>‹size›</td>
+<td>2 files</td>
+<td><span id="m-0bf45f94-ffca-5f66-b9a0-9333feb537fe" data-section-uuid="0bf45f94-ffca-5f66-b9a0-9333feb537fe"><code>0bf45f94</code></span></td>
+</tr>
+<tr>
+<td>Store</td>
+<td><code>claude-code/ingest/entities.doltlite_db</code></td>
+<td>‹size›</td>
+<td></td>
+<td><span id="m-e8fcf883-f0a6-5639-bdfd-672b81b63e61" data-section-uuid="e8fcf883-f0a6-5639-bdfd-672b81b63e61"><code>e8fcf883</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>claude-code/ingest/entities.doltlite_db#ingested_files</code></td>
+<td></td>
+<td>3 rows</td>
+<td><span id="m-420626c7-684f-5f3f-86d1-93f94554a0a4" data-section-uuid="420626c7-684f-5f3f-86d1-93f94554a0a4"><code>420626c7</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>claude-code/ingest/entities.doltlite_db#records</code></td>
+<td></td>
+<td>24 rows</td>
+<td><span id="m-4d685c86-6bfe-546a-9bcb-af2e919b0fa8" data-section-uuid="4d685c86-6bfe-546a-9bcb-af2e919b0fa8"><code>4d685c86</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>claude-code/ingest/entities.doltlite_db#transcripts</code></td>
+<td></td>
+<td>3 rows</td>
+<td><span id="m-81d901ac-75cf-5655-aeae-e52484582ad7" data-section-uuid="81d901ac-75cf-5655-aeae-e52484582ad7"><code>81d901ac</code></span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">claude-code/render_markdown/a4d3483a-15a5-5434-bd12-77967f5a5584/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="a4d3483a-15a5-5434-bd12-77967f5a5584">Deflector dish drift (all) <a class="source-link" href="https://claude.ai/code/cse_01TNGdeflector" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-fc98d210-1f11-5a64-a07f-cfa3390177af" data-section-uuid="fc98d210-1f11-5a64-a07f-cfa3390177af" class="msg msg--claude_code">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:00:14+00:00" title="2364-04-11 10:00:14 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<p>The deflector dish is 0.3 degrees off axis. Find why the realignment script fails.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 4 tool steps</summary>
+<div id="m-d7310c24-6876-532e-a50e-77e348f0e4c1" data-section-uuid="d7310c24-6876-532e-a50e-77e348f0e4c1" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:21+00:00" title="2364-04-11 10:00:21 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Thinking</summary>
+<blockquote>
+<p>The emitter array logs are the first place to look.</p>
+</blockquote>
+</details>
+</div>
+<div id="m-6ad4a1ca-b68e-5795-b044-572209b212e3" data-section-uuid="6ad4a1ca-b68e-5795-b044-572209b212e3" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:21+00:00" title="2364-04-11 10:00:21 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool use: Bash</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;bin/diag emitter --verbose&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;description&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Run the emitter diagnostic&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-cb747396-3166-58b7-a5e8-42afee5aa474" data-section-uuid="cb747396-3166-58b7-a5e8-42afee5aa474" class="msg msg--claude_code">
+<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T10:00:28+00:00" title="2364-04-11 10:00:28 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool result: Bash</summary>
+<pre><code>emitter array: 24 of 24 online
+phase variance: 0.31 deg
+last calibration: stardate 41153.7
+</code></pre>
+</details>
+</div>
+<div id="m-2e654a5b-5186-5bee-aaff-34648111dfdf" data-section-uuid="2e654a5b-5186-5bee-aaff-34648111dfdf" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:35+00:00" title="2364-04-11 10:00:35 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool use: Read</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;file_path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/src/deflector/calibrate.py&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-b5a9774f-02ef-52a8-8955-ddaa018c56ee" data-section-uuid="b5a9774f-02ef-52a8-8955-ddaa018c56ee" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:35+00:00" title="2364-04-11 10:00:35 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<p>Phase variance matches the 0.3 degrees you saw. Let me read the calibration routine.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-3ef8aa85-0880-5787-833d-3eaf712da589" data-section-uuid="3ef8aa85-0880-5787-833d-3eaf712da589" class="msg msg--claude_code">
+<h2><span class="msg-author">Read</span> <time class="msg-ts" datetime="2364-04-11T10:00:42+00:00" title="2364-04-11 10:00:42 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool result: Read</summary>
+<pre><code>     1	def calibrate(emitters):
+     2	    variance = phase_variance(emitters)
+     3	    if variance &gt; 0.5:
+     4	        realign(emitters)
+     5	    return variance
+</code></pre>
+</details>
+</div>
+<div id="m-bcd16c32-3da8-590c-9213-236ebd83c668" data-section-uuid="bcd16c32-3da8-590c-9213-236ebd83c668" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:49+00:00" title="2364-04-11 10:00:49 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<details><summary>Tool use: Agent</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;description&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Scan emitter logs&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;prompt&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Scan the emitter logs since stardate 41153.7 for phase drift events.&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;subagent_type&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Explore&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-a07ef58b-c41e-58e4-9138-ab0ea43f547e" data-section-uuid="a07ef58b-c41e-58e4-9138-ab0ea43f547e" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:00:49+00:00" title="2364-04-11 10:00:49 UTC">Sat Apr 11th, 2364 at 10:00</time></h2>
+<p>The threshold is 0.5 degrees, so a 0.31 degree drift never triggers <code>realign</code>. I'll delegate the log check while I fix it.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 3 tool steps</summary>
+<div id="m-9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6" data-section-uuid="9c5eeb42-b6a0-5a76-a8e1-b5f4bb3c39c6" class="msg msg--claude_code">
+<h2><span class="msg-author">Agent</span> <time class="msg-ts" datetime="2364-04-11T10:01:03+00:00" title="2364-04-11 10:01:03 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<details><summary>Tool result: Agent</summary>
+<pre><code>Three drift events since 41153.7, all after the warp core recalibration on 41154.2.
+</code></pre>
+</details>
+</div>
+<div id="m-3f7e7abc-6894-531a-92c2-543cd957d66d" data-section-uuid="3f7e7abc-6894-531a-92c2-543cd957d66d" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:10+00:00" title="2364-04-11 10:01:10 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<details><summary>Tool use: Edit</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;file_path&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;/Users/picard/src/enterprise/src/deflector/calibrate.py&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;new_string&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;    if variance &gt; 0.25:&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;old_string&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;    if variance &gt; 0.5:&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-2af3ca18-cf65-5063-a8ed-302792995af8" data-section-uuid="2af3ca18-cf65-5063-a8ed-302792995af8" class="msg msg--claude_code">
+<h2><span class="msg-author">Edit</span> <time class="msg-ts" datetime="2364-04-11T10:01:17+00:00" title="2364-04-11 10:01:17 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<details><summary>Tool result: Edit</summary>
+<pre><code>The file has been updated successfully.
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb" data-section-uuid="cbd4ca0e-7dee-54f8-a974-9a9da1c4bbeb" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:24+00:00" title="2364-04-11 10:01:24 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<p>Lowered the realignment threshold to 0.25 degrees in <code>src/deflector/calibrate.py</code>. The drift started after the warp core recalibration on stardate 41154.2, so it is worth checking whether that changed the emitter phase reference.</p>
+</div>
+<div id="m-d18956ce-ccc4-5cc5-9b88-6d48cb442e81" data-section-uuid="d18956ce-ccc4-5cc5-9b88-6d48cb442e81" class="msg msg--claude_code">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-11T10:01:38+00:00" title="2364-04-11 10:01:38 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<p>Ship it.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-8c7eb7e5-887a-557a-987a-d3fe0c478fc2" data-section-uuid="8c7eb7e5-887a-557a-987a-d3fe0c478fc2" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:45+00:00" title="2364-04-11 10:01:45 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<details><summary>Tool use: Bash</summary>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;command&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;gh pr create --title &#x27;Lower deflector realignment threshold&#x27; --body &#x27;Drift of 0.31 deg never triggered realign.&#x27;&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+</details>
+</div>
+<div id="m-baec7f4c-62ca-57d0-9b7e-3ff47363a5eb" data-section-uuid="baec7f4c-62ca-57d0-9b7e-3ff47363a5eb" class="msg msg--claude_code">
+<h2><span class="msg-author">Bash</span> <time class="msg-ts" datetime="2364-04-11T10:01:52+00:00" title="2364-04-11 10:01:52 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<details><summary>Tool result: Bash</summary>
+<pre><code>https://github.com/starfleet/enterprise/pull/1701
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-cc6b0152-064e-51dc-8f6f-11d746f3b380" data-section-uuid="cc6b0152-064e-51dc-8f6f-11d746f3b380" class="msg msg--claude_code">
+<h2><span class="msg-author">claude-opus-5</span> <time class="msg-ts" datetime="2364-04-11T10:01:59+00:00" title="2364-04-11 10:01:59 UTC">Sat Apr 11th, 2364 at 10:01</time></h2>
+<p>Opened <a href="https://github.com/starfleet/enterprise/pull/1701">PR #1701</a>.</p>
+</div>
+</div>
+</div>
+</section>
+<section class="preview-source" id="src-facebook">
+<h2 class="preview-source-name">facebook <span class="preview-count">14 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/102e9bd4-0fc9-5e2f-b168-1e01c809f632/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="004abae0-cd69-58ee-b2bd-2e64d8a7176d">Facebook · Happy birthday, Number One. The bridge is yours for the day. (all)</h1>
+<div id="m-921c8e84-24cb-5c06-bb2a-f1bb3abe9526" data-section-uuid="921c8e84-24cb-5c06-bb2a-f1bb3abe9526" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:00:00+00:00" title="2369-03-18 14:00:00 UTC">Tue Mar 18th, 2369 at 14:00</time></h2>
+<p>Happy birthday, Number One. The bridge is yours for the day.</p>
+<p>— feeling grateful</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/178cf9c5-78f3-5267-b9cc-42205b338b65/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e99b5fbb-a51e-51b3-a9aa-f3ef325778c9">Facebook · Ten Forward Nights (all)</h1>
+<div id="m-c5ecec15-c712-5f75-ae28-f177607ae304" data-section-uuid="c5ecec15-c712-5f75-ae28-f177607ae304" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T21:00:00+00:00" title="2369-04-01 21:00:00 UTC">Tue Apr 1st, 2369 at 21:00</time></h2>
+<p>Ten Forward Nights</p>
+<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
+<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/21951e99-7834-50ef-8013-2f80fc757e1d/2369-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="6fc0751f-af1b-5610-927d-f25d598c19b3">Facebook · Reactions (2369-03)</h1>
+<div id="m-394fc1d0-e08e-5a1d-8c10-882ef464386c" data-section-uuid="394fc1d0-e08e-5a1d-8c10-882ef464386c" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T14:30:00+00:00" title="2369-03-18 14:30:00 UTC">Tue Mar 18th, 2369 at 14:30</time> <a class="source-link" href="https://www.facebook.com/will.riker/posts/pfbid0RIKER" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>👍 Jean-Luc Picard liked William Riker's post.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/21951e99-7834-50ef-8013-2f80fc757e1d/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ee85d91b-b0a1-5813-8e55-b13ee2039627">Facebook · Reactions (2369-04)</h1>
+<div id="m-1da1c297-0a62-5842-abeb-edb4c0cc6ec6" data-section-uuid="1da1c297-0a62-5842-abeb-edb4c0cc6ec6" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:05:00+00:00" title="2369-04-02 08:05:00 UTC">Wed Apr 2nd, 2369 at 08:05</time> <a class="source-link" href="https://www.facebook.com/photo.php?fbid=200000000000002&amp;set=a.100000000000001" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>❤️ Jean-Luc Picard reacted to Guinan's photo.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/33d5a6ee-1240-5755-b4bd-f2268ea86e22/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="5dec9d23-bb31-5e64-ac67-346e1d558379">Facebook · Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff. (all)</h1>
+<div id="m-2b74a55d-ef6c-5d3d-abf0-ae07d9dc91cf" data-section-uuid="2b74a55d-ef6c-5d3d-abf0-ae07d9dc91cf" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-15T20:00:00+00:00" title="2369-03-15 20:00:00 UTC">Sat Mar 15th, 2369 at 20:00</time></h2>
+<p>Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.</p>
+<p>📍 <a href="https://www.facebook.com/pages/Ten-Forward/300000000000001">Ten Forward</a> — Deck 10, USS Enterprise</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/50069ba5-b1f5-5b33-a324-23e2331bae7d/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="50069ba5-b1f5-5b33-a324-23e2331bae7d">Beverly Crusher</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-02-14T18:30:00+00:00</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/931b96c6-e4b7-51cd-a97f-c3b923711a79/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="04c14b01-decd-5613-a853-3fd5ceafec39">Facebook · Ten Forward Nights (all)</h1>
+<div id="m-aed4dc0b-4a5b-576e-9756-a647588fc959" data-section-uuid="aed4dc0b-4a5b-576e-9756-a647588fc959" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<p>Off-duty evenings on Deck 10.</p>
+</div>
+<div id="m-159c9eca-c75f-56ca-8dde-0b58a49ce41f" data-section-uuid="159c9eca-c75f-56ca-8dde-0b58a49ce41f" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:50:00+00:00" title="2369-04-01 20:50:00 UTC">Tue Apr 1st, 2369 at 20:50</time></h2>
+<p><img src="blobs/303f964a39bf6024.png" alt="200000000000001.png"></p>
+</div>
+<div id="m-a392fac2-6b27-5c75-9327-7234cf4e067a" data-section-uuid="a392fac2-6b27-5c75-9327-7234cf4e067a" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-01T20:52:00+00:00" title="2369-04-01 20:52:00 UTC">Tue Apr 1st, 2369 at 20:52</time></h2>
+<p>Guinan behind the bar.</p>
+<p><img src="blobs/8b80ba76f8bd4174.png" alt="200000000000002.png"></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/_datalib/storage.md</h3>
+<div class="chat-body markdown-body"><h1>facebook — storage</h1>
+<p>Measured 2369-04-15T00:00:00+00:00.</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>What</th>
+<th>Size</th>
+<th>Count</th>
+<th>Id</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source Size</td>
+<td><code>facebook/ingest</code></td>
+<td>‹size›</td>
+<td>4 files</td>
+<td><span id="m-ccb38526-3521-5652-9c06-14e7d784d380" data-section-uuid="ccb38526-3521-5652-9c06-14e7d784d380"><code>ccb38526</code></span></td>
+</tr>
+<tr>
+<td>Store</td>
+<td><code>facebook/ingest/blobs.doltlite_db</code></td>
+<td>‹size›</td>
+<td></td>
+<td><span id="m-8fcab811-c94d-596e-a58d-f5a80bfe632e" data-section-uuid="8fcab811-c94d-596e-a58d-f5a80bfe632e"><code>8fcab811</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/blobs.doltlite_db#cas_objects</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-f7f39ca9-6c03-51de-b680-a49da41351c0" data-section-uuid="f7f39ca9-6c03-51de-b680-a49da41351c0"><code>f7f39ca9</code></span></td>
+</tr>
+<tr>
+<td>Store</td>
+<td><code>facebook/ingest/entities.doltlite_db</code></td>
+<td>‹size›</td>
+<td></td>
+<td><span id="m-e8d1451a-003e-5949-aa1c-6367b39216e3" data-section-uuid="e8d1451a-003e-5949-aa1c-6367b39216e3"><code>e8d1451a</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-6d653749-5c97-5c2e-ae9a-3144a4e70208" data-section-uuid="6d653749-5c97-5c2e-ae9a-3144a4e70208"><code>6d653749</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#connections_friends_your_friends</code></td>
+<td></td>
+<td>3 rows</td>
+<td><span id="m-c366bf73-47d3-544c-9b02-f1a2e7ad8d20" data-section-uuid="c366bf73-47d3-544c-9b02-f1a2e7ad8d20"><code>c366bf73</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-65f5f382-7410-5295-b883-68443fc7c72c" data-section-uuid="65f5f382-7410-5295-b883-68443fc7c72c"><code>65f5f382</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#media_blobs</code></td>
+<td></td>
+<td>8 rows</td>
+<td><span id="m-aef37c2c-7775-5577-b6bf-e26568c38544" data-section-uuid="aef37c2c-7775-5577-b6bf-e26568c38544"><code>aef37c2c</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-2a0cdb68-0220-5d02-a52c-20b39040f506" data-section-uuid="2a0cdb68-0220-5d02-a52c-20b39040f506"><code>2a0cdb68</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments</code></td>
+<td></td>
+<td>3 rows</td>
+<td><span id="m-fc664d5d-3e30-5a80-a2f1-2c8627a46847" data-section-uuid="fc664d5d-3e30-5a80-a2f1-2c8627a46847"><code>fc664d5d</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-1304a28f-a50e-50b4-9e23-67ca558a7d7a" data-section-uuid="1304a28f-a50e-50b4-9e23-67ca558a7d7a"><code>1304a28f</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-f1af1763-abc5-5ff6-b38f-11884222e34b" data-section-uuid="f1af1763-abc5-5ff6-b38f-11884222e34b"><code>f1af1763</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-0d2390aa-976e-55b2-b0a8-6ad98a275064" data-section-uuid="0d2390aa-976e-55b2-b0a8-6ad98a275064"><code>0d2390aa</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos</code></td>
+<td></td>
+<td>4 rows</td>
+<td><span id="m-1299d232-1804-5d84-af61-d3af0bc30582" data-section-uuid="1299d232-1804-5d84-af61-d3af0bc30582"><code>1299d232</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-ac4f9954-18f8-56b1-ae09-f9b4a2094e55" data-section-uuid="ac4f9954-18f8-56b1-ae09-f9b4a2094e55"><code>ac4f9954</code></span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/abc0c7cf-ac1c-5a3c-8620-645fd9a577ae/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="abc0c7cf-ac1c-5a3c-8620-645fd9a577ae">Data</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-01-06T10:05:00+00:00</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/b27ed612-4631-5353-adca-37b0047401d6/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="86398f3b-7760-5199-9b61-02c28908e383">Facebook · Jean-Luc Picard added a life event from January 5, 2364: Took command of the En… (all)</h1>
+<div id="m-44de9fb2-5809-5ba3-a19d-8d774239b000" data-section-uuid="44de9fb2-5809-5ba3-a19d-8d774239b000" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-20T12:00:00+00:00" title="2369-03-20 12:00:00 UTC">Thu Mar 20th, 2369 at 12:00</time></h2>
+<p><strong>Took command of the Enterprise</strong></p>
+<p>Stardate 41153.7 — a new ship, a new crew. ✨</p>
+<p>📍 Farpoint Station — Deneb IV</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/eaa1e8f3-9b67-59f2-b035-89055ce0fd45/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="ea0c9c99-f0d2-5bb6-99f1-f59f22aee0e8">Facebook · Two views of the bridge before alpha shift. (all)</h1>
+<div id="m-06f44fc9-b5e1-52ea-bfe6-556b05324854" data-section-uuid="06f44fc9-b5e1-52ea-bfe6-556b05324854" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T09:30:00+00:00" title="2369-03-16 09:30:00 UTC">Sun Mar 16th, 2369 at 09:30</time></h2>
+<p>Two views of the bridge before alpha shift.</p>
+<p>The bridge at dawn.</p>
+<p>— with Data</p>
+<p><img src="blobs/0303506702c3ec28.png" alt="200000000000003.png"></p>
+<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/f1087c63-5bea-51db-8ec2-cca5afe91003/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="f1087c63-5bea-51db-8ec2-cca5afe91003">William Riker</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Friends since</td>
+<td>2364-01-06T10:00:00+00:00</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/fc358ba4-b6be-5ed7-98e4-cc9dd07265d7/2369-03.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="fc29f459-ba89-522c-bf3e-226407c25868">Facebook · Comments (2369-03)</h1>
+<div id="m-84872844-eec2-51c2-b542-069c279df7bf" data-section-uuid="84872844-eec2-51c2-b542-069c279df7bf" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-16T10:00:00+00:00" title="2369-03-16 10:00:00 UTC">Sun Mar 16th, 2369 at 10:00</time></h2>
+<p>And the same view an hour later.</p>
+<p><em>Jean-Luc Picard commented on his own photo.</em></p>
+<p><img src="blobs/156f6002713189bc.png" alt="200000000000004.png"></p>
+</div>
+<div id="m-6a41e419-80e9-572a-b609-00c393320584" data-section-uuid="6a41e419-80e9-572a-b609-00c393320584" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time></h2>
+<p>Enjoy the chair, Will.</p>
+<p><em>Jean-Luc Picard commented on William Riker's post.</em></p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">facebook/render_markdown/fc358ba4-b6be-5ed7-98e4-cc9dd07265d7/2369-04.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="640d4e72-f900-5a80-88d8-3093a1133925">Facebook · Comments (2369-04)</h1>
+<div id="m-3a4f8394-afb5-5e4a-9669-69c955997c63" data-section-uuid="3a4f8394-afb5-5e4a-9669-69c955997c63" class="msg msg--facebook">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-02T08:00:00+00:00" title="2369-04-02 08:00:00 UTC">Wed Apr 2nd, 2369 at 08:00</time></h2>
+<p>Guinan's synthehol never disappoints. 🍸</p>
+<p><em>Jean-Luc Picard commented on his own album.</em></p>
 </div>
 </div>
 </div>
@@ -2109,7 +2773,7 @@ Riker out.</p>
 </div>
 </section>
 <section class="preview-source" id="src-linkedin">
-<h2 class="preview-source-name">linkedin <span class="preview-count">5 documents</span></h2>
+<h2 class="preview-source-name">linkedin <span class="preview-count">7 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">linkedin/render_markdown/0f7d3aa5-e30a-5528-9ea5-d5b6fa547fc0/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="7779d1ce-184c-5b95-bd62-112362fc5c4d">LinkedIn · Jean-Luc Picard, William Riker (all)</h1>
@@ -2124,6 +2788,21 @@ Riker out.</p>
 <div id="m-d4aa04b2-cbcd-587f-b2cc-0a8eaa39e473" data-section-uuid="d4aa04b2-cbcd-587f-b2cc-0a8eaa39e473" class="msg msg--linkedin">
 <h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-04-10T09:06:30+00:00" title="2369-04-10 09:06:30 UTC">Thu Apr 10th, 2369 at 09:06</time></h2>
 <p>Make it so.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/render_markdown/2c5e5b27-4f44-58a2-a326-3177352a6cf5/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="09c8728c-5d50-5e93-a341-390fd1717bfd">LinkedIn · Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… (all) <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A2369041114000000001" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-c739ddda-ab95-543b-a509-ecabdecfe5e5" data-section-uuid="c739ddda-ab95-543b-a509-ecabdecfe5e5" class="msg msg--linkedin">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-11T14:00:00+00:00" title="2369-04-11 14:00:00 UTC">Fri Apr 11th, 2369 at 14:00</time></h2>
+<p>Thrilled to share: the Enterprise has completed its survey of the Mintaka system. &quot;Fascinating&quot; barely covers it.</p>
+<p><a href="https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A2369041114000000001">🔗 View on LinkedIn</a></p>
+</div>
+<div id="m-8a81cc14-ff66-5071-b53b-55ed58302f5b" data-section-uuid="8a81cc14-ff66-5071-b53b-55ed58302f5b" class="msg msg--linkedin">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-11T15:02:00+00:00" title="2369-04-11 15:02:00 UTC">Fri Apr 11th, 2369 at 15:02</time></h2>
+<p>Correction: the survey concluded at 13:47 ship's time.</p>
+<p><a href="https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A2369041114000000001">🔗 View on LinkedIn</a></p>
 </div>
 </div>
 </div>
@@ -2204,6 +2883,13 @@ Riker out.</p>
 </tr>
 <tr>
 <td>Table</td>
+<td><code>linkedin/ingest/entities.doltlite_db#comments</code></td>
+<td></td>
+<td>3 rows</td>
+<td><span id="m-366e9b13-dd3f-5d89-9832-fd20b7406d4a" data-section-uuid="366e9b13-dd3f-5d89-9832-fd20b7406d4a"><code>366e9b13</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
 <td><code>linkedin/ingest/entities.doltlite_db#connections</code></td>
 <td></td>
 <td>3 rows</td>
@@ -2229,6 +2915,13 @@ Riker out.</p>
 <td></td>
 <td>3 rows</td>
 <td><span id="m-48f3c0e8-54c9-5348-b945-e06af59b5f43" data-section-uuid="48f3c0e8-54c9-5348-b945-e06af59b5f43"><code>48f3c0e8</code></span></td>
+</tr>
+<tr>
+<td>Table</td>
+<td><code>linkedin/ingest/entities.doltlite_db#shares</code></td>
+<td></td>
+<td>1 row</td>
+<td><span id="m-f6475c6a-b9ad-5021-9f6c-26edec28f0e0" data-section-uuid="f6475c6a-b9ad-5021-9f6c-26edec28f0e0"><code>f6475c6a</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
@@ -2267,6 +2960,25 @@ Riker out.</p>
 </tr>
 </tbody>
 </table>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">linkedin/render_markdown/d8c38718-494f-5b42-b2ba-b17bb51dab70/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="a86cbb8c-e4dc-5f55-9ea8-f47cbc580297">LinkedIn · Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… (all) <a class="source-link" href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-1c0d0b64-b6cd-5e2a-a589-e0d480e2d8cd" data-section-uuid="1c0d0b64-b6cd-5e2a-a589-e0d480e2d8cd" class="msg msg--linkedin">
+<p><em><small><time class="msg-ts" datetime="2369-04-12T08:15:00+00:00" title="2369-04-12 08:15:00 UTC">Sat Apr 12th, 2369 at 08:15</time> — system: Original post not included in the LinkedIn export — <a href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002">https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002</a></small></em></p>
+</div>
+<div id="m-0736594d-0a1e-5b6b-93ed-10e9d18ac753" data-section-uuid="0736594d-0a1e-5b6b-93ed-10e9d18ac753" class="msg msg--linkedin">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-12T08:15:00+00:00" title="2369-04-12 08:15:00 UTC">Sat Apr 12th, 2369 at 08:15</time></h2>
+<p>Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not &quot;astronomical&quot;.</p>
+<p><a href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002">🔗 View on LinkedIn</a></p>
+</div>
+<div id="m-c302b9bf-8c3f-5a6e-85f1-fdb303c8639f" data-section-uuid="c302b9bf-8c3f-5a6e-85f1-fdb303c8639f" class="msg msg--linkedin">
+<h2><span class="msg-author">Me</span> <time class="msg-ts" datetime="2369-04-12T08:20:30+00:00" title="2369-04-12 08:20:30 UTC">Sat Apr 12th, 2369 at 08:20</time></h2>
+<p>On reflection, &quot;astronomical&quot; is an acceptable approximation.</p>
+<p>I am attempting humor.</p>
+<p><a href="https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002">🔗 View on LinkedIn</a></p>
+</div>
 </div>
 </div>
 <div class="preview-doc">
@@ -3111,8 +3823,64 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 </div>
 </section>
+<section class="preview-source" id="src-slack-diff">
+<h2 class="preview-source-name">slack-diff <span class="preview-count">3 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">slack-diff/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="e3bec17a-39bf-5a1c-bccd-887b53f88817">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-b963b02d-7632-5a12-8b63-584e8ed3776b" data-section-uuid="b963b02d-7632-5a12-8b63-584e8ed3776b" class="msg msg--slack">
+<h2><span class="msg-author">Jean-Luc Picard</span> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Mr. Data, status report.</p>
+</div>
+<div id="m-1ced4324-27d1-5fda-a93e-643b91094b3e" data-section-uuid="1ced4324-27d1-5fda-a93e-643b91094b3e" class="msg msg--slack">
+<h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.</p>
+<ul>
+<li><span id="m-5d8beccb-9223-5c3b-91e1-29378deeaba6" data-section-uuid="5d8beccb-9223-5c3b-91e1-29378deeaba6">:robot_face: Lt. Cmdr. Data</span></li>
+<li><span id="m-52c211c5-03b2-5d4e-878e-4e43b00e5a67" data-section-uuid="52c211c5-03b2-5d4e-878e-4e43b00e5a67">👍 Jean-Luc Picard</span></li>
+<li><span id="m-0f58213f-f2ff-5e15-9ac5-86636819f629" data-section-uuid="0f58213f-f2ff-5e15-9ac5-86636819f629">👍 William T. Riker</span></li>
+</ul>
+</div>
+<div id="m-5eb62d6e-a971-583d-947f-685d7041a940" data-section-uuid="5eb62d6e-a971-583d-947f-685d7041a940" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Set a course, Mr. Data. Warp factor five.</p>
+</div>
+<div class="diff-added">
+<div id="m-7698d538-c677-5557-9a53-decb920864ca" data-section-uuid="7698d538-c677-5557-9a53-decb920864ca" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Long-range sensors confirm it, Captain: a Warbird, decloaking.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack-diff/render_markdown/6afbf20c-01a6-5602-a7ec-9944e71f8e1f/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="20c6d450-efa9-57dc-ac5a-188c7304fd7f">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="diff-added">
+<div id="m-a2b804be-2630-57ba-8354-57ebbcb0670d" data-section-uuid="a2b804be-2630-57ba-8354-57ebbcb0670d" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Shields up. Red alert.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack-diff/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="96e5880c-4588-51a9-aa0e-1114f71cc76d">#bridge: I recommend raising shields *now*, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="diff-modified">
+<div id="m-27fc7188-80ca-5371-96c5-8071431244a3" data-section-uuid="27fc7188-80ca-5371-96c5-8071431244a3" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>I recommend raising <del>shields,</del><ins>shields <strong>now</strong>,</ins> Captain.</p>
+<ul>
+<li><span id="m-b0bb5167-dba2-5cf0-a70c-119980271819" data-section-uuid="b0bb5167-dba2-5cf0-a70c-119980271819"><ins>🛡️ Jean-Luc Picard</ins></span></li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</section>
 <section class="preview-source" id="src-slack">
-<h2 class="preview-source-name">slack <span class="preview-count">12 documents</span></h2>
+<h2 class="preview-source-name">slack <span class="preview-count">13 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="0d19c789-9bb6-5f9e-9bf9-f9b3c85b2eba">#bridge: Mr. Data, status report. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
@@ -3132,6 +3900,10 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div id="m-b89c97ab-5bca-5de7-98e8-f2157ff69991" data-section-uuid="b89c97ab-5bca-5de7-98e8-f2157ff69991" class="msg msg--slack">
 <h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:11:40+00:00" title="2369-05-28 15:11:40 UTC">Wed May 28th, 2369 at 15:11</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Set a course, Mr. Data. Warp factor five.</p>
+</div>
+<div id="m-e5f492e7-2b67-51cf-aace-6984e2af47b8" data-section-uuid="e5f492e7-2b67-51cf-aace-6984e2af47b8" class="msg msg--slack">
+<h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:25:00+00:00" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001100001100?team=T_NCC1701D&amp;thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Long-range sensors confirm it, Captain: a Warbird, decloaking.</p>
 </div>
 </div>
 </div>
@@ -3168,6 +3940,15 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div id="m-6607ab50-b9d8-55c1-86c2-a810ba8949eb" data-section-uuid="6607ab50-b9d8-55c1-86c2-a810ba8949eb" class="msg msg--slack">
 <h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:15:00+00:00" title="2369-05-28 15:15:00 UTC">Wed May 28th, 2369 at 15:15</time> <a class="source-link" href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Warp core efficiency at 99.7%.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">slack/render_markdown/6afbf20c-01a6-5602-a7ec-9944e71f8e1f/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="6afbf20c-01a6-5602-a7ec-9944e71f8e1f">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div id="m-bc3d5f31-5665-5959-a76c-d0ef3a0ba86e" data-section-uuid="bc3d5f31-5665-5959-a76c-d0ef3a0ba86e" class="msg msg--slack">
+<h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<p>Shields up. Red alert.</p>
 </div>
 </div>
 </div>
@@ -3234,7 +4015,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <td>Table</td>
 <td><code>slack/ingest/entities.doltlite_db#messages</code></td>
 <td></td>
-<td>14 rows</td>
+<td>16 rows</td>
 <td><span id="m-32e2f526-b5d6-5fce-80df-73d2bf8912e3" data-section-uuid="32e2f526-b5d6-5fce-80df-73d2bf8912e3"><code>32e2f526</code></span></td>
 </tr>
 <tr>
@@ -3271,10 +4052,13 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/aa7f900b-31b9-5603-995a-5ed36db03478/all.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="aa7f900b-31b9-5603-995a-5ed36db03478">#bridge: I recommend raising shields *now*, Captain. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" data-section-uuid="80b2ae4e-06f9-5ca3-9d40-e24d82214eb3" class="msg msg--slack">
 <h2><span class="msg-author">Worf</span> <time class="msg-ts" datetime="2369-05-28T15:13:20+00:00" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
-<p>I recommend raising shields, Captain.</p>
+<p>I recommend raising shields <strong>now</strong>, Captain.</p>
+<ul>
+<li><span id="m-2e6c93c9-a12a-54b7-b825-631e09d1a992" data-section-uuid="2e6c93c9-a12a-54b7-b825-631e09d1a992">🛡️ Jean-Luc Picard</span></li>
+</ul>
 </div>
 </div>
 </div>
@@ -3457,6 +4241,121 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 </div>
 </section>
+<section class="preview-source" id="src-tng-contacts-diff">
+<h2 class="preview-source-name">tng_contacts-diff <span class="preview-count">3 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts-diff/render_markdown/7c6a988a-7c4c-517a-a956-80d624205fe9/index.md</h3>
+<div class="chat-body markdown-body"><div class="diff-removed">
+<h1 class="page-title" data-page-title-uuid="f56682c3-e1a1-57d7-82b8-00ebc5b72447">Data</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D — Operations</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Operations Officer</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:data@enterprise.starfleet">data@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Soong-type android. Positronic. Probability of friendship: 1.0.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts-diff/render_markdown/dcba5673-ef5d-5b92-adf3-c4d2a1571fe3/index.md</h3>
+<div class="chat-body markdown-body"><div class="diff-added">
+<h1 class="page-title" data-page-title-uuid="883ef5f2-3091-5816-b7a8-3a0a2a3e8a02">Worf</h1>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise NCC-1701-D — Security</td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Chief of Security</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:worf@enterprise.starfleet">worf@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Son of Mogh. Prefers prune juice.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts-diff/render_markdown/fe56b2f2-2d6a-5074-af37-729c7c466123/index.md</h3>
+<div class="chat-body markdown-body"><div class="diff-modified">
+<h1 class="page-title" data-page-title-uuid="291e7317-9c44-5a0e-8256-8574b0465c70">Jean-Luc Picard</h1>
+<p><img src="blobs/fe56b2f2-2d6a-5074-af37-729c7c466123.png" alt="Jean-Luc Picard"></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Org</td>
+<td>Starfleet — USS Enterprise <del>NCC-1701-D</del><ins>NCC-1701-E</ins></td>
+</tr>
+<tr>
+<td>Title</td>
+<td>Captain</td>
+</tr>
+<tr>
+<td>Email (work)</td>
+<td><a href="mailto:jlpicard@enterprise.starfleet">jlpicard@enterprise.starfleet</a></td>
+</tr>
+<tr>
+<td>Phone (work)</td>
+<td>+1-555-NCC-1701</td>
+</tr>
+<tr>
+<td><ins>Phone (home)</ins></td>
+<td><ins>+33-555-LABARRE</ins></td>
+</tr>
+<tr>
+<td>Address (work)</td>
+<td>, , Ready Room, Deck 1, Saucer Section, ,</td>
+</tr>
+<tr>
+<td>Note</td>
+<td>Make it so.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</section>
 <section class="preview-source" id="src-tng-contacts">
 <h2 class="preview-source-name">tng_contacts <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
@@ -3535,8 +4434,8 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 </div>
 </div>
 <div class="preview-doc">
-<h3 class="preview-name">tng_contacts/render_markdown/1db2d2f9-e79a-58ad-978f-eb56fba5060f/index.md</h3>
-<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="1db2d2f9-e79a-58ad-978f-eb56fba5060f">Data</h1>
+<h3 class="preview-name">tng_contacts/render_markdown/71e87c5f-57be-5a68-a27e-4ab95bc36810/index.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="71e87c5f-57be-5a68-a27e-4ab95bc36810">Worf</h1>
 <table>
 <thead>
 <tr>
@@ -3547,19 +4446,19 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <tbody>
 <tr>
 <td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D — Operations</td>
+<td>Starfleet — USS Enterprise NCC-1701-D — Security</td>
 </tr>
 <tr>
 <td>Title</td>
-<td>Operations Officer</td>
+<td>Chief of Security</td>
 </tr>
 <tr>
 <td>Email (work)</td>
-<td><a href="mailto:data@enterprise.starfleet">data@enterprise.starfleet</a></td>
+<td><a href="mailto:worf@enterprise.starfleet">worf@enterprise.starfleet</a></td>
 </tr>
 <tr>
 <td>Note</td>
-<td>Soong-type android. Positronic. Probability of friendship: 1.0.</td>
+<td>Son of Mogh. Prefers prune juice.</td>
 </tr>
 </tbody>
 </table>
@@ -3661,7 +4560,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <tbody>
 <tr>
 <td>Org</td>
-<td>Starfleet — USS Enterprise NCC-1701-D</td>
+<td>Starfleet — USS Enterprise NCC-1701-E</td>
 </tr>
 <tr>
 <td>Title</td>
@@ -3674,6 +4573,10 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <tr>
 <td>Phone (work)</td>
 <td>+1-555-NCC-1701</td>
+</tr>
+<tr>
+<td>Phone (home)</td>
+<td>+33-555-LABARRE</td>
 </tr>
 <tr>
 <td>Address (work)</td>

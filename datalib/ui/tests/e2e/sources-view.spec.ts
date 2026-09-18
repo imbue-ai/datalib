@@ -14,11 +14,12 @@ async function openSources(page: Page) {
   await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
 }
 
-test("add a source via chip, save, sync lights up, restore", async ({ page }) => {
+test("add a source via chip, save, sync lights up, restore", async ({ page, request }) => {
   await openSources(page);
 
-  // Fixture config has no sources; the editor holds the raw file.
-  await expect(page.getByText("no sources configured yet")).toBeVisible();
+  // The fixture root declares its rendered sources (see
+  // `materialize_tng_root.sh`); the counts below are relative to that.
+  const before = (await (await request.get("/api/config")).json()) as { source_count: number };
   const editor = page.locator(".editor");
   await expect(editor).toHaveValue(/data_root = /);
   const original = await editor.inputValue();
@@ -38,7 +39,9 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // and persists; the row becomes selectable and "Sync selected"
   // lights up once it's checked.
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("✓ Saved — 1 source(s) configured.")).toBeVisible();
+  await expect(
+    page.getByText(`✓ Saved — ${before.source_count + 1} source(s) configured.`),
+  ).toBeVisible();
   await expect(checkbox).toBeEnabled();
   await checkbox.check();
   const syncSelected = page.getByRole("button", { name: /Sync selected \(1\)/ });
@@ -59,8 +62,9 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // Restore the original config so later specs see the fixture unchanged.
   await editor.fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("✓ Saved — 0 source(s) configured.")).toBeVisible();
-  await expect(page.getByText("no sources configured yet")).toBeVisible();
+  await expect(
+    page.getByText(`✓ Saved — ${before.source_count} source(s) configured.`),
+  ).toBeVisible();
 });
 
 test("Locate config selects the source's stanza in the editor", async ({ page }) => {

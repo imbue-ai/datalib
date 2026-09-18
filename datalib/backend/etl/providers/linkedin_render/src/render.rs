@@ -10,7 +10,9 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_chat_common::types::{
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
@@ -28,7 +30,7 @@ pub const RENDER_VERSION: u32 = 3;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Chat".to_string(),
@@ -66,14 +68,12 @@ pub fn render(
     // later `dolt_commit` fail.
     let Some((by_table, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = range.pin(db.pool()).await? else {
-                db.close().await;
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(None);
             };
-            datalib_etl::pin::install_views(db.pool(), &pin).await?;
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             let mut loaded = Vec::new();
             for table in message_tables() {
                 // A feed the user didn't export has no table; treat a
@@ -178,13 +178,15 @@ fn build_chats(
                 let from = field(p, "FROM");
                 let date = field(p, "DATE");
                 let content = field(p, "CONTENT");
+                let mut problems = Vec::new();
+                let date_ms = own_stamp_ms(Some(date), "DATE", parse_date_ms, &mut problems);
                 NormalizedChatItem {
                     message_uuid: uuid5(&format!("msg:{table}:{conv}:{date}:{from}:{content}")),
                     author_id: nonempty(field(p, "SENDER PROFILE URL"))
                         .unwrap_or(from)
                         .to_string(),
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
-                    date_ms: parse_date_ms(date),
+                    date_ms,
                     text: nonempty(content).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
@@ -194,6 +196,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    problems,
                 }
             })
             .collect();
@@ -259,16 +262,9 @@ fn nonempty(s: &str) -> Option<&str> {
     (!t.is_empty()).then_some(t)
 }
 
-/// TODO(problem-sink): a shape we don't recognize is dropped silently.
-/// `None` is the right *value* for `when_ts`, but nothing anywhere
-/// records that we discarded something upstream actually sent — that is
-/// only half of R1 ("drop, count, log; never abort, never hide"). When
-/// the problem sink exists (see
-/// `docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
-/// report `{field, reason: CoercionFailed, sample}` here as well as
-/// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,
-/// or `None` on any shape we don't recognize.
+/// or `None` on any shape we don't recognize — which the caller records
+/// through `own_stamp_ms`.
 pub(crate) fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().trim_end_matches(" UTC").trim();
     datalib_time::parse_custom_strftime_assumed_utc(s, "%Y-%m-%d %H:%M:%S")

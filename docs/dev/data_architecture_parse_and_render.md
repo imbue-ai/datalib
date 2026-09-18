@@ -7,14 +7,14 @@ Those two cover the **download** stage — how upstream bytes land on
 disk and what shape they have at rest. This one covers what happens
 next.
 
-Two words, because they are two things and conflating them caused real
-confusion while this document was being written:
+Two words, because they are two things and conflating them causes real
+confusion:
 
 - **parse** — deserialize a stored payload into the provider's typed
   in-memory representation. Pure, no I/O, lives in
   `render/parse.rs`.
-- **render** — turn that representation into the artifacts:
-  `<id>.md` for humans and `<id>.grid_rows.json` for the index.
+- **render** — turn that representation into the artifacts: `<id>.md`
+  for humans and the rows of the render store for the index.
 
 Together they are one pipeline stage, the `render_markdown` step of a
 source's group. When this doc needs a word for the whole transform it
@@ -26,53 +26,29 @@ re-render and never a re-fetch.
 Like its siblings this is aspirational as much as descriptive, and it
 tries to say which is which at each point. §4 in particular is a set of
 rules we do **not** follow today; the audit and retrofit plan is
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md),
-and what the tree actually does today is measured in the
-[render audit](plans/data_lib_as_a_library/render_audit_2026_09_03.md).
-§3's **U-rules are mostly descriptive** — they name a pattern already
-built in four places — while its **P-rules are mixed**, and P1 and P3
-are both currently violated. §2's
-["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
-is now **half built**: Step 1 shipped — the sidecar tree is gone and
-each source writes a doltlite database — and Step 2 (the markdown
-itself moving into a table) is still aspiration. That section says
-which is which.
+[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
+§3's **U-rules are descriptive** — they name a pattern already built in
+four places — while its **P-rules are mixed**, and P1 and P3 are both
+violated today. §5 is descriptive throughout: it is how the render step
+driver works.
 
 ## 1. Why there are three of these
 
-`data_architecture_ingestion.md` began as one document. It was split in
-`dab2c3d9` (2026-06-15) along a **principles vs practitioner** line —
-the load-bearing rules stayed, testing and adding-a-provider and the
-open questions moved to the companion — so the core would stay focused
-and land under 1000 lines. That split is still right, and this doc does
-not repeat it: parse/render's principles and its practices are one file
-until it gets big enough to hurt.
-
-The reason for a *third* file was different. Both existing docs are
-scoped to ingestion, by title and by their own opening paragraphs — and
-render material kept accumulating in them anyway, because there was
-nowhere else to put it. The clearest tell was a bullet in the ingestion
-doc that opened **"(NOT download/ingest related)"** and then ran five
-lines about `GridRow` backpointers.
-
-That homelessness had a cost beyond tidiness: it is why the
-data-quality rules in §4 were first written up as a proposal instead of
-landing in the architecture docs where they belong.
-
-**Everything that was misfiled now lives here**, with a pointer left
-behind at each old location: the backpointers bullet (§3), the
-`GridRow.when_ts` policy (§6 — the `datalib-time` crate contract stays
-in the ingestion doc, since download stamps its own `fetched_at_utc` with
-it), the render cursor and the render-side progress question (§5), the
-render-store contract (§2), and the `GridRow` family taxonomy (§3).
+The two ingestion docs are scoped to download, by title and by their own
+opening paragraphs. Render material has nowhere to live in them, so it
+lives here.
 
 | doc | stage | contains |
 | --- | --- | --- |
 | [`data_architecture_ingestion.md`](data_architecture_ingestion.md) | download | principles, at-rest shape, operational properties |
 | [`data_architecture_ingestion_practices.md`](data_architecture_ingestion_practices.md) | download | testing, adding a provider, schema evolution, open questions |
-| **this file** | parse + render | the stage contract (and where it is heading), the projection, the parse contract and the unification/fidelity rules, data-quality rules, incrementality, timestamps |
+| **this file** | parse + render | the stage contract, the projection, the parse contract and the unification/fidelity rules, data-quality rules, incrementality and deletion, timestamps |
 | [`grid_rows.md`](grid_rows.md) / [`edges.md`](edges.md) | — | the tables render writes into |
 | [`entity_ids.md`](entity_ids.md) | — | the `uuid` recipe every projection must follow |
+
+The `datalib-time` crate contract stays in the ingestion doc, since
+download stamps its own `fetched_at_utc` with it; §6 here covers only
+what render does with a record's own timestamps.
 
 ## 2. The stage contract
 
@@ -97,26 +73,26 @@ derive `grid_rows` for the UI.
 The cross-provider contract is the **render store**: one doltlite
 database per source, at
 `<data_root>/<name>/render_markdown/indexed_markdown.doltlite_db`, holding
-four tables —
 
   - `markdowns` — one row per rendered document: its `markdown_uuid`
     (the primary key for the `.md`), its `renderer_version`, its
-    `md_path` and the `bucket_key` it was rendered from. Nothing on it is
-    stamped per
-    run — a re-render of an unchanged document writes an identical row.
+    `md_path` and the `bucket_key` it was rendered from. Nothing on it
+    is stamped per run — a re-render of an unchanged document writes
+    an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.
-  - `render_problems` — what render could not do getting there (§4).
+  - `problems` — what render could not do getting there (§4).
+  - `render_inputs` and `render_cursor` — what each bucket was rendered
+    from, and how far into the raw store the last run got (§5).
+  - `source_measurements` — the storage report's samples
+    ([`grid_rows.md`](grid_rows.md)).
 
 The human artifact stays a file: `<id>.md`, with YAML frontmatter,
 beside a `blobs/` directory for its attachments.
 
 Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
-what a renderer writes and what the index reads. This *was* a JSON
-sidecar file per document; see
-["Where this is heading"](#where-this-is-heading-the-artifact-becomes-a-database)
-for what the swap bought.
+what a renderer writes and what the index reads.
 
 Grid index reads that store — **it never re-parses markdown**. The
 markdown is for humans; the store is the machine-readable projection.
@@ -124,19 +100,10 @@ markdown is for humans; the store is the machine-readable projection.
 This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental, by diff alone.** Render asks the raw store
-    `dolt_diff` between the commit its `render_cursor` row names and
-    HEAD, and renders only the buckets that moved. Every document it
-    renders is written; there is no fingerprint deciding whether a
-    write is needed, because doltlite's tables are content-addressed —
-    a row identical to the stored one is no change, carries no diff,
-    and is never seen by the index. The index then asks each render
-    store `dolt_diff` between the commit it last consumed
-    (`source_cursors`, in the index database) and that store's HEAD, so
-    a steady-state run reads no documents at all. The one rule that
-    keeps this true: nothing per-run may be written into a row whose
-    content did not change (`markdowns_carries_no_per_run_stamp` in
-    `datalib_schema` pins it).
+  - **Incremental, by diff alone.** Render asks the raw store what
+    changed since the commit its cursor names and renders only the
+    buckets that read those rows; the index asks the render store the
+    same question about its own commits. §5 is the whole mechanism.
   - **Resumable at every checkpoint**: render commits the store after
     every batch of documents, and each commit leaves a store a consumer
     can read. A run killed after N of M documents has N of them
@@ -146,189 +113,71 @@ This part of the pipeline aspires to the same properties as download:
     partial one left by a SIGKILL mid-write is rewritten next run.
 
 Less attention has been paid to render-side observability and to
-making partial-progress visible to the user than to the same on
+making partial progress visible to the user than to the same on
 download; this is an area where the implementation trails the
 principle.
 
-### Where this is heading: the artifact becomes a database
+### Why the projection is a database and not a file tree
 
-**Status: Step 1 is built; Step 2 is not.** The two steps looked
-similar when this was written and cost very different amounts, which is
-why they were separated — and that turned out to be the right split.
+The render store is doltlite for the same reason the raw store is: the
+question "what changed since my cursor?" is one doltlite answers, and a
+file tree of sidecars would have to re-implement it with fingerprints
+and full walks. Four properties follow, and each is load-bearing
+somewhere downstream:
 
-**Step 1 — the sidecar becomes a table. Done.** Each source writes its
-projected rows into
-`<name>/render_markdown/indexed_markdown.doltlite_db`: `grid_rows`,
-`markdowns`, `edges` and `render_problems`, already columnar and
-already in the shape the unified index stacks. There is no
-`<id>.grid_rows.json` anywhere in the tree any more, and
-`datalib-index-lib` — the crate that existed only to define that wire
-format — is deleted.
+- **No tree walks.** What a run needs to know about the render store it
+  reads through indexed queries; what it needs to know about the raw
+  store it reads through `dolt_diff`.
+- **A row cannot be unreadable.** A sidecar file could be malformed, and
+  the two responses to that (skip it silently; abort the whole load)
+  were both bad. There is no file to fail to parse.
+- **A document lands whole or not at all.** Its rows, edges, markdown
+  and problems are written inside one SQL transaction, so a commit
+  landing between two documents — a checkpoint, a Ctrl-C, a rescue —
+  never publishes a fraction of one.
+- **Deletion is expressible.** A `dolt_diff` can name a row that
+  *left*, which is how a document a source stops holding reaches the
+  grid index as a deletion. Reading whole stores could never see that.
+- **The step's output version is free.** A doltlite artifact versions
+  as its commit hash, so the render step reports its store's HEAD and
+  the runner never content-hashes the tree
+  ([`dag/README.md`](../../datalib/backend/dag/README.md) says what an
+  unreported version costs).
 
-Everything the argument below predicted it would buy, it bought:
+It also simplifies [§4](#4-data-quality-rules)'s problem sink. Render's
+rows and the record of what was dropped or nulled getting them there
+live in one database with one writer, so they commit in one transaction
+and can never disagree about which run they came from. A document whose
+every row was dropped is stored as no document at all — no `markdowns`
+row, no `.md` file — and its problem rows are the whole record of it.
 
-- The two tree walks are gone: what a run needs to know about the
-  store it reads through indexed queries, and what it needs to know
-  about the raw store it reads through `dolt_diff`.
-- The unreadable-sidecar failure class is gone; there is no file to
-  fail to parse.
-- Render commits once per run, so a document's rows and its
-  `render_problems` land together or not at all.
-- **Deletion is expressible, and the index now uses it.** The grid
-  index keeps a per-source cursor (`source_cursors`, one commit hash
-  per source, in the index database) and asks each store
-  `dolt_diff` between that commit and its HEAD. A steady-state run
-  reads *nothing*: the TNG fixture's second run reads 0 documents
-  where the first read 58. And because a diff can name a row that
-  **left**, a document a source stops holding is finally deleted from
-  the index — re-reading whole stores could never see that, so before
-  this a deleted conversation stayed in the grid until someone wiped
-  the file.
+### What is still a file: the markdown
 
-One thing worth recording, because this section changed its mind
-twice and the repo warns about believing well-argued prose: the
-fingerprint compare **was** replaced by the cursor in the end
-(2026-09-14), after a year of both being in the tree and this section
-arguing they answered different questions. They did — "which documents
-to read" and "whether a read document needs writing" — but the second
-question is one doltlite answers on its own: writing an unchanged row
-to a content-addressed table is not a write. Keeping a fingerprint
-beside that was a second mechanism for one question, and it went wrong
-in both directions it was tried (a provider's input hash skipped
-changed documents; the driver's output hash bought nothing and put a
-per-run column on `markdowns`). See
-[`plans/render_inputs.md`](plans/render_inputs.md) §"Does the
-fingerprint still earn its place?" for the record.
-
-Deletion on the render side is now wired, and the shape it took is worth
-knowing before you port a renderer to it. "Not re-emitted this run" is
-*not* the signal — render is incremental, so it overwhelmingly means "not
-looked at". Nor is "absent from what parse returned", which is what the
-first draft used and is wrong for a subtler reason: every provider's
-loader filters (`payload IS NOT NULL` at minimum), so a bucket missing
-from a parse result may be one whose body we have not fetched yet, and
-deleting on that reading destroys a live document.
-
-The signal is **the raw store has no row with this id**, and it is read
-where the rows are loaded: a bucket the run set out to render — because
-the driver found its declared inputs moved, or the provider's own scan
-named it — that comes back with no rows is declared with nothing, and the
-driver drops every document under it — rows and the `.md` file both. The
-file is not an afterthought: `md_path` is what
-`/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
-document deleted from the store but left on disk is a deletion the user
-can still read.
-
-Keyed on the bucket rather than the document because a periodizing
-renderer (slack, signal, beeper) turned one conversation into several
-documents, and once the conversation is gone from the raw store the render
-store is the only thing that still knows how many. `grid_index` needs no
-change — it already learns of a removal from this store's diff.
-
-### Two mechanisms, because there are two kinds of renderer
-
-Which one a renderer uses follows from whether it is incremental, and
-that split is worth knowing on its own — **only 6 of the 17 renderers
-ask `dolt_diff` what changed** (checked 2026-09-07). The rest re-derive
-every document from their whole raw store on every run and write it
-again; doltlite stores the unchanged ones as no change, but the
-re-derivation is paid in full. That is a real cost the
-[provider migration recipe](provider_migration_dolt_diff_and_cas_edge.md)
-exists to pay down; it is not what the deletion work fixes.
-
-**Declared buckets: `RenderCtx::declare_bucket`.** Every provider. A
-run declares each bucket it looked at with the raw rows it read — with
-nothing when the rows are gone — and the driver drops what the store
-holds under a declared bucket that the run did not emit. A bucket the
-run never looked at says nothing about its documents, so a narrowed run
-cannot delete its own steady state. The design is
-[`plans/render_inputs.md`](plans/render_inputs.md).
-
-The original argument, which still reads correctly:
-
-The argument is that **the sidecar tree is a hand-rolled version of what
-doltlite already does for us one stage earlier.** Download → raw store
-gets "what changed since my cursor" from `dolt_diff`. Render → sidecar
-tree re-implements the same question with fingerprints and full tree
-walks, and most of the render driver's complexity is the cost of that
-re-implementation:
-
-- **Two full tree walks per run.** `scan_sidecars` reads every sidecar
-  header to rebuild the `markdown_uuid → fingerprint` map, and
-  `grid_index` then walks the same tree again. One `dolt_diff` against a
-  stored commit answers both.
-- **A whole class of failure that a table does not have.** A sidecar can
-  be unreadable or unparseable; a row cannot. The audit found both
-  responses to that class in the tree and neither is good — the render
-  driver silently skips a malformed sidecar (losing its skip), and the
-  index loader aborts its entire transaction.
-- **No atomicity.** §2 above admits this outright: a SIGKILL mid-write
-  leaves a `.md` whose fingerprint does not match its body. A commit
-  fixes that by construction.
-- **Deletion is expressible.** The two gaps a file tree had — orphaned
-  documents after a render-param change (§5), and the whole-tree
-  `rm -rf` a renderer that re-keyed its documents used to need — were
-  both "you cannot update a file tree in place when identity moves."
-  `DELETE … WHERE` is the answer to both, and both are closed now: a
-  version or param change renders everything in place and sweeps what
-  the walk did not produce.
-- **The step's output version comes free.** A doltlite artifact versions
-  as its commit hash, so the runner never content-hashes anything. The
-  render step reports its store's HEAD, and
-  [#225](pipeline_dag_architecture.md) is what happens when a step
-  reports nothing: forty seconds of hashing, every run, to version a
-  step that had already been skipped.
-
-It also simplifies [§4](#4-data-quality-rules)'s problem sink rather
-than complicating it. If render's rows already live in a per-source
-doltlite database with a single writer, the problem table belongs in
-**that same database** — so a document's rows and the record of what was
-dropped or nulled getting them there commit in one transaction, and can
-never disagree about which run they came from. A document whose every
-row was dropped is stored as no document at all — no `markdowns` row,
-no `.md` file — and its problem rows are the whole record of it; a
-`markdowns` row with nothing pointing at it would carry a title and a
-`bucket_key` from whichever render last had rows.
-
-[`data_architecture_ingestion.md`](data_architecture_ingestion.md) said
-the `source_fingerprint` compare stays, and this section claimed it
-would be superseded by the cursor. Both shipped, this section then
-conceded, and the compare was finally removed anyway — for the reason
-in the correction above, not the one this section first gave.
-
-Step 1 was close to free, and that is worth saying plainly: **nothing
-outside our own code ever read a `.grid_rows.json`.** It was a machine
-format with exactly one producer and one consumer, which is what made
-replacing it a local change.
-
-**Step 2 — the markdown moves too.** Longer-term, the rendered `.md`
-lives in a doltlite table rather than as a file on disk.
-
-This one is genuinely gated, and on something specific: **qmd consumes a
-markdown tree.** The semantic index shells out to `@tobilu/qmd` over
-`render_markdown/`, so the tree cannot simply stop existing — it would have
-to be materialized for the indexer, or qmd's role would have to be taken
-over by something that reads from the database (a direction
-[`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already proposes for
-other reasons). Two smaller things point the same way: attachment blobs
-are materialized into each page's `blobs/` directory today, and the
-markdown is deliberately human-readable and greppable on disk, which is
-a property someone will miss.
+The rendered `.md` lives on disk rather than in a table, and moving it
+is gated on something specific: **qmd consumes a markdown tree.** The
+semantic index shells out to `@tobilu/qmd` over `render_markdown/`, so
+the tree cannot simply stop existing — it would have to be materialized
+for the indexer, or qmd's role taken over by something that reads from
+the database (a direction
+[`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
+proposes for other reasons). Two smaller things point the same way:
+attachment blobs are materialized into each page's `blobs/` directory,
+and the markdown is deliberately human-readable and greppable on disk,
+which is a property someone will miss.
 
 The storage argument cuts both ways and should not be oversold.
-`plans/multimodal_retrieval.md` §4 measured a real data root and found the
-same text stored **five** times. Putting markdown in doltlite makes that
-six unless the file tree actually goes away — so the win is conditional
-on finishing the move, not on starting it.
+`plans/multimodal_retrieval.md` §4 measured a real data root and found
+the same text stored **five** times. Putting markdown in doltlite makes
+that six unless the file tree actually goes away — so the win is
+conditional on finishing the move, not on starting it.
 
-**What does not change in either step.** The *contract* is unaffected:
-render still emits a human artifact and a separate machine-readable
-projection, the projection is still never recovered by parsing the
-markdown, and the index still reads the projection. Only the medium
-changes. If you find yourself proposing that the grid index parse
-markdown because it is now conveniently in the same database, that is
-the same mistake ["QMDs are write-only"](/AGENTS.md) warns about, wearing
-a new hat.
+Whatever the medium, the *contract* holds: render emits a human
+artifact and a separate machine-readable projection, the projection is
+never recovered by parsing the markdown, and the index reads the
+projection. If you find yourself proposing that the grid index parse
+markdown because it is conveniently in the same database, that is the
+mistake ["QMDs are write-only"](/AGENTS.md) warns about, wearing a new
+hat.
 
 ## 3. The projection
 
@@ -340,10 +189,7 @@ Three shapes, in order:
    representation, in `render/parse.rs`. Where a shape is shared
    across providers the canonical type lives in a shared crate:
    `chat-common`'s `Normalized*` types for the two chat families,
-   `contact-common`'s for contacts. (Earlier drafts of this doc, and
-   `data_architecture_ingestion.md`, call this file
-   `schema_translate.rs`. No provider has ever had one — the layer
-   landed under the two names above.)
+   `contact-common`'s for contacts.
 3. **The rows** — `GridRow` + `EdgeRow`, handed back through
    `ctx.emit_doc` as a `RenderedMarkdown` and written into the
    source's render store.
@@ -358,7 +204,7 @@ pure given the raw store, and both are the right place for §4's tests.
     - `external_id` — the provider-native primary id (numeric GH/GL id, PR number, …) preserved alongside our UUID so we can round-trip back to the provider's API.
     - `source_url` — the canonical URL on the provider's web UI (e.g. `pull_request.html_url`, GitLab `note.web_url` with `#note_<id>` anchor), populated everywhere we can construct it.
     - `qmd_path` — the path to the rendered `.md`, relative to the data root.
-    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `slack_link`, `git_sha`, …) so the UI can link sideways as well as out.
+    - Provider-specific cross-references (`notion_page_uuid`, `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
 optional: anything durably keyed on a row — feedback today,
@@ -469,10 +315,12 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-This rule is currently violated for timestamps — six of the twelve
-render modules parse them with raw `chrono` instead, and that is where
-every fabricated-epoch bug in the tree lives. See the
-[render audit](plans/data_lib_as_a_library/render_audit_2026_09_03.md) §04.
+This rule is violated for timestamps: six of the 22 render crates
+(`chatgpt`, `facebook`, `google_takeout`, `linkedin`, `perseus`,
+`sms_backup_restore`) still reach for `chrono` directly rather than
+`datalib-time`, and that is where every fabricated-epoch bug in the
+tree has lived. The retrofit is in
+[`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
 **P4 — Parse reads the raw store and nothing else.** The stage contract
 from §2, restated here because parse is where the temptation appears:
@@ -537,7 +385,7 @@ rule, and the tree already follows it in four places:
 
 | faithful column | unified companion | what the unification buys |
 | --- | --- | --- |
-| `when_ts` — source offset preserved verbatim | `when_ts_utc` + `when_offset`, derived at load by `split_when_ts` | one zone and one width, so lexical order *is* chronological order |
+| `created_at` — source offset preserved verbatim | `created_at_utc` + `created_offset`, derived at load by `split_record_stamp` | one zone and one width, so lexical order *is* chronological order |
 | `upstream_id` + `upstream_entity_kind` + `upstream_scope` — the provider's own identity, byte-exact | `uuid` — our v5 over the five-component recipe | one id space across every provider; stable across re-render |
 | `upstream_entity_kind` — the upstream's own word, which "may not [be reworded], because `uuid` derives from it" | `kind` — the grid's display label, which "may be reworded freely" | one Kind column the UI can filter on |
 | `blake3` — the whole file | `payload_blake3` — the metadata-excluding digest | "same audio, different tags" becomes a query |
@@ -563,7 +411,7 @@ string a `uuid` was minted under, kept so the id can be regenerated and
 checked.
 
 The rule has a real limit, and knowing it stops the pattern from
-becoming ritual: `when_ts_utc` carries no scheme column and should not,
+becoming ritual: `created_at_utc` carries no scheme column and should not,
 because there is only ever one way to render an instant in UTC. Stamp
 the recipe when a *choice* was made, not merely when a derivation
 happened.
@@ -593,11 +441,37 @@ Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
-**Status: not implemented.** These are adopted-in-principle and
-unimplemented in fact; see
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
-for the audit that measures how far off we are and the plan to close
-it.
+**Status: R1's sink is built for every stage — fetch, parse, render
+and grid row — and on screen, though most providers do not yet route
+a per-record fetch failure into it; R2's middle category is what the
+sink makes possible and is followed where the sink is wired; R3–R7 are
+adopted in principle and not built.** The sink is the `problems` table
+(`datalib_problems`), one row per problem per record: a fetch problem
+starts in the source's raw store, everything else in its render
+store, and the render store carries the raw store's rows forward so
+one store holds the source's whole list. From there it is copied into
+the unified index, counted on the Manage row and shown on the
+document. How it is wired at each stage:
+
+| stage | how a problem gets in | swept by |
+| --- | --- | --- |
+| fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
+| fetch, a configured entry upstream does not have | `download_problems::report`, in the raw store, keyed `config:<setting>:<value>` | the next run's report, which replaces the last one's whole |
+| fetch, a listing or phase the run could not do | `download_problems::report_run`, in the raw store, keyed `listing:<name>` / `phase:<name>` | likewise, every run |
+| fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id (`render.rs`, `replace_stage_problems`) | every render |
+| grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
+| parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
+| parse, no document yet | `RenderCtx::report_unparsed` with a `ReadScope` | the tables the parse read whole |
+| render, whole document | `RenderCtx::report_document_failed` | the document, when it next renders |
+
+The fetch-stage rows are the download side's; the rule for writing
+one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
+and how they travel is [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
+
+The design and what is still open are
+[`plans/problem_visibility.md`](plans/problem_visibility.md); the
+audit that produced it is
+[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
 They come from reading the `data-pipeline-builder` skill in
 [`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534),
@@ -608,7 +482,8 @@ they said it better than our first attempt did.
 ### R1 — Drop, count, log; never abort, never hide
 
 The headline, and their phrasing. Every problem goes through one sink,
-and the sink has a taxonomy rather than a severity:
+and the sink has a taxonomy first — what was lost — and a severity
+second, derived from it unless the writer says otherwise:
 
 | what happened | what we do |
 | --- | --- |
@@ -618,8 +493,9 @@ and the sink has a taxonomy rather than a severity:
 | a value whose type the contract does not cover | null that field — never pass it through untyped |
 
 `GridRowBuilder::build_or_record` is this sink for the grid-row stage:
-a `when_ts` that will not parse is nulled and the row kept, a row with
-no identity is dropped, and each lands as a `render_problems` row.
+a `created_at` that will not parse is nulled and the row kept, a row with
+no identity is dropped, and each lands as a `problems` row with a
+deterministic id, swept when its document is next rendered.
 
 Every one emits `{source, stage, key_or_path, field, reason, sample}`,
 where `sample` is the first 80 characters. Never a count without a
@@ -630,18 +506,22 @@ what to change, the sink is wrong.
 
 ### R2 — Three failure categories, not two
 
-[`step_protocol.md`](step_protocol.md) currently draws one line —
-absent vs malformed — and classifies a record that will not deserialize
-as a `data` failure, which fails the step and poisons its entire
-downstream subtree, including the `grid_index` fan-in that depends on
-*every* source. Right for "the store will not open," wrong for "one of
-forty thousand Slack messages has a field we did not expect."
+[`step_protocol.md`](step_protocol.md) draws one line — absent vs
+malformed — and classifies a record that will not deserialize as a
+`data` failure, which fails the step and poisons its entire downstream
+subtree, including the `grid_index` fan-in that depends on *every*
+source. Right for "the store will not open," wrong for "one of forty
+thousand Slack messages has a field we did not expect."
 
 - **absent** — nothing to render: emit nothing, exit 0.
 - **malformed but isolated** — this record is bad, the rest are fine:
-  drop it, count it (R1), continue, exit 0.
+  drop it, count it (R1), continue, exit 0. A provider's parse
+  collects the rows it could not read as `Unparsed` instead of
+  `continue`ing past them, and its processor reports them; a
+  conversion that fails on one document reports that document.
 - **malformed systemically** — the input is not what we think it is:
-  exit non-zero, `data`, poison the subtree.
+  exit non-zero, `data`, poison the subtree. The threshold between
+  this and the previous category is R4, which is not built.
 
 ### R3 — Any rule that turns a non-null source value into null is a judgment call
 
@@ -715,72 +595,237 @@ in a `.doltlite_db` reclaims no disk today (see
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
 The *stating* half is not blocked.
 
-**A reclaim mechanism is deliberately deferred** (decided 2026-09-04),
-and the reasoning has an expiry date attached so it can be revisited
-rather than inherited. Derived intermediates are cheap to reclaim by
-hand — delete the store and rebuild it, which costs a re-render and
-never a re-fetch — and while the schemas are still changing often
-enough that intermediates get deleted and rebuilt anyway, a built
-mechanism would automate something the churn already does. The
-condition to watch is the schema settling: once a derived store starts
-living a long time, this needs building. The raw store is a separate
-question and is *not* covered by that argument, because it is the copy
-we cannot re-fetch. Render's known instance is already
-recorded: nothing prunes `render_markdown/`, so a re-render under new
-params leaves documents that changed identity beside the new ones, and
-they stay in the grid index.
+**A reclaim mechanism is deliberately deferred**, and the reasoning has
+a condition attached so it can be revisited rather than inherited.
+Derived intermediates are cheap to reclaim by hand — delete the store
+and rebuild it, which costs a re-render and never a re-fetch — and
+while the schemas are still changing often enough that intermediates
+get deleted and rebuilt anyway, a built mechanism would automate
+something the churn already does. The condition to watch is the schema
+settling: once a derived store starts living a long time, this needs
+building. The raw store is a separate question and is *not* covered by
+that argument, because it is the copy we cannot re-fetch. Documents a
+source no longer produces are not part of the problem: §5's sweep
+removes their rows and their `.md` files in the run that stops
+producing them. What stays is the store's *history* of them, which is
+doltlite's to reclaim.
 
-## 5. Incrementality and progress
+## 5. Incrementality and deletion
 
-Render skips what it can, by three mechanisms:
+Incremental render answers one question: *given the raw rows that
+changed since the last render, which documents need rendering again?*
+Deletion is the other half of the same question — a document whose
+inputs are gone re-renders to nothing. Both are answered from one
+record, and the record is why the render step driver never infers a
+deletion from a document's *absence*: absence has three meanings
+(gone, not looked at, could not look), and a mechanism that reads it
+as "gone" has deleted a live source here more than once. The rule the
+whole section rests on:
 
-- **What changed since last render** —
-  [dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints).
-  The render store's `render_cursor` row names the raw commit the last
-  render consumed; the next run diffs from it. The render step driver
-  writes the row in the same transaction as the run's last work.
-- **Whether a document needs re-loading** — `source_cursors` in the
-  index database names the store commit `grid_index` last consumed; a
-  document render rewrote identically is not in that diff, because
-  doltlite stored it as no change.
-- **Forcing a rebake** — `RENDER_VERSION` in each provider's
-  `render/render.rs`.
-- **When a render param changes** — below.
+> **`dolt_diff` between two commits of our own raw store reports every
+> row that left. Render never infers a deletion from anything else.**
 
-### The same problem on the render side
+The ingestion doc's
+[dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints)
+is the download-side half of the same idea.
 
-Render has its own cursor (the `render_cursor` row in the render
-store, `datalib_schema::render_cursor::RenderCursorRow`) and the same
-failure mode: a render param only reaches documents that the upstream
-diff happens to surface, so widening `only_render_labels` renders
-nothing new and changing `period` re-buckets only the chats that moved.
+### What is recorded
 
-The cursor therefore records the render params too — each processor
-declares its knobs through `RenderProcessor::render_params` — and when
-they differ the driver renders every bucket again and keeps the range. Render re-renders *wholesale* where
-download reacts proportionally — it's local work over an on-disk
-store, so there's no rate limit to ration and the simpler rule is
-easier to trust. A renderer version bump takes the same path.
+Two tables in the render store, both written by the driver
+(`datalib_step/src/render.rs`):
 
-What such a run did not produce is swept at the end: every processor
-reported the raw commit it read (`RenderCtx::consumed`), so the walk
-was complete, and a document the store holds that the walk did not
-emit — a chat re-bucketed under a different `period`, a uuid minted by
-the old recipe — is gone. The sweep, the storage report and the cursor
-land in one transaction, and the deletions reach the grid index
-through the store's own `dolt_diff`. A run in which a processor read
-no store (none on disk, nothing committed) sweeps nothing: it said
-nothing about what should exist. A `global_fanout_tables` hit (a
-`users` row changed, say) renders everything, and still probes the
-buckets the diff named for removal:
-`DiffScan` carries the two sets separately, so a conversation deleted
-in the same range as a rename does not outlive it in the store.
+- **`render_cursor`** — one row: the raw store's commit the last run
+  consumed, and the render params (a period, a label filter — whatever
+  each processor declares through `RenderProcessor::render_params`)
+  the documents were rendered with. The driver writes it in the same
+  transaction as the run's last work, so it can never claim a range the
+  store's rows do not reflect, and rewrites it only when it moves.
+- **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
+  per raw row a bucket's render **asked for, found or not**. A thread
+  rendered while its author's `users` row had not been fetched yet
+  records `(users, U123)` anyway, so the row's arrival names the
+  thread. Keyed on the bucket rather than the document because a
+  periodizing renderer (slack, signal, beeper) turns one conversation
+  into several documents, and the inputs belong to the conversation.
+  `markdowns.bucket_key` is the link back: the bucket each document
+  came from.
+
+A **bucket** is whatever a provider loads and renders as a unit — a
+conversation, a thread, a PR, a page; perseus renders its whole file
+tree as one. A provider declares each bucket it rendered, once, through
+`RenderCtx::declare_bucket(bucket_key, inputs)`
+(`etl/render/src/processor.rs`), and every document it emits carries
+that key. The declaring is done where the rows are read:
+`datalib_etl_render::inputs::Inputs` collects them as a bucket is
+built, and `Lookup` wraps a lookup table (users, channels, recipients)
+so a key cannot be read without being declared, a miss included. A
+processor that reads a table whole declares `Input::whole_table`
+(`input_id = '*'`), which any row of the table matches. A composite key
+is one string, its columns in `pragma_table_info` order joined by `|`.
+
+A row a provider reads but does not declare will not re-render the
+bucket when that row changes, and nothing else will notice.
+`tests/fixtures/render_contract_test.py` is the check: for every raw
+table in the TNG fixture it edits one row, runs the incremental path,
+and asserts that the result equals a cold render and that exactly the
+buckets the store says read that row were rendered.
+
+### How a run decides what to render
+
+The driver reads the stored cursor and decides a plan. A renderer
+version bump (the tree holds `markdowns.renderer_version` values the
+processors no longer declare) or a params change means **everything**;
+otherwise it diffs from the stored commit; with no cursor at all the
+provider reads its whole store, which is not the same as "everything"
+— see the sweep below.
+
+With a cursor, a raw doltlite store and something declared, the driver
+runs the **reverse lookup** (`reverse_lookup`): it pins the raw store's
+HEAD, asks `dolt_diff` for every changed key in every table
+`render_inputs` mentions between the cursor and the pin, and reads back
+the buckets that declared any of those rows. The provider is handed the
+pin and that stale set (`RenderCtx::raw_pin`, `RenderCtx::stale_buckets`,
+together `RawRange`), reads at the pin and never at HEAD, so what it
+loads is what the set was computed against. A table the driver cannot
+diff — the file was replaced by hand, a schema change dropped the table
+— is logged and the scan is left to the provider.
+
+The provider adds its own **forward** scan, because a row that *arrived*
+was nobody's input yet: a `scan_buckets` bucket query over the added
+and modified rows of its primary tables, or `changed_rows` mapped
+through the rows it loads anyway where the key lives inside the payload.
+`RawRange::narrow` joins the two; `narrow_by` also hands back the stale
+keys whose raw row no longer exists, for the processor to declare with
+nothing. `global_fanout_tables` — a table whose change re-renders the
+whole source — is empty everywhere but email under a label filter,
+where the mailbox tree decides which threads render at all.
+
+**Every emitted document is written.** There is no fingerprint deciding
+whether a write is needed: doltlite's tables are content-addressed, so a
+row identical to the stored one is no change, carries no diff, and is
+never seen by the index. A fingerprint on top of that is a second
+answer to a question the store already answers, and a worse one — an
+input hash that leaves out a value resolved at render time skips
+changed documents, and an output hash puts a per-run column on
+`markdowns`. The rule instead, pinned by
+`markdowns_carries_no_per_run_stamp` in `datalib_schema`: **nothing
+per-run may be written into a row whose content did not change.** The
+storage report is the one document the driver decides about itself,
+because its byte counts wobble run to run: it is rewritten only when a
+row *count* moved (`introspect::counts_unchanged`).
+
+### The sweep
+
+Deletion happens at the end of a run that got through every processor,
+in the same transaction as the storage report and the cursor
+(`seal_run`), and it has two halves:
+
+- **Per bucket, every run.** A bucket the run declared produces exactly
+  what it emitted; any document the store still holds under that
+  `bucket_key` is removed — rows and the `.md` file. A bucket declared
+  with nothing is a bucket whose entity is gone; a periodized bucket
+  that re-rendered to fewer documents drops the extra ones. Positive
+  evidence only: a bucket the run never looked at says nothing about
+  its documents, so a narrowed run cannot delete its own steady state.
+- **Whole store, on a full walk only.** A *full walk* is a run that
+  rendered everything (version or params changed) **and** in which
+  every processor reported the raw commit it read
+  (`RenderCtx::consumed`). Then a document the walk did not produce —
+  a chat re-bucketed under a different period, a uuid minted by the old
+  recipe — is gone. A first run with no cursor is not a full walk, and
+  neither is one in which a processor read no store (none on disk,
+  nothing committed): it said nothing about what should exist, and
+  nothing is swept.
+
+The `.md` file matters as much as the rows: `md_path` is what
+`/applet/unified_index/chat/{uuid}` serves and what qmd indexed, so a
+document deleted from the store but left on disk is a deletion the user
+can still read. A document that comes back at a different path loses
+the file at its old one (`put_document`). `grid_index` needs no part in
+any of this — it learns of a removal from the render store's own diff.
+
+Across a version bump or a params change the store is **kept**: its
+history, the commit `grid_index` last consumed, and the cursor. "Render
+every bucket again" and "forget where I was" are different requests,
+and only the first is ever wanted — a re-keyed document then reaches the
+index as a deletion plus an addition rather than as an old row nobody
+removes.
+
+### Edge cases
+
+1. **First run, no cursor.** The provider reads its whole store at
+   HEAD; nothing is swept except through the buckets it declared; the
+   cursor is recorded at the end.
+
+2. **`--reset-and-redownload`.** The raw tables are truncated and
+   refilled, and the cursor stays: the next diff runs from the old
+   commit to the pin, where the tables are populated again, and an
+   unchanged row diffs as unchanged. Nothing wipes the cursor and
+   nothing should. A reset read at a checkpoint taken mid-wipe is the
+   one case no record can fix — every row reads as removed — and the
+   rule against it is on the ingest side: a wiping run does not
+   checkpoint ([`plans/one_mode.md`](plans/one_mode.md)).
+
+3. **A store with tables but no commit.** Download ran but nothing
+   was committed — a test that bypasses the runner. `pin::head`
+   refuses to pin it ("unreadable, not empty"), the provider reads
+   nothing and reports no consumed commit, the cursor stays and
+   nothing is swept. Have the test commit after download. Two
+   neighbours look similar and are not: a cursor the store cannot
+   resolve (someone replaced the file by hand) is a `warn` every run
+   and a render of everything, and a bucket query naming a table or
+   column the store does not have is an **error**, not a cold start —
+   cold-starting past it would re-render everything on every run and
+   never say why.
+
+4. **Removed rows.** The diff names them, the reverse lookup names the
+   buckets that read them, and each renders to fewer documents or to
+   none and is declared so. The per-bucket sweep removes the rest,
+   `.md` files included — nothing sits waiting for a collector.
+
+5. **Multi-commit ranges.** Five ingest runs between two renders are
+   one diff from the cursor to the pin; a row that left and came back
+   in between is `unchanged` or `modified`, which is the right answer.
+
+6. **Concurrent renders.** Two render steps on one source are two
+   writers on one doltlite file, which AGENTS.md's "One open per
+   doltlite file" rules out; the runner never schedules it.
+
+7. **No doltlite extension.** A build without `dolt_hashof` reads the
+   same as a store with no commit to pin (case 3): nothing to read,
+   cursor untouched.
+
+### Rendering the delta itself
+
+If you can render a collection of things, consider rendering the
+difference between two versions of it. A **diff group** does that with
+no second renderer: the source's render processors run at two raw
+commits into a collecting sink — each pass the incremental render the
+sync step already does, so the cost tracks the buckets that moved, not
+the store — and the two sides are subtracted per document
+(`datalib_etl_render::diff`): rows keyed by `uuid` become `added`,
+`removed`, `modified` (naming the columns that moved) or `unchanged`;
+sections keyed by their `data-section-uuid` are wrapped in
+`diff-added` / `diff-removed` / `diff-modified` bands, with a
+line-then-word diff inside a modified one. The result is written as an
+ordinary render tree, every uuid re-minted under the diff group so it
+never claims a source row's id.
+
+What this asks of a renderer is nothing beyond the contract above: a
+render must be a pure function of the raw rows at a pin (no per-run
+stamp in a row), every row and section must carry a stable uuid, and
+the renderer must say what its sections are (`RenderedMarkdown.sections`,
+concatenated they are the `.md`) rather than leaving the driver to
+parse them back — the one thing a renderer written before diff groups
+may lack, and the degradation is documented: its documents diff as one
+block. [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) is the
+design record.
 
 ### Render-side partial-progress visibility
 
 **Desired principle**: a long-running render pass — first run after
-a big initial download, or a `RENDER_VERSION` bump that invalidates
-every document — must be as monitorable and as stoppable-resumable as
+a big initial download, or a version bump that invalidates every
+document — must be as monitorable and as stoppable-resumable as
 download is. The user sees "rendered 12,347 / 89,201" with an ETA;
 ^C-then-rerun resumes from 12,347 not 0.
 
@@ -792,9 +837,14 @@ download-side. Worth measuring.
 
 If [object identity](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That global ordering is what makes the UI's union grid time-sortable, what makes `before:` / `after:` queries mean the same thing across Slack and GitHub and Notion, and what lets a sync delta be "what happened in the last week" instead of "what happened to be at the top of each provider's result list."
 
-The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** Concretely, in `GridRow.when_ts`:
+The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** There are two of them, and they mean different ends of the thing:
 
-- **Real upstream timestamp when one exists.** A Slack message's `ts`, a GitHub PR's `created_at`, a Notion page's `last_edited_time`. Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
+- **`created_at`** is when the thing came into being — a Slack message's `ts`, a PR's `created_at`, a page's `created_time`. For a document row (the thread, the conversation, the PR) it is the earliest moment in the document: the first message, not the last. It is the global sort key.
+- **`modified_at`** is when it last changed — the last message or reaction in a thread, a PR's `updated_at`, a page's `last_edited_time`, a vCard's `REV`. For a row inside a document it is the edit stamp where the source keeps one and **null** otherwise; null means "not known to have changed since it was created", never a copy of `created_at`.
+
+The per-provider table is in [`grid_rows.md`](grid_rows.md#created_at-and-modified_at). Concretely, for either stamp:
+
+- **Real upstream timestamp when one exists.** Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
 - **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
 
@@ -807,7 +857,7 @@ documented in
 ### No fabricated timestamps
 A logical corollary of the broader "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)" principle, called out here because timestamps are the easiest place to accidentally violate it:
 
-- When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `when_ts` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
+- When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `created_at` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
 - When upstream's timestamp string is naive and we haven't audited that feed, parsing returns an error — surfaced as a warning in the per-run summary, not silently rescued.
 - Fallback paths that synthesize a value when upstream is silent are anti-patterns even when they "look plausible." They mask incompleteness in ways the consumer can't tell apart from real data.
 
@@ -818,12 +868,14 @@ Some upstream object types genuinely don't have a meaningful timestamp:
 - **Perseus texts and other immutable corpora.** The corpus is upstream-frozen; per-section "timestamps" would be nonsense.
 - **Workspace/account metadata** (Slack `team`, GitHub `org`): arguably has a creation date, but it isn't shown in any time-ordered view.
 
-For these `when_ts` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `when_ts` for each.
+For these `created_at` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
 
 ## See also
 
 - [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
   — the audit and retrofit plan for §4.
+- [`plans/one_mode.md`](plans/one_mode.md) — the rule every step's
+  writes follow, of which §5's sweep is the render-side half.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category
   has to be written down to mean anything.
 - [`grid_rows.md`](grid_rows.md), [`edges.md`](edges.md),

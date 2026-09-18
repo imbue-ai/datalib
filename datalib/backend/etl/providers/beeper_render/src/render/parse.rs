@@ -145,20 +145,18 @@ pub fn parse(input: &Path, period: Period, range: RawRange<'_>) -> Result<Parsed
 }
 
 async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Result<ParsedBeeper> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open — at the driver's commit, else HEAD — with the views
+    // installed before anything reads. No commit means nothing has been
+    // committed here to render: emptiness, not a reason to read the
+    // working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
-
-    // Pin before the first read: the driver's pin when it made one, else
-    // HEAD. No commit means nothing has been committed here to render —
-    // emptiness, not a reason to read whatever is sitting in the working
-    // set.
-    let Some(pin) = range.pin(&pool).await? else {
+        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
+    else {
         return Ok(ParsedBeeper::default());
     };
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the beeper raw store for render")?;
+    let pool = reader.pool().clone();
+    let pin = reader.pin().clone();
 
     // ── rooms ──────────────────────────────────────────────────────
     let mut rooms: HashMap<String, Room> = HashMap::new();
@@ -281,7 +279,7 @@ async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Res
     .context("read beeper_media_attachments")?;
     let cas_path = datalib_etl::blob_cas::cas_path_for(db_path);
     let cas_meta: HashMap<String, (Option<String>, Option<i64>)> = if cas_path.is_file() {
-        let cas_pool = datalib_etl::doltlite_raw::open_reader(&cas_path)
+        let cas_pool = datalib_etl::blob_cas::open_cas_reader(&cas_path)
             .await
             .with_context(|| format!("open CAS for render at {}", cas_path.display()))?;
         let rows = sqlx::query("SELECT blake3, content_type, byte_len FROM cas_objects")
@@ -398,6 +396,8 @@ async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Res
          WHERE 1 = 1{room_filter}
          ORDER BY room_uuid, timestamp_ms"
     );
+    // Audited: the same two interpolations as `bucket_sql` above —
+    // `period_expr` from the `Period` enum and the bound room run.
     let mut events_query = sqlx::query(sqlx::AssertSqlSafe(events_sql));
     for room in &room_binds {
         events_query = events_query.bind(room);

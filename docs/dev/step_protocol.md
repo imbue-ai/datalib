@@ -9,8 +9,8 @@ each layer you adopt buys better incrementality, progress reporting,
 or failure handling.
 
 This doc is the contract from the command's point of view. The
-runner/scheduler side (edge derivation, skipping, retry, subtree
-poisoning) is in `pipeline_dag_architecture.md`.
+runner/scheduler side (staleness, retry, what a dropped entry costs)
+is in `datalib/backend/dag/README.md`.
 
 ## The config entry
 
@@ -66,16 +66,21 @@ declared fields to your argv, each only when present/non-empty:
 
 | flag | value |
 | --- | --- |
-| `--params <json>` | the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
+| `--params-file <path>` | a JSON file holding the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
 
 So the entry above runs
-`fetch-weather --station KSFO --params {"units":"metric"}`. A command
-that takes no flags at all still works — declare no params and no
-inputs and it sees nothing extra (a `sh -c 'script'` step receives
-whatever is appended as `$0`/positional args and can drop them). There
-is no `--outputs`: the one tree a step writes is its id, which arrives
-in the environment.
+`fetch-weather --station KSFO --params-file <root>/system/params/weather_ingest.XXXX.json`,
+and that file holds `{"units":"metric"}`. The params travel in a file
+and not on the command line because they are where tokens and device
+ids live, and every user on the machine can read every process's
+command line with `ps`. The runner creates the file readable by its
+owner only and deletes it when the step exits, so read it early and
+don't keep the path. A command that takes no flags at all still works —
+declare no params and no inputs and it sees nothing extra (a `sh -c
+'script'` step receives whatever is appended as `$0`/positional args and
+can drop them). There is no `--outputs`: the one tree a step writes is
+its id, which arrives in the environment.
 
 **Environment** — the identity/context channel:
 
@@ -353,7 +358,7 @@ changed = set(os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n"))
 root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
 out = os.environ["DATALIB_DAG_STEP"]   # the one tree this step writes
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
-params = json.loads(args.get("--params", "{}"))
+params = json.load(open(args["--params-file"])) if "--params-file" in args else {}
 
 def emit(obj): print(json.dumps(obj), flush=True)
 
@@ -386,8 +391,8 @@ learn what to do — `ingest`, `render_markdown`, `grid_index` or
 per-source functions require and the two index functions ignore. It
 writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
-store from the first entry of `DATALIB_DAG_INPUTS`. It reads
-`--params` as the provider's **function-specific** config — the ingest
+store from the first entry of `DATALIB_DAG_INPUTS`. It reads the
+params file as the provider's **function-specific** config — the ingest
 step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
 providers; beeper/signal `period`, perseus `alignment_pairs`, email

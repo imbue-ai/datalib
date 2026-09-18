@@ -3,6 +3,7 @@ name = "datalib-http"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_http"
@@ -18,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 app-schema = { path = "../app_schema" }
 datalib-core = { path = "../core" }
+datalib-fetch = { path = "../fetch" }
 datalib-dag = { path = "../dag" }
 datalib-time = { path = "../time" }
 clap = { version = "4.5", features = ["derive"] }
@@ -47,15 +49,15 @@ notify = "8"
 chrono = { workspace = true }
 futures = "0.3"
 tokio = { workspace = true }
-tower-http = { workspace = true }
 uuid = { workspace = true }
 strum = { workspace = true }
 # The server's own log: every event to stderr and, through
 # `datalib_runs::StoreLayer`, to the run store (src/logging.rs).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Owner-only params files for the applets and probes this server spawns.
+tempfile = "3"
 
 [dev-dependencies]
 sqlx = { workspace = true }
-tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

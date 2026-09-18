@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_chatgpt_config::ChatgptRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{ReadScope, RenderCtx, RenderProcessor};
 use std::path::PathBuf;
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -46,6 +46,11 @@ impl RenderProcessor for ChatgptRender {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("chatgpt parse {}", self.raw_path.display()))?;
+        ctx.report_unparsed(
+            &ReadScope::Whole(vec!["conversations"]),
+            &parsed.unparsed,
+            self.render_version(),
+        )?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("chatgpt render_all")?;

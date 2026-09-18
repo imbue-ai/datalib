@@ -10,14 +10,22 @@ security model the walkthrough's bind-mount rules rest on.
 
 `ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 24.04 plus:
 
-- every binary from the release tarball (`datalib-dag`, `datalib-step`,
+- the release tarball, unpacked whole at `/opt/datalib` and linked into
+  `/usr/local/bin`: every binary (`datalib-dag`, `datalib-step`,
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
-  `doltlite` — and the two `latchkey-curl-*` binaries), installed under
-  `/usr/local/bin`;
-- Node 22, the pinned `latchkey` CLI, and the pinned `qmd` with its
-  three models pre-fetched into `/root/.cache/qmd/models`, so a first
-  sync never stalls on a multi-gigabyte download;
+  `doltlite` — and the two `latchkey-curl-*` binaries) and the
+  `latchkey` launcher, plus the release's `runtime-<triple>.tar.gz`
+  asset unpacked beside them as `runtime/` — the Node runtime plus the
+  lockfile-pinned `qmd` and `latchkey` package trees the binaries
+  resolve beside themselves, checked against its published sha256 at
+  build time. There is no Node, npm or npx in the image; nothing is
+  fetched from a registry at build or run time, and the first-use fetch
+  a tarball install does (`runtime_fetch.md`) never fires here;
+- qmd's three models pre-fetched into `/root/.cache/qmd/models` by
+  `datalib-step pull-models`, each from its pinned HuggingFace revision
+  and sha256-verified, so a first sync never stalls on a multi-gigabyte
+  download;
 - the demo data library at `/opt/datalib/demo`, ingested and rendered
   at image build time from the TNG fixtures under
   `/opt/datalib/demo-sources` (see below);
@@ -25,8 +33,9 @@ security model the walkthrough's bind-mount rules rest on.
   which provisions latchkey's encryption key.
 
 The `:<version>-slim` variant is the same image without the qmd
-models; the devcontainer builds on it. It is amd64 only and not tagged
-`latest`.
+models. It is amd64 only and not tagged `latest`. The devcontainer CI
+runs in is a separate image (`.devcontainer/Dockerfile`, published by
+`devcontainer.yml`) and does not build on either.
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the

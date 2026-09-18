@@ -36,6 +36,8 @@ pub enum Provider {
     Chatgpt,
     /// Both `claude_api` and `claude_export`: one raw store, one tag.
     Claude,
+    /// Claude Code sessions — the terminal, desktop and IDE transcripts.
+    ClaudeCode,
     /// CardDAV address books.
     Contacts,
     /// Not an upstream provider: datalib describing a source's own
@@ -48,6 +50,8 @@ pub enum Provider {
     /// one tag. Named for the thing, not for whichever protocol a
     /// particular mirror happens to use.
     Email,
+    /// A "Download your information" export, the JSON flavour.
+    Facebook,
     /// Garmin Connect: a watch's worth of health and activity data.
     Garmin,
     Github,

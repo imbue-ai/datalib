@@ -105,9 +105,10 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
     // NULL rather than a bare path when the URL can't be formed; a
     // half-valid link is worse than an absent one.
     let source_url = file_url(meta.abs_path);
-    // Prefer the authored creation date; fall back to modification.
-    // Never fall back to "now" — an ingest timestamp masquerading as an
-    // authored one would sort the whole corpus to today.
+    // Prefer the authored creation date; fall back to modification —
+    // the file existed by then. Never fall back to "now": an ingest
+    // timestamp masquerading as an authored one would sort the whole
+    // corpus to today.
     let when = meta.created_at.or(meta.modified_at);
 
     let mut rows = Vec::with_capacity(pages.len() + 1);
@@ -117,7 +118,9 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         provider: PROVIDER.as_str().into(),
         kind: KIND_DOCUMENT.into(),
         source_label: SOURCE_LABEL.into(),
-        when_ts: when.map(str::to_string),
+        is_document: true,
+        created_at: when.map(str::to_string),
+        modified_at: meta.modified_at.map(str::to_string),
         author: meta.author.map(str::to_string),
         account: None,
         project: None,
@@ -137,7 +140,6 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         } else {
             title.clone()
         },
-        slack_link: None,
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
@@ -152,6 +154,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         markdown_uuid: Some(doc_uuid.clone()),
         byte_size: None,
         item_count: Some(pages.len() as i64),
+        diff_status: None,
+        diff_changed_columns: None,
     });
 
     for (number, text) in pages {
@@ -161,7 +165,11 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             provider: PROVIDER.as_str().into(),
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
-            when_ts: when.map(str::to_string),
+            is_document: false,
+            created_at: when.map(str::to_string),
+            // A page has no stamp of its own; the document's modification
+            // is the document's to carry.
+            modified_at: None,
             // Denormalized onto the page rows too, matching how every
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.
@@ -176,7 +184,6 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
             text: text.clone(),
-            slack_link: None,
             qmd_path: meta.qmd_path.map(str::to_string),
             source_url: source_url.clone(),
             git_sha: None,
@@ -188,6 +195,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             markdown_uuid: Some(doc_uuid.clone()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         });
     }
     rows
@@ -362,22 +371,22 @@ mod tests {
     }
 
     #[test]
-    fn when_ts_never_invents_an_ingest_timestamp() {
+    fn created_at_never_invents_an_ingest_timestamp() {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = None;
         let rows = rows_for_document(&m, &[(1, "x".into())]);
-        assert!(rows.iter().all(|r| r.when_ts.is_none()));
+        assert!(rows.iter().all(|r| r.created_at.is_none()));
     }
 
     #[test]
-    fn modified_at_is_the_fallback_for_when_ts() {
+    fn modified_at_is_the_fallback_for_created_at() {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = Some("2020-02-02T02:02:02+00:00");
         let rows = rows_for_document(&m, &[(1, "x".into())]);
         assert_eq!(
-            rows[0].when_ts.as_deref(),
+            rows[0].created_at.as_deref(),
             Some("2020-02-02T02:02:02+00:00")
         );
     }

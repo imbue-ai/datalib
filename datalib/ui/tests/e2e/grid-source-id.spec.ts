@@ -10,9 +10,9 @@
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
 import { test, expect, type Page } from "@playwright/test";
-import { searchAndSettle } from "./grid-helpers";
+import { actOnRowByUuid, searchAndSettle } from "./grid-helpers";
 
-const SOURCE_CELLS = '.ag-grid-scrolling-rows [col-id="source_ref"]';
+const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
 
 /// The distinct, non-empty texts in the Source column, in set order.
 async function distinctSourceCells(page: Page): Promise<string[]> {
@@ -23,7 +23,7 @@ async function distinctSourceCells(page: Page): Promise<string[]> {
 async function openGrid(page: Page) {
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 }
@@ -56,19 +56,33 @@ test.afterEach(async ({ page }) => {
 
 test("the Source column shows the configured name, and source_id: filters by id", async ({
   page,
+  request,
 }) => {
   // Two config writes plus five searches, any of which may land after
   // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
   test.setTimeout(210_000);
 
-  // --- With no config entry, the column falls back to the id -------
+  // --- With no name in the config, the column falls back to the id --
+  // Read off one of the source's own rows, brought into view: the grid
+  // paints only the rows in view, and which those are is the sort's
+  // business, not this test's.
+  const slackRow = (await (
+    await request.get("/applet/unified_index/search?q=source_id:slack&limit=1")
+  ).json()) as { rows: { uuid: string }[] };
+  expect(slackRow.rows.length, "the fixture has slack rows").toBe(1);
   await openGrid(page);
-  await expect(page.locator(SOURCE_CELLS, { hasText: "slack" }).first()).toBeVisible();
+  const cellText = await actOnRowByUuid(
+    page,
+    slackRow.rows[0].uuid,
+    (row) => row.locator('[col-id="source_ref"]').innerText({ timeout: 3_000 }),
+    "source_ref",
+  );
+  expect(cellText.trim()).toBe("slack");
 
   // --- `source_id:` narrows to one source --------------------------
   // Every visible cell must read `slack` — the filter is a whole-segment
   // prefix test on qmd_path, not a substring match on anything.
-  await searchAndSettle(page, "source_id:slack type:all");
+  await searchAndSettle(page, "source_id:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   expect(
     await distinctSourceCells(page),
@@ -77,14 +91,14 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // `source_name:` is the spelling this filter had before a source had
   // a name to collide with, so it is in saved queries and in people's
   // fingers. It has to keep landing on the same rows.
-  await searchAndSettle(page, "source_name:slack type:all");
+  await searchAndSettle(page, "source_name:slack");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source_id:claude-api type:all");
+  await searchAndSettle(page, "source_id:claude-api");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["claude-api"]);
@@ -93,39 +107,26 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
-  await searchAndSettle(page, "source_id:datalib type:all");
+  await searchAndSettle(page, "source_id:datalib");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
-  await writeConfig(
-    page,
-    `${original.replace(/\s*$/, "")}\n
-[[groups]]
-id = "slack"
-name = "Work Slack"
-type = "slack"
-
-[[steps]]
-group = "slack"
-function = "ingest"
-
-[[steps]]
-group = "slack"
-function = "render_markdown"
-inputs = ["slack/ingest"]
-`,
-  );
+  // The fixture root already declares `slack` (see
+  // `materialize_tng_root.sh`); this gives that entry a name.
+  const slackGroup = '[[groups]]\nid = "slack"\n';
+  expect(original).toContain(slackGroup);
+  await writeConfig(page, original.replace(slackGroup, `${slackGroup}name = "Work Slack"\n`));
 
   await openGrid(page);
-  await searchAndSettle(page, "source_id:slack type:all");
+  await searchAndSettle(page, "source_id:slack");
   expect(
     await distinctSourceCells(page),
   ).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  await searchAndSettle(page, 'source_id:"Work Slack" type:all');
+  await searchAndSettle(page, 'source_id:"Work Slack"');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

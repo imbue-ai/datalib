@@ -110,8 +110,8 @@ fn renders_tng_fixture_grid_rows() {
         r.get(k).and_then(|v| v.as_str()).map(str::to_string)
     };
 
-    // The thread-level row: stable thread uuid, channel, permalink now in
-    // source_url (not slack_link), title text preserved as conversation_name.
+    // The thread-level row: stable thread uuid, channel, permalink in
+    // source_url, title text preserved as conversation_name.
     let thread_row = rows
         .iter()
         .find(|r| {
@@ -130,11 +130,6 @@ fn renders_tng_fixture_grid_rows() {
         field(thread_row, "conversation_name").as_deref(),
         Some("#bridge")
     );
-    // Permalink migrated from slack_link → source_url.
-    assert!(thread_row
-        .get("slack_link")
-        .map(|v| v.is_null())
-        .unwrap_or(true));
     assert!(field(thread_row, "source_url")
         .unwrap_or_default()
         .contains("slack.com/archives/C_BRIDGE"));
@@ -162,7 +157,7 @@ fn renders_tng_fixture_grid_rows() {
     rows.sort_by_key(|v| {
         (
             field(v, "kind").unwrap_or_default(),
-            field(v, "when_ts").unwrap_or_default(),
+            field(v, "created_at").unwrap_or_default(),
             field(v, "uuid").unwrap_or_default(),
         )
     });

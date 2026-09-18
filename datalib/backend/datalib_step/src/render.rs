@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor};
+use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -92,21 +93,28 @@ pub async fn run(
     // everything is fine — and the more dangerous of those two reads as
     // success. These are whole-store counts, not this-run counts: a
     // problem on a document this run skipped is still current, which is
-    // the point of the per-document sweep.
-    if !report.problems.is_empty() {
-        let total: i64 = report.problems.values().sum();
-        let dropped = report.problems.get("dropped").copied().unwrap_or(0);
-        let nulled = report.problems.get("nulled").copied().unwrap_or(0);
+    // the point of the per-document sweep. The metrics are what the
+    // Manage row's errors/warnings cell reads, so they are reported
+    // every run, zero included: a missing series means "never counted",
+    // not "clean".
+    let errors = report.problems.get(&Severity::Error).copied().unwrap_or(0);
+    let warnings = report
+        .problems
+        .get(&Severity::Warning)
+        .copied()
+        .unwrap_or(0);
+    progress.metric(METRIC, &[Severity::Error.metric_label()], errors);
+    progress.metric(METRIC, &[Severity::Warning.metric_label()], warnings);
+    if errors + warnings > 0 {
         tracing::warn!(
             source = %name,
-            total,
-            dropped,
-            nulled,
+            errors,
+            warnings,
             "render: rows this source could not fully project \
-             (see render_problems in its indexed_markdown.doltlite_db)"
+             (see `problems` in its indexed_markdown.doltlite_db)"
         );
         progress.set_message(&format!(
-            "{total} row(s) with render problems ({dropped} dropped, {nulled} degraded)"
+            "{errors} error(s) and {warnings} warning(s) rendering this source"
         ));
     }
     // The whole tree re-renders from the raw store, so cache-aware
@@ -153,8 +161,8 @@ pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
     pub removed: usize,
-    /// Whole-store problem counts by outcome.
-    pub problems: HashMap<String, i64>,
+    /// Whole-store problem counts by severity.
+    pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
     pub head: Option<String>,
     /// Rows the final commit sealed beyond the last checkpoint — the
@@ -274,6 +282,22 @@ pub fn render_source(
         buckets.insert(bucket.to_string());
         Ok(())
     };
+    // Entity-scoped problems land in the open batch beside the
+    // documents, so a checkpoint carries them and a failed processor's
+    // rollback takes them with it.
+    let mut on_problems = |scope: &ReadScope, rows: &[ProblemRow]| -> Result<()> {
+        match scope {
+            ReadScope::Whole(tables) => store
+                .put_entity_problems(tables, rows)
+                .context("record the parse's entity problems"),
+            ReadScope::Partial => store
+                .put_entity_problems(&[], rows)
+                .context("record the parse's entity problems"),
+            ReadScope::Document(markdown_uuid) => store
+                .put_document_problems(markdown_uuid, rows)
+                .with_context(|| format!("record problems of document {markdown_uuid}")),
+        }
+    };
     // The raw commit each processor rendered from, or `None` for one
     // that read no store.
     let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
@@ -289,6 +313,7 @@ pub fn render_source(
                 stale_buckets.as_ref(),
                 &mut on_doc,
                 &mut on_declare,
+                &mut on_problems,
             );
             futures::executor::block_on(proc.run(&ctx))
                 .with_context(|| format!("processor {}", proc.id()))?;
@@ -305,6 +330,16 @@ pub fn render_source(
     }
     store.commit_batch()?;
     let raw_commit = one_consumed_commit(&name, &consumed);
+    // What the download could not do, carried into this store so it
+    // travels on with the documents: the raw store's `problems` at the
+    // commit this run rendered from, re-minted under this source's id.
+    if let Some(raw_db) = raw_db.as_deref() {
+        let rows = fetch_problems_of(raw_db, raw_commit.as_deref(), &name)
+            .with_context(|| format!("read the download's problems for {name}"))?;
+        store
+            .replace_stage_problems(Stage::Fetch, &rows)
+            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
+    }
 
     // A full render in which every processor read its store walked
     // everything, so whatever it did not produce is gone. A processor
@@ -398,27 +433,31 @@ pub fn render_source(
 
 /// What closes a run: the sweep (`Some(keep)` deletes every document not
 /// in it), the storage report, and the cursor to record.
-struct RunEnd<'a> {
+pub(crate) struct RunEnd<'a> {
     /// Whether the run walked everything, so a document not in `keep` is
     /// one the source no longer produces.
-    sweep: bool,
+    pub(crate) sweep: bool,
     /// Every document this run emitted or owns.
-    keep: &'a BTreeSet<String>,
+    pub(crate) keep: &'a BTreeSet<String>,
     /// Buckets the run rendered: what the store holds under them beyond
     /// `keep` is gone.
-    declared: &'a BTreeSet<String>,
-    storage: Option<crate::introspect::Measured>,
-    cursor: Option<RenderCursorRow>,
+    pub(crate) declared: &'a BTreeSet<String>,
+    pub(crate) storage: Option<crate::introspect::Measured>,
+    pub(crate) cursor: Option<RenderCursorRow>,
 }
 
-struct Sealed {
-    stored: usize,
-    removed: usize,
+pub(crate) struct Sealed {
+    pub(crate) stored: usize,
+    pub(crate) removed: usize,
 }
 
 /// The sweep, the storage report and the cursor land as one transaction,
 /// so the cursor can never claim a range the store's rows do not reflect.
-fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> Result<Sealed> {
+pub(crate) fn seal_run(
+    store: &IndexedMarkdownStore,
+    data_root: &Path,
+    end: RunEnd<'_>,
+) -> Result<Sealed> {
     store.transaction(|| {
         let mut sealed = Sealed {
             stored: 0,
@@ -510,13 +549,14 @@ fn reverse_lookup(
     if tables.is_empty() {
         return Ok((None, None));
     }
-    let pool = blocking(datalib_etl::doltlite_raw::open_reader(raw_db))
-        .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?;
+    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, None))
+        .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?
+    else {
+        return Ok((None, None));
+    };
+    let pool = reader.pool().clone();
     let result = (|| -> Result<_> {
-        let Some(pin) = blocking(datalib_etl::pin::head(&pool))? else {
-            return Ok((None, None));
-        };
-        let to = pin.commit().to_string();
+        let to = reader.pin().commit().to_string();
         let mut changed: Vec<Input> = Vec::new();
         for table in &tables {
             match blocking(datalib_etl::doltlite_raw::changed_keys(
@@ -545,6 +585,66 @@ fn reverse_lookup(
         );
         Ok((Some(to), Some(stale)))
     })();
+    blocking(pool.close());
+    result
+}
+
+/// The raw store's `problems` at `commit` (HEAD when the run consumed
+/// none), each minted again under `source_id` — the download did not
+/// know it — with the stamps the download gave them. Empty when there
+/// is no store, nothing committed, or a store from before the table.
+fn fetch_problems_of(
+    raw_db: &Path,
+    commit: Option<&str>,
+    source_id: &str,
+) -> Result<Vec<ProblemRow>> {
+    use datalib_schema::problems::{Problem, Scope};
+    if !raw_db.exists() {
+        return Ok(Vec::new());
+    }
+    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, commit))
+        .with_context(|| format!("open {} for its problems", raw_db.display()))?
+    else {
+        return Ok(Vec::new());
+    };
+    let pool = reader.pool().clone();
+    let result = blocking(async {
+        let rows = match sqlx::query("SELECT * FROM pinned_problems WHERE stage = ?")
+            .bind(Stage::Fetch.as_str())
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => Vec::new(),
+            Err(e) => return Err(e).context("read the raw store's problems"),
+        };
+        rows.iter()
+            .map(|r| {
+                let raw = ProblemRow::from_row(r)?;
+                Ok(ProblemRow {
+                    first_seen_at_utc: raw.first_seen_at_utc.clone(),
+                    last_seen_at_utc: raw.last_seen_at_utc.clone(),
+                    tz_offset: raw.tz_offset.clone(),
+                    ..ProblemRow::new(
+                        source_id,
+                        raw.stage,
+                        Scope::Entity(&raw.scope_key),
+                        raw.item_uuid.as_deref(),
+                        raw.outcome,
+                        Problem {
+                            reason: raw.reason,
+                            field: raw.field.clone(),
+                            path: raw.path.clone(),
+                            rule: raw.rule.clone(),
+                            sample: raw.sample.clone(),
+                            severity: Some(raw.severity),
+                        },
+                        None,
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    });
     blocking(pool.close());
     result
 }
@@ -586,7 +686,7 @@ impl RenderPlan {
 
 /// Every processor's params under its id, so one source's cursor carries
 /// all of them and a change to any one re-renders the source.
-fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
+pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))
@@ -614,7 +714,7 @@ fn one_consumed_commit(source: &str, consumed: &[Option<String>]) -> Option<Stri
     Some(first)
 }
 
-fn tree_is_from_an_older_renderer(
+pub(crate) fn tree_is_from_an_older_renderer(
     on_disk: &BTreeSet<u32>,
     current: Option<&BTreeSet<u32>>,
 ) -> bool {
@@ -633,7 +733,7 @@ fn tree_is_from_an_older_renderer(
     true
 }
 
-fn every_stored_version_must_be_declared(
+pub(crate) fn every_stored_version_must_be_declared(
     source: &str,
     rendered_root: &Path,
     on_disk: &BTreeSet<u32>,
@@ -675,7 +775,9 @@ fn every_stored_version_must_be_declared(
     Ok(())
 }
 
-fn declared_render_versions(processors: &[Box<dyn RenderProcessor>]) -> Option<BTreeSet<u32>> {
+pub(crate) fn declared_render_versions(
+    processors: &[Box<dyn RenderProcessor>],
+) -> Option<BTreeSet<u32>> {
     let versions: BTreeSet<u32> = processors
         .iter()
         .map(|p| p.render_version())
@@ -755,6 +857,7 @@ mod plan_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .text("body")
             .markdown_uuid(Some(uuid.to_string()))
+            .is_document(true)
             .build()
             .unwrap();
         store
@@ -768,6 +871,7 @@ mod plan_tests {
                     md_path: root.join(uuid).join("all.md"),
                     render_version: 5,
                     rows: vec![row],
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
@@ -883,6 +987,7 @@ mod stale_tree_tests {
             .entire_chat(format!("/chat/{chat_uuid}"))
             .text("body")
             .markdown_uuid(Some(chat_uuid.to_string()))
+            .is_document(true)
             .build()
             .unwrap();
         store
@@ -896,6 +1001,7 @@ mod stale_tree_tests {
                     md_path: root.join(chat_uuid).join("all.md"),
                     render_version: version,
                     rows: vec![row],
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },

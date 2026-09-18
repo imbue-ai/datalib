@@ -14,7 +14,8 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Inputs;
@@ -37,7 +38,7 @@ use datalib_schema::providers::Provider;
 ///     place. The render step discards it wholesale; see
 ///     `DataProcessor::render_version`.
 /// v6: an item with no timestamp — and no parent stamp to inherit from
-///     — gets a null `when_ts` instead of a real-looking
+///     — gets a null `created_at` instead of a real-looking
 ///     `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 /// v7: `account` is the account's email rather than Anthropic's user
@@ -47,7 +48,7 @@ pub const RENDER_VERSION: u32 = 7;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Chat".to_string(),
@@ -67,7 +68,7 @@ fn profile() -> RenderProfile {
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Project".to_string(),
@@ -214,11 +215,14 @@ fn build_chat(
         // else nothing — a conversation whose own `created_at` is
         // missing and whose first message has none either genuinely has
         // no time to report, and `None` says so.
-        let msg_ms = m
-            .created_at
-            .as_deref()
-            .and_then(iso_to_ms)
-            .or_else(|| last_ms.map(|p| p + 1));
+        let mut msg_problems = Vec::new();
+        let msg_ms = own_stamp_ms(
+            m.created_at.as_deref(),
+            "created_at",
+            iso_to_ms,
+            &mut msg_problems,
+        )
+        .or_else(|| last_ms.map(|p| p + 1));
         last_ms = msg_ms.or(last_ms);
 
         let sender = m.sender.as_deref().unwrap_or("unknown");
@@ -292,12 +296,14 @@ fn build_chat(
             // A block inherits its message's stamp, offset by its
             // index so blocks keep their order. `None` only when the
             // message had none either.
-            let block_ms = b
-                .start_timestamp
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .and_then(iso_to_ms)
-                .or_else(|| msg_ms.map(|ms| ms + (b.block_index as i64) + 1));
+            let mut block_problems = Vec::new();
+            let block_ms = own_stamp_ms(
+                b.start_timestamp.as_deref(),
+                "start_timestamp",
+                iso_to_ms,
+                &mut block_problems,
+            )
+            .or_else(|| msg_ms.map(|ms| ms + (b.block_index as i64) + 1));
             let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
@@ -317,6 +323,7 @@ fn build_chat(
                     block_id.natural_key.clone(),
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
+                problems: block_problems,
             });
         }
 
@@ -347,6 +354,7 @@ fn build_chat(
                 msg_id.natural_key.clone(),
             )),
             is_aside: false,
+            problems: msg_problems,
         });
     }
 
@@ -479,6 +487,7 @@ fn build_project_page(
                 doc_id.natural_key.clone(),
             )),
             is_aside: false,
+            problems: Vec::new(),
         });
     }
     items.sort_by_key(|i| i.date_ms);
@@ -566,6 +575,7 @@ fn project_item(
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        problems: Vec::new(),
     }
 }
 
@@ -589,13 +599,10 @@ fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable (callers fall back to a bumped previous time, and to
-/// `None` when there is no previous time either).
+/// unparseable — the caller records that through `own_stamp_ms` before
+/// falling back to a bumped previous time, and to `None` when there is
+/// no previous time either.
 fn iso_to_ms(s: &str) -> Option<i64> {
     datalib_time::parse_strict(s)
         .ok()
@@ -846,7 +853,7 @@ mod project_doc_tests {
 
     /// The parse helper must answer `None` for anything it cannot read,
     /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `when_ts`.
+    /// stamp and — when there is none — to a null `created_at`.
     #[test]
     fn iso_to_ms_refuses_to_invent_a_timestamp() {
         assert_eq!(

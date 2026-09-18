@@ -1,11 +1,13 @@
 # `datalib-dag` — the runner
 
 Reads a `config.toml`, builds a DAG from it, and runs the steps. This file
-holds the rules you cannot recover by reading the code; the design history
-and the open questions are in
-[`docs/dev/pipeline_dag_architecture.md`](../../../docs/dev/pipeline_dag_architecture.md),
-and the contract a step author needs is
-[`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md).
+holds the rules you cannot recover by reading the code; the contract a
+step author needs is
+[`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md). One
+design question is still open: the node set is known before a run
+starts, so a step that *discovers* downstream work (a fan-out per
+conversation, say) lives inside one node rather than expanding the
+graph.
 
 ## A step is (group, function); its id is composed
 
@@ -207,6 +209,15 @@ naming no step) looks exactly like one it did.
 
 They must be *different* files: the server spawns the runner, so one shared
 lock would deadlock the server against its own child.
+
+The runner also exits with the server: the worker spawns it on a parent
+pipe (`datalib_parent_watch`, `DATALIB_PARENT_PIPE`), and when the pipe
+closes — the server exited, or the desktop shell SIGKILLed it — the
+runner SIGINTs its steps so they checkpoint, gives them fifteen seconds,
+then kills what is left and exits. A run that outlived its server would
+have nobody to record how it ended: the job row stays `running` and the
+next boot cannot tell a run still going from one that died. That boot
+reads the run store to say what became of each job it finds active.
 
 `flock(2)` rather than a pid file, because the kernel releases it when the
 holder dies — a crashed process leaves no stale lock to reason about. The

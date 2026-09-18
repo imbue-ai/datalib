@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{ReadScope, RenderCtx, RenderProcessor};
 use datalib_etl_slack_config::SlackRenderConfig;
 use std::path::PathBuf;
 
@@ -46,6 +46,13 @@ impl RenderProcessor for SlackRender {
         use crate::render::{parse::parse, render::render_all};
         let parsed = parse(&self.raw_path, ctx.raw_range())
             .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
+        // Users are read whole every run; messages only for the changed
+        // threads on a narrowed run.
+        let scope = match parsed.scan.render {
+            None => ReadScope::Whole(vec!["users", "messages"]),
+            Some(_) => ReadScope::Whole(vec!["users"]),
+        };
+        ctx.report_unparsed(&scope, &parsed.unparsed, self.render_version())?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(&parsed, ctx.root, &self.name, ctx.progress, &mut on_doc)
             .context("slack render_all")?;

@@ -46,7 +46,7 @@ pub fn render_params(period: Period) -> serde_json::Value {
 
 pub fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: PROVIDER,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "Signal Chat".to_string(),

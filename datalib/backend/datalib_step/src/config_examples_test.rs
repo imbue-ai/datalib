@@ -47,16 +47,38 @@ fn validate_config(name: &str, path: &std::path::Path) {
                 step.id
             ),
         };
-        let ty = cfg
+        let group_entry = cfg
             .groups
             .iter()
             .find(|g| g.id == group)
-            .and_then(|g| g.r#type.as_deref())
-            .unwrap_or_else(|| panic!("{name}: step {}: its group declares no type", step.id));
-        let params = match &step.params {
+            .unwrap_or_else(|| panic!("{name}: step {}: its group is not declared", step.id));
+        let mut params = match &step.params {
             Some(p) => serde_json::to_value(p)
                 .unwrap_or_else(|e| panic!("{name}: step {}: params → JSON: {e}", step.id)),
             None => serde_json::json!({}),
+        };
+        // A diff group plans as its source's renderer, once `params.diff`
+        // is taken off — the same split `datalib-step` makes.
+        let ty = if group_entry.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
+            let (_pair, rest) = crate::render_diff::split_params(params)
+                .unwrap_or_else(|e| panic!("{name}: step {}: {e:#}", step.id));
+            params = rest;
+            let source = group_entry
+                .source
+                .as_deref()
+                .unwrap_or_else(|| panic!("{name}: diff group {group} names no source"));
+            cfg.groups
+                .iter()
+                .find(|g| g.id == source)
+                .and_then(|g| g.r#type.as_deref())
+                .unwrap_or_else(|| {
+                    panic!("{name}: diff group {group}: source {source} has no type")
+                })
+        } else {
+            group_entry
+                .r#type
+                .as_deref()
+                .unwrap_or_else(|| panic!("{name}: step {}: its group declares no type", step.id))
         };
         let raw_dir = datalib_etl::layout::ingest_root(data_root.path(), group);
         dispatch::plan(ty, phase, group, raw_dir, params).unwrap_or_else(|e| {

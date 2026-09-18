@@ -1,0 +1,101 @@
+# qmd's GGUF models, fetched by a build action rather than at repository
+# fetch time.
+#
+# As `http_file` repositories they were downloaded whenever anything under
+# `//...` was analysed — 1.8 GB on every CI run, whether or not a single
+# action needed them, because loading a repository's BUILD file is what
+# fetches it. As action outputs they are fetched once per pin, cached in
+# the remote cache, and under `--remote_download_minimal` moved only to
+# a machine that runs an action taking them as an input — which is the
+# e2e test, run on the CI runner itself, so its fixture carries the
+# embedding model alone (`//tests/fixtures:materialize_tng_root_embed_only`).
+#
+# Three files, and the three code paths that load them are worth knowing
+# apart, because "qmd needs 2.2 GB of models" is true of the shipped app
+# and not of any one thing here:
+#
+#   embeddinggemma        `qmd embed` (the fixture index genrule) and
+#                         every search — the applet's daemon embeds the
+#                         query text.
+#   query-expansion 1.7B  only the applet's CLI FALLBACK, which shells
+#                         out to `qmd query` (auto-expanding) when the
+#                         long-lived `qmd mcp` daemon fails.
+#   qwen3-reranker        nothing, today. Both query paths disable
+#                         reranking (`"rerank": false` in daemon.rs,
+#                         `--no-rerank` in runner.rs). It is here so the
+#                         `dev_tng` root holds what a real one does, and
+#                         so flipping that flag is a code change rather
+#                         than a surprise download.
+#
+# Pinned to repo REVISIONS rather than `main`: HuggingFace serves
+# `resolve/main/...` as a moving pointer, so a re-quantized re-upload
+# would otherwise change what we embed with. With the revision pinned,
+# such a change is a `git` edit here.
+#
+# The output names are load-bearing, not cosmetic. node-llama-cpp decides
+# a model is already cached by looking for the filename it would itself
+# have downloaded to — `hf_<owner>_<file>`, see
+# `findMatchingFilesInDirectory` in its `resolveModelFile.js`. Name a
+# file anything else and it downloads its own copy next to ours.
+#
+# The sha256s are HuggingFace's own LFS oids for each blob, which are
+# sha256 of the content — cross-checked against `shasum -a 256` of a warm
+# `~/.cache/qmd/models` before being written down here.
+#
+# The same table lives in `datalib/backend/runtime/src/qmd.rs`
+# (`PINNED_MODELS`), where the shipped binaries provision and verify the
+# files at run time; `//tools:qmd_model_pins_test` holds the two equal.
+#
+# `requires-network` is what lets the sandbox reach the origin on a cache
+# miss; `no-remote-exec` keeps the fetch off the remote executors, which
+# have no business talking to HuggingFace. A miss is rare — the action's
+# key is the URL and the digest — and the script retries a 429 with
+# backoff, which is the failure that made these bazel inputs in the first
+# place.
+exports_files(["BUILD.bazel"])  # read by //tools:qmd_model_pins_test
+
+MODELS = [
+    (
+        "embeddinggemma",
+        "ggml-org/embeddinggemma-300M-GGUF",
+        "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
+        "embeddinggemma-300M-Q8_0.gguf",
+        "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+    ),
+    (
+        "query_expansion",
+        "tobil/qmd-query-expansion-1.7B-gguf",
+        "7816de0b72572c6c860ca1eddf97ba9e7fb8cc65",
+        "qmd-query-expansion-1.7B-q4_k_m.gguf",
+        "000dfb1c06efa6a049e9f64ba921c3740e2454f62abab6fa10e77bd30bb2bcc0",
+    ),
+    (
+        "reranker",
+        "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+        "a02f48bb4f057028298c21fa033da2b30d7742d5",
+        "qwen3-reranker-0.6b-q8_0.gguf",
+        "22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48",
+    ),
+]
+
+[
+    genrule(
+        name = short,
+        outs = ["hf_%s_%s" % (repo.split("/")[0], basename)],
+        cmd = "python3 $(execpath //tools:fetch_pinned.py) " +
+              "'https://huggingface.co/%s/resolve/%s/%s' %s $@" % (repo, rev, basename, sha),
+        tags = [
+            "no-remote-exec",
+            "requires-network",
+        ],
+        tools = ["//tools:fetch_pinned.py"],
+        visibility = ["//visibility:public"],
+    )
+    for short, repo, rev, basename, sha in MODELS
+]
+
+filegroup(
+    name = "all",
+    srcs = [":" + short for short, _, _, _, _ in MODELS],
+    visibility = ["//visibility:public"],
+)

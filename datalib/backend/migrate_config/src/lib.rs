@@ -288,7 +288,8 @@ inputs = ["slack/render_markdown"]
             cfg.run_history,
             Some(datalib_dag::config::RunHistory {
                 max_runs: 7,
-                max_age_days: 3
+                max_age_days: 3,
+                ..datalib_dag::config::RunHistory::default()
             })
         );
         assert_eq!(

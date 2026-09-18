@@ -1,6 +1,7 @@
 //! `datalib-applet` — the applet host, one subcommand per applet.
 #![allow(clippy::disallowed_macros)]
 
+mod gate;
 mod slack;
 mod unified_index;
 
@@ -25,9 +26,11 @@ struct Cli {
     /// which one it picked.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
-    /// The config entry's `params`, as JSON.
-    #[arg(long, global = true)]
-    params: Option<String>,
+    /// A JSON file holding the config entry's `params`. A file rather
+    /// than an argument because params can carry tokens, and argv is
+    /// readable by every user on the machine.
+    #[arg(long = "params-file", global = true)]
+    params_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -51,43 +54,17 @@ pub fn announce_port(port: u16) {
     let _ = out.flush();
 }
 
-fn exit_with_parent() {
-    if std::env::var_os("DATALIB_APPLET_PARENT_PIPE").is_none() {
-        return;
-    }
-    std::thread::spawn(|| {
-        use std::io::{Read, Write};
-        let mut stdin = std::io::stdin().lock();
-        let mut scratch = [0u8; 64];
-        loop {
-            match stdin.read(&mut scratch) {
-                // The gateway is gone. Leave the way it would have made
-                // us leave.
-                Ok(0) => break,
-                // Nothing is supposed to arrive, but a byte is not a
-                // reason to die.
-                Ok(_) => continue,
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        // Best effort, and it matters which way round: stderr is a
-        // pipe to the same gateway that just died, so this write takes
-        // EPIPE — and `eprintln!` *panics* on a failed write, which
-        // would kill this thread and leave the process running. Which
-        // is exactly the leak being fixed, reintroduced one line from
-        // the exit that fixes it. `announce_port` above writes
-        // best-effort for the same reason.
-        let _ = writeln!(
-            std::io::stderr(),
-            "datalib-applet: parent pipe closed, exiting"
-        );
-        std::process::exit(0);
-    });
-}
-
 fn main() {
-    exit_with_parent();
+    if let Err(e) = datalib_parent_watch::exit_with_parent(|| {
+        datalib_parent_watch::report("datalib-applet: parent gone, exiting");
+        std::process::exit(0);
+    }) {
+        eprintln!("datalib-applet: {e}");
+        std::process::exit(2);
+    }
+    // The unified_index applet runs qmd; from a release tarball that
+    // ships no `runtime/`, the first search fetches the manifest's.
+    datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run() {
         eprintln!("datalib-applet: {e:#}");
         std::process::exit(1);
@@ -96,8 +73,13 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let params: serde_json::Value = match &cli.params {
-        Some(json) => serde_json::from_str(json).context("--params is not valid JSON")?,
+    let params: serde_json::Value = match &cli.params_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read the params file {}", path.display()))?;
+            serde_json::from_str(&text)
+                .with_context(|| format!("{} is not valid JSON", path.display()))?
+        }
         None => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // One run's log, as a grid: every line the run store holds for it,
-// sortable and groupable by AG Grid, appended to as the run goes — and
+// sortable and groupable, appended to as the run goes — and
 // a picker for the other runs the step took part in, since "what did
 // it do last time" is the question right after "what is it doing". The
 // picker's last entry is every run at once, with a column saying which.
@@ -13,47 +13,33 @@
 // token to it the same way there.
 //
 // The tail is a cursor, not a stream: the store assigns each line a
-// monotone `seq`, and each `run_store_changed` frame (someone wrote the
-// store — the runner, or the server itself) asks for the lines after
-// the last one seen. A run that has finished is read once.
-import { computed, onMounted, onUnmounted, ref, shallowRef } from "vue";
-import { AgGridVue } from "ag-grid-vue3";
-import {
-  ModuleRegistry,
-  AllCommunityModule,
-  themeQuartz,
-  colorSchemeVariable,
-  type CellClassParams,
-  type ColDef,
-  type DefaultMenuItem,
-  type GetContextMenuItemsParams,
-  type GridApi,
-  type GridReadyEvent,
-  type ITooltipParams,
-  type MenuItemDef,
-  type ValueFormatterParams,
-} from "ag-grid-community";
-// The drag-to-group bar and the right-click menu are enterprise
-// modules. GridCard already links the whole enterprise bundle, so this
-// costs nothing new; only the three are registered here.
-import { ContextMenuModule, RowGroupingModule, RowGroupingPanelModule } from "ag-grid-enterprise";
-import { keepExcludeItems, withToken } from "@/grid/query";
+// monotone `seq`, and each `log` frame (someone wrote a line — the
+// runner, or the server itself) asks for the lines after the last one
+// seen. A run that has finished is read once.
+//
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
+import type {
+  Column,
+  Formatter,
+  GridOption,
+  GroupingFormatterItem,
+  MenuFromCellCallbackArgs,
+  SlickDraggableGrouping,
+  SlickGrid,
+} from "@slickgrid-universal/common";
+import { filterToken, withToken } from "@/grid/query";
+import { menuSlots, type MenuEntry } from "@/grid/menu";
+// The column rules and cell helpers every slickgrid here shares.
+import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
   formatRelative,
   formatStamp,
   formatTimeOfDay,
 } from "@/config/timeFormat";
-
-ModuleRegistry.registerModules([
-  AllCommunityModule,
-  ContextMenuModule,
-  RowGroupingModule,
-  RowGroupingPanelModule,
-]);
-const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const props = defineProps<{
   /// The run the panel opens on.
@@ -98,12 +84,24 @@ const stepOnly = ref(true);
 /// the start, since the lines it drops are exactly the ones wanted back.
 const query = ref(props.initialQuery ?? "");
 let queryTimer: ReturnType<typeof setTimeout> | null = null;
-const lines = shallowRef<RunLogLine[]>([]);
+/// How many lines the grid holds: the dataset lives in the grid, and a
+/// tail appends there rather than replacing it (see `load`).
+const lineCount = ref(0);
 const busy = ref(false);
 const error = ref<string | null>(null);
 /// The newest `seq` in the grid, which the next fetch resumes after.
 let lastSeq = 0;
-let gridApi: GridApi<RunLogLine> | null = null;
+const boxEl = ref<HTMLDivElement | null>(null);
+// The bundle types its grid and view as optional because they can be
+// asked for before `init`; here neither is handed out before both exist.
+type Grid = SlickVanillaGridBundle<RunLogLine> & {
+  dataView: NonNullable<SlickVanillaGridBundle<RunLogLine>["dataView"]>;
+  slickGrid: NonNullable<SlickVanillaGridBundle<RunLogLine>["slickGrid"]>;
+};
+/// Created on the first line and kept from then on, hidden while a
+/// reload leaves nothing to show: a grid created inside a hidden box
+/// measures no width and fits its columns to that.
+let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
 
@@ -119,7 +117,7 @@ async function load(fresh: boolean) {
   inflight = true;
   if (fresh) {
     lastSeq = 0;
-    lines.value = [];
+    lineCount.value = 0;
     busy.value = true;
   }
   error.value = null;
@@ -132,14 +130,33 @@ async function load(fresh: boolean) {
     });
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
-      lines.value = fresh ? got : [...lines.value, ...got];
-      if (!fresh && gridApi) {
-        gridApi.applyTransaction({ add: got });
+      lineCount.value += got.length;
+      // The box is shown once there is a count; the grid must be built
+      // or resized after that paint, not before it.
+      await nextTick();
+      if (!bundle) {
+        createGrid(got);
+      } else if (fresh) {
+        bundle.dataset = got;
+      } else {
+        // Appended through the grid rather than as a new dataset, which
+        // would re-render every row and lose the scroll.
+        bundle.gridService.addItems(got, {
+          position: "bottom",
+          highlightRow: false,
+          scrollRowIntoView: false,
+          resortGrid: true,
+          triggerEvent: false,
+        });
         // Follow the tail only while the reader is already at it: a
         // scroll up to read something must not be yanked back down.
-        const last = gridApi.getDisplayedRowCount() - 1;
-        if (atBottom) gridApi.ensureIndexVisible(last, "bottom");
+        if (atBottom) {
+          const grid = bundle.slickGrid;
+          grid.scrollRowIntoView(grid.getDataLength() - 1);
+        }
       }
+    } else if (fresh && bundle) {
+      bundle.dataset = [];
     }
   } catch (e) {
     error.value = (e as Error).message;
@@ -150,11 +167,10 @@ async function load(fresh: boolean) {
 }
 
 let atBottom = true;
-function onBodyScrollEnd() {
-  if (!gridApi) return;
-  const last = gridApi.getDisplayedRowCount() - 1;
-  const lastVisible = gridApi.getLastDisplayedRowIndex();
-  atBottom = last < 0 || lastVisible >= last - 1;
+function onScroll(_e: unknown, args: { grid: SlickGrid }) {
+  const vp = args.grid.getViewportNode();
+  if (!vp) return;
+  atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
 }
 
 function toggleScope() {
@@ -209,119 +225,180 @@ function runLabel(r: RunInfo): string {
   return r.finished_at_utc == null ? `${when} · running` : when;
 }
 
-function levelClass(p: CellClassParams<RunLogLine>): string {
-  const l = p.data?.level;
+function levelClass(line: RunLogLine | undefined): string {
+  const l = line?.level;
   return l === "error" ? "rl-error" : l === "warn" ? "rl-warn" : "";
 }
 
-const columnDefs = computed((): ColDef<RunLogLine>[] => [
+const ROW_HEIGHT = 24;
+
+/// A cell's text, with the row's level colour and the whole value on
+/// hover. Text, never HTML: `enableHtmlRendering` is off below, so a
+/// log line that contains markup is shown as the characters it is.
+const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
+  text: value == null ? "" : String(value),
+  toolTip: value == null ? "" : String(value),
+  addClasses: levelClass(line),
+});
+
+const timeOfDay: Formatter<RunLogLine> = (_r, _c, value) => ({
+  text: formatTimeOfDay(value ? String(value) : null),
+  toolTip: value ? formatStamp(String(value)) : "",
+});
+
+const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
+  text: shortRunId(String(value ?? "")),
+  toolTip: String(value ?? ""),
+});
+
+/// What a group row says: the column, its value and how many lines
+/// share it. An element rather than a string for the reason `plain`
+/// gives.
+function groupTitle(name: string) {
+  return (g: GroupingFormatterItem) => {
+    const el = document.createElement("span");
+    el.className = "rl-group";
+    el.textContent = `${name}: ${g.value === "" || g.value == null ? "—" : String(g.value)}`;
+    const count = document.createElement("span");
+    count.className = "rl-group-count";
+    count.textContent = ` (${g.count})`;
+    el.appendChild(count);
+    return el as unknown as string;
+  };
+}
+
+/// A column that keeps its width when the grid fits itself to the
+/// panel: the fit pass shrinks a column down to `minWidth`, and these
+/// are already as narrow as they read. Message, the one flexible
+/// column, is the one that gives.
+function fixed(width: number) {
+  return { width, minWidth: width };
+}
+
+/// A column the drag-to-group bar accepts. Only a column carrying
+/// `grouping` can be dropped there, which is how Time and Fields (one of
+/// a kind per line: a group per row) stay out of it.
+function groupable(name: string, field: keyof RunLogLine) {
+  return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
+}
+
+watch([allRuns, stepOnly], () => {
+  if (bundle) bundle.columnDefinitions = buildColumns();
+});
+
+function buildColumns(): Column<RunLogLine>[] {
+  // `col-id` on every header and cell, for a test to find a column by.
+  return columnSet().map((c) => ({
+    ...c,
+    cellAttrs: { "col-id": String(c.id) },
+    headerCellAttrs: { "col-id": String(c.id) },
+  }));
+}
+
+function columnSet(): Column<RunLogLine>[] {
+  return [
   {
-    headerName: "Time",
+    id: "ts_utc",
+    name: "Time",
     field: "ts_utc",
-    width: 110,
+    ...fixed(110),
     // The time of day to the millisecond, in the viewer's zone (a
     // step's own lines are stamped in UTC, the runner's in local time);
     // the date is in the tooltip, since every line of one run shares it.
     // Clipped from the left: the seconds and milliseconds are what tell
     // one line from the next, the hour is the same for all.
-    cellClass: "rl-clip-left",
-    enableRowGroup: false,
-    valueFormatter: (p: ValueFormatterParams<RunLogLine>) =>
-      formatTimeOfDay(p.value ? String(p.value) : null),
-    tooltipValueGetter: (p: ITooltipParams<RunLogLine>) =>
-      p.value ? formatStamp(String(p.value)) : "",
-    comparator: compareStamps,
+    cssClass: "rl-clip-left",
+    formatter: timeOfDay,
     sortable: true,
-    filter: false,
+    sortComparer: (a, b, dir) => compareStamps(a, b) * (dir ?? 1),
   },
   {
-    headerName: "Run",
+    id: "run_id",
+    name: "Run",
     field: "run_id",
-    width: 100,
-    hide: !allRuns.value,
-    filter: true,
-    valueFormatter: (p: ValueFormatterParams<RunLogLine>) => shortRunId(String(p.value ?? "")),
-    tooltipField: "run_id",
+    ...fixed(100),
+    hidden: !allRuns.value,
+    formatter: runIdShort,
+    sortable: true,
+    ...groupable("Run", "run_id"),
   },
   {
-    headerName: "Process",
+    id: "process",
+    name: "Process",
     field: "process",
-    width: 90,
+    ...fixed(90),
     // One step's lines are all the runner's; the column says something
     // only once the server's can be in the grid too.
-    hide: stepOnly.value && !!props.step,
-    filter: true,
+    hidden: stepOnly.value && !!props.step,
+    formatter: plain,
+    sortable: true,
+    ...groupable("Process", "process"),
   },
   {
-    headerName: "Step",
+    id: "step",
+    name: "Step",
     field: "step",
-    width: 180,
-    hide: stepOnly.value && !!props.step,
-    filter: true,
+    ...fixed(180),
+    hidden: stepOnly.value && !!props.step,
+    formatter: plain,
+    sortable: true,
+    ...groupable("Step", "step"),
   },
-  { headerName: "Level", field: "level", width: 80, filter: true, cellClass: levelClass },
   {
-    headerName: "Stream",
+    id: "level",
+    name: "Level",
+    field: "level",
+    ...fixed(80),
+    formatter: plain,
+    sortable: true,
+    ...groupable("Level", "level"),
+  },
+  {
+    id: "stream",
+    name: "Stream",
     field: "stream",
-    width: 84,
-    filter: true,
+    ...fixed(84),
+    formatter: plain,
+    sortable: true,
+    ...groupable("Stream", "stream"),
   },
   {
-    headerName: "Thread",
+    id: "thread",
+    name: "Thread",
     field: "thread",
-    width: 150,
-    filter: true,
+    ...fixed(150),
+    formatter: plain,
+    sortable: true,
+    ...groupable("Thread", "thread"),
   },
   {
-    headerName: "Target",
+    id: "target",
+    name: "Target",
     field: "target",
-    width: 200,
-    filter: true,
+    ...fixed(200),
+    formatter: plain,
+    sortable: true,
+    ...groupable("Target", "target"),
   },
   {
-    headerName: "Message",
+    id: "msg",
+    name: "Message",
     field: "msg",
-    flex: 1,
+    width: 600,
     minWidth: 320,
-    filter: true,
-    wrapText: false,
-    cellClass: levelClass,
-    tooltipField: "msg",
+    formatter: plain,
+    sortable: true,
+    ...groupable("Message", "msg"),
   },
   {
-    headerName: "Fields",
+    id: "fields",
+    name: "Fields",
     field: "fields",
-    width: 220,
-    filter: true,
-    tooltipField: "fields",
-    // One of a kind per line: grouping by it would be a group per row.
-    enableRowGroup: false,
+    ...fixed(220),
+    formatter: plain,
+    sortable: true,
   },
-]);
-
-const defaultColDef: ColDef<RunLogLine> = {
-  resizable: true,
-  sortable: true,
-  suppressHeaderMenuButton: false,
-  enableRowGroup: true,
-};
-
-/// Grouping by run, by process, by level, by target — the questions a
-/// log answers once it holds more than one run. Groups open expanded: the point is
-/// to organise the lines, not to hide them, and the counts on the group
-/// rows read the same either way.
-const groupOptions = {
-  rowGroupPanelShow: "always" as const,
-  groupDefaultExpanded: -1,
-  localeText: {
-    rowGroupColumnsEmptyMessage:
-      "Drag a column here to group the lines by it — Run, Process, Level, Target",
-  },
-  autoGroupColumnDef: { minWidth: 220 } as ColDef<RunLogLine>,
-};
-
-function onGridReady(e: GridReadyEvent<RunLogLine>) {
-  gridApi = e.api;
+  ];
 }
 
 // Right-click on a cell: keep only the lines sharing its value, or drop
@@ -339,54 +416,166 @@ const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   msg: "msg",
 };
 
-function contextMenuItems(
-  params: GetContextMenuItemsParams<RunLogLine>,
-): (MenuItemDef<RunLogLine> | DefaultMenuItem)[] {
-  const defaults = params.defaultItems ?? [];
-  const colId = params.column?.getColId() as keyof RunLogLine | undefined;
-  const key = colId && QUERY_KEYS[colId];
-  const raw = params.value;
-  if (!gridApi || !colId || !key || !params.node || raw == null || raw === "") {
-    return defaults;
-  }
+/// The cell under the right-click, as the menu needs it: the query key
+/// for its column, the raw value and the value as shown. Null when the
+/// column has no key or the cell is empty.
+function cellUnderMenu(args: MenuFromCellCallbackArgs): {
+  header: string;
+  key: string;
+  value: string;
+  shown: string;
+} | null {
+  // `onBeforeMenuShow` is handed the cell's coordinates and nothing
+  // else; the command callbacks get the column and the row as well.
+  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
+    | Column<RunLogLine>
+    | undefined;
+  const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
+    | RunLogLine
+    | undefined;
+  const field = column?.field as keyof RunLogLine | undefined;
+  const key = field && QUERY_KEYS[field];
+  if (!column || !line || !field || !key) return null;
+  const raw = line[field];
+  if (raw == null || raw === "") return null;
   const value = String(raw);
-  const shown = String(
-    gridApi.getCellValue({
-      rowNode: params.node,
-      colKey: colId,
-      useFormatter: true,
-    }) ?? value,
-  );
-  const items = keepExcludeItems<RunLogLine>({
-    header: params.column?.getColDef().headerName ?? key,
-    key,
-    value,
-    shown,
-    apply: (token) => setQuery(withToken(query.value, token)),
-  });
-  if (query.value.trim()) {
-    items.push({ name: "Clear the query", action: () => setQuery("") }, "separator");
-  }
-  return [...items, ...defaults];
+  const shown = field === "run_id" ? shortRunId(value) : value;
+  return { header: String(column.name ?? key), key, value, shown };
 }
+
+/// The menu for the cell under the right-click. Read on each opening,
+/// since the entries name the cell's value.
+function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
+  const cell = cellUnderMenu(args);
+  const entries: MenuEntry[] = [];
+  if (cell) {
+    entries.push(
+      {
+        name: `Keep only ${cell.header}=${cell.shown}`,
+        action: () => setQuery(withToken(query.value, filterToken(cell.key, cell.value, false))),
+      },
+      {
+        name: `Exclude all ${cell.header}=${cell.shown}`,
+        action: () => setQuery(withToken(query.value, filterToken(cell.key, cell.value, true))),
+      },
+    );
+  }
+  if (query.value.trim()) {
+    if (entries.length) entries.push({ name: "", separator: true });
+    entries.push({ name: "Clear the query", action: () => setQuery("") });
+  }
+  return entries;
+}
+
+function isDark(): boolean {
+  return document.documentElement.dataset.theme === "dark";
+}
+
+function gridOptions(): GridOption {
+  return {
+    datasetIdPropertyName: "seq",
+    // Cells and group rows are text (see `plain`), never markup.
+    enableHtmlRendering: false,
+    enableCellNavigation: false,
+    enableTextSelectionOnCells: true,
+    enableAutoTooltip: false,
+    enableEmptyDataWarningMessage: false,
+    multiColumnSort: false,
+    rowHeight: ROW_HEIGHT,
+    headerRowHeight: 30,
+    darkMode: isDark(),
+    // The grid fills its container, whatever the panel's size, rather
+    // than measuring the window: the panel is a dialog over the page.
+    enableAutoResize: true,
+    autoResize: {
+      // The frame around the box, not the box: the resizer sizes the box
+      // to what it measures, and a box it also measured would then stop
+      // following the panel.
+      container: boxEl.value!.parentElement!,
+      calculateAvailableSizeBy: "container",
+      resizeDetection: "container",
+      autoHeight: false,
+      bottomPadding: 0,
+      minHeight: 200,
+    },
+    // Grouping by run, by process, by level, by target — the questions a
+    // log answers once it holds more than one run. Groups open expanded:
+    // the point is to organise the lines, not to hide them, and the counts
+    // on the group rows read the same either way.
+    enableGrouping: true,
+    enableDraggableGrouping: true,
+    createPreHeaderPanel: true,
+    showPreHeaderPanel: true,
+    preHeaderPanelHeight: 30,
+    draggableGrouping: {
+      dropPlaceHolderText:
+        "Drag a column here to group the lines by it — Run, Process, Level, Target",
+      hideToggleAllButton: false,
+      toggleAllButtonText: "Expand / collapse all",
+      // The theme ships these icons but draws nothing for the plugin's
+      // default classes; the chip's controls are invisible without them.
+      deleteIconCssClass: "mdi mdi-close",
+      sortAscIconCssClass: "mdi mdi-arrow-up",
+      sortDescIconCssClass: "mdi mdi-arrow-down",
+      onExtensionRegistered: (plugin) => {
+        groupingPlugin = plugin;
+      },
+    },
+    enableContextMenu: true,
+    contextMenu: {
+      commandItems: menuSlots(4, menuEntries),
+    },
+  };
+}
+
+let groupingPlugin: SlickDraggableGrouping | null = null;
+
+function createGrid(first: RunLogLine[]) {
+  if (bundle || !boxEl.value) return;
+  const b = new SlickVanillaGridBundle<RunLogLine>(
+    boxEl.value,
+    buildColumns(),
+    gridOptions(),
+    first,
+  ) as Grid;
+  bundle = b;
+  b.slickGrid.onScroll.subscribe(onScroll);
+  // What the bar's drop does, without the mouse, for the e2e tests:
+  // a drag dispatched by hand dies inside SortableJS under load, and
+  // the grid card exposes the same thing as `__fwGridApi.groupBy`.
+  (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
+    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
+  };
+}
+
+/// The app's theme is an attribute on `<html>`; the grid's is an option.
+let themeWatch: MutationObserver | null = null;
 
 onMounted(() => {
   void load(true);
   void loadRuns();
   unsubscribe = subscribeLive({
     root: (e) => {
-      if (e.kind === "run_store_changed" && live.value) void load(false);
+      if (changed(e, "log") && live.value) void load(false);
     },
     resync: () => {
       void loadRuns();
       if (live.value) void load(false);
     },
   });
+  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 });
 
 onUnmounted(() => {
   unsubscribe?.();
   unsubscribe = null;
+  themeWatch?.disconnect();
+  themeWatch = null;
+  bundle?.dispose();
+  bundle = null;
+  groupingPlugin = null;
+  delete (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi;
 });
 </script>
 
@@ -417,38 +606,22 @@ onUnmounted(() => {
         <option v-if="props.step" :value="ALL_RUNS">every run</option>
       </select>
       <span class="rl-count">
-        {{ lines.length }} line{{ lines.length === 1 ? "" : "s" }}
+        {{ lineCount }} line{{ lineCount === 1 ? "" : "s" }}
         <span v-if="live"> · following</span>
       </span>
     </div>
     <p v-if="error" class="rl-note bad">{{ error }}</p>
     <p v-else-if="busy" class="rl-note">Reading the run store…</p>
-    <p v-else-if="lines.length === 0" class="rl-note">
+    <p v-else-if="lineCount === 0" class="rl-note">
       <template v-if="query.trim()">Nothing matches the query.</template>
       <template v-else>
         Nothing logged yet<span v-if="!allRuns"> for this run</span
         ><span v-if="stepOnly && props.step"> by this step</span>.
       </template>
     </p>
-    <AgGridVue
-      v-show="lines.length > 0"
-      class="rl-grid"
-      :theme="gridTheme"
-      :columnDefs="columnDefs"
-      :defaultColDef="defaultColDef"
-      :rowData="lines"
-      :getRowId="(p: { data: RunLogLine }) => String(p.data.seq)"
-      :tooltipShowDelay="300"
-      :rowHeight="24"
-      :headerHeight="30"
-      :preventDefaultOnContextMenu="true"
-      :getContextMenuItems="contextMenuItems"
-      v-bind="groupOptions"
-      :enableCellTextSelection="true"
-      :suppressCellFocus="true"
-      @grid-ready="onGridReady"
-      @body-scroll-end="onBodyScrollEnd"
-    />
+    <div v-show="lineCount > 0" class="rl-grid">
+      <div ref="boxEl" class="rl-box" />
+    </div>
   </div>
 </template>
 
@@ -504,26 +677,36 @@ onUnmounted(() => {
 .rl-grid {
   flex: 1 1 auto;
   min-height: 320px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  min-width: 0;
+  position: relative;
+}
+.rl-box {
+  position: absolute;
+  inset: 0;
 }
 </style>
 
 <style>
 /* Cell classes are set by the grid, so they can't be scoped. */
-/* Overflow hides the start of the text rather than its end. The value
-   span is what clips, so it runs right-to-left: the ellipsis lands on
-   the left. A time of day is digits and separators only, which the bidi
-   algorithm keeps as one left-to-right run, so the text itself is
-   unchanged. */
-.rl-grid .rl-clip-left .ag-cell-value {
+/* Overflow hides the start of the text rather than its end: the cell
+   runs right-to-left, so the ellipsis lands on the left. A time of day
+   is digits and separators only, which the bidi algorithm keeps as one
+   left-to-right run, so the text itself is unchanged. */
+.rl-grid .slick-cell.rl-clip-left {
   direction: rtl;
   text-align: left;
 }
-.rl-grid .rl-warn {
+.rl-grid .slick-cell.rl-warn {
   color: var(--datalib-log-warn);
 }
-.rl-grid .rl-error {
+.rl-grid .slick-cell.rl-error {
   color: var(--datalib-log-error);
+}
+.rl-grid .rl-group-count {
+  color: var(--datalib-muted);
+}
+.rl-grid .slick-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
 }
 </style>

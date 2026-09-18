@@ -14,8 +14,8 @@ use datalib_etl_timeseries_render::text::{
 };
 use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{ParsedAirvisual, Series};
 use super::units::{self, series_label, spec_for, Quantity, QUANTITIES};
@@ -95,7 +95,7 @@ pub fn render_all(
         .unwrap_or(&md_path)
         .to_string_lossy()
         .into_owned();
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
 
     on_doc_complete(RenderedMarkdown {
@@ -107,6 +107,7 @@ pub fn render_all(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges: Vec::new(),
         problems,
         bucket_key: Some(m_uuid.clone()),
@@ -207,15 +208,19 @@ fn render_markdown(
     plots: &[(&Quantity, PlotFacts)],
 ) -> String {
     let mut out = String::with_capacity(8 * 1024);
-    let when_ts = parsed.latest_ts_ms().and_then(iso);
+    let created_at = parsed.earliest_ts_ms().and_then(iso);
+    let modified_at = parsed.latest_ts_ms().and_then(iso);
 
     out.push_str("---\n");
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: airvisual\n");
     let _ = writeln!(out, "title: {}", yaml_safe(&page_title(source_id)));
-    if let Some(ts) = &when_ts {
-        let _ = writeln!(out, "when_ts: {}", yaml_safe(ts));
+    if let Some(ts) = &created_at {
+        let _ = writeln!(out, "created_at: {}", yaml_safe(ts));
+    }
+    if let Some(ts) = &modified_at {
+        let _ = writeln!(out, "modified_at: {}", yaml_safe(ts));
     }
     out.push_str("---\n\n");
 
@@ -420,7 +425,7 @@ fn build_grid_rows(
     source_id: &str,
     m_uuid: &str,
     md_rel: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let title = page_title(source_id);
     let by_device = parsed.series_by_device();
@@ -440,7 +445,9 @@ fn build_grid_rows(
         .provider(Provider::Airvisual)
         .kind("Sensor Timeseries")
         .source_label(SOURCE_LABEL)
-        .when_ts(parsed.latest_ts_ms().and_then(iso))
+        .is_document(true)
+        .created_at(parsed.earliest_ts_ms().and_then(iso))
+        .modified_at(parsed.latest_ts_ms().and_then(iso))
         .conversation_name(Some(title.clone()))
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))
@@ -477,7 +484,7 @@ fn build_grid_rows(
                 .provider(Provider::Airvisual)
                 .kind("Sensor Device")
                 .source_label(SOURCE_LABEL)
-                .when_ts(when)
+                .created_at(when)
                 .author(Some(dev.name.clone()))
                 .channel(Some(dev.name.clone()))
                 .conversation_name(Some(title.clone()))

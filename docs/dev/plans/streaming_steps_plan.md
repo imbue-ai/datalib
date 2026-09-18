@@ -922,9 +922,11 @@ Each of these is a reviewable PR that leaves the tree green.
    moved. `datalib-http`'s root watcher, which already pushes
    `dag_changed` when the runner's record moves, now watches
    `unified_index/grid_index/` too and pushes `index_changed` when
-   `db.doltlite_db` is written — a `grid_index` pass per checkpoint,
+   `db.doltlite_db`'s HEAD moves — a `grid_index` pass per checkpoint,
    under streaming — and `GridCard` drops its search cache and re-runs
-   the shown query on it. Armed lazily: the directory belongs to the
+   the shown query on it. HEAD, not the file: the applet reads at HEAD
+   (a pin per request, `datalib_pin`), so a write that has not
+   committed is nothing a reader can fetch yet. Armed lazily: the directory belongs to the
    steps and the applet, so the server never creates it, and a root that
    has never synced gets the watch on the first `dag_changed` after the
    directory appears.

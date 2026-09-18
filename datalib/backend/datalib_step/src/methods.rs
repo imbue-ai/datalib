@@ -19,6 +19,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::Contacts => datalib_etl_contacts_config::ContactsConfig::METHODS,
         SourceType::Chatgpt => datalib_etl_chatgpt_config::ChatgptConfig::METHODS,
         SourceType::Claude => datalib_etl_claude_config::ClaudeConfig::METHODS,
+        SourceType::ClaudeCode => datalib_etl_claude_code_config::ClaudeCodeConfig::METHODS,
         SourceType::Email => datalib_etl_email_config::EmailConfig::METHODS,
         SourceType::Fsindex => datalib_etl_fsindex_config::FsindexConfig::METHODS,
         SourceType::Garmin => datalib_etl_garmin_config::GarminConfig::METHODS,
@@ -34,6 +35,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         }
         SourceType::ApplePhotos => datalib_etl_apple_photos_config::ApplePhotosConfig::METHODS,
         SourceType::Linkedin => datalib_etl_linkedin_config::LinkedinConfig::METHODS,
+        SourceType::Facebook => datalib_etl_facebook_config::FacebookConfig::METHODS,
         SourceType::Media => datalib_etl_media_config::MediaConfig::METHODS,
         SourceType::Notion => datalib_etl_notion_config::NotionConfig::METHODS,
         SourceType::Pdf => datalib_etl_pdf_config::PdfConfig::METHODS,

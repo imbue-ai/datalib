@@ -150,6 +150,10 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             datalib_etl_sms_backup_restore::ingest::schema_raw::full_ddl(),
         ),
         (
+            "claude_code/raw",
+            datalib_etl_claude_code::ingest::schema_raw::full_ddl(),
+        ),
+        (
             "whatsapp/raw",
             owned(datalib_etl_whatsapp::schema_raw::ALL_DDL),
         ),
@@ -161,6 +165,12 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             "garmin/raw",
             datalib_etl_garmin::ingest::schema_raw::full_ddl(),
         ),
+        // Only the media edge: every other facebook table is named for
+        // the export file it came from, at ingest time.
+        (
+            "facebook/raw",
+            datalib_etl_facebook::ingest::schema_raw::media_ddl(),
+        ),
         // The shared render/index and app stores, from `PortableTable`.
         (
             "unified_index/grid",
@@ -168,7 +178,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
                 datalib_schema::grid_rows::DDL,
                 datalib_schema::markdowns::DDL,
                 datalib_schema::edges::DDL,
-                datalib_schema::render_problems::DDL,
+                datalib_schema::problems::DDL,
                 datalib_schema::source_cursors::DDL,
                 datalib_schema::render_cursor::DDL,
                 datalib_schema::render_inputs::DDL,

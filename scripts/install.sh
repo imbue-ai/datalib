@@ -5,10 +5,22 @@
 #
 # Downloads the latest release tarball from
 #   https://github.com/imbue-ai/datalib/releases
-# and drops the binaries into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
+# unpacks it whole into ${DATALIB_LIB_DIR:-$HOME/.local/lib/datalib} and
+# links each binary into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
+#
+# Whole, because the tarball is more than binaries: `runtime.manifest`
+# beside them names the release's Node runtime (Node plus the `qmd` and
+# `latchkey` package trees), which the binaries fetch, sha256-checked,
+# into ~/.cache/datalib/runtime on their first use — so a sync runs
+# both tools with no Node, npm or npx on the host, and this script
+# installs nothing but the tarball. The symlinks are what puts the
+# binaries on PATH; they canonicalize their own path before looking
+# beside it, so the link is transparent to them.
 #
 # Env vars:
-#   DATALIB_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
+#   DATALIB_INSTALL_DIR   where the binaries are linked (default ~/.local/bin)
+#   DATALIB_LIB_DIR       where the tarball is unpacked (default
+#                             ~/.local/lib/datalib); replaced on every install
 #   DATALIB_VERSION       release tag to install (default: latest)
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
 #                             auto-detected; see libc detection below)
@@ -24,6 +36,7 @@ set -eu
 
 REPO="imbue-ai/datalib"
 INSTALL_DIR="${DATALIB_INSTALL_DIR:-${HOME}/.local/bin}"
+LIB_DIR="${DATALIB_LIB_DIR:-${HOME}/.local/lib/datalib}"
 VERSION="${DATALIB_VERSION:-latest}"
 
 say() { printf 'datalib-install: %s\n' "$1"; }
@@ -131,18 +144,37 @@ done
 [ -n "${staged}" ] || err "tarball did not contain expected datalib-*-${TRIPLE}/ dir"
 
 # --- install ---
-mkdir -p "${INSTALL_DIR}"
+# The unpacked tree replaces LIB_DIR wholesale: it is ours (nothing else
+# is documented to live there), and a stale `runtime.manifest` beside
+# new binaries is exactly the drift a version bump must not leave behind.
+# Swap through a sibling so an interrupted install leaves either the
+# old tree or the new one, never a half of each.
+mkdir -p "$(dirname "${LIB_DIR}")" "${INSTALL_DIR}"
+rm -rf "${LIB_DIR}.new" "${LIB_DIR}.old"
+mv "${staged}" "${LIB_DIR}.new"
+[ ! -e "${LIB_DIR}" ] || mv "${LIB_DIR}" "${LIB_DIR}.old"
+mv "${LIB_DIR}.new" "${LIB_DIR}"
+rm -rf "${LIB_DIR}.old"
+
 installed=""
-for bin in "${staged}"/*; do
+for bin in "${LIB_DIR}"/*; do
     [ -f "${bin}" ] || continue
     name="$(basename "${bin}")"
-    mv -f "${bin}" "${INSTALL_DIR}/${name}"
-    chmod +x "${INSTALL_DIR}/${name}"
+    chmod +x "${bin}"
+    ln -sfn "${bin}" "${INSTALL_DIR}/${name}"
     installed="${installed} ${name}"
 done
 [ -n "${installed}" ] || err "no binaries found in tarball"
 
-say "installed:${installed} -> ${INSTALL_DIR}"
+say "unpacked into ${LIB_DIR}"
+say "linked:${installed} -> ${INSTALL_DIR}"
+if [ -f "${LIB_DIR}/runtime.manifest" ]; then
+    say "the Node runtime for qmd and latchkey is fetched on first use (once per release,"
+    say "sha256-checked, into ~/.cache/datalib/runtime); \`datalib-step pull-runtime\` does it now."
+else
+    say "note: this tarball names no Node runtime; semantic search and latchkey need"
+    say "      DATALIB_RUNTIME_DIR pointed at one, or DATALIB_ALLOW_NPX=1 with Node on the host."
+fi
 
 # --- PATH hint ---
 case ":${PATH}:" in

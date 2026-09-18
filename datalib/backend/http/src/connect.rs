@@ -511,7 +511,7 @@ pub struct ProbeRequest {
 }
 
 pub async fn probe(
-    State(_s): State<AppState>,
+    State(s): State<AppState>,
     Json(req): Json<ProbeRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let source_type = validated_type(&req.source_type)?;
@@ -524,12 +524,25 @@ pub async fn probe(
         )
     })?;
     let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
+    // The wizard's typed credentials are in here; an owner-only file
+    // keeps them off argv, where `ps` would show them to every user.
+    let params_file = datalib_dag::subprocess::write_params_file(
+        &s.root,
+        &format!("probe_{source_type}"),
+        &params,
+    )
+    .map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("params file: {e:#}"),
+        )
+    })?;
 
     let mut cmd = Command::new(step_bin);
     cmd.arg("probe")
         .arg(&source_type)
-        .arg("--params")
-        .arg(params)
+        .arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
+        .arg(params_file.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -588,21 +601,9 @@ async fn latchkey_output(args: &[String]) -> anyhow::Result<String> {
 }
 
 async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::Result<String> {
-    // The same resolution `datalib_etl::latchkey` uses (bundled Node
-    // runtime, else `npx -y latchkey@<pin>`), reached through
+    // The same resolution `datalib_etl::latchkey` uses, reached through
     // `datalib_core` so the pin is not spelled twice.
-    let mut cmd: Command = datalib_core::node_runtime::bundled_command(
-        "latchkey",
-        datalib_core::node_runtime::LATCHKEY_VERSION,
-        LATCHKEY_ENTRY_REL,
-    )
-    .unwrap_or_else(|| {
-        datalib_core::node_runtime::npx_command(&format!(
-            "latchkey@{}",
-            datalib_core::node_runtime::LATCHKEY_VERSION
-        ))
-    })
-    .into();
+    let mut cmd: Command = datalib_core::node_runtime::latchkey_command()?.into();
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -621,11 +622,6 @@ async fn latchkey_output_env(args: &[String], env: &[(&str, &str)]) -> anyhow::R
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
-
-/// Entry script of the `latchkey` npm package inside a staged runtime
-/// tree. Mirrors `datalib_etl::latchkey::LATCHKEY_ENTRY_REL`, which
-/// this crate cannot import (it links no ETL code).
-const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 
 async fn latchkey_json(args: &[&str], timeout: Duration) -> anyhow::Result<Value> {
     let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -909,7 +905,7 @@ mod tests {
     use serde_json::json;
 
     /// The exact shape `latchkey services info <name>` prints, as
-    /// captured from latchkey 3.11.0. If latchkey changes it, this test
+    /// captured from latchkey 3.11.0 (unchanged through 3.14.0). If it changes, this test
     /// is what says so — the handler itself would just start returning
     /// an empty account list.
     #[test]

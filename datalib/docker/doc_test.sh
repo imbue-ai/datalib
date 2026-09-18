@@ -135,8 +135,18 @@ doc_test_after() {
         demo-sql|own-sql)
             ;;  # the block itself fails if the store cannot be read
         own-ingest)
-            test -s "$DATA_ROOT/unified_index/grid_index/db.doltlite_db"
-            test -s "$DATA_ROOT/unified_index/qmd_index/qmd/index.sqlite"
+            # From the host, as the user — not `docker exec` — because
+            # that is how the page's reader will look at their data
+            # root. A container that leaves it unreadable (root-owned
+            # 0700, the umask leak of #469) fails here and nowhere else.
+            for f in unified_index/grid_index/db.doltlite_db \
+                     unified_index/qmd_index/qmd/index.sqlite; do
+                if ! test -s "$DATA_ROOT/$f"; then
+                    echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2
+                    ls -laR "$DATA_ROOT" >&2 || true
+                    return 1
+                fi
+            done
             ;;
         own-serve)
             wait_healthy datalib

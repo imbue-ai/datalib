@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { CONFIG_MUTATING } from "./tests/e2e/config-mutating";
 
 // Materialize the bazel-built fixture once, before any worker starts.
-// Tests share the resulting data root via FW_E2E_FIXTURE_ROOT — cached
+// Tests share the resulting data root via DATALIB_TEST_E2E_FIXTURE_ROOT — cached
 // in env so worker subprocesses (which re-import this config) don't
 // each rebuild the fixture into a fresh temp dir.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,23 +28,23 @@ const workspaceDir = path.resolve(here, "..", "..");
 // `pnpm exec playwright test` path, where nobody reclaims them at all:
 // bazel exports TEST_TMPDIR but never TMPDIR.
 const scratchParent =
-  process.env.FW_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
+  process.env.DATALIB_TEST_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
 function mintRoot(prefix: string): string {
   return mkdtempSync(path.join(scratchParent, prefix));
 }
 function materializeRoot(prefix: string): string {
   const materializer =
-    process.env.FW_E2E_MATERIALIZE_TNG_ROOT ||
+    process.env.DATALIB_TEST_E2E_MATERIALIZE_TNG_ROOT ||
     path.join(workspaceDir, "bazel-bin/tests/fixtures/materialize_tng_root");
   const root = mintRoot(prefix);
   execFileSync(materializer, [root], { stdio: "inherit" });
   return root;
 }
 function ensureFixtureRoot(): string {
-  const existing = process.env.FW_E2E_FIXTURE_ROOT;
+  const existing = process.env.DATALIB_TEST_E2E_FIXTURE_ROOT;
   if (existing) return existing;
   const root = materializeRoot("datalib-e2e-");
-  process.env.FW_E2E_FIXTURE_ROOT = root;
+  process.env.DATALIB_TEST_E2E_FIXTURE_ROOT = root;
   return root;
 }
 const fixtureRoot = ensureFixtureRoot();
@@ -58,10 +58,10 @@ const fixtureRoot = ensureFixtureRoot();
   // sees an uninitialized root next run. Cached in env because worker
   // subprocesses re-import this file and must not mint a second directory.
 function emptyRoot(): string {
-  const existing = process.env.FW_E2E_EMPTY_ROOT;
+  const existing = process.env.DATALIB_TEST_E2E_EMPTY_ROOT;
   if (existing) return existing;
   const root = mintRoot("datalib-e2e-empty-");
-  process.env.FW_E2E_EMPTY_ROOT = root;
+  process.env.DATALIB_TEST_E2E_EMPTY_ROOT = root;
   return root;
 }
 const EMPTY_ROOT = emptyRoot();
@@ -70,16 +70,16 @@ const EMPTY_ROOT = emptyRoot();
   // EMPTY_ROOT and initializes it, and onboarding is one-shot — a root with a
   // config can never go back to having none.
 function onboardingRoot(): string {
-  const existing = process.env.FW_E2E_ONBOARDING_ROOT;
+  const existing = process.env.DATALIB_TEST_E2E_ONBOARDING_ROOT;
   if (existing) return existing;
   const root = mintRoot("datalib-e2e-onboarding-");
-  process.env.FW_E2E_ONBOARDING_ROOT = root;
+  process.env.DATALIB_TEST_E2E_ONBOARDING_ROOT = root;
   return root;
 }
 const ONBOARDING_ROOT = onboardingRoot();
 
 const binDir =
-  process.env.FW_E2E_BIN_DIR ||
+  process.env.DATALIB_TEST_E2E_BIN_DIR ||
   path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
 
 // The tree the onboarding spec points its PDF source at. Built here
@@ -88,30 +88,30 @@ const binDir =
 // the spec adds a file to it partway through and the corpus itself is a
 // bazel input shared with every other test.
 const PDF_CORPUS =
-  process.env.FW_E2E_PDF_FIXTURE_DIR ||
+  process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR ||
   path.join(workspaceDir, "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng");
-process.env.FW_E2E_PDF_LATECOMER = path.join(
+process.env.DATALIB_TEST_E2E_PDF_LATECOMER = path.join(
   PDF_CORPUS,
   "engineering/warp_core_manual.pdf",
 );
 function pdfScanDir(): string {
-  const existing = process.env.FW_E2E_PDF_SCAN_DIR;
+  const existing = process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR;
   if (existing) return existing;
   const dir = mintRoot("datalib-e2e-pdfs-");
   for (const f of ["captains_log.pdf", "captains_log_v2.pdf"]) {
     copyFileSync(path.join(PDF_CORPUS, f), path.join(dir, f));
   }
-  process.env.FW_E2E_PDF_SCAN_DIR = dir;
+  process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR = dir;
   return dir;
 }
 pdfScanDir();
 
 // The Signal backup the onboarding spec's second source points at.
 export const FIXTURE_SIGNAL_AEP = "0".repeat(64);
-const SIGNAL_MAKE_FIXTURE = process.env.FW_E2E_SIGNAL_MAKE_FIXTURE;
-const SIGNAL_SPEC = process.env.FW_E2E_SIGNAL_SPEC;
+const SIGNAL_MAKE_FIXTURE = process.env.DATALIB_TEST_E2E_SIGNAL_MAKE_FIXTURE;
+const SIGNAL_SPEC = process.env.DATALIB_TEST_E2E_SIGNAL_SPEC;
 function signalBackupDir(): string | undefined {
-  const existing = process.env.FW_E2E_SIGNAL_BACKUP_DIR;
+  const existing = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
   if (existing) return existing;
   // Absent outside bazel (`pnpm exec playwright test` straight from the
   // source tree). The spec skips its Signal half rather than failing,
@@ -119,7 +119,7 @@ function signalBackupDir(): string | undefined {
   if (!SIGNAL_MAKE_FIXTURE || !SIGNAL_SPEC) return undefined;
   const dir = mintRoot("datalib-e2e-signal-");
   execFileSync(SIGNAL_MAKE_FIXTURE, [SIGNAL_SPEC, dir], { stdio: "pipe" });
-  process.env.FW_E2E_SIGNAL_BACKUP_DIR = dir;
+  process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR = dir;
   return dir;
 }
 signalBackupDir();
@@ -128,14 +128,14 @@ signalBackupDir();
 type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
-// it: what `materialize_tng_root.sh` writes, minus the pre-built index
-// and markdown trees. The streaming spec needs this rather than the
+// it: the fixture root minus its sources, the pre-built index and the
+// markdown trees. The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of
 // them as already indexed and skips it.
 const APPLET_BIN =
-  process.env.FW_E2E_DATALIB_APPLET ||
+  process.env.DATALIB_TEST_E2E_DATALIB_APPLET ||
   path.join(workspaceDir, "bazel-bin/datalib/backend/applets/datalib_applet");
 function bareRoot(prefix: string): string {
   const root = mintRoot(prefix);
@@ -169,7 +169,7 @@ const ROOT_OF: Record<string, (prefix: string) => string> = {
 // set. Every step a sync spawns inherits it from the runner, which
 // inherits it from the server — the same chain a real install has from
 // the user's shell.
-const PLAYBACK_DIR = process.env.FW_E2E_PLAYBACK_DIR;
+const PLAYBACK_DIR = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // The streaming spec's two sources replay tapes rather than fetch,
   // and each replayed request waits this long first: a download of a
@@ -181,9 +181,11 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
     : {},
   // The control spec starts, stops and restarts those same downloads
   // from the table, so each has to last long enough to be acted on
-  // partway through: slower still.
+  // partway through: slower still. A tape of five requests at 2.5 s
+  // was ~12 s, and a config save with its remount ate most of that on
+  // a CI runner; at 5 s the window is ~25 s.
   "manager2-control": PLAYBACK_DIR
-    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "2500" }
+    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "5000" }
     : {},
 };
 
@@ -192,14 +194,14 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
 /// than building their own. `url` is filled in below, once the backend
 /// on this root has said which port it got.
 function sandboxRoots(): Sandbox[] {
-  const existing = process.env.FW_E2E_SANDBOXES;
+  const existing = process.env.DATALIB_TEST_E2E_SANDBOXES;
   if (existing) return JSON.parse(existing) as Sandbox[];
   const made = CONFIG_MUTATING.map((spec) => ({
     spec,
     root: (ROOT_OF[spec] ?? materializeRoot)(`datalib-e2e-${spec}-`),
     url: "",
   }));
-  process.env.FW_E2E_SANDBOXES = JSON.stringify(made);
+  process.env.DATALIB_TEST_E2E_SANDBOXES = JSON.stringify(made);
   return made;
 }
 const SANDBOX_ROOTS = sandboxRoots();
@@ -270,15 +272,21 @@ function spawnBackend(
   const log = path.join(dir, `${name}.log`);
   rmSync(urlFile, { force: true });
   const fd = openSync(log, "w");
+  // stdin is a pipe this process holds open and never writes to. When
+  // the runner dies — including a SIGKILL that runs no `globalTeardown`
+  // — the kernel closes it, and the backend takes the EOF as its cue to
+  // exit (`datalib_parent_watch`). Workers re-importing this config
+  // attach through `FW_E2E_SERVERS` and hold no copy of the pipe.
   const child = spawn(
     backendBin,
     [root, "--no-open", "--url-file", urlFile],
     {
-      stdio: ["ignore", fd, fd],
+      stdio: ["pipe", fd, fd],
       env: {
         ...process.env,
         DATALIB_BIND: "127.0.0.1:0",
         DATALIB_TOKEN: API_TOKEN,
+        DATALIB_PARENT_PIPE: "1",
         ...env,
       },
     },
@@ -334,7 +342,7 @@ function awaitAnnouncements(pending: Pending[]): Server[] {
 /// worker re-importing this config must attach to the running backends,
 /// not start a second set of its own.
 function servers(): Server[] {
-  const existing = process.env.FW_E2E_SERVERS;
+  const existing = process.env.DATALIB_TEST_E2E_SERVERS;
   if (existing) return JSON.parse(existing) as Server[];
   const pending = [
     spawnBackend("fixture", fixtureRoot),
@@ -365,7 +373,7 @@ function servers(): Server[] {
     for (const p of pending) p.child.kill("SIGKILL");
     throw err;
   }
-  process.env.FW_E2E_SERVERS = JSON.stringify(started);
+  process.env.DATALIB_TEST_E2E_SERVERS = JSON.stringify(started);
   return started;
 }
 const SERVERS = servers();
@@ -378,14 +386,14 @@ function serverUrl(name: string): string {
 
 const BACKEND_URL = serverUrl("fixture");
 const EMPTY_URL = serverUrl("empty");
-process.env.FW_E2E_EMPTY_URL = EMPTY_URL;
+process.env.DATALIB_TEST_E2E_EMPTY_URL = EMPTY_URL;
 const ONBOARDING_URL = serverUrl("onboarding");
-process.env.FW_E2E_ONBOARDING_URL = ONBOARDING_URL;
+process.env.DATALIB_TEST_E2E_ONBOARDING_URL = ONBOARDING_URL;
 const SANDBOXES: Sandbox[] = SANDBOX_ROOTS.map((s) => ({
   ...s,
   url: serverUrl(`sandbox-${s.spec}`),
 }));
-process.env.FW_E2E_SANDBOXES = JSON.stringify(SANDBOXES);
+process.env.DATALIB_TEST_E2E_SANDBOXES = JSON.stringify(SANDBOXES);
 
 // ── where the recordings go ──────────────────────────────────────────
 const REPORT_DIR = process.env.TEST_UNDECLARED_OUTPUTS_DIR
@@ -471,6 +479,7 @@ export default defineConfig({
       testMatch: [
         // Explore / GridCard — the search grid.
         /grid-populated\.spec\.ts/,
+        /grid-card-fit\.spec\.ts/,
         /grid-context-menu\.spec\.ts/,
         /contents-cell-clamp\.spec\.ts/,
         /row-click-scroll\.spec\.ts/,
@@ -482,10 +491,15 @@ export default defineConfig({
         /url-sync\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
+        // The sandboxed DACTAL iframe: an opaque origin loading module
+        // scripts, which WebKit and Chromium have disagreed about.
+        /dactal-sandbox\.spec\.ts/,
         // /sources2 — the Manager2 Pipeline table, and the commit-history
         // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,
         /manager2-history\.spec\.ts/,
+        // The run-log panel's grid, menu and drag-to-group bar.
+        /run-log\.spec\.ts/,
       ],
     },
   ],

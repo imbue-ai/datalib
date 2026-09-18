@@ -581,7 +581,9 @@ export function fieldIsActive(field: Field, values: FieldValues): boolean {
 function isSet(field: Field, value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (field.kind === "string_list") return Array.isArray(value) && value.length > 0;
-  if (field.kind === "text" || field.kind === "date") return String(value).trim() !== "";
+  if (field.kind === "text" || field.kind === "date" || field.kind === "path") {
+    return String(value).trim() !== "";
+  }
   if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
   if (field.kind === "bytes") return parseByteSize(bytesText(value)) !== null;
     // A select normally holds one of its options, so it is always written. The
@@ -757,6 +759,49 @@ export function buildSource(opts: {
       : null,
     stepsBody: render ? `${ingest}\n\n${render}` : ingest,
     renderId: renders ? stepIdFor(group, "render") : null,
+  };
+}
+
+/// The group `type` of a comparison between two commits of a source's
+/// raw store — `docs/dev/plans/completed/diff_renderer.md`. Not a source type
+/// the catalog offers: one is made from a source, by "Compare…".
+export const DIFF_TYPE = "diff";
+
+/// Everything "Compare…" writes for one diff group: the group, with the
+/// source it compares, and its one render step, reading the source's
+/// ingest tree with the two commits under `params.diff`. The step is
+/// wired into the fan-ins like any render step (`renderId`).
+export function buildDiffSource(opts: {
+  id: string;
+  name: string;
+  source: string;
+  from: string;
+  to: string;
+  maxDocuments: number;
+}): { groupBody: string; stepsBody: string; renderId: string } {
+  const { id, source } = opts;
+  const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
+  const lines = [
+    `id = ${quote(id)}`,
+    nameLine(id, opts.name),
+    `type = ${quote(DIFF_TYPE)}`,
+    `source = ${quote(source)}`,
+  ].filter((l): l is string => l !== null);
+  const params = [
+    "[steps.params.diff]",
+    `from = ${quote(opts.from)}`,
+    `to = ${quote(opts.to)}`,
+    `max_documents = ${Math.max(1, Math.floor(opts.maxDocuments))}`,
+  ].join("\n");
+  return {
+    groupBody: `${divider}\n[[groups]]\n${lines.join("\n")}`,
+    stepsBody: stepToml({
+      group: id,
+      phase: "render",
+      inputs: [stepIdFor(source, "download")],
+      params,
+    }),
+    renderId: stepIdFor(id, "render"),
   };
 }
 

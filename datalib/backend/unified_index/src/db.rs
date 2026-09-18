@@ -3,7 +3,7 @@
 //! impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
 
-use crate::query::{extract_uuid_suffix, Field, ParsedQuery, RowType};
+use crate::query::{extract_uuid_suffix, Field, ParsedQuery};
 use datalib_schema::providers::Provider;
 
 const SNIPPET_LEN: usize = 240;
@@ -25,11 +25,10 @@ pub struct ChatMeta {
     pub account: Option<String>,
     pub project: Option<String>,
     pub channel: Option<String>,
-    pub when_ts: Option<String>,
+    pub created_at: Option<String>,
     pub source_label: Option<String>,
     /// Canonical web URL back to the provider, used for the page-level
-    /// "Open in …" button. For Slack rows `source_url` is null and we
-    /// fall back to `slack_link` (a slack:// deep link) at SELECT time.
+    /// "Open in …" button.
     pub source_url: Option<String>,
 }
 
@@ -84,8 +83,8 @@ fn first_chars(s: &str, n: usize) -> String {
 
 /// Map a query [`Field`] to the underlying `grid_rows` column it
 /// constrains, or `None` for fields that aren't single-column equality
-/// filters (Before/After are range, Type is a row-class classifier,
-/// Subj/Other have no column yet).
+/// filters (Before/After are range, Is sets `documents`, Subj/Other have
+/// no column yet).
 fn column_for_field(f: &Field) -> Option<&'static str> {
     match f {
         Field::Source => Some("source_label"),
@@ -98,7 +97,8 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
         Field::Account => Some("account"),
         Field::Project => Some("project"),
         Field::NotionPage => Some("notion_page_uuid"),
-        Field::Before | Field::After | Field::Type | Field::Subj | Field::Other(_) => None,
+        Field::Change => Some("diff_status"),
+        Field::Before | Field::After | Field::Is | Field::Subj | Field::Other(_) => None,
     }
 }
 
@@ -110,14 +110,8 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
-    match q.resolved_type {
-        RowType::Chat => {
-            clauses.push("kind IN ('Chat','Slack Thread')".into());
-        }
-        RowType::Message => {
-            clauses.push("kind NOT IN ('Chat','Slack Thread')".into());
-        }
-        RowType::All => {}
+    if let Some(documents) = q.documents {
+        clauses.push(format!("is_document = {}", i32::from(documents)));
     }
 
     // Per-term AND filters. Each occurrence is its own clause —
@@ -184,7 +178,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     // sorts on, so before:/after: bounds agree with display order across
     // rows recorded in different local offsets. The user-typed bound is
     // normalized to UTC first (datalib_time): a naive value means
-    // local machine time, so it lands on the same basis as when_ts_utc.
+    // local machine time, so it lands on the same basis as created_at_utc.
     // An unparseable bound drops the filter rather than compare garbage.
     if let Some(v) = q
         .filters
@@ -192,7 +186,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         .and_then(|vals| vals.first())
         .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
     {
-        clauses.push("when_ts_utc < ?".into());
+        clauses.push("created_at_utc < ?".into());
         params.push(v);
     }
     if let Some(v) = q
@@ -201,7 +195,7 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         .and_then(|vals| vals.first())
         .and_then(|v| datalib_time::normalize_user_time_to_utc(v))
     {
-        clauses.push("when_ts_utc > ?".into());
+        clauses.push("created_at_utc > ?".into());
         params.push(v);
     }
     if !needle.is_empty() {
@@ -224,14 +218,23 @@ mod tests {
 
     #[test]
     fn empty_query_produces_no_where() {
-        let (sql, params) = build_where(&parse_query("type:all"), "");
+        let (sql, params) = build_where(&parse_query(""), "");
         assert!(sql.is_empty());
         assert!(params.is_empty());
     }
 
     #[test]
+    fn is_document_is_a_column_test_not_a_kind_list() {
+        let (sql, params) = build_where(&parse_query("is:document"), "");
+        assert_eq!(sql, " WHERE is_document = 1");
+        assert!(params.is_empty());
+        let (sql, _) = build_where(&parse_query("-is:document"), "");
+        assert_eq!(sql, " WHERE is_document = 0");
+    }
+
+    #[test]
     fn source_filter_emits_equality_clause() {
-        let (sql, params) = build_where(&parse_query("source:Claude type:all"), "");
+        let (sql, params) = build_where(&parse_query("source:Claude"), "");
         assert_eq!(sql, " WHERE source_label = ?");
         assert_eq!(params, vec!["Claude"]);
     }
@@ -241,14 +244,14 @@ mod tests {
     /// workspaces are one `source` and two `source_id`s.
     #[test]
     fn source_id_filter_matches_the_qmd_path_prefix() {
-        let (sql, params) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack"), "");
         assert_eq!(
             sql,
             " WHERE INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
         );
         assert_eq!(params, vec!["slack/", "datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:slack type:all"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:slack"), "");
         assert_eq!(
             sql,
             " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
@@ -263,16 +266,16 @@ mod tests {
     /// real source's id has to exclude them despite the path.
     #[test]
     fn source_id_filter_files_measurements_under_datalib() {
-        let (sql, params) = build_where(&parse_query("source_id:datalib type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:datalib"), "");
         assert_eq!(sql, " WHERE provider = ?");
         assert_eq!(params, vec!["datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:datalib type:all"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:datalib"), "");
         assert_eq!(sql, " WHERE (provider IS NULL OR provider != ?)");
         assert_eq!(params, vec!["datalib"]);
 
         // The other direction: `slack`'s own rows, not what slack weighs.
-        let (sql, _) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (sql, _) = build_where(&parse_query("source_id:slack"), "");
         assert!(sql.contains("provider != ?"), "{sql}");
     }
 
@@ -282,7 +285,7 @@ mod tests {
     /// `slackXwork` stanza. INSTR takes its needle verbatim.
     #[test]
     fn source_id_filter_does_not_go_through_like() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work type:all"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack_work"), "");
         assert!(!sql.contains("LIKE"), "{sql}");
         assert_eq!(params, vec!["slack_work/", "datalib"]);
     }
@@ -292,7 +295,7 @@ mod tests {
     /// separate `slack-personal` stanza.
     #[test]
     fn source_id_filter_matches_whole_segments_only() {
-        let (_, params) = build_where(&parse_query("source_id:slack type:all"), "");
+        let (_, params) = build_where(&parse_query("source_id:slack"), "");
         assert_eq!(params, vec!["slack/", "datalib"]);
         assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
@@ -303,15 +306,29 @@ mod tests {
     #[test]
     fn the_old_source_name_spelling_builds_the_same_clause() {
         assert_eq!(
-            build_where(&parse_query("source_name:slack type:all"), ""),
-            build_where(&parse_query("source_id:slack type:all"), ""),
+            build_where(&parse_query("source_name:slack"), ""),
+            build_where(&parse_query("source_id:slack"), ""),
         );
     }
 
     #[test]
     fn negated_filter_keeps_nulls() {
-        let (sql, _) = build_where(&parse_query("-channel:announce type:all"), "");
+        let (sql, _) = build_where(&parse_query("-channel:announce"), "");
         assert!(sql.contains("(channel IS NULL OR channel != ?)"));
+    }
+
+    /// `change:` is `diff_status`; negated it keeps NULL, so
+    /// `-change:unchanged` is a diff's moved rows and every real row.
+    #[test]
+    fn change_filter_is_the_diff_status_column() {
+        let (sql, params) = build_where(&parse_query("change:added"), "");
+        assert!(sql.contains("diff_status = ?"), "{sql}");
+        assert_eq!(params, vec!["added".to_string()]);
+        let (sql, _) = build_where(&parse_query("-change:unchanged"), "");
+        assert!(
+            sql.contains("(diff_status IS NULL OR diff_status != ?)"),
+            "{sql}"
+        );
     }
 
     #[test]

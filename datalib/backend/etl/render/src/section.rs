@@ -1,6 +1,42 @@
-//! Shared "section anchor" helpers for provider renderers.
+//! Shared "section anchor" helpers for provider renderers, and the
+//! [`Section`] a renderer hands over so a document can be read piece by
+//! piece without parsing its markdown.
 
 use datalib_schema::providers::Provider;
+
+/// One piece of a rendered document, in document order. `uuid` is the
+/// piece's `data-section-uuid` — a message, a contact — so a row of the
+/// grid names the piece it came from; `None` for a piece that belongs
+/// to no row: the frontmatter and title, a `<details>` opener around a
+/// run of asides. Concatenated in order, a document's sections are its
+/// `.md` byte for byte ([`join`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub uuid: Option<String>,
+    pub md: String,
+}
+
+impl Section {
+    pub fn keyed(uuid: &str, md: String) -> Self {
+        Self {
+            uuid: Some(uuid.to_string()),
+            md,
+        }
+    }
+
+    pub fn unkeyed(md: String) -> Self {
+        Self { uuid: None, md }
+    }
+}
+
+/// The `.md` a list of sections spells.
+pub fn join(sections: &[Section]) -> String {
+    let mut out = String::with_capacity(sections.iter().map(|s| s.md.len()).sum());
+    for s in sections {
+        out.push_str(&s.md);
+    }
+    out
+}
 
 /// HTML attribute fragment that anchors a navigable section.
 /// Identical shape across providers: `id="m-{uuid}"` for in-page
@@ -29,6 +65,18 @@ pub const MSG_DIV_CLOSE: &str = "</div>";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joined_sections_are_the_document() {
+        let sections = vec![
+            Section::unkeyed("---\n---\n\n".into()),
+            Section::keyed("a", "<div>a</div>\n".into()),
+            Section::keyed("b", "<div>b</div>\n".into()),
+        ];
+        assert_eq!(join(&sections), "---\n---\n\n<div>a</div>\n<div>b</div>\n");
+        assert_eq!(sections[0].uuid, None);
+        assert_eq!(sections[1].uuid.as_deref(), Some("a"));
+    }
 
     #[test]
     fn attrs_shape() {

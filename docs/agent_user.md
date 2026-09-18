@@ -55,9 +55,8 @@ definition — the constants both sides read — is
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
 server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway), `latchkey-curl-dispatch` +
-`latchkey-curl-impersonate` (upstream `curl-impersonate`: Cloudflare-safe
-HTTP for downloaders),
+by the http gateway), `latchkey-curl-router` +
+`curl-impersonate` (Cloudflare-safe HTTP for downloaders),
 `datalib-doltlite` (the shell for reading and exporting the stores —
 see "Reading the mirrored data" below), `datalib-fsindex` (the
 directory-tree scanner, also reachable as a step) and
@@ -153,8 +152,11 @@ Pick the surface that fits the question:
 - **SQL over everything** — the `grid_rows` union table in
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
-  `when_ts`, `author`, `channel`, `conversation_uuid`, `text`,
-  `entire_chat`, etc.
+  `created_at`, `modified_at`, `author`, `channel`, `conversation_uuid`,
+  `text`, `entire_chat`, etc. `is_document = 1` picks the one row per
+  rendered document — the thread, the conversation, the PR, the page —
+  and leaves out the messages inside them, which is usually the row
+  count you meant.
 
   Read it with **`datalib-doltlite`**, which is in the release tarball
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
@@ -196,15 +198,18 @@ Pick the surface that fits the question:
 - **Semantic search** — the qmd index:
 
   ```sh
+  rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
   INDEX_PATH=<data_root>/unified_index/qmd_index/qmd/index.sqlite \
-      npx -y @tobilu/qmd query "that thing about the boat"
+      "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values; fields include
   `source:`, `source_id:` (`source_name:` is an accepted alias),
   `kind:`, `channel:`, `author:`, `account:`,
-  `project:`, `before:`/`after:`, `convo:`), `GET /api/log?q=…` (the
+  `project:`, `before:`/`after:`, `convo:`, `is:document` for the one
+  row per rendered document and `-is:document` for the rows inside
+  them), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `step:`,
   `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
   substring of the line; `run=`/`step=` narrow it, `after_seq=` tails),
@@ -239,9 +244,9 @@ Pick the surface that fits the question:
   classification. **Read
   [`docs/dev/step_protocol.md`](dev/step_protocol.md)** — it is
   the complete contract, with minimal shell and Python examples. The
-  design behind the scheduler (edge derivation, skipping, subtree
-  poisoning) is
-  [`docs/dev/pipeline_dag_architecture.md`](dev/pipeline_dag_architecture.md).
+  rules behind the scheduler (what makes a step stale, what a dropped
+  entry costs) are in
+  [`datalib/backend/dag/README.md`](../datalib/backend/dag/README.md).
 - **Custom UI cards** — the web UI can host agent-authored views
   ("cards", small JS view factories, `PUT /api/lib/{name}`). The
   server serves its own guide for this at **`GET /agent/cards.md`**

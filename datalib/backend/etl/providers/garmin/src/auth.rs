@@ -403,14 +403,14 @@ pub async fn curl(args: &[&str]) -> Result<CurlResponse> {
     run_curl(tokio::process::Command::new("curl"), args).await
 }
 
-/// The dispatch curl with the impersonation marker, so the request
+/// The router curl with the impersonation marker, so the request
 /// leaves with Chrome's TLS fingerprint and user agent. The SSO host is
 /// behind Cloudflare's bot wall, which since spring 2026 answers the
 /// phone app's own login flow with 429 unless the client looks like a
 /// browser (matin/garth#222).
 pub async fn curl_impersonated(args: &[&str]) -> Result<CurlResponse> {
-    let dispatch = datalib_etl::latchkey::ensure_curl_dispatch()?;
-    let mut cmd = tokio::process::Command::new(dispatch);
+    let router = datalib_etl::latchkey::ensure_curl_router()?;
+    let mut cmd = tokio::process::Command::new(router);
     cmd.arg("-H")
         .arg(datalib_etl::http::IMPERSONATE_MARKER_HEADER);
     run_curl(cmd, args).await

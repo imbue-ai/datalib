@@ -77,11 +77,10 @@ rather than guessing.";
 
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
-See <provider>/INGEST.md for setup. Confirm the dispatch curl and its \
-impersonator sibling are built (`bazel build \
-//datalib/backend/etl:latchkey_curl_dispatch \
-//datalib/backend/etl:latchkey_curl_impersonate`), or set \
-$DATALIB_CURL_DISPATCH / $LATCHKEY_CURL to the dispatch explicitly, and \
+See <provider>/INGEST.md for setup. Confirm the router curl and its \
+impersonator sibling are fetched (`bazel build \
+//third-party/latchkey-curl-shims`), or set \
+$DATALIB_CURL_ROUTER / $LATCHKEY_CURL to the router explicitly, and \
 that `{LK} auth list` shows entries.";
 
 /// Per-provider fix-it text for auth failures. Every runnable latchkey

@@ -2,9 +2,10 @@
 # Launch the datalib dev UI pointed at the checked-in TNG fixtures.
 #
 # Materializes a one-shot data root in a tmpdir via the shared
-# `//tests/fixtures:materialize_tng_root` script — the same one used by
-# the UI e2e test, so this command and the test stay byte-identical in
-# what they materialize. The tmpdir is removed on exit.
+# `//tests/fixtures:materialize_tng_root` script — the same script the
+# UI e2e test runs, so this command and the test stay byte-identical in
+# what they materialize; only the models differ (all three here, the
+# embedding model alone there). The tmpdir is removed on exit.
 #
 # Invoke via `bazelisk run //datalib:dev_tng`.
 

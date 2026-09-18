@@ -3,6 +3,7 @@ name = "datalib-etl-contacts-render"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_etl_contacts_render"
@@ -29,7 +30,7 @@ tracing = "0.1"
 # is "walk events, fish out the leaves I care about" — cheaper and
 # more forgiving than deriving a strict schema for what is in
 # practice a quirky WebDAV server zoo.
-quick-xml = "0.36"
+quick-xml = "0.41"
 # Lightweight base64 codec — vCard `PHOTO` properties inline binary
 # data as base64 in line-folded text. We decode + carry the bytes
 # inside `ContactPhoto`, written to `blobs/<uid>.<ext>` at render

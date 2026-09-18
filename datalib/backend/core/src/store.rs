@@ -1,6 +1,5 @@
-//! Opening a doltlite file, and the one error every reader must
-//! tolerate. Shared by the app stores here and by the grid index in
-//! `datalib_unified_index`, so the two cannot drift on pool settings.
+//! Opening a doltlite file the app server owns. A reader of somebody
+//! else's store opens through `datalib_pin` instead.
 
 use std::str::FromStr;
 
@@ -22,17 +21,4 @@ pub async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Er
         .max_connections(1)
         .connect_with(opts)
         .await
-}
-
-/// True iff `e` is SQLite's "no such table: <table>" for exactly the
-/// given table — the fresh-data-root state, before whatever step owns
-/// that table has run for the first time. Readers map this one case to
-/// "no data yet". Deliberately narrow: an exact message match on the
-/// single table the query reads, so real failures — corruption, bad
-/// SQL, missing columns, connection errors — still surface as errors.
-pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
-    match e {
-        sqlx::Error::Database(db) => db.message() == format!("no such table: {table}"),
-        _ => false,
-    }
 }

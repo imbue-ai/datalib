@@ -1,0 +1,145 @@
+# Builds and publishes the image `test.yml` runs in:
+# `ghcr.io/imbue-ai/datalib_devcontainer`. Standalone — nothing here
+# waits on a release, which is what kept the previous publish (a job at
+# the end of `release.yml`, behind the prod image's doc check) from
+# producing an image for four releases in a row.
+#
+# Runs on every `v*` tag — the same cadence the image always had, but
+# on its own, not as a job at the end of `release.yml` that a failing
+# prod-image check could skip — and on demand. Not on pushes or pull
+# requests: a build is ~8 min and ~2.5 GB, and the image carries a
+# pre-fetched output base that degrades gracefully when stale (bazel
+# fetches only what the lockfiles added since), so a release's worth of
+# drift costs seconds. Every build is tagged `:sha-<commit>`, a tag
+# build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
+# a tag, or when a dispatch asks, and only after the image has proved
+# it can analyse the tree. To try a Dockerfile change before a release,
+# dispatch this workflow on the branch, then `test.yml` with the `sha-`
+# tag it prints. Old `sha-` versions are pruned after each push.
+name: devcontainer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: Also move the `latest` tag to this build.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: devcontainer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and push (ghcr.io)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pre-fetch pulls the Rust toolchains and ~300 crates into the
+      # build; buildx plus the layer cache export need more than the
+      # ~14 GB free an ubuntu-latest runner ships with.
+      - name: Free up runner disk
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the image
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}_devcontainer"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          # amd64 only: CI runs on x86_64, and a contributor's devcontainer
+          # is built locally from the same Dockerfile for their own arch.
+          docker buildx build \
+              --file .devcontainer/Dockerfile \
+              --platform linux/amd64 \
+              --build-arg PREFETCH_OUTPUT_BASE=true \
+              --build-arg WARM_BAZEL_CACHE=false \
+              --tag "${image}:sha-${GITHUB_SHA::12}" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --cache-from type=gha,scope=devcontainer,version=3 \
+              --cache-to type=gha,mode=max,scope=devcontainer,version=3 \
+              --load \
+              .
+
+      # The image is only useful if the baked output base is one this
+      # tree's bazel accepts as already fetched: analyse `//...` from a
+      # checkout at a *different* path and under a *different* HOME than
+      # the image was built with (as CI's are), and require that nothing
+      # was downloaded. The HOME half is what caught the contents-cache
+      # trap the Dockerfile describes.
+      # The image is only useful if the baked output base is one this
+      # tree's bazel accepts as already fetched: analyse `//...` from a
+      # checkout at a *different* path than the one the image was built
+      # against (as CI's is), and require that nothing was downloaded.
+      - name: Smoke test — analyse the tree from the baked output base
+        run: |
+          docker run --rm -v "${PWD}:/src" -w /src -e HOME=/tmp/not-root "${IMAGE}:sha-${GITHUB_SHA::12}" \
+              bash .devcontainer/smoke_test.sh
+
+      # Pushed as a second export from the layers the build just cached,
+      # compressed with zstd rather than the gzip `docker push` would use:
+      # the runner spends the pull decompressing, and zstd decompresses
+      # several times faster. `--load` above is still the gzip form,
+      # because the smoke test needs the image in the local daemon.
+      - name: Push
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          set -euo pipefail
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* || "${{ inputs.publish_latest }}" == "true" ]]; then
+              tags+=("${IMAGE}:latest")
+          fi
+          names=$(IFS=,; echo "${tags[*]}")
+          docker buildx build \
+              --file .devcontainer/Dockerfile \
+              --platform linux/amd64 \
+              --build-arg PREFETCH_OUTPUT_BASE=true \
+              --build-arg WARM_BAZEL_CACHE=false \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --cache-from type=gha,scope=devcontainer,version=3 \
+              --output "type=image,\"name=${names}\",push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
+              .
+          printf 'pushed %s\n' "${tags[@]}"
+          [[ " ${tags[*]} " == *" ${IMAGE}:latest "* ]] && echo "moved :latest to sha-${GITHUB_SHA::12}" || true
+
+      # GHCR keeps every pushed version. Keep the newest few `sha-` builds
+      # (enough to roll `latest` back by hand) and drop the rest; the
+      # `latest`-tagged version is never among the deleted.
+      - name: Prune old image versions
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
+        with:
+          package-name: ${{ github.event.repository.name }}_devcontainer
+          package-type: container
+          min-versions-to-keep: 6
+          ignore-versions: '^(latest|[0-9]+\.[0-9]+\.[0-9]+)$'

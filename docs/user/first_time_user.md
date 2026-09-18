@@ -44,15 +44,16 @@ The sections on credentials (step 2) and on getting your data back out
 
 ## 0. Prerequisites
 
-You need `node` on your `PATH`:
-
-```sh
-brew install node
-```
-
-The tools shell out to two Node programs at sync time, fetching each
-on demand with `npx`: `latchkey`, which holds your credentials, and
-`qmd`, which builds the semantic search index. Nothing else is needed.
+None. The release tarball carries the binaries, and the first sync
+fetches the one other thing a sync runs: a Node runtime with the two
+Node programs the tools shell out to — `latchkey`, which holds your
+credentials, and `qmd`, which builds the semantic search index — at
+the exact versions datalib was built and tested with, published beside
+the tarball on the same release and checked against the sha256 the
+tarball carries for it. It lands in `~/.cache/datalib/runtime`, about
+100 MB, once per release. You do not need `node`, `npm` or `npx`
+installed. To fetch it ahead of the first sync (an offline laptop, say),
+run `datalib-step pull-runtime` while online.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 
@@ -63,9 +64,9 @@ One command installs the binaries from the GitHub Releases page — no
 curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 ```
 
-This downloads the latest release tarball, verifies its checksum, and
-drops the tools into `~/.local/bin`. The ones you will meet in this
-guide:
+This downloads the latest release tarball, verifies its checksum,
+unpacks it into `~/.local/lib/datalib` and links the tools into
+`~/.local/bin`. The ones you will meet in this guide:
 
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
@@ -76,7 +77,8 @@ guide:
 - `datalib-migrate-config` — rewrites a config file from an older
   datalib (step 3).
 
-Also installed: `datalib-fsindex` and `datalib-dirtree-diff` (a
+Also installed: `latchkey` (the credential tool, step 4, running on
+the bundled Node), `datalib-fsindex` and `datalib-dirtree-diff` (a
 standalone directory scanner and a diff of two scans) and the two
 `latchkey-curl-*` binaries the web-API sources fetch through. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
@@ -84,8 +86,9 @@ line to add to your `~/.zshrc` — add it and restart your shell.
 
 Three optional knobs:
 
-- `DATALIB_INSTALL_DIR` — install somewhere else, e.g.
-  `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
+- `DATALIB_INSTALL_DIR` — link the tools somewhere else, e.g.
+  `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`
+  (`DATALIB_LIB_DIR` moves the unpacked tarball).
 - `DATALIB_VERSION` — pin a release tag instead of `latest`, e.g.
   `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`.
 - `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
@@ -133,9 +136,9 @@ the rest — see [**getting your data**](getting_your_data.md).
 > local agent inherits this authority for as long as the credentials
 > remain valid.
 
-You don't need to install `latchkey`: the commands below run it through
-`npx`, which fetches it on demand (the `node` install from step 0 ships
-with `npx`).
+You don't need to install `latchkey`: the installer put it on your
+`PATH` in step 1, running on the Node runtime that came in the same
+tarball.
 
 ### Option 1: A Google Takeout export (no credentials needed)
 
@@ -180,7 +183,7 @@ Slack is built into latchkey. One command opens a browser, you sign in,
 and latchkey keeps the session:
 
 ```sh
-npx -y latchkey auth browser slack
+latchkey auth browser slack
 ```
 
 The sample config includes a Slack source, so do this before the first
@@ -195,7 +198,7 @@ DevTools.
 a. Register the `claude-ai` service with latchkey (one-time):
 
    ```sh
-   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
+   latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
 b. Paste the next command into your terminal **but don't run it yet** —
@@ -206,7 +209,7 @@ b. Paste the next command into your terminal **but don't run it yet** —
    text rather than your live session token:
 
    ```sh
-   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+   latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
    ```
 
 c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
@@ -406,12 +409,11 @@ faster.
     ├── jobs.doltlite_db            # sync job queue + history
     ├── runs.sqlite                 # every run's step states, logs and metrics
     ├── usage.doltlite_db           # bytes on disk over time
-    ├── media/                      # attachment bytes served to the UI
     └── frontend/                   # UI components the applets contribute
 ```
 
 > **Backups:** the bulky **derived** trees — each `<name>/render_markdown/`,
-> `unified_index/`, and `system/media/` — are rebuilt from your raw
+> and `unified_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -467,12 +469,13 @@ corpus is a fast no-op.
 ## 7. Querying the search index directly with qmd
 
 You can also query the semantic index from the command line, by
-pointing `qmd` at the sqlite file under your data root via the
-`INDEX_PATH` env var:
+pointing the fetched `qmd` at the sqlite file under your data root via
+the `INDEX_PATH` env var:
 
 ```sh
+rt=$(echo ~/.cache/datalib/runtime/*/)
 INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
-    npx -y @tobilu/qmd query "hello"
+    "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 
 `qmd status` against the same `INDEX_PATH` shows collections and

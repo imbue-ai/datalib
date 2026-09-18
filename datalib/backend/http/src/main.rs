@@ -36,6 +36,24 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let root = args.data_root;
+    // The connect flow runs `latchkey`; from a release tarball that
+    // ships no `runtime/`, the first one fetches the manifest's.
+    datalib_fetch::enable_runtime_fetch();
+
+    // First, so a spawner that asked for the watch and forgot the pipe is
+    // refused before anything under the root is touched.
+    let (parent_gone_tx, parent_gone) = tokio::sync::oneshot::channel();
+    datalib_parent_watch::exit_with_parent(move || {
+        let _ = parent_gone_tx.send(());
+        // Graceful shutdown waits for in-flight requests. One that never
+        // ends must not become the very leak this watch exists to stop.
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        datalib_parent_watch::report(
+            "datalib-http: parent gone and shutdown still running after 10s, exiting",
+        );
+        std::process::exit(0);
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
     let bind = std::env::var("DATALIB_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
     let created = !root.exists();
 
@@ -118,14 +136,14 @@ async fn main() -> anyhow::Result<()> {
     // Serve until a signal, then stop the applets on the way out.
     let applets = state.applets.clone();
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(terminated())
+        .with_graceful_shutdown(terminated(parent_gone))
         .await?;
     tracing::info!("datalib-http: shutting down, stopping applets");
     applets.shutdown();
     Ok(())
 }
 
-async fn terminated() {
+async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     let interrupt = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -146,9 +164,19 @@ async fn terminated() {
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+    // `Err` is the sender dropped without firing: the watch was never
+    // armed (no `DATALIB_PARENT_PIPE`), so there is no parent to outlive.
+    let parent_gone = async {
+        if parent_gone.await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
 
     tokio::select! {
         _ = interrupt => {}
         _ = terminate => {}
+        _ = parent_gone => {
+            tracing::info!("datalib-http: parent process gone, shutting down");
+        }
     }
 }

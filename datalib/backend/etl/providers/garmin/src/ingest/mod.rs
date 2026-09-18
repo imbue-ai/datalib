@@ -4,6 +4,13 @@
 //! bundle, and the small whole-account listings. Garmin has no "what
 //! changed since" API, so incrementality is a trailing re-fetch window
 //! per walk, and UPSERT-by-upstream-id makes the overlap free.
+//!
+//! A walk prunes what its listing did not name only when the listing
+//! is an enumeration: an array (every page of it, for the paged ones),
+//! with no request failing. Anything else — an object with no array
+//! inside, a 204/404/empty body, a page that errored — is byte-similar
+//! to "everything was deleted" and must not be read that way; it is a
+//! `problems` row instead, and the stored rows stay.
 
 pub mod api;
 pub mod db;
@@ -20,6 +27,7 @@ use datalib_etl::blob_cas::CasEdgeAccumulator;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
@@ -41,10 +49,77 @@ const CONSECUTIVE_FAILURE_BUDGET: u32 = 10;
 /// `/weight-service/weight/range/<start>/<end>` per request.
 pub const WEIGHT_CHUNK_DAYS: i64 = 90;
 pub const ACTIVITY_PAGE: usize = 100;
-/// Pages of the activity listing before the walk is declared runaway.
-const MAX_ACTIVITY_PAGES: usize = 2000;
+/// `start`/`limit` page of the workout and goal listings.
+pub const ITEM_PAGE: usize = 100;
+/// Pages of a listing before the walk is declared runaway — and, since
+/// it never reached a short page, not an enumeration.
+const MAX_LISTING_PAGES: usize = 2000;
 
-pub const ITEM_KINDS: &[&str] = &["personal_records", "gear", "badges", "workouts", "goals"];
+/// The whole-account listings, in the order they are walked. A paged
+/// kind takes `start`/`limit` and is walked to its first short page;
+/// the rest answer the whole list in one response.
+pub const ITEM_KINDS: &[ItemKind] = &[
+    ItemKind {
+        name: "personal_records",
+        id_keys: &["id"],
+        paged: false,
+    },
+    ItemKind {
+        name: "gear",
+        id_keys: &["gearPk", "uuid"],
+        paged: false,
+    },
+    ItemKind {
+        name: "badges",
+        id_keys: &["badgeId", "badgeUuid"],
+        paged: false,
+    },
+    ItemKind {
+        name: "workouts",
+        id_keys: &["workoutId"],
+        paged: true,
+    },
+    ItemKind {
+        name: "goals",
+        id_keys: &["id", "goalId"],
+        paged: true,
+    },
+];
+
+#[derive(Debug, Clone, Copy)]
+pub struct ItemKind {
+    pub name: &'static str,
+    /// The upstream id, first present key wins.
+    pub id_keys: &'static [&'static str],
+    pub paged: bool,
+}
+
+/// The path of one item listing, or of one of its pages. `None` for
+/// gear on an account whose profile carries no `profileId`. Also what
+/// the synthesizer builds its fixtures under.
+pub fn item_listing_path(
+    kind: &str,
+    display_name: &str,
+    profile_pk: Option<&str>,
+    offset: usize,
+) -> Option<String> {
+    Some(match kind {
+        "personal_records" => format!(
+            "/personalrecord-service/personalrecord/prs/{}",
+            urlencoding::encode(display_name)
+        ),
+        "gear" => format!(
+            "/gear-service/gear/filterGear?userProfilePk={}",
+            profile_pk?
+        ),
+        "badges" => "/badge-service/badge/earned".to_string(),
+        "workouts" => format!("/workout-service/workouts?start={offset}&limit={ITEM_PAGE}"),
+        "goals" => format!(
+            "/goal-service/goal/goals?status=active&start={offset}&limit={ITEM_PAGE}&sortOrder=asc"
+        ),
+        other => panic!("item_listing_path: {other:?} is not in ITEM_KINDS"),
+    })
+}
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -73,6 +148,10 @@ pub struct FetchSummary {
     pub devices: usize,
     pub items: usize,
     pub items_pruned: usize,
+    /// Listings that were not enumerations, so were not pruned to.
+    pub listings_failed: usize,
+    /// Phases that failed wholesale; the others ran.
+    pub phases_failed: usize,
     pub errors: usize,
 }
 
@@ -81,7 +160,8 @@ impl FetchSummary {
         format!(
             "requests={} metrics={} days={} weigh_ins={} weigh_ins_pruned={} \
              activities_listed={} activities_fetched={} activities_pruned={} \
-             activity_files={} wellness_files={} devices={} items={} items_pruned={} errors={}",
+             activity_files={} wellness_files={} devices={} items={} items_pruned={} \
+             listings_failed={} phases_failed={} errors={}",
             self.requests,
             self.metrics,
             self.days,
@@ -95,6 +175,8 @@ impl FetchSummary {
             self.devices,
             self.items,
             self.items_pruned,
+            self.listings_failed,
+            self.phases_failed,
             self.errors,
         )
     }
@@ -157,7 +239,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Every phase after the account is independent, and one that fails
     // must not cost the others — except an auth failure, which they would
-    // all share.
+    // all share. The run still returns `Ok` after a failed phase: the
+    // step driver commits and reports the store's problem counts only on
+    // `Ok`, so `Err` here would hide the very rows that say what failed.
     let account = fetch_account(&mut client, &db).await?;
     let mut walk = Walk {
         db: &db,
@@ -170,6 +254,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         since_widened,
         sealer: opts.sealer.as_ref(),
         progress,
+        problems: Vec::new(),
     };
 
     macro_rules! phase {
@@ -179,8 +264,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 if is_auth(&e) {
                     return Err(e.context(concat!("garmin ", $name)));
                 }
+                let detail = format!("{e:#}");
                 s.errors += 1;
-                warn!(event = "garmin_phase_failed", phase = $name, error = %format!("{e:#}"));
+                s.phases_failed += 1;
+                warn!(event = "garmin_phase_failed", phase = $name, error = %detail);
+                walk.problems.push(RunProblem::phase($name, detail));
             }
         };
     }
@@ -192,6 +280,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     phase!("items", walk.items(&mut s));
     let requests = walk.client.requests;
     s.requests = requests;
+    // Every run, empty included: last run's rows go with it.
+    download_problems::report_run(db.pool(), &walk.problems).await;
     datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
@@ -214,6 +304,47 @@ struct Walk<'a> {
     since_widened: bool,
     sealer: Option<&'a Sealer>,
     progress: &'a Progress,
+    /// What the run could not do as a whole, reported once at the end.
+    problems: Vec<RunProblem>,
+}
+
+/// What a listing request came back as. Only a complete one is an
+/// enumeration, and only a complete one is pruned to. `rows` on an
+/// incomplete one are the pages that did arrive; upserting them loses
+/// nothing.
+struct Listed {
+    rows: Vec<Value>,
+    /// Why this is not an enumeration, when it is not.
+    incomplete: Option<String>,
+}
+
+const NOTHING: &str = "answered with nothing (204, 404 or an empty body)";
+
+/// The array a listing answered with, or why it is not one. `wrapped`
+/// accepts an object holding the array under some key, which the item
+/// listings do; the rest answer a bare array.
+fn listing_array(
+    fetched: Fetched<Value>,
+    wrapped: bool,
+) -> std::result::Result<Vec<Value>, String> {
+    match fetched {
+        Fetched::Some(Value::Array(a)) => Ok(a),
+        Fetched::Some(Value::Object(o)) if wrapped => {
+            let keys: Vec<&String> = o.keys().collect();
+            let inside = format!("answered an object with no array inside: keys {keys:?}");
+            o.into_iter()
+                .find_map(|(_, v)| match v {
+                    Value::Array(a) => Some(a),
+                    _ => None,
+                })
+                .ok_or(inside)
+        }
+        Fetched::Some(other) => {
+            let preview: String = other.to_string().chars().take(120).collect();
+            Err(format!("expected an array, got {preview}"))
+        }
+        Fetched::Nothing => Err(NOTHING.to_string()),
+    }
 }
 
 async fn fetch_account(client: &mut GarminClient, db: &RawDb) -> Result<Account> {
@@ -317,17 +448,99 @@ impl Walk<'_> {
         }
     }
 
+    /// One listing request. Only an auth failure is an `Err`; any other
+    /// way of not getting an array comes back as the reason.
+    async fn list_once(
+        &mut self,
+        path: &str,
+        wrapped: bool,
+    ) -> Result<std::result::Result<Vec<Value>, String>> {
+        match self.client.get_json(path).await {
+            Ok(fetched) => Ok(listing_array(fetched, wrapped)),
+            Err(e) if is_auth(&e) => Err(e),
+            Err(e) => Ok(Err(format!("{e:#}"))),
+        }
+    }
+
+    /// A `start`/`limit` listing, `page(offset)` naming each page's
+    /// path, walked to its first short page. A page that is not an
+    /// array, or whose request failed, ends the walk incomplete; so does
+    /// a walk that never reaches a short page.
+    async fn list_pages(
+        &mut self,
+        page: impl Fn(usize) -> String,
+        page_size: usize,
+        wrapped: bool,
+    ) -> Result<Listed> {
+        let mut rows: Vec<Value> = Vec::new();
+        let mut offset = 0usize;
+        for _ in 0..MAX_LISTING_PAGES {
+            match self.list_once(&page(offset), wrapped).await? {
+                Ok(page_rows) => {
+                    let n = page_rows.len();
+                    // An endpoint that ignores `start` answers the same
+                    // full page forever; one repeat is enough to know.
+                    if n > 0 && rows.ends_with(&page_rows) {
+                        return Ok(Listed {
+                            rows,
+                            incomplete: Some(format!(
+                                "page at offset {offset} repeated the page before it"
+                            )),
+                        });
+                    }
+                    rows.extend(page_rows);
+                    if n < page_size {
+                        return Ok(Listed {
+                            rows,
+                            incomplete: None,
+                        });
+                    }
+                    offset += n;
+                }
+                Err(why) => {
+                    return Ok(Listed {
+                        rows,
+                        incomplete: Some(format!("page at offset {offset}: {why}")),
+                    })
+                }
+            }
+        }
+        Ok(Listed {
+            rows,
+            incomplete: Some(format!("still a full page after {MAX_LISTING_PAGES} pages")),
+        })
+    }
+
+    /// A listing that is not an enumeration: nothing is pruned to it
+    /// this run, and the run says so. Counted once per listing.
+    fn listing_failed(&mut self, s: &mut FetchSummary, name: &str, why: &str) {
+        s.errors += 1;
+        warn!(
+            event = "garmin_listing_incomplete",
+            listing = name,
+            reason = why,
+            "not an enumeration; the stored rows are kept, nothing is pruned"
+        );
+        let problem = RunProblem::listing(name, why);
+        if self.problems.iter().any(|p| p.key() == problem.key()) {
+            return;
+        }
+        s.listings_failed += 1;
+        self.problems.push(problem);
+    }
+
     // ── devices ──────────────────────────────────────────────────────
 
     async fn devices(&mut self, s: &mut FetchSummary) -> Result<()> {
         let list = match self
-            .client
-            .get_json("/device-service/deviceregistration/devices")
+            .list_once("/device-service/deviceregistration/devices", false)
             .await?
         {
-            Fetched::Some(Value::Array(a)) => a,
-            Fetched::Some(other) => bail!("devices: expected an array, got {other}"),
-            Fetched::Nothing => Vec::new(),
+            Ok(list) => list,
+            Err(why) => {
+                self.listing_failed(s, "devices", &why);
+                return Ok(());
+            }
         };
         let mut rows = Vec::with_capacity(list.len());
         for d in &list {
@@ -424,6 +637,7 @@ impl Walk<'_> {
         let start = self.resume_from(CURSOR_WEIGHT).await?;
         let mut chunk_start = start;
         let mut seen: HashSet<String> = HashSet::new();
+        let mut complete = true;
         while chunk_start <= self.today {
             let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(self.today);
             let path = format!(
@@ -431,17 +645,39 @@ impl Walk<'_> {
                 ymd(chunk_start),
                 ymd(chunk_end)
             );
-            let rows = match self.client.get_json(&path).await? {
-                Fetched::Some(v) => weigh_in_rows(&v),
-                Fetched::Nothing => Vec::new(),
+            let listed = match self.client.get_json(&path).await {
+                Ok(Fetched::Some(v)) => match v["dailyWeightSummaries"].as_array() {
+                    Some(summaries) => Ok(weigh_in_rows(summaries)),
+                    None => {
+                        let preview: String = v.to_string().chars().take(120).collect();
+                        Err(format!("no dailyWeightSummaries array: {preview}"))
+                    }
+                },
+                Ok(Fetched::Nothing) => Err(NOTHING.to_string()),
+                Err(e) if is_auth(&e) => return Err(e),
+                Err(e) => Err(format!("{e:#}")),
             };
-            for r in &rows {
-                seen.insert(r.id_and_payload.id.clone());
+            match listed {
+                Ok(rows) => {
+                    for r in &rows {
+                        seen.insert(r.id_and_payload.id.clone());
+                    }
+                    s.weigh_ins += rows.len();
+                    upsert(self.db, &rows).await?;
+                    self.wrote(rows.len() as u64).await;
+                }
+                Err(why) => {
+                    complete = false;
+                    let why = format!("{}..{}: {why}", ymd(chunk_start), ymd(chunk_end));
+                    self.listing_failed(s, "weight", &why);
+                }
             }
-            s.weigh_ins += rows.len();
-            upsert(self.db, &rows).await?;
-            self.wrote(rows.len() as u64).await;
             chunk_start = chunk_end + Duration::days(1);
+        }
+        // A chunk that did not list leaves the window unenumerated: no
+        // prune, and the cursor stays so the next run walks it again.
+        if !complete {
+            return Ok(());
         }
         let keep: HashSet<&str> = seen.iter().map(String::as_str).collect();
         s.weigh_ins_pruned = self
@@ -456,24 +692,23 @@ impl Walk<'_> {
 
     async fn activities(&mut self, s: &mut FetchSummary) -> Result<()> {
         let start = self.resume_from(CURSOR_ACTIVITIES).await?;
-        let mut listed: Vec<Value> = Vec::new();
-        let mut offset = 0usize;
-        for _ in 0..MAX_ACTIVITY_PAGES {
-            let path = format!(
-                "/activitylist-service/activities/search/activities?start={offset}&limit={ACTIVITY_PAGE}&startDate={}",
-                ymd(start)
-            );
-            let page = match self.client.get_json(&path).await? {
-                Fetched::Some(Value::Array(a)) => a,
-                Fetched::Some(other) => bail!("activities: expected an array, got {other}"),
-                Fetched::Nothing => Vec::new(),
-            };
-            let n = page.len();
-            listed.extend(page);
-            if n < ACTIVITY_PAGE {
-                break;
-            }
-            offset += n;
+        let start_date = ymd(start);
+        let Listed {
+            rows: listed,
+            incomplete,
+        } = self
+            .list_pages(
+                |offset| {
+                    format!(
+                        "/activitylist-service/activities/search/activities?start={offset}&limit={ACTIVITY_PAGE}&startDate={start_date}"
+                    )
+                },
+                ACTIVITY_PAGE,
+                false,
+            )
+            .await?;
+        if let Some(why) = &incomplete {
+            self.listing_failed(s, "activities", why);
         }
         s.activities_listed = listed.len();
 
@@ -580,6 +815,11 @@ impl Walk<'_> {
         }
         flush_activity_files(self.db, &edges).await?;
 
+        // A walk that stopped short enumerated nothing: no prune, and
+        // the cursor stays so the next run walks the window again.
+        if incomplete.is_some() {
+            return Ok(());
+        }
         // The listing is complete from `start`, so an activity dated
         // clearly inside the window that it did not name is gone
         // upstream. A day of slack keeps the local/GMT boundary out of it.
@@ -646,82 +886,69 @@ impl Walk<'_> {
     // ── whole-account listings ───────────────────────────────────────
 
     async fn items(&mut self, s: &mut FetchSummary) -> Result<()> {
+        let display_name = self.account.display_name.clone();
+        let profile_pk = self.account.profile_pk.clone();
         for kind in ITEM_KINDS {
-            let (path, id_keys): (String, &[&str]) = match *kind {
-                "personal_records" => (
-                    format!(
-                        "/personalrecord-service/personalrecord/prs/{}",
-                        self.account.display_name
-                    ),
-                    &["id"],
-                ),
-                "gear" => {
-                    let Some(pk) = &self.account.profile_pk else {
-                        warn!(
-                            event = "garmin_gear_skipped",
-                            "socialProfile carries no profileId"
-                        );
-                        continue;
-                    };
-                    (
-                        format!("/gear-service/gear/filterGear?userProfilePk={pk}"),
-                        &["gearPk", "uuid"],
-                    )
-                }
-                "badges" => (
-                    "/badge-service/badge/earned".to_string(),
-                    &["badgeId", "badgeUuid"],
-                ),
-                "workouts" => (
-                    "/workout-service/workouts?start=0&limit=1000".to_string(),
-                    &["workoutId"],
-                ),
-                "goals" => (
-                    "/goal-service/goal/goals?status=active&start=0&limit=1000&sortOrder=asc"
-                        .to_string(),
-                    &["id", "goalId"],
-                ),
-                _ => unreachable!(),
+            let path = |offset: usize| {
+                item_listing_path(kind.name, &display_name, profile_pk.as_deref(), offset)
             };
-            let list = match self.client.get_json(&path).await {
-                Ok(Fetched::Some(Value::Array(a))) => a,
-                Ok(Fetched::Some(other)) => {
-                    // A wrapped listing: take the first array inside.
-                    other
-                        .as_object()
-                        .and_then(|o| o.values().find_map(|v| v.as_array().cloned()))
-                        .unwrap_or_default()
-                }
-                Ok(Fetched::Nothing) => Vec::new(),
-                Err(e) if is_auth(&e) => return Err(e),
-                Err(e) => {
-                    s.errors += 1;
-                    warn!(event = "garmin_items_failed", kind, error = %format!("{e:#}"));
-                    continue;
+            let Some(first_page) = path(0) else {
+                warn!(
+                    event = "garmin_gear_skipped",
+                    "socialProfile carries no profileId"
+                );
+                continue;
+            };
+            let Listed {
+                rows: list,
+                incomplete,
+            } = if kind.paged {
+                self.list_pages(
+                    |offset| path(offset).expect("the first page resolved"),
+                    ITEM_PAGE,
+                    true,
+                )
+                .await?
+            } else {
+                match self.list_once(&first_page, true).await? {
+                    Ok(rows) => Listed {
+                        rows,
+                        incomplete: None,
+                    },
+                    Err(why) => Listed {
+                        rows: Vec::new(),
+                        incomplete: Some(why),
+                    },
                 }
             };
+            if let Some(why) = &incomplete {
+                self.listing_failed(s, kind.name, why);
+            }
             let mut rows = Vec::with_capacity(list.len());
             for item in &list {
-                let Some(upstream_id) = id_of(item, id_keys) else {
+                let Some(upstream_id) = id_of(item, kind.id_keys) else {
                     warn!(
                         event = "garmin_item_without_id",
-                        kind, "skipping an item with no id"
+                        kind = kind.name,
+                        "skipping an item with no id"
                     );
                     continue;
                 };
                 rows.push(ItemRow {
                     id_and_payload: WirePayload {
-                        id: ItemRow::id_for(kind, &upstream_id),
+                        id: ItemRow::id_for(kind.name, &upstream_id),
                         payload: item.to_string(),
                     },
-                    kind: kind.to_string(),
+                    kind: kind.name.to_string(),
                     upstream_id,
                 });
             }
             let keep: HashSet<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
             upsert(self.db, &rows).await?;
             s.items += rows.len();
-            s.items_pruned += self.db.prune_items(kind, &keep).await?;
+            if incomplete.is_none() {
+                s.items_pruned += self.db.prune_items(kind.name, &keep).await?;
+            }
             self.wrote(rows.len() as u64).await;
         }
         Ok(())
@@ -804,13 +1031,10 @@ pub fn daily_path(metric: &str, display_name: &str, d: &str) -> String {
 }
 
 /// `dailyWeightSummaries[].allWeightMetrics[]` flattened, one row per
-/// weigh-in.
-pub fn weigh_in_rows(v: &Value) -> Vec<WeighInRow> {
+/// weigh-in. The caller has already established that the summaries
+/// array is there: its absence is not an empty range.
+pub fn weigh_in_rows(summaries: &[Value]) -> Vec<WeighInRow> {
     let mut out = Vec::new();
-    let summaries = v["dailyWeightSummaries"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
     for summary in summaries {
         let Some(metrics) = summary["allWeightMetrics"].as_array() else {
             continue;
@@ -887,7 +1111,7 @@ mod tests {
                 {"summaryDate": "2026-09-14", "allWeightMetrics": []}
             ]
         });
-        let rows = weigh_in_rows(&v);
+        let rows = weigh_in_rows(v["dailyWeightSummaries"].as_array().unwrap());
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id_and_payload.id, "1");
         assert_eq!(rows[1].weight_g, Some(80100.0));
@@ -908,6 +1132,47 @@ mod tests {
         }
         assert_eq!(fit_from_zip(&buf.into_inner()).unwrap(), b".FIT-bytes");
         assert!(fit_from_zip(b"not a zip").is_err());
+    }
+
+    /// Only an array is an enumeration. An empty array is one — "you
+    /// have no badges" — and a wrapped object is one only when it
+    /// wraps an array.
+    #[test]
+    fn only_an_array_is_an_enumeration() {
+        let arr = |v: Value| listing_array(Fetched::Some(v), false);
+        assert_eq!(arr(json!([])).unwrap(), Vec::<Value>::new());
+        assert_eq!(arr(json!([1, 2])).unwrap().len(), 2);
+        assert!(
+            arr(json!({"list": [1]})).is_err(),
+            "bare kinds take no wrapper"
+        );
+        assert!(arr(json!("x")).unwrap_err().contains("expected an array"));
+        assert!(listing_array(Fetched::Nothing, false)
+            .unwrap_err()
+            .contains("nothing"));
+
+        let wrapped = |v: Value| listing_array(Fetched::Some(v), true);
+        assert_eq!(wrapped(json!({"count": 1, "list": [1]})).unwrap().len(), 1);
+        assert!(wrapped(json!({"count": 0}))
+            .unwrap_err()
+            .contains("no array inside"));
+        assert!(wrapped(json!({})).is_err(), "an empty object wraps nothing");
+    }
+
+    #[test]
+    fn every_item_kind_has_a_path_and_only_the_paged_ones_take_an_offset() {
+        for kind in ITEM_KINDS {
+            let p0 = item_listing_path(kind.name, "Some Body", Some("1701"), 0).unwrap();
+            let p1 = item_listing_path(kind.name, "Some Body", Some("1701"), ITEM_PAGE).unwrap();
+            assert!(p0.starts_with('/'), "{}: {p0}", kind.name);
+            assert!(
+                !p0.contains(' '),
+                "{}: display name must be encoded: {p0}",
+                kind.name
+            );
+            assert_eq!(p0 != p1, kind.paged, "{}: {p0} vs {p1}", kind.name);
+        }
+        assert!(item_listing_path("gear", "x", None, 0).is_none());
     }
 
     #[test]

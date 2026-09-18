@@ -28,8 +28,8 @@ pub struct ParsedContact {
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
-    /// `REV:` (revision timestamp). Render uses it for `when_ts`;
-    /// falls back to the `--now` stamp when absent.
+    /// `REV:` (revision timestamp). Render uses it for `modified_at`;
+    /// null when absent.
     pub revision: Option<String>,
     /// Multi-valued properties surfaced in document order.
     pub emails: Vec<VcardProp>,

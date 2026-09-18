@@ -33,7 +33,7 @@ pub fn out_rel() -> String {
 /// Taking the list from the graph rather than from a directory scan means
 /// a source dropped from the config stops being indexed on the next run,
 /// even while its rendered tree is still on disk.
-fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
+pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for input in inputs {
         if let Some(group) = input.split('/').next() {
@@ -113,10 +113,34 @@ pub async fn run(
     if let Some(d) = models_dir {
         opts.models_dir = d;
     }
-    // run_index shells out to qmd; blocking work.
-    let outcome = tokio::task::spawn_blocking(move || datalib_qmd_indexer::run_index(&opts))
-        .await
-        .context("qmd task panicked")??;
+    // Models first, then the index: qmd finds every pinned GGUF already
+    // in place and never fetches one itself. run_index shells out to
+    // qmd; blocking work.
+    let outcome = tokio::task::spawn_blocking(move || {
+        let effective = datalib_qmd_models::effective_models_dir(
+            &datalib_runtime::qmd::qmd_state_dir(&opts.root),
+            &opts.models_dir,
+        );
+        let models = datalib_qmd_models::PINNED_MODELS;
+        let outcomes = datalib_qmd_models::ensure_models(
+            &effective,
+            models,
+            datalib_qmd_models::Fetch::from_env(),
+        )
+        .with_context(|| format!("provision qmd models in {}", effective.display()))?;
+        let missing = datalib_qmd_models::missing(models, &outcomes);
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "qmd models missing from {} and not fetched ({} is set): {}",
+                effective.display(),
+                datalib_qmd_models::NO_FETCH_ENV,
+                missing.join(", ")
+            );
+        }
+        datalib_qmd_indexer::run_index(&opts)
+    })
+    .await
+    .context("qmd task panicked")??;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the

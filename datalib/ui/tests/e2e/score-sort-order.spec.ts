@@ -31,10 +31,11 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    for the scroll-to-top assertion below.
     await page.goto("/");
     await page
-      .locator('.ag-grid-scrolling-rows [role="row"]')
+      .locator(".grid-box .slick-row")
       .first()
       .waitFor({ timeout: 10_000 });
-    const viewport = page.locator(".ag-grid-viewport");
+    // The main pane's viewport: the grid keeps one per frozen quadrant.
+    const viewport = page.locator(".grid-box .slick-viewport-top.slick-viewport-left");
     await expect(viewport).toBeVisible();
     const beforeScrollTop = await viewport.evaluate((el) => el.scrollTop);
     expect(
@@ -53,17 +54,16 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     // qmd failed identically.
     await searchAndSettle(page, "grey earl");
 
-    const scoreHeader = page.locator('.ag-header-cell[col-id="score"]');
+    const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
     await expect(scoreHeader).toBeVisible();
     const firstRow = page
-      .locator('.ag-grid-scrolling-rows [role="row"]')
+      .locator(".grid-box .slick-row")
       .first();
     await expect(firstRow).toBeVisible();
 
-    // 3. Viewport must have scrolled to row 0. AG Grid's
-    //    `ensureIndexVisible(0, "top")` writes scrollTop near 0 (browser
-    //    may add a sub-pixel for alignment). Poll briefly to absorb
-    //    the post-sort layout settle.
+    // 3. Viewport must have scrolled to row 0. `scrollRowIntoView(0)`
+    //    writes scrollTop near 0 (browser may add a sub-pixel for
+    //    alignment). Poll briefly to absorb the post-sort layout settle.
     await expect
       .poll(async () => viewport.evaluate((el) => el.scrollTop), {
         timeout: 5_000,
@@ -71,14 +71,22 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
       })
       .toBeLessThan(5);
 
-    // 4. Score column values are non-increasing in DOM order.
+    // 4. Score column values are non-increasing in row order.
     //    Virtualization means we only see the on-screen window, but a
     //    non-increasing prefix is enough to assert the sort direction.
+    //    Row order, not DOM order: the grid appends a row's node when
+    //    it first scrolls in, so the DOM is not sorted.
     const cells = page.locator(
-      '.ag-grid-scrolling-rows [role="row"] [col-id="score"]',
+      '.grid-box .slick-row [col-id="score"]',
     );
     const texts = await cells.evaluateAll((els) =>
-      els.map((el) => (el.textContent ?? "").trim()),
+      els
+        .map((el) => ({
+          row: Number(el.closest(".slick-row")?.getAttribute("data-row") ?? -1),
+          text: (el.textContent ?? "").trim(),
+        }))
+        .sort((a, b) => a.row - b.row)
+        .map((c) => c.text),
     );
     expect(texts.length, "expected qmd-routed search to surface score cells")
       .toBeGreaterThan(1);

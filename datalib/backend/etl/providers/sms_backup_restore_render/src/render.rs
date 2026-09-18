@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
@@ -25,7 +24,7 @@ use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
 /// v2: a row whose `date` field is missing or non-numeric gets a null
-///     `when_ts` instead of a real-looking `1970-01-01T00:00:00`. See
+///     `created_at` instead of a real-looking `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 2;
 
@@ -49,7 +48,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::SmsBackupRestore,
         // Drives the grid "Source" column (and `source:SMS` queries); keep
         // it short so it reads cleanly next to the SMS icon.
@@ -76,19 +75,14 @@ pub fn render(
     }
     let (messages, calls, blobs, scan) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
-            // Pin before reading, and pin the CAS too — separate file,
-            // separate HEAD. No commit means nothing has been committed here
-            // to render, which is emptiness rather than a reason to read the
-            // working set.
-            let pin = range.pin(db.pool()).await?;
+            // Pinned at open. No commit means nothing has been committed
+            // here to render, which is emptiness rather than a reason to
+            // read the working set.
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                return Ok(Default::default());
+            };
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             let loaded = async {
-                let Some(pin) = pin else {
-                    return anyhow::Ok(Default::default());
-                };
-                datalib_etl::pin::install_views(db.pool(), &pin)
-                    .await
-                    .context("pin the sms_backup_restore raw store for render")?;
                 let messages = datalib_etl::doltlite_raw::load_payloads_with_id(
                     db.pool(),
                     datalib_etl::pin::Reads::At(&pin),
@@ -361,7 +355,7 @@ fn item(v: &Value) -> NormalizedChatItem {
         .map(str::to_string)
         .unwrap_or_else(|| uuid5(&v.to_string()));
     // Missing or non-numeric `date` is "we don't know when", which is a
-    // null `when_ts` — not the epoch.
+    // null `created_at` — not the epoch.
     let date_ms = v.get("date").and_then(Value::as_i64);
 
     match kind {
@@ -390,6 +384,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: Vec::new(),
             }
         }
         // sms / mms
@@ -453,6 +448,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: Vec::new(),
             }
         }
     }

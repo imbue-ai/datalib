@@ -78,7 +78,7 @@ accident:
 
 Most of a provider's shape reaches the renderer through
 `RenderProfile` — its `grid_rows` taxonomy, its `source_label`, its
-`when_ts` precision. Three knobs exist for one source each, and are
+`created_at` precision. Three knobs exist for one source each, and are
 worth knowing about before you invent a fourth:
 
 - **`RenderProfile` is per *call*, not per source.** Beeper bridges
@@ -120,8 +120,8 @@ is one its processors declare.
 ## Looking at the output
 
 ```sh
-bazelisk run //datalib/ui:chat_preview     # rewrite the golden
-open datalib/ui/tests/goldens/chat_preview.html
+bazelisk run //datalib/ui:render_preview     # rewrite the golden
+open datalib/ui/tests/goldens/render_preview.html
 ```
 
 `src/samples.rs` holds a corpus that hits every layout this crate can
@@ -137,5 +137,17 @@ controls and the copy buttons you are clicking are the app's own code.
 That is also why that file is plain JavaScript: the preview can inline
 it without a bundler.
 
-`//datalib/ui:chat_preview_test` regenerates the page and diffs it, so
+`//datalib/ui:render_preview_test` regenerates the page and diffs it, so
 the checked-in copy cannot drift from the sources it was built from.
+
+## The UI sanitizes what you emit
+
+A message body reaches the markdown as the sender wrote it, and the app
+renders the markdown with HTML enabled because the section wrappers are
+HTML. So before the page shows a document, `ui/src/cards/sanitize.ts`
+runs it through DOMPurify: scripts, event handlers, `javascript:` URLs,
+form controls and foreign iframes are dropped, and only the tags and
+attributes the renderers actually use survive. **A renderer that starts
+emitting a new tag or attribute has to add it there**, or the page will
+silently strip it; `ui/tests/sanitize.test.ts` is where the vocabulary
+is pinned.

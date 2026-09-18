@@ -11,7 +11,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
@@ -31,7 +31,7 @@ const ME: &str = "Me";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Post".to_string(),
@@ -62,14 +62,12 @@ pub fn render_posts(
 
     let Some((shares, comments, changed, new_head)) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let db = RawDb::open_reader(&db_path).await?;
             // Read at a commit: this store belongs to the download step, and
             // nothing committed means nothing to render from.
-            let Some(pin) = range.pin(db.pool()).await? else {
-                db.close().await;
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(None);
             };
-            datalib_etl::pin::install_views(db.pool(), &pin).await?;
+            let pin = db.pin().expect("a reader is pinned at open").clone();
             // A feed the user didn't export has no table; treat a load
             // error as "absent" rather than failing the render.
             let shares = datalib_etl::doltlite_raw::load_payloads_with_id(
@@ -279,11 +277,13 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         }
         text.push_str(&format!("[🔗 View on LinkedIn]({u})"));
     }
+    let mut problems = Vec::new();
+    let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
     NormalizedChatItem {
         message_uuid: uuid5(&format!("msg:posts:{key}:{role}:{date}:{text}")),
         author_id: "me".to_string(),
         author_display: ME.to_string(),
-        date_ms: parse_date_ms(date),
+        date_ms,
         text: nonempty(&text).map(str::to_string),
         kind: ItemKind::Text,
         attachments: linkout(url),
@@ -293,6 +293,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        problems,
     }
 }
 
@@ -315,6 +316,7 @@ fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedCha
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        problems: Vec::new(),
     }
 }
 

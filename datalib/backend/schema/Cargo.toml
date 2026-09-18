@@ -3,6 +3,7 @@ name = "datalib-schema"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -12,6 +13,8 @@ datalib-etl-macros = { path = "../etl/macros" }
 datalib-table = { path = "../table" }
 datalib-time = { path = "../time" }
 serde = { workspace = true }
-serde_json = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

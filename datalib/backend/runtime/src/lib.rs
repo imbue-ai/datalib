@@ -4,3 +4,4 @@
 pub mod layout;
 pub mod node_runtime;
 pub mod qmd;
+pub mod runtime_manifest;

@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Context;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
@@ -13,10 +12,11 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_schema::problems::Problem;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmen
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
-/// v2: a `created_date` / `when` we cannot parse gets a null `when_ts`
+/// v2: a `created_date` / `when` we cannot parse gets a null `created_at`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 pub const RENDER_VERSION: u32 = 2;
@@ -49,7 +49,7 @@ fn uuid5(recipe: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
@@ -62,7 +62,7 @@ fn profile() -> RenderProfile {
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
-        when_ts_precision: datalib_etl_chat_common::WhenTsPrecision::Seconds,
+        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
         provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
@@ -97,19 +97,15 @@ pub fn render(
     let Some((messages, groups, voice_messages, voice_blobs, scan)) =
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                let db = RawDb::open_reader(&db_path).await?;
-                // Pin before reading: the driver's pin when it made one,
-                // else HEAD. No commit means nothing has been committed here
-                // to render, which is emptiness rather than a reason to read
+                // Pinned at open: the driver's pin when it made one, else
+                // HEAD. No commit means nothing has been committed here to
+                // render, which is emptiness rather than a reason to read
                 // the working set.
-                let pin = range.pin(db.pool()).await?;
+                let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
+                    return Ok(None);
+                };
+                let pin = db.pin().expect("a reader is pinned at open").clone();
                 let loaded = async {
-                    let Some(pin) = pin else {
-                        return anyhow::Ok(None);
-                    };
-                    datalib_etl::pin::install_views(db.pool(), &pin)
-                        .await
-                        .context("pin the google_takeout raw store for render")?;
                     let messages = db
                         .load_payloads_with_id(datalib_etl::pin::Reads::At(&pin), "chat_messages")
                         .await?;
@@ -356,13 +352,18 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     .unwrap_or(name);
                 let id = m.get("message_id").and_then(Value::as_str).unwrap_or("");
                 let text = m.get("text").and_then(Value::as_str);
+                let mut problems = Vec::new();
+                let date_ms = own_stamp_ms(
+                    m.get("created_date").and_then(Value::as_str),
+                    "created_date",
+                    parse_date_ms,
+                    &mut problems,
+                );
                 NormalizedChatItem {
                     message_uuid: uuid5(&format!("msg:{id}")),
                     author_id: email.to_string(),
                     author_display: name.to_string(),
-                    date_ms: parse_date_ms(
-                        m.get("created_date").and_then(Value::as_str).unwrap_or(""),
-                    ),
+                    date_ms,
                     text: text.filter(|s| !s.is_empty()).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
@@ -372,6 +373,7 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    problems,
                 }
             })
             .collect();
@@ -446,16 +448,9 @@ fn space_of_dir(dir: &str) -> String {
         .to_string()
 }
 
-/// TODO(problem-sink): a shape we don't recognize is dropped silently.
-/// `None` is the right *value* for `when_ts`, but nothing anywhere
-/// records that we discarded something upstream actually sent — that is
-/// only half of R1 ("drop, count, log; never abort, never hide"). When
-/// the problem sink exists (see
-/// `docs/dev/plans/data_lib_as_a_library/render_audit_2026_09_03.md` §4),
-/// report `{field, reason: CoercionFailed, sample}` here as well as
-/// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
-/// timestamp to unix millis, or `None` on any shape we don't recognize.
+/// timestamp to unix millis, or `None` on any shape we don't recognize —
+/// which the caller records through `own_stamp_ms`.
 fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
     const FMTS: [&str; 2] = [
@@ -571,7 +566,8 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| uuid5(&m.to_string()));
-    let date_ms = voice_date_ms(m);
+    let mut problems = Vec::new();
+    let date_ms = voice_date_ms(m, &mut problems);
 
     let attachments: Vec<NormalizedAttachment> = voice_attachment_refs(m)
         .into_iter()
@@ -626,6 +622,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
         "voicemail" | "recorded" => {
@@ -656,6 +653,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
         // missed / placed / received — a call with no media: a system note.
@@ -681,6 +679,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
     }
@@ -702,22 +701,25 @@ fn party_id(party: Option<&Value>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `when_ts`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::when_ts_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
-/// raw value, then to `None`.
-fn voice_date_ms(m: &Value) -> Option<i64> {
+/// raw value, then to `None` — recorded when there was a value and it
+/// would not parse.
+fn voice_date_ms(m: &Value, problems: &mut Vec<Problem>) -> Option<i64> {
     let ts = m
         .get("when")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .or_else(|| m.get("when_raw").and_then(Value::as_str))
-        .unwrap_or("");
-    datalib_time::parse_strict(ts)
-        .ok()
-        .map(|t| t.to_unix_millis())
+        .or_else(|| m.get("when_raw").and_then(Value::as_str));
+    own_stamp_ms(
+        ts,
+        "when",
+        |s| {
+            datalib_time::parse_strict(s)
+                .ok()
+                .map(|t| t.to_unix_millis())
+        },
+        problems,
+    )
 }
 
 fn month_of(ms: Option<i64>) -> String {
@@ -858,11 +860,17 @@ mod tests {
 
     #[test]
     fn voice_date_ms_yields_none_when_undated() {
-        assert_eq!(voice_date_ms(&json!({})), None);
-        assert_eq!(voice_date_ms(&json!({"when": ""})), None);
-        assert_eq!(voice_date_ms(&json!({"when": "yesterday"})), None);
+        assert_eq!(voice_date_ms(&json!({}), &mut Vec::new()), None);
+        assert_eq!(voice_date_ms(&json!({"when": ""}), &mut Vec::new()), None);
         assert_eq!(
-            voice_date_ms(&json!({"when": "2019-08-01T14:49:00.742-07:00"})),
+            voice_date_ms(&json!({"when": "yesterday"}), &mut Vec::new()),
+            None
+        );
+        assert_eq!(
+            voice_date_ms(
+                &json!({"when": "2019-08-01T14:49:00.742-07:00"}),
+                &mut Vec::new()
+            ),
             Some(1_564_696_140_742),
         );
     }

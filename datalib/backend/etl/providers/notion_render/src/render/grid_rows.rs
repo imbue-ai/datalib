@@ -7,8 +7,8 @@ use std::time::Instant;
 use anyhow::Result;
 use datalib_etl_render::inputs::{Inputs, Lookup};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
 use super::parse::{parent_block_of, ParsedNotion};
@@ -110,18 +110,16 @@ fn page_row(
     title: &str,
     stanza: &str,
     users: Lookup<'_, HashMap<String, String>>,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let pid = page
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let when_ts: Option<String> = page
-        .get("last_edited_time")
-        .and_then(|v| v.as_str())
-        .or_else(|| page.get("created_time").and_then(|v| v.as_str()))
-        .map(str::to_string);
+    let stamp = |key: &str| page.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let created_at = stamp("created_time");
+    let modified_at = stamp("last_edited_time");
     let author_id = page
         .get("last_edited_by")
         .or_else(|| page.get("created_by"))
@@ -133,7 +131,9 @@ fn page_row(
         .provider(Provider::Notion)
         .kind("Notion Page")
         .source_label("Notion")
-        .when_ts(when_ts)
+        .is_document(true)
+        .created_at(created_at)
+        .modified_at(modified_at)
         .author(resolved_author(author_id, users))
         .conversation_name(Some(title.to_string()))
         .conversation_uuid(pid.clone())
@@ -155,7 +155,7 @@ fn thread_rows(
     stanza: &str,
     parent_block_id: Option<&str>,
     anchor: Option<&str>,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     if members_sorted.is_empty() {
         return Vec::new();
@@ -182,10 +182,24 @@ fn thread_rows(
             .provider(Provider::Notion)
             .kind("Notion Comment Thread")
             .source_label("Notion")
-            .when_ts(
+            .is_document(true)
+            .created_at(
                 first
                     .get("created_time")
                     .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            )
+            // The thread last changed when its latest comment was
+            // written or edited, whichever `last_edited_time` is latest.
+            .modified_at(
+                members_sorted
+                    .iter()
+                    .filter_map(|c| {
+                        c.get("last_edited_time")
+                            .or_else(|| c.get("created_time"))
+                            .and_then(|v| v.as_str())
+                    })
+                    .max()
                     .map(str::to_string),
             )
             .author(comment_author(first))
@@ -207,9 +221,15 @@ fn thread_rows(
                 .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
-                .when_ts(
+                .created_at(
                     c.get("created_time")
                         .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                )
+                .modified_at(
+                    c.get("last_edited_time")
+                        .and_then(|v| v.as_str())
+                        .filter(|t| Some(*t) != c.get("created_time").and_then(|v| v.as_str()))
                         .map(str::to_string),
                 )
                 .author(comment_author(c))
@@ -246,7 +266,7 @@ pub struct PageDocument {
     pub rows: Vec<GridRow>,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
-    pub problems: Vec<RenderProblemRow>,
+    pub problems: Vec<ProblemRow>,
 }
 
 pub struct ThreadDocument {
@@ -260,7 +280,7 @@ pub struct ThreadDocument {
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// See [`PageDocument::problems`].
-    pub problems: Vec<RenderProblemRow>,
+    pub problems: Vec<ProblemRow>,
 }
 
 pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentRows> {
@@ -304,7 +324,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         let title = page_titles.get(&pid).cloned().unwrap_or_default();
         let inputs = Inputs::default();
         inputs.read("pages", &pid);
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut problems: Vec<ProblemRow> = Vec::new();
         let mut rows: Vec<GridRow> = Vec::new();
         let users = inputs.lookup("users", &parsed.user_names);
         if let Some(r) = page_row(page, &title, stanza, users, &mut problems) {
@@ -350,7 +370,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
                 .iter()
                 .filter_map(|c| c.get("id").and_then(Value::as_str)),
         );
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut problems: Vec<ProblemRow> = Vec::new();
         let anchors = inputs.lookup("comment_anchors", &parsed.anchor_text);
         let anchor = parent_block_id
             .as_deref()

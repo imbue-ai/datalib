@@ -14,9 +14,12 @@ tight inner loop narrow the *bazel* invocation to what you're touching
 supported build/test driver — don't shell out to `cargo` / `pnpm`, which
 bypass (and never warm) the cache and can disagree with CI.
 
-See [`/AGENTS.md`](/AGENTS.md) § "Running tests" for the details (don't filter
-on `-manual,-external` — it silently drops fmt/UI checks) and
-[`/docs/dev/coverage.md`](/docs/dev/coverage.md) for coverage.
+The complete local gate is `bazelisk run //:precommit` (the hygiene lint,
+`//:lint`, a `build //...` for the fmt and clippy aspects, and every
+hermetic test). Never put `--test_tag_filters=-manual,-external` on the
+full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
+[`/docs/dev/coverage.md`](/docs/dev/coverage.md); why a run was slow:
+[`/docs/dev/ci.md`](/docs/dev/ci.md).
 
 ## Updating insta goldens (`.update` targets)
 
@@ -30,10 +33,37 @@ bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
 bazel run //datalib/backend/etl/providers/slack:slack_translate.update
 ```
 
-These land the new snapshots in the source tree where `git status` shows them.
-Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
-§ "Updating insta snapshots" for the full pattern, including how to declare a
-`.update` for a new test.
+The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`, which
+only exists under `bazel run` and resolves to the source tree, so new
+`.snap` files land where `git status` shows them. Always review the diff
+before committing. The same wrapper regenerates a golden that is not an
+insta snapshot: a test that writes its file when `INSTA_UPDATE=always` is
+set and compares otherwise (`//datalib/backend/datalib_step:ingest_methods.update`
+is one). The live tests need `LATCHKEY_CURL` pointed at the router curl,
+never the impersonator (`docs/dev/curl_impersonate.md`).
+
+When adding an insta-using test, declare a sibling `.update`:
+
+```python
+load("//tools:insta.bzl", "insta_update")
+
+rust_test(
+    name = "my_render_test",
+    data = [":tng_fixture"],
+    env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
+    ...
+)
+
+insta_update(
+    name = "my_render_test.update",
+    test = ":my_render_test",
+    test_args = ["--ignored"],  # only if the test is #[ignore]'d
+    # `data` and `env` on rust_test do NOT propagate through the sibling
+    # sh_binary wrapper — mirror every fixture / env-var dep here.
+    extra_data = [":tng_fixture"],
+    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
+)
+```
 
 ## The Playwright suite runs in two engines
 
@@ -65,7 +95,14 @@ project's `testMatch`, or it runs in Chromium only. Note that WebKit is
 also stricter about `loading="lazy"` iframes (it will not load one far
 below the fold — scroll it into view first;
 [`yolink-plots.spec.ts`](/datalib/ui/tests/e2e/yolink-plots.spec.ts) shows
-the shape).
+the shape). And do not drive a native HTML5 drag with `page.mouse` in a
+spec the `webkit` project runs: Playwright's WebKit on macOS turns it into
+a native drag session that it sometimes loses under load — the page gets
+`dragstart` and one `dragenter`, then nothing, not even `dragend` on the
+release — while CI's Linux WebKit drives it fine, so the failure is
+mac-only. Dispatch the drag events by hand around a real press and
+release; [`run-log.spec.ts`](/datalib/ui/tests/e2e/run-log.spec.ts)
+shows the shape.
 
 Browser binaries are **not** Bazel inputs — chromium and webkit both come
 from the host's `~/Library/Caches/ms-playwright` via `env_inherit = HOME`,
@@ -87,17 +124,23 @@ image carrying it). Anyone acting on it would have dropped the
 exclusion and gotten a red gate, because the actual blockers were two
 things the note never mentioned.
 
-* **The qmd GGUFs are not in the image.** The published devcontainer is
-  built on the `-slim` prod image (`QMD_PREFETCH_MODELS=false`), which
-  creates `/root/.cache/qmd/models` empty, and
+* **The qmd GGUFs are not in the image.** The devcontainer image has no
+  `/root/.cache/qmd/models` at all, and
   `materialize_tng_root.sh` used to require that directory to hold them
   — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
   could not masquerade as a hang. CI filled it with a `qmd pull` behind
-  an `actions/cache`. Both halves are gone now: the three GGUFs are
-  pinned in `MODULE.bazel` as `@qmd_model_*` and reach the materializer
-  (and the fixture's index genrule) as bazel inputs, and `.bazelrc`'s
-  `buildbuddy` config fetches them through BuildBuddy's remote
-  downloader rather than from HuggingFace.
+  an `actions/cache`. Both halves are gone now: the GGUFs are fetched
+  by a build action (`//third-party/qmd_models`) and reach the
+  materializer (and the fixture's index genrule) as bazel inputs. The
+  action's outputs live in the remote cache, so a run that does not
+  need the bytes never moves them, and one that does takes them from
+  BuildBuddy rather than HuggingFace unless the cache has lost them.
+  The e2e suite runs on the runner itself, so its runfiles *are*
+  downloaded before it starts — which is why it uses
+  `materialize_tng_root_embed_only`: the embedding model is all it
+  loads, and the other two are 1.8 GB. The suite sets
+  `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them absent
+  instead of fetching them into the fixture root.
 * **`HOME=/github/home`.** GitHub forces that for container steps, while
   the image bakes its caches under `/root`, so every lookup landed in an
   empty directory. One `--test_env` flag still redirects the lookup that
@@ -174,9 +217,8 @@ directly with the two variables set and a short cadence in the config:
 ```bash
 bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
 step=bazel-bin/datalib/backend/datalib_step/datalib_step
-$step synthesize chatgpt --name chatgpt \
-  --params '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' \
-  --out /tmp/tapes
+echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
+$step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
   bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
 ```
@@ -276,13 +318,3 @@ keys, each commented with why it's redacted — carried over verbatim, because i
 operates on the produced data tree and the DAG migration didn't change that
 layout. See the module header of the test for what genuinely had to change.
 
-### Note: the old in-repo copies have been purged from history
-
-This data used to live in-repo (`configs/thad_tiny.yaml` +
-`datalib/backend/sync/tests/snapshots/`). It left the working tree in
-26412853 and was later expunged from git history with `git filter-repo` —
-no reachable commit on `main` or `origin/main` contains either path. What
-remains before the repo is made public is server-side: GitHub still holds
-the pre-rewrite blobs as unreachable objects, and any collaborator who
-never re-cloned still has them locally. See the note at the top of
-[`/TODO.md`](/TODO.md).

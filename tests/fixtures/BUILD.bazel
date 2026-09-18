@@ -27,56 +27,67 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# qmd's three GGUF models, pinned in MODULE.bazel and fetched by bazel
-# rather than downloaded by qmd at run time. Only the materialize path
+# qmd's three GGUF models, fetched by bazel (//third-party/qmd_models)
+# rather than downloaded by qmd at run time. Only `:materialize_tng_root`
 # takes all three: `:ingested_tng_qmd` embeds and nothing else, so it
 # names the embedding model alone rather than dragging 1.8 GB of inputs
 # it never opens through every action key.
 filegroup(
     name = "qmd_models",
-    srcs = [
-        "@qmd_model_embeddinggemma//file",
-        "@qmd_model_query_expansion//file",
-        "@qmd_model_reranker//file",
-    ],
+    srcs = ["//third-party/qmd_models:all"],
     visibility = ["//visibility:public"],
 )
 
 # Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
-# into a caller-provided directory. Used by both `//datalib:dev_tng`
-# (interactive eyeballing) and the UI e2e test (fixture setup) so the two
-# paths can't drift apart.
-sh_binary(
-    name = "materialize_tng_root",
-    srcs = ["materialize_tng_root.sh"],
-    data = [
-        ":ingested_tng",
-        ":ingested_tng_qmd",
-        # The models the materialized root's `unified_index/qmd/models`
-        # points at. Before this they came from the developer's
-        # `~/.cache/qmd/models`, and the script refused to run when that
-        # was empty — which made "have you run qmd once?" a prerequisite
-        # for `bazelisk run //datalib:dev_tng` and for the e2e suite.
-        ":qmd_models",
-        # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
-        # directory the `fsindex` (Unison-style) scanner can index. It's not
-        # rendered (fsindex is extract-only), so it just sits in the root.
-        "//datalib/backend/etl/providers/fsindex:tng_fixture",
-        # The generated config declares the `unified_index` applet, and
-        # the gateway spawns it by the command written there. Naming the
-        # binary's runfiles path keeps that resolvable without a
-        # `binary_dir` or a PATH assumption.
-        "//datalib/backend/applets:datalib_applet",
-    ],
-    visibility = ["//visibility:public"],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
-)
+# into a caller-provided directory. One script, two targets that differ
+# only in which models ride in the runfiles, so `//datalib:dev_tng`
+# (interactive eyeballing) and the UI e2e test (fixture setup) can't
+# drift apart:
+#
+#   materialize_tng_root             all three models — a root that
+#                                    holds what a real one does.
+#   materialize_tng_root_embed_only  the embedding model alone, for the
+#                                    e2e suite. The suite runs on the CI
+#                                    runner itself, so every runfile is
+#                                    downloaded from the remote cache
+#                                    before it starts, serially, after
+#                                    every other test has finished; the
+#                                    two models it never loads were
+#                                    1.8 GB of that. The suite sets
+#                                    DATALIB_QMD_MODELS_NO_FETCH so the
+#                                    applet reports them absent rather
+#                                    than fetching them.
+[
+    sh_binary(
+        name = name,
+        srcs = ["materialize_tng_root.sh"],
+        data = [
+            ":ingested_tng",
+            ":ingested_tng_qmd",
+            # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
+            # directory the `fsindex` (Unison-style) scanner can index. It's not
+            # rendered (fsindex is extract-only), so it just sits in the root.
+            "//datalib/backend/etl/providers/fsindex:tng_fixture",
+            # The generated config declares the `unified_index` applet, and
+            # the gateway spawns it by the command written there. Naming the
+            # binary's runfiles path keeps that resolvable without a
+            # `binary_dir` or a PATH assumption.
+            "//datalib/backend/applets:datalib_applet",
+        ] + models,
+        visibility = ["//visibility:public"],
+        deps = ["@bazel_tools//tools/bash/runfiles"],
+    )
+    for name, models in [
+        ("materialize_tng_root", [":qmd_models"]),
+        ("materialize_tng_root_embed_only", ["//third-party/qmd_models:embeddinggemma"]),
+    ]
+]
 
 # Cacheable, ingested-fixture artifact.
 #
 # `bazelisk build //tests/fixtures:ingested_tng` runs the full
 # pipeline (ingest -> render) against the checked-in TNG-themed source
-# JSON and emits two outputs:
+# JSON and emits four outputs:
 #
 #   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
 #   * qmd.tar    -- the rendered conversation tree (markdown, each
@@ -85,16 +96,18 @@ sh_binary(
 #   * qmd_md.tar -- markdown alone, the sole input to :ingested_tng_qmd.
 #                   See tar_qmd.py for why the embedder gets its own
 #                   narrower archive.
+#   * config_body.toml -- every source as a render-only group plus the
+#                   two fan-ins, for materialize_tng_root.sh to declare
+#                   in the root it builds from the tars.
 
 filegroup(
     name = "source_json",
-    srcs = glob([
-        "github_api/**/*.jsonl",
-        "gitlab_api/**/*.jsonl",
-        "notion_web/**/*.jsonl",
-    ]) + [
-        # Provider fixtures moved into their respective Rust crates so
-        # the sample data is co-located with the code under test.
+    # Every provider's fixture lives in its own crate, beside the code
+    # under test.
+    srcs = [
+        "//datalib/backend/etl/providers/github:tng_fixture",
+        "//datalib/backend/etl/providers/gitlab:tng_fixture",
+        "//datalib/backend/etl/providers/notion:tng_fixture",
         "//datalib/backend/etl/providers/slack:tng_fixture",
         "//datalib/backend/etl/providers/chatgpt:tng_fixture",
         "//datalib/backend/etl/providers/claude:tng_fixture",
@@ -110,6 +123,8 @@ filegroup(
         "//datalib/backend/etl/providers/pdf:pdf_fixture",
         "//datalib/backend/etl/providers/garmin:tng_fixture",
         "//datalib/backend/etl/providers/airvisual:tng_fixture",
+        "//datalib/backend/etl/providers/facebook:tng_fixture",
+        "//datalib/backend/etl/providers/claude_code:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -125,15 +140,17 @@ filegroup(
 # qmd.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
 # at the layer of DB + qmd files.
+#
+# The pipeline binaries are `srcs`, not `tools`, on purpose. `tools` are
+# configured for the exec platform, which would build `datalib_step` — and
+# the 99 crates under it — a second time beside the copies the tests link
+# and `:dist` ships. As `srcs` they are the same files the tests use. They
+# arrive without their runfiles, which the playback pipeline never needs
+# (`latchkey` resolution is lazy and only live downloads reach it).
 genrule(
     name = "ingested_tng",
-    srcs = [":source_json"],
-    outs = [
-        "ingested/backend_index.doltlite_db",
-        "ingested/qmd.tar",
-        "ingested/qmd_md.tar",
-    ],
-    tools = [
+    srcs = [
+        ":source_json",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
         # CLI that converts the signal TNG JSON spec into an encrypted
@@ -149,6 +166,14 @@ genrule(
         # emits no download step and renders over the store this binary
         # writes.
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
+    ],
+    outs = [
+        "ingested/backend_index.doltlite_db",
+        "ingested/qmd.tar",
+        "ingested/qmd_md.tar",
+        "ingested/config_body.toml",
+    ],
+    tools = [
         "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
@@ -164,9 +189,9 @@ genrule(
             "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
             "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
             "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-            "tests/fixtures/github_api",
-            "tests/fixtures/gitlab_api",
-            "tests/fixtures/notion_web",
+            "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+            "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+            "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
             # Beeper is different — the fixture is SQL + media, not
             # an HTTP capture tree. run_sync_pipeline.py
             # materializes a BeeperTexts-shaped dir from it on the
@@ -208,11 +233,19 @@ genrule(
             "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
             # AirVisual: two Pros' data folders (arg 25, appended likewise).
             "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+            # Facebook export dir (arg 26, appended likewise). File-backed;
+            # posts, an album, comments, reactions and friends render.
+            "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
+            # Claude Code: a `~/.claude/projects` tree (arg 27, appended likewise).
+            "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_index/grid_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
+        # The sources as render-only groups, for materialize_tng_root.sh
+        # to splice into the root's config.toml.
+        "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
         # Tar the render_markdown tree hermetically: the whole tree into
         # qmd.tar, and markdown alone into qmd_md.tar. See tar_qmd.py for
         # why the embedding action gets its own narrower archive.
@@ -255,14 +288,12 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        # FIXME: move these into their provider specific directories.
-        "tests/fixtures/github_api",
-        "tests/fixtures/gitlab_api",
-        "tests/fixtures/notion_web",
+        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
         "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
@@ -280,6 +311,10 @@ py_test(
         "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
         # AirVisual (arg 25, appended likewise).
         "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+        # Facebook (arg 26, appended likewise).
+        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
+        # Claude Code (arg 27, appended likewise).
+        "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -313,14 +348,12 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        # FIXME: move these into their provider specific directories.
-        "tests/fixtures/github_api",
-        "tests/fixtures/gitlab_api",
-        "tests/fixtures/notion_web",
+        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
         "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
@@ -338,6 +371,10 @@ py_test(
         "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
         # AirVisual (arg 25, appended likewise).
         "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+        # Facebook (arg 26, appended likewise).
+        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
+        # Claude Code (arg 27, appended likewise).
+        "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -367,15 +404,14 @@ py_test(
 #     //third-party/qmd/runtime), which the driver symlinks into a
 #     `DATALIB_RUNTIME_DIR` layout so the indexer resolves them instead
 #     of shelling out to `npx`. The embedding model is a Bazel input too
-#     (`@qmd_model_embeddinggemma`, pinned in MODULE.bazel), staged into
+#     (`//third-party/qmd_models:embeddinggemma`), staged into
 #     a models dir inside the sandbox — so this action no longer reads
 #     the host's `~/.cache/qmd/models`, and no longer downloads it on a
 #     machine where that cache is cold (which is every CI run).
-#   * Embeds only; it does not `qmd pull`. Pull exists to put the query
-#     expansion and reranker models in place for interactive querying,
-#     which the fixture never does — and it is also the step that would
-#     re-download our staged model, since it treats "cached file whose
-#     etag I cannot confirm" as stale. The driver passes `--no-pull`.
+#   * Embeds only. Nothing runs `qmd pull` any more (it re-downloads on
+#     any etag difference against HuggingFace `main`); the indexer needs
+#     the embedding model already in its models dir, which is what the
+#     Bazel input above supplies.
 #   * SQLite output is NOT byte-stable across runs (timestamps, packing).
 #     This rule is correctness-only. That does not stop it from being
 #     CACHEABLE, though — bazel keys an action on its inputs, never on
@@ -397,7 +433,7 @@ genrule(
         # The embedding model `qmd embed` loads. See MODULE.bazel for why
         # it is fetched by bazel rather than by qmd, and why its filename
         # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
-        "@qmd_model_embeddinggemma//file",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
@@ -419,11 +455,11 @@ genrule(
         QMD_VERSION,
         "$(execpath @nodejs_host//:node_bin)",
         "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
-        "$(execpath @qmd_model_embeddinggemma//file)",
+        "$(execpath //third-party/qmd_models:embeddinggemma)",
     ]),
     tags = [
         # No `requires-network`, deliberately. It was here for the model
-        # download, which is now `@qmd_model_embeddinggemma` — a bazel
+        # download, which is now `//third-party/qmd_models:embeddinggemma` — a
         # input, fetched by the repository rule outside the action and
         # kept in the repository cache. The other thing this tag used to
         # cover, fetching qmd ITSELF, went away earlier: the package tree

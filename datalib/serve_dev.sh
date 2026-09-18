@@ -14,6 +14,10 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
+# The Node + qmd + latchkey trees a sync spawns (see dev_runtime.sh).
+# shellcheck disable=SC1090
+source "$(rlocation _main/datalib/dev_runtime.sh)"
+
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
@@ -88,10 +92,17 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.2
 done
 
-case "$(uname -s)" in
-  Darwin) open "$OPEN_URL" ;;
-  Linux)  xdg-open "$OPEN_URL" >/dev/null 2>&1 || true ;;
-  *)      echo "open $OPEN_URL in your browser" ;;
-esac
+# `DATALIB_NO_OPEN=1` keeps the URL on the terminal instead: a tool that
+# opens the page in its own pane does not want the OS browser stealing
+# the focus every time it restarts the server.
+if [[ -n "${DATALIB_NO_OPEN:-}" ]]; then
+  echo "open $OPEN_URL in your browser"
+else
+  case "$(uname -s)" in
+    Darwin) open "$OPEN_URL" ;;
+    Linux)  xdg-open "$OPEN_URL" >/dev/null 2>&1 || true ;;
+    *)      echo "open $OPEN_URL in your browser" ;;
+  esac
+fi
 
 wait "$BIN_PID"

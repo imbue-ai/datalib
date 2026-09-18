@@ -3,6 +3,7 @@ name = "datalib-applet"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "datalib-applet"
@@ -13,7 +14,9 @@ path = "src/main.rs"
 [dependencies]
 datalib-schema = { path = "../schema" }
 datalib-core = { path = "../core" }
+datalib-fetch = { path = "../fetch" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
+datalib-qmd-models = { path = "../qmd_models" }
 datalib-unified-index = { path = "../unified_index" }
 anyhow = { workspace = true }
 axum = { workspace = true }
@@ -27,4 +30,5 @@ tokio = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+datalib-time = { path = "../time" }
 tempfile = "3"

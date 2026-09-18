@@ -8,7 +8,7 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl_email::ingest;
 use datalib_etl_email_config::EmailOutlink;
 use datalib_etl_email_config::EmailRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{ReadScope, RenderCtx, RenderProcessor};
 use std::path::PathBuf;
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -75,6 +75,11 @@ impl RenderProcessor for EmailRender {
 
         // Two-phase parse driven by the render cursor's commit.
         let parsed = parse(&db, ctx.raw_range(), !self.only_render_labels.is_empty())?;
+        ctx.report_unparsed(
+            &ReadScope::Whole(vec!["accounts", "mailboxes", "threads"]),
+            &parsed.unparsed,
+            self.render_version(),
+        )?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,

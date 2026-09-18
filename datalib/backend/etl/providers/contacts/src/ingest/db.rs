@@ -74,18 +74,13 @@ impl RawDb {
     /// A reader pinned at `commit` — the one the render driver diffed
     /// against — or at HEAD when there is none.
     pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let pool = datalib_etl::doltlite_raw::open_reader(db_path).await?;
-        let pin = match commit {
-            Some(commit) => Some(datalib_etl::pin::Pin::at(commit)?),
-            None => datalib_etl::pin::head(&pool).await?,
-        };
-        let Some(pin) = pin else {
-            pool.close().await;
+        // Pinned at open, views installed: a reader cannot read the
+        // working set by forgetting to.
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        datalib_etl::pin::install_views(&pool, &pin)
-            .await
-            .context("pin the contacts raw store for render")?;
+        let pin = reader.pin().clone();
+        let pool = reader.pool().clone();
         Ok(Some(Self {
             pool,
             cas: None,
@@ -302,6 +297,39 @@ impl RawDb {
                 .context("delete contact bookkeeping")?;
         }
         tx.commit().await.context("commit delete contact tx")?;
+        Ok(())
+    }
+
+    /// Drop the contacts of one address book whose uid is in `uids`, with
+    /// their sidecar rows: what a re-read `.vcf` file no longer carries.
+    /// Idempotent.
+    pub async fn delete_contacts_by_uid(
+        &self,
+        addressbook_id: &str,
+        uids: &[String],
+    ) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete contacts tx")?;
+        for uid in uids {
+            let id = contact_pk(addressbook_id, uid);
+            sqlx::query("DELETE FROM contacts WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact")?;
+            sqlx::query("DELETE FROM contacts_bookkeeping WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .context("delete contact bookkeeping")?;
+        }
+        tx.commit().await.context("commit delete contacts tx")?;
         Ok(())
     }
 

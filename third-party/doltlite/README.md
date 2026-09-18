@@ -78,6 +78,11 @@ A version lives in **four** places and they must all move together:
 | 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
 | 4 | `datalib/docker/Dockerfile` → `DOLTLITE_CLI_VERSION` — the container's debug-shell `.deb` |
 
+and two files ride along: `LICENSE.md` and `APACHE_LICENSE`, upstream's
+notices at the pinned version, which every release ships under
+`licenses/doltlite/` (DoltLite is Apache-2.0). Neither archive carries
+them, so re-fetch both from the release's tag when you bump.
+
 **Nothing mechanically verifies that these four agree — check them by
 hand.** `:cli_version_test` reads like it does this, and its comments
 say so, but the check is circular: the CLI prints the version it was
@@ -152,4 +157,5 @@ No code or wiring changes needed unless the doltlite public API shifts
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
 | `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` comparison is circular and catches no drift — see [Upgrading doltlite](#upgrading-doltlite). |
 | `libsqlite3-sys.patch`      | Absolutize `$(BINDIR)`-derived paths inside libsqlite3-sys's build.rs. |
+| `LICENSE.md`, `APACHE_LICENSE` | Upstream's notices at the pinned version; shipped in every release's `licenses/doltlite/`. |
 | `README.md`                 | This file.                                                             |

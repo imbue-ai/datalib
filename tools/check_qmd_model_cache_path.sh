@@ -7,7 +7,7 @@
 # This is about the SHIPPED app, not the build: a sync run by the app
 # downloads models to that path, and the indexer has to look for them
 # where qmd put them. The build itself stopped reading the host cache
-# when the models became bazel inputs (`@qmd_model_*` in MODULE.bazel).
+# when the models became bazel inputs (`//third-party/qmd_models`).
 #
 # Why this exists: the vendored `third-party/qmd/` snapshot is kept in
 # sync with `DEFAULT_QMD_VERSION` (parity checked below) so this test

@@ -70,7 +70,7 @@
 
 .m2-grid {
   margin-top: 8px;
-  /* A definite height is what makes AG Grid scroll internally — both
+  /* A definite height is what makes the grid scroll internally — both
      ways. */
   flex: 1 1 auto;
   min-height: 180px;
@@ -126,12 +126,9 @@
 /* The history panel is a grid rather than a list, and wider than the
    log: nine columns, and the table list is the one worth the room. */
 .m2-history { width: min(1400px, 100%); height: min(720px, 100%); }
-/* `position: relative`, because `.m2-ag` is absolutely placed — see the
-   WebKit note above it. */
+/* `position: relative`, because the viewer fills it absolutely — see
+   the WebKit note above it. */
 .m2-history-grid { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px 16px; }
-/* Fill the positioned .m2-history-grid absolutely rather than with
-   `height: 100%`, which a flex-sized parent resolves as `auto`. */
-.m2-ag { position: absolute; inset: 0; }
 
 /* Cell renderers build plain DOM, so their classes can't be scoped. */
 .m2-history-hash {
@@ -159,8 +156,6 @@
   cursor: pointer;
   text-decoration: underline dotted;
 }
-/* The destructive entry, told apart the way the trash button is. */
-.ag-menu-option.m2-menu-danger:not(.ag-menu-option-disabled) { color: var(--datalib-log-error); }
 /* The same control as `button.copy-uuid` in ChatBody: a greyed glyph
    that lights up on hover and flashes its verdict. */
 .m2-copy-id {

@@ -26,6 +26,8 @@ rust_library(
         # events.rs). Keeps the timestamp format identical to the rest of
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/flock:datalib_flock",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -35,9 +37,9 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
-        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
         "@datalib_crates//:walkdir",
     ],
@@ -49,7 +51,6 @@ rust_test(
     crate = ":datalib_dag",
     edition = "2021",
     deps = [
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
@@ -65,7 +66,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.33.0",
+    version = "0.35.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -76,11 +77,33 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+# The runner exits with the process that started it, and takes its
+# steps along. Runs the real binary under the parent-watch probe, which
+# is the parent the test can SIGKILL.
+rust_test(
+    name = "parent_gone_test",
+    size = "medium",
+    srcs = ["tests/parent_gone.rs"],
+    data = [
+        ":datalib_dag_bin",
+        "//datalib/backend/parent_watch:parent_watch_probe",
+    ],
+    edition = "2021",
+    env = {
+        "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+        "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
     ],
 )
 

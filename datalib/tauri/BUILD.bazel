@@ -1,6 +1,8 @@
 load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
+exports_files(["deny.toml"])  # read by //tools:license_lists_test
+
 # The Tauri shell itself is NOT built by Bazel — it is a standalone
 # cargo workspace, deliberately, so crate_universe never has to resolve
 # the tauri dependency tree (see Cargo.toml's `[workspace]` table and

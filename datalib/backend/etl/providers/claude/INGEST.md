@@ -37,6 +37,18 @@ to coerce it into the export format:
   * Restores `flags: null` on every content block.
   * Adds `_source: { via: "claude.ai/api", org_uuid }` provenance.
 
+That runs at render time, on the way out of the store. What goes *in*
+is the API response with every null-valued object key dropped
+(`canonicalize_conversation_payload`). claude.ai's replicas do not agree
+on whether a field with no value is sent as `null` or left out — the
+same untouched conversation came back both ways five minutes apart on
+the 2026-09-18 bake, on `chat_messages[].content[]` down to
+`display_content.link.*` — and either spelling reads the same
+everywhere here, so storing one of them is what keeps a no-change
+refetch from counting as `modified` and re-rendering. Null array
+elements stay; they are positional. The export ingest stores its file
+as written: one export comes from one serializer.
+
 ## Auth + Cloudflare
 
 The downloader does not handle claude.ai cookies directly. It shells
@@ -45,14 +57,14 @@ injects the cookies registered under the `claude-ai` service.
 
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
 clear the challenge, requests go out through a Chrome-impersonating
-curl — the bundled `curl-impersonate`, reached via the dispatch curl
+curl — the bundled `curl-impersonate`, reached via the router curl
 (`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
-downloader finds the dispatch itself; to set it by hand, point it at
-the **dispatch**, which brings the impersonator along as a sibling:
+downloader finds the router itself; to set it by hand, point it at
+the **router**, which brings the impersonator along as a sibling:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
+bazelisk build //third-party/latchkey-curl-shims
+export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
 claude-ingest --out ~/backups/claude_api
 ```
 
@@ -347,7 +359,6 @@ result is merged into the existing `conversations.json`, so prior
 cache entries are preserved.
 
 ```sh
-export LATCHKEY_CURL=/path/to/curl_impersonate-chrome
 claude-ingest --out ~/backups/claude_api \
     --conv-uuid 12345678-90ab-cdef-1234-567890abcdef
 ```
@@ -356,7 +367,7 @@ claude-ingest --out ~/backups/claude_api \
 
 `claude.ai` doesn't 429 us in practice today, so `api::ClaudeClient`
 is a single-shot shell-out without a backoff loop. If that ever
-changes, model the loop on `chatgpt/src/extract/api.rs`.
+changes, model the loop on `chatgpt/src/ingest/api.rs`.
 
 ## Sample data
 

@@ -105,7 +105,7 @@ async fn renders_tng_fixture() {
 
     // The `stellar_cartography` project carries no `created_at` /
     // `updated_at` — a real shape, found in the live manual-e2e corpus,
-    // where a Claude project row rendered `when_ts` as
+    // where a Claude project row rendered `created_at` as
     // `1970-01-01T00:00:00+00:00`. Until this fixture landed, no
     // checked-in record anywhere was undated, so the goldens agreed
     // with the bug and could not have caught it.
@@ -124,10 +124,10 @@ async fn renders_tng_fixture() {
     );
     for r in &undated.rows {
         assert!(
-            r.when_ts.is_none(),
-            "a project with no created_at/updated_at must leave when_ts null, \
+            r.created_at.is_none(),
+            "a project with no created_at/updated_at must leave created_at null, \
              never a fabricated epoch — got {:?} on kind={}",
-            r.when_ts,
+            r.created_at,
             r.kind
         );
     }

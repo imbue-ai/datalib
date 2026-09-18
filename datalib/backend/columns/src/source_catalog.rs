@@ -21,6 +21,7 @@ const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
     e("claude", Some("api"), "Claude", Some("claude")),
     e("claude", Some("export"), "Claude export", Some("claude")),
+    e("claude_code", None, "Claude Code", Some("claude")),
     e("chatgpt", None, "ChatGPT", Some("chatgpt")),
     e("github", None, "GitHub", Some("github")),
     e("gitlab", None, "GitLab", Some("gitlab")),
@@ -33,6 +34,7 @@ const CATALOG: &[Entry] = &[
     e("yolink", None, "YoLink", Some("yolink")),
     e("google_takeout", None, "Google Takeout", None),
     e("linkedin", None, "LinkedIn", Some("linkedin")),
+    e("facebook", None, "Facebook", Some("facebook")),
     e("signal", None, "Signal", Some("signal")),
     e("whatsapp", None, "WhatsApp", Some("whatsapp")),
     e("sms_backup_restore", None, "SMS & calls", Some("sms")),
@@ -50,6 +52,9 @@ const CATALOG: &[Entry] = &[
         Some("apple_messages"),
     ),
     e("perseus", None, "Perseus library", None),
+    // Not a provider: a group that renders what changed in another
+    // group's raw store between two commits (docs/dev/plans/completed/diff_renderer.md).
+    e("diff", None, "Diff", Some("diff")),
 ];
 
 const fn e(

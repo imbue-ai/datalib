@@ -8,7 +8,8 @@
 //   (`edge.hover`); every doc card subscribes and puts a transient
 //   highlight on the target span when the destination is its own doc.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { fetchChat, type ChatResponse, type EdgeOut } from "@/api";
+import { fetchChat, type ChatResponse, type DocProblem, type EdgeOut } from "@/api";
+import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
@@ -19,6 +20,7 @@ import {
   type FeedbackContext,
 } from "@/feedback/context";
 import { chatHrefFromClick } from "./chatLink";
+import { problemLabel } from "./problems";
 import {
   TOPIC_EDGE_HOVER,
   type CardCtx,
@@ -114,6 +116,32 @@ const docLevelOutgoing = computed<EdgeOut[]>(() => {
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+// ── The problems banner: what render could not fully do to this
+// document, above the body, errors first. A line about a record that
+// survived as a section jumps to it; a dropped record has no section,
+// and its line says so instead.
+const problems = computed<DocProblem[]>(() => chat.value?.problems ?? []);
+const problemErrors = computed<string[]>(() => chat.value?.errors ?? []);
+/// The section a banner line was clicked for: overrides the card's own
+/// target so the body scrolls and highlights in place rather than
+/// opening a second card.
+const jumpTo = ref<string | null>(null);
+watch(
+  () => props.markdownUuid,
+  () => {
+    jumpTo.value = null;
+  },
+);
+
+function onProblemJump(p: DocProblem) {
+  if (!p.item_uuid) return;
+  // Re-set through null so clicking the same line twice scrolls again.
+  jumpTo.value = null;
+  void Promise.resolve().then(() => {
+    jumpTo.value = p.item_uuid;
+  });
+}
 
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
@@ -220,17 +248,7 @@ async function onCopy() {
     closeCtxMenu();
     return;
   }
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Fallback for non-secure contexts.
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-  }
+  await copyToClipboard(text);
   closeCtxMenu();
 }
 
@@ -338,6 +356,32 @@ watch(
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
+      <ul v-if="problems.length || problemErrors.length" class="problems">
+        <li v-for="e in problemErrors" :key="e" class="problem problem-error">
+          <span class="problem-severity">error</span>
+          <span class="problem-text">{{ e }}</span>
+        </li>
+        <li
+          v-for="p in problems"
+          :key="p.problem_uuid"
+          :class="['problem', `problem-${p.severity}`]"
+          :data-problem-uuid="p.problem_uuid"
+          :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
+        >
+          <span class="problem-severity">{{ p.severity }}</span>
+          <span class="problem-text">
+            <a
+              v-if="p.item_uuid"
+              class="problem-jump"
+              href="#"
+              @click.prevent="onProblemJump(p)"
+              >{{ problemLabel(p) }}</a
+            >
+            <template v-else>{{ problemLabel(p) }}</template>
+            <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
+          </span>
+        </li>
+      </ul>
       <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
           <span class="edge-arrow" aria-hidden="true">→</span>
@@ -369,7 +413,7 @@ watch(
         <ChatBody
           :body="chat.body"
           :markdown-uuid="chat.markdown_uuid"
-          :selected-section-uuid="sectionUuid"
+          :selected-section-uuid="jumpTo ?? sectionUuid"
           :outgoing-edges="chat.outgoing_edges"
           :hover-anchor-uuid="hoverAnchor"
           @open-edge="onOpenEdge"
@@ -436,6 +480,47 @@ watch(
 }
 .error {
   color: #e35d6a;
+}
+.problems {
+  /* Above the body and the edges: what render could not do to this
+     document is the first thing a reader should see. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.problem {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.25rem 0;
+}
+.problem-severity {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  padding: 0 0.4rem;
+  border-radius: 0.5rem;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.problem-error .problem-severity { color: var(--datalib-log-error); }
+.problem-warning .problem-severity { color: var(--datalib-log-warn); }
+.problem-info .problem-severity { color: var(--datalib-muted); }
+.problem-text { flex: 1 1 auto; min-width: 0; }
+.problem-jump { color: inherit; text-decoration: underline dotted; }
+.problem-sample {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body

@@ -25,6 +25,11 @@ bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip
 
 Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/`.
 
+On CI, a red `bazel test //...` job uploads that zip as the
+`e2e-playwright-report` artifact (kept a week); a green one uploads
+nothing, since every spec but the onboarding one records only on
+failure.
+
 ## Opening it
 
 The report is self-contained — the trace viewer is bundled, so nothing

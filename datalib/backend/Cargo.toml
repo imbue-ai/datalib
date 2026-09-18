@@ -7,6 +7,8 @@ members = [
     "unified_index",
     "core",
     "runtime",
+    "qmd_models",
+    "fetch",
     "dag",
     "dirtree_diff",
     "http",
@@ -33,6 +35,8 @@ members = [
     "etl/providers/gitlab_render",
     "etl/providers/email",
     "etl/providers/email_render",
+    "etl/providers/facebook",
+    "etl/providers/facebook_render",
     "etl/providers/garmin",
     "etl/providers/garmin_render",
     "etl/providers/linkedin",
@@ -56,6 +60,8 @@ members = [
     "etl/providers/signal_render",
     "etl/providers/slack",
     "etl/providers/slack_render",
+    "etl/providers/claude_code",
+    "etl/providers/claude_code_render",
     "etl/providers/sms_backup_restore",
     "etl/providers/sms_backup_restore_render",
     "etl/providers/yolink",
@@ -78,10 +84,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.33.0"
+version = "0.35.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
+license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -218,6 +225,7 @@ cbc = { version = "0.2", features = ["block-padding"] }
 ctr = "0.10"
 cipher = { version = "0.5", features = ["block-padding"] }
 flate2 = "1.0"
+tar = "0.4"
 # GHASH (the universal hash inside GCM) and AES-CTR primitives,
 # composed by `datalib-whatsapp-backup` into a hand-rolled
 # GCM decrypt. We can't use the `aes-gcm` crate here: WhatsApp's

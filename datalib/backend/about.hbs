@@ -1,0 +1,24 @@
+# Third-party notices
+
+This distribution includes the following third-party crates, listed
+under the licenses they are used under. Each license's text follows its
+list of crates.
+
+{{#each overview}}
+- {{{name}}}: {{count}} crate{{#if (ne count 1)}}s{{/if}}
+{{/each}}
+
+{{#each licenses}}
+
+## {{{name}}}
+
+Used by:
+
+{{#each used_by}}
+- {{{crate.name}}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+```
+{{{text}}}
+```
+{{/each}}

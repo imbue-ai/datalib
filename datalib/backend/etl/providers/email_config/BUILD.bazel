@@ -6,7 +6,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 #
 # Bazel-only by design (no Cargo.toml): a first-party crate that uses only
 # already-vendored third-party deps needs just this BUILD file. See
-# AGENTS.md, "Why each provider has a <p>_config crate".
+# AGENTS.md §"Repo layout" (why each provider has a <p>_config crate).
 rust_library(
     name = "datalib_etl_email_config",
     srcs = glob(["src/**/*.rs"]),
@@ -25,7 +25,7 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_email_config",
     edition = "2021",
-    # Tests only: the round-trip cases parse a `--params` payload the way
+    # Tests only: the round-trip cases parse a params payload the way
     # the step planner does, which is JSON.
     deps = ["@datalib_crates//:serde_json"],
 )

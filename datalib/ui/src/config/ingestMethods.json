@@ -39,6 +39,12 @@
       "reach": "local"
     }
   ],
+  "claude_code": [
+    {
+      "path": "sessions",
+      "reach": "local"
+    }
+  ],
   "contacts": [
     {
       "path": "carddav",
@@ -60,6 +66,12 @@
     },
     {
       "path": "mbox",
+      "reach": "local"
+    }
+  ],
+  "facebook": [
+    {
+      "path": "export",
       "reach": "local"
     }
   ],

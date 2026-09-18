@@ -9,12 +9,15 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   unified_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
 #   unified_index/qmd_index/qmd/index.sqlite QMD index (from qmd-index.tar).
-#   unified_index/qmd_models/          the three qmd GGUFs, linked in from
-#                                      bazel inputs (`:qmd_models`).
+#   unified_index/qmd_models/          the qmd GGUFs this target carries,
+#                                      linked in from bazel outputs (all
+#                                      three, or the embedding model alone
+#                                      — see the two targets in BUILD.bazel).
 #   unified_index/qmd_index/qmd/models -> ../../qmd_models
-#   config.toml                        { data_root } plus the
-#                                      `unified_index` applet the grid
-#                                      is served by.
+#   config.toml                        { data_root }, every source as a
+#                                      render-only group, the two fan-ins,
+#                                      and the `unified_index` applet the
+#                                      grid is served by.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -44,10 +47,12 @@ APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
 DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
+CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
+[[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
 
 command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1; }
 
@@ -78,43 +83,40 @@ chmod u+w "$OUT_ROOT/unified_index/grid_index/db.doltlite_db"
 # a space-free cache dir, so this only bites the `bazelisk run
 # //datalib:dev_tng` path, which resolves through the source tree.
 #
-# The `unified_index` group is declared for the same reason a real root
-# declares it (see `scaffold_toml` in datalib-http): a group is one row
-# on the Manage screen, and the storage endpoint measures one tree per
-# *declared* group and step. Without the group the index is invisible
-# there — no row, and no way to see that it is the second-largest thing
-# in the root. The two steps are declared but not run here; the index
-# itself arrives pre-built in the tars above.
-cat > "$OUT_ROOT/config.toml" <<EOF
-data_root = "$OUT_ROOT"
-
-[[groups]]
-id = "unified_index"
-name = "Unified Index"
-
-[[steps]]
-group = "unified_index"
-function = "grid_index"
-inputs = []
-
-[[steps]]
-group = "unified_index"
-function = "qmd_index"
-inputs = []
+# The groups come from the pipeline that rendered the trees
+# (`config_body.toml`): every source, and the `unified_index` group, for
+# the same reason a real root declares them — a group is one row on the
+# Manage screen, the storage endpoint measures one tree per *declared*
+# group and step, and Browse needs a row to start from. Each source is
+# render-only with no raw store behind it: the steps are declared so the
+# rows exist, and the index arrives pre-built in the tars above. Syncing
+# one of them fails on the missing store.
+{
+  echo "data_root = \"$OUT_ROOT\""
+  echo
+  cat "$CONFIG_BODY"
+  cat <<EOF
 
 [[applets]]
 group = "unified_index"
 id = "unified_index"
 command = "'$APPLET_BIN' unified_index"
 EOF
+} > "$OUT_ROOT/config.toml"
 
-# qmd's GGUF models. They arrive as bazel inputs (`:qmd_models`, pinned
-# in MODULE.bazel), so this no longer depends on the developer having run
+# qmd's GGUF models. They arrive as bazel inputs (fetched by
+# //third-party/qmd_models), so this no longer depends on the developer having run
 # qmd at least once — which it used to, refusing with a "populate the
 # shared cache first" message. That check existed because letting qmd
 # download 2.2 GB silently is a multi-minute stall that masquerades as a
 # hang; taking the models from bazel removes the stall instead of
 # reporting it.
+#
+# The embedding model is required: every search embeds the query. The
+# other two are staged when this target carries them and reported when
+# it does not; `materialize_tng_root_embed_only` leaves them out on
+# purpose, and its caller sets DATALIB_QMD_MODELS_NO_FETCH so nothing
+# fetches them into the root behind its back.
 #
 # Two details, both deliberate:
 #
@@ -129,15 +131,21 @@ EOF
 #     sibling and the expected path points at it.
 MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
 mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_index/qmd"
+EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
+src="$(rlocation "$EMBED_MODEL")" || src=""
+if [[ -z "$src" || ! -s "$src" ]]; then
+  echo "ERROR: qmd embedding model not found in runfiles: $EMBED_MODEL" >&2
+  echo "  (is //third-party/qmd_models:embeddinggemma still in this target's \`data\`?)" >&2
+  exit 3
+fi
+ln -sfn "$src" "$MODELS_DIR/$(basename "$EMBED_MODEL")"
 for entry in \
-  "qmd_model_embeddinggemma/file/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf" \
-  "qmd_model_query_expansion/file/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
-  "qmd_model_reranker/file/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
+  "_main/third-party/qmd_models/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
+  "_main/third-party/qmd_models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
   src="$(rlocation "$entry")" || src=""
   if [[ -z "$src" || ! -s "$src" ]]; then
-    echo "ERROR: qmd model not found in runfiles: $entry" >&2
-    echo "  (is \`:qmd_models\` still in materialize_tng_root's \`data\`?)" >&2
-    exit 3
+    echo "note: $(basename "$entry") is not in this target's runfiles; not staged" >&2
+    continue
   fi
   ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done

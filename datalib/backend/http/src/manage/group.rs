@@ -2,7 +2,7 @@
 //! applets filed under it: the order they run in, the status the row
 //! shows, the instant it calls "last synced", and the steps a sync of
 //! the group starts at. The rules are the aggregation table in
-//! docs/dev/plans/groups_and_functions.md. Nothing here does arithmetic
+//! docs/dev/config_model.md. Nothing here does arithmetic
 //! across children: a group's bytes come from its own measured series.
 
 use super::status::{compare_stamps, StatusView};
@@ -125,6 +125,21 @@ pub fn group_seeds<T: Child>(children: &[T], is_dropped: impl Fn(&T) -> bool) ->
         .filter(|c| c.kind() == ChildKind::Step && c.inputs().is_empty() && !is_dropped(c))
         .map(|c| c.id().to_string())
         .collect()
+}
+
+/// The steps a sync of a diff group starts at: what its step reads —
+/// its source's ingest step — since a diff group has no source step of
+/// its own and its render runs in the source's chain. Dropped steps
+/// are left out as above.
+pub fn diff_group_seeds<T: Child>(children: &[T], is_dropped: impl Fn(&T) -> bool) -> Vec<String> {
+    let mut seeds: Vec<String> = children
+        .iter()
+        .filter(|c| c.kind() == ChildKind::Step && !is_dropped(c))
+        .flat_map(|c| c.inputs().iter().cloned())
+        .collect();
+    seeds.sort();
+    seeds.dedup();
+    seeds
 }
 
 #[cfg(test)]
@@ -403,5 +418,13 @@ mod tests {
     fn group_seeds_is_empty_for_a_group_whose_steps_all_read_something() {
         let got = group_seeds(&[step("u/grid_index", &["a/render_markdown"])], |_| false);
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn a_diff_groups_sync_starts_at_its_sources_ingest() {
+        let got = diff_group_seeds(&[step("s-diff/render_markdown", &["s/ingest"])], |_| false);
+        assert_eq!(got, ["s/ingest"]);
+        let dropped = diff_group_seeds(&[step("s-diff/render_markdown", &["s/ingest"])], |_| true);
+        assert!(dropped.is_empty());
     }
 }

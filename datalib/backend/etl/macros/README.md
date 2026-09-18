@@ -120,16 +120,20 @@ emits the table DDL, two index DDLs, the `BulkUpsertable` impl, and the
 
 The consumer-side sibling. Where the three above derive the raw-store wire
 shape, this covers flat typed tables whose columns use portable
-MySQL/Dolt/SQLite types (`VARCHAR(n)`, `LONGTEXT`, `INT`). It replaced the
-old `schemas/codegen.py` JSON-Schema path, making the struct the single
-source of truth the same way `schema_raw.rs` already was.
+MySQL/Dolt/SQLite types (`VARCHAR(n)`, `LONGTEXT`, `INT`), with the struct
+as the single source of truth the same way `schema_raw.rs` is.
 
 - `#[portable_table(table = "grid_rows", primary_key = "uuid")]` — both keys
   required; `primary_key` accepts a comma-separated list for composite keys.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
-- `#[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]` — repeatable, on
+- `#[col(sql = "VARCHAR(16)", enum)]` — the field is a `Copy` enum (or
+  `Option` of one) with `as_str(self) -> &'static str`, the strum shape
+  AGENTS.md prescribes for a closed set of strings. It is bound as that
+  text; a reader parses it back with the enum's `parse` and never
+  compares the column to a literal.
+- `#[derived(name = "created_at_utc", sql = "VARCHAR(40)")]` — repeatable, on
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.
 

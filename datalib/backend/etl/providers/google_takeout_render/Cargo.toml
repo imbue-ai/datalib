@@ -3,6 +3,7 @@ name = "datalib-etl-google-takeout-render"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_etl_google_takeout_render"
@@ -24,7 +25,7 @@ uuid = { workspace = true, features = ["v5"] }
 sqlx = { workspace = true }
 # Google Voice takeout is XHTML; quick-xml pull-parses it (with a
 # `<br>`→newline pre-pass) into structured rows.
-quick-xml = "0.36"
+quick-xml = "0.41"
 sha2 = { workspace = true }
 tracing = "0.1"
 

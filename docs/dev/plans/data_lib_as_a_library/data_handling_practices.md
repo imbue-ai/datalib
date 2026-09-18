@@ -146,7 +146,7 @@ exactly that from identity to **content**:
 
 > For N random `grid_rows` per provider, fetch the raw payload by
 > `upstream_id` and assert the pass-through scalars agree —
-> `author`, `when_ts`, `source_url`, and a prefix of `text`.
+> `author`, `created_at`, `source_url`, and a prefix of `text`.
 
 Every failure is one of three things: a real loss, a deliberate rule
 that belongs in R3's table, or a mapping we cannot express in SQL (fine
@@ -204,15 +204,7 @@ date. Not issues-only: the value is being able to see the whole surface
 at once, and an issue tracker cannot show you that. File issues for the
 *fixes*, link them from the table.
 
-**First run: [`render_audit_2026_09_03.md`](render_audit_2026_09_03.md)**
-— passes A–D against the tree, with the per-provider table, the R1 sink
-designed as a per-source doltlite `render_problems` store, and ten
-named timestamp fabrications. It grew past a table, so it lives in its
-own file rather than inline here. Two corrections to this doc came out
-of it: Pass B's 424 sites should be **461** (the walk missed the three
-providers that render from `src/render.rs` rather than a `src/render/`
-directory), and R7's `rendered_md/` pruning gap is now half closed by
-`discard_tree_from_an_older_renderer`.
+**First run:** done; its findings that still hold are in `data_architecture_parse_and_render.md`, and the sink it designed is the `problems` table (`datalib_problems`).
 
 ## 4. Retrofit
 
@@ -259,7 +251,7 @@ G8, scoped to where it pays: not a tool, a habit, and only when the
 corpus is unread.
 
 **When writing the projection** (the pure function in the provider's
-`render/parse.rs` / `render/schema_translate.rs`)**:** a table-driven
+`render/parse.rs`)**:** a table-driven
 test with one row per
 oddity class the profile turned up — a list where a string is
 declared, a bare string where a list is, an int where a string is, an

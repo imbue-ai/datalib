@@ -80,7 +80,7 @@ test --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
 # from inside the sandbox instead of re-downloading it. Nothing in the
 # build reads that directory any more: the models are pinned in
-# MODULE.bazel (`@qmd_model_*`) and reach the two places that need them —
+# fetched by a build action (`//third-party/qmd_models`) and reach the two places that need them —
 # `//tests/fixtures:ingested_tng_qmd` and `:materialize_tng_root` — as
 # ordinary bazel inputs. Dropping the mount also drops its onboarding
 # cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
@@ -171,33 +171,58 @@ test  --experimental_disk_cache_gc_max_size=150G
 #
 # `--remote_upload_local_results=true` is the default but we name it
 # explicitly so it's obvious this is a read+write cache, not a
-# read-only mirror. Untrusted CI contexts (PR builds from forks) should
-# pass `--remote_upload_local_results=false` to avoid poisoning the
-# cache with unverified outputs.
+# read-only mirror.
+#
+# WHICH cache is decided by the API key, and there are two BuildBuddy
+# groups (a group is BuildBuddy's isolation unit — separate caches,
+# separate keys). Bazel never verifies an action-cache hit, so whoever
+# can write a cache decides what a build that reads it ships:
+#
+#   * the contributor org, `imbue.buildbuddy.io` — every laptop with the
+#     key, every PR run. What `--config=buildbuddy` reaches.
+#   * the release org, `imbue-release.buildbuddy.io` — written only by
+#     `test.yml` runs of commits on `main` (PR-gated code), read by
+#     `release.yml` on a tag, which builds the same commit and so hits
+#     what main just built. A separate org is a separate subdomain, a
+#     separate cache and its own key: nothing with the contributor key
+#     can write to it, and the release build itself never writes
+#     (`buildbuddy-release-readonly` below). docs/dev/ci.md §"Two
+#     caches" has the setup.
 build:buildbuddy --bes_results_url=https://imbue.buildbuddy.io/invocation/
 build:buildbuddy --bes_backend=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
 
+# The release org: same flags, its own host (a later flag overrides an
+# earlier one, so this inherits the timeout and the downloader
+# fallback below and swaps only the endpoints). Read+write — what a
+# `main` run of test.yml uses to fill it.
+build:buildbuddy-release --config=buildbuddy
+build:buildbuddy-release --bes_results_url=https://imbue-release.buildbuddy.io/invocation/
+build:buildbuddy-release --bes_backend=grpcs://imbue-release.buildbuddy.io
+build:buildbuddy-release --remote_cache=grpcs://imbue-release.buildbuddy.io
+build:buildbuddy-release --experimental_remote_downloader=grpcs://imbue-release.buildbuddy.io
+
+# The tag build's view of the release org: read, never write.
+build:buildbuddy-release-readonly --config=buildbuddy-release
+build:buildbuddy-release-readonly --remote_upload_local_results=false
+
 # Fetch repository downloads through BuildBuddy too, not just action
 # results. Bazel asks BuildBuddy for the URL; BuildBuddy serves it from
 # its cache if it has it, otherwise fetches it once from the origin and
 # keeps it. So `http_archive` / `http_file` content — the rust
-# toolchains, the doltlite amalgamation, the qmd GGUFs — comes from the
-# same host as everything else instead of from a third-party server per
-# machine, per CI container.
+# toolchains, the doltlite amalgamation — comes from the same host as
+# everything else instead of from a third-party server per machine, per
+# CI container.
 #
-# The qmd models are why this is here. They are ~2.26 GB of
-# `@qmd_model_*` (MODULE.bazel), a CI container starts with an empty
-# repository cache, and HuggingFace answered one of those cold fetches
-# with `429 Too Many Requests` on 2026-09-03 and failed the build.
-#
-# Measured, not assumed: fetching `@qmd_model_reranker//file` cold with
-# this flag uploaded 639,174,366 bytes to BuildBuddy on the first run
-# (origin fetch, then stored) and 20,814 bytes on the second, with the
-# same 639,153,184 downloaded — i.e. the second fetch came from
-# BuildBuddy, not HuggingFace.
+# The qmd models were why this was added: as `http_file` repositories
+# they were ~2.26 GB fetched into every empty CI container, and
+# HuggingFace answered one of those cold fetches with `429 Too Many
+# Requests` on 2026-09-03 and failed the build. They are a build action
+# now (`//third-party/qmd_models`), so they ride the action cache
+# instead, and only a run that executes a consumer moves them. The
+# downloader stays for everything else.
 #
 # `_local_fallback=true` because the default is `false`, which turns a
 # BuildBuddy outage into a failed fetch rather than a slow one. With it,
@@ -277,9 +302,9 @@ build:remote --jobs=80
 # Silicon hosts, so much of the release path can be debugged locally
 # (e.g. `datalib_http_bin` cross-builds to a fully-static ELF from
 # a mac). The `bazel build ... (musl static)` step in test.yml gates
-# the full musl dist on every PR. The impersonating curl is not built
-# by bazel at all under any config: it is fetched, one prebuilt
-# archive per triple (see //third-party/curl-impersonate).
+# the full musl dist on every PR. The two curl shims are not built
+# by bazel at all under any config: they are fetched, one prebuilt
+# archive per triple (see //third-party/latchkey-curl-shims).
 #
 # The resulting binaries are statically linked against musl libc (no
 # DT_NEEDED entries at all — verify with `file`, which should say
@@ -355,6 +380,19 @@ try-import %workspace%/.bazelrc.user
 # aborts during module resolution — so a red CI job never leaves a
 # half-updated file behind.
 common:ci --lockfile_mode=error
+
+# CI builds without the bytes. Every run is mostly remote cache hits —
+# ~4400 on a warm `main` run — and without this each hit's outputs are
+# downloaded onto the runner (~320 thread-seconds, ~40 s of wall clock)
+# and then written a second time into a `--disk_cache` that dies with
+# the container. `minimal` fetches only what a local action or a test
+# needs; a failed test's log is still fetched for `--test_output=errors`
+# (checked, not assumed: a deliberately failing test on a probe run
+# printed its stderr under these flags). The one step that needs real
+# files on disk — staging `//datalib/backend:bin` into the tarball —
+# passes `--remote_download_toplevel` on its own command line.
+build:ci --remote_download_minimal
+build:ci --disk_cache=
 
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
 common --enable_platform_specific_config

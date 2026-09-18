@@ -76,9 +76,9 @@ RUNS_KEPT=3
 SCRATCH_PARENT="${TEST_TMPDIR:-${TMPDIR:-/tmp}}"
 # `date -u`: the prune below sorts on this name, and a local clock runs
 # backwards for an hour at a DST fall-back.
-FW_E2E_RUN_DIR="$(mktemp -d "$SCRATCH_PARENT/datalib-e2e-run.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
-export FW_E2E_RUN_DIR
-if [[ -z "${TEST_TMPDIR:-}" && -z "${FW_E2E_KEEP_ROOTS:-}" ]]; then
+DATALIB_TEST_E2E_RUN_DIR="$(mktemp -d "$SCRATCH_PARENT/datalib-e2e-run.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+export DATALIB_TEST_E2E_RUN_DIR
+if [[ -z "${TEST_TMPDIR:-}" && -z "${DATALIB_TEST_E2E_KEEP_ROOTS:-}" ]]; then
   # The names carry a timestamp, so a plain sort is oldest-first.
   drop=$(( $(ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | wc -l) - RUNS_KEPT ))
   ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | sort | while IFS= read -r stale; do
@@ -89,7 +89,7 @@ fi
 
 # Fires on the early-exit paths only, for the `exec` reason above. Those
 # are setup failures, with nothing in the run dir worth keeping.
-cleanup() { rm -rf "$FW_E2E_RUN_DIR"; return 0; }
+cleanup() { rm -rf "$DATALIB_TEST_E2E_RUN_DIR"; return 0; }
 trap cleanup EXIT
 
 # Which browser engines to provision. Both by default: the suite has a
@@ -166,7 +166,7 @@ else
   # runfiles tree has the specs and configs as symlinks back to
   # bazel-out / source, so we rehome the test inputs into a tempdir
   # as real files (rsync -L resolves symlinks during the copy).
-  STAGE_DIR="$FW_E2E_RUN_DIR/stage"
+  STAGE_DIR="$DATALIB_TEST_E2E_RUN_DIR/stage"
   mkdir -p "$STAGE_DIR"
   rsync -aL \
     --exclude node_modules \
@@ -200,26 +200,26 @@ fi
 # source-workspace `bazel-bin/...` convenience symlink, which is not a
 # declared input of this test and can race with concurrent bazel actions
 # under `bazel test //...`.
-BACKEND_BIN_RUNFILE="$(need_runfile "${FW_E2E_HTTP_BIN_RLOC:-}" -x)"
+BACKEND_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_HTTP_BIN_RLOC:-}" -x)"
 export DATALIB_HTTP_BIN="$BACKEND_BIN_RUNFILE"
 
 # Resolve the shared TNG materializer so playwright.config.ts can spawn
 # it directly (same script as `bazelisk run //datalib:dev_tng`).
-MATERIALIZE_RUNFILE="$(need_runfile "${FW_E2E_MATERIALIZE_RLOC:-}" -x)"
-export FW_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
+MATERIALIZE_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_MATERIALIZE_RLOC:-}" -x)"
+export DATALIB_TEST_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
 
 # Resolve the step host so the sync spec can name it as a step's
 # `command:`. The fixture data root is a temp dir with nothing on PATH,
 # so an absolute path is the only way a step can be spawned there —
 # same reason the materializer writes the applet's path absolutely.
-STEP_BIN_RUNFILE="$(need_runfile "${FW_E2E_STEP_BIN_RLOC:-}" -x)"
-export FW_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
+STEP_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_STEP_BIN_RLOC:-}" -x)"
+export DATALIB_TEST_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
 
 # The DAG runner. The http server's sync worker resolves it from
 # $DATALIB_DAG_BIN, then from its own directory, then PATH — and under
 # `bazel test` it sits in the runfiles rather than beside the server, so
 # the env var is the only one of the three that finds it.
-DAG_BIN_RUNFILE="$(need_runfile "${FW_E2E_DAG_BIN_RLOC:-}" -x)"
+DAG_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_DAG_BIN_RLOC:-}" -x)"
 export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 
 # A directory holding every shipped binary under its **public
@@ -234,26 +234,26 @@ export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 # instead, which is why they have never needed this. Symlinks rather
 # than a copy_to_directory dep: bazel names each output after its target
 # (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
-BIN_STAGE="$FW_E2E_RUN_DIR/bin"
+BIN_STAGE="$DATALIB_TEST_E2E_RUN_DIR/bin"
 mkdir -p "$BIN_STAGE"
-APPLET_BIN_RUNFILE="$(need_runfile "${FW_E2E_APPLET_BIN_RLOC:-}" -x)"
+APPLET_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_APPLET_BIN_RLOC:-}" -x)"
 # The streaming spec's root is written by playwright.config.ts rather
 # than materialized, and its config names the applet by absolute path
 # the way materialize_tng_root.sh does.
-export FW_E2E_DATALIB_APPLET="$APPLET_BIN_RUNFILE"
+export DATALIB_TEST_E2E_DATALIB_APPLET="$APPLET_BIN_RUNFILE"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
   "datalib-dag:$DAG_BIN_RUNFILE" \
   "datalib-applet:$APPLET_BIN_RUNFILE"; do
   ln -sfn "${pair#*:}" "$BIN_STAGE/${pair%%:*}"
 done
-export FW_E2E_BIN_DIR="$BIN_STAGE"
+export DATALIB_TEST_E2E_BIN_DIR="$BIN_STAGE"
 
 # The local PDF corpus the sync spec scans. Anchor off one file and
 # hand over its directory, the way materialize_tng_root.sh anchors the
 # fsindex tree off its breadcrumb.
 PDF_ANCHOR="$(need_runfile _main/datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng/captains_log.pdf -f)"
-export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
+export DATALIB_TEST_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
 
 # Signal, for the onboarding spec's second source. Unlike the PDF
 # corpus there is nothing to point at directly: a Signal backup is an
@@ -261,9 +261,9 @@ export FW_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
 # Hand playwright.config.ts both halves and let it expand them once per
 # config load, next to where it seeds the PDF scan directory.
 SIGNAL_FIXTURE_BIN="$(need_runfile _main/datalib/backend/signal-backup/signal_make_fixture -x)"
-export FW_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
+export DATALIB_TEST_E2E_SIGNAL_MAKE_FIXTURE="$SIGNAL_FIXTURE_BIN"
 SIGNAL_SPEC="$(need_runfile _main/datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json -f)"
-export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
+export DATALIB_TEST_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
 
 # Playback tapes for the streaming spec: one directory of replayable
 # responses per source, written by the same `datalib-step synthesize`
@@ -271,20 +271,21 @@ export FW_E2E_SIGNAL_SPEC="$SIGNAL_SPEC"
 # Anchored off one file in each checked-in fixture, like the PDF corpus.
 # The spec's backend gets `DATALIB_HTTP_PLAYBACK` pointed here, so every
 # step it spawns replays instead of fetching.
-PLAYBACK_STAGE="$FW_E2E_RUN_DIR/playback"
+PLAYBACK_STAGE="$DATALIB_TEST_E2E_RUN_DIR/playback"
 mkdir -p "$PLAYBACK_STAGE"
 for pair in \
   "chatgpt:_main/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api/conversations.json" \
   "claude:_main/datalib/backend/etl/providers/claude/tests/fixtures/claude_export/conversations.json"; do
   type="${pair%%:*}"
   anchor="$(need_runfile "${pair#*:}" -f)"
+  printf '{"fixture_path": "%s"}' "$(dirname "$anchor")" > "$PLAYBACK_STAGE/synthesize-$type.params.json"
   "$STEP_BIN_RUNFILE" synthesize "$type" \
     --name "$type" \
-    --params "{\"fixture_path\": \"$(dirname "$anchor")\"}" \
+    --params-file "$PLAYBACK_STAGE/synthesize-$type.params.json" \
     --out "$PLAYBACK_STAGE" > "$PLAYBACK_STAGE/synthesize-$type.log" 2>&1 \
     || { echo "ERROR: datalib-step synthesize $type failed; see $PLAYBACK_STAGE/synthesize-$type.log" >&2; exit 1; }
 done
-export FW_E2E_PLAYBACK_DIR="$PLAYBACK_STAGE"
+export DATALIB_TEST_E2E_PLAYBACK_DIR="$PLAYBACK_STAGE"
 
 # --- the Node that runs qmd ------------------------------------------
 #
@@ -305,15 +306,15 @@ export FW_E2E_PLAYBACK_DIR="$PLAYBACK_STAGE"
 #
 # Deliberately fatal on a miss. A silent fall-through to npx is exactly
 # the bug this block exists to delete, and it would look like a pass.
-NODE_BIN_RUNFILE="$(rlocation "${FW_E2E_NODE_BIN_RLOC:-}")" || NODE_BIN_RUNFILE=""
-QMD_PKG_RUNFILE="$(rlocation "${FW_E2E_QMD_PKG_RLOC:-}")" || QMD_PKG_RUNFILE=""
+NODE_BIN_RUNFILE="$(rlocation "${DATALIB_TEST_E2E_NODE_BIN_RLOC:-}")" || NODE_BIN_RUNFILE=""
+QMD_PKG_RUNFILE="$(rlocation "${DATALIB_TEST_E2E_QMD_PKG_RLOC:-}")" || QMD_PKG_RUNFILE=""
 if [[ ! -x "$NODE_BIN_RUNFILE" ]]; then
-  echo "ERROR: bazel-managed node not in runfiles (FW_E2E_NODE_BIN_RLOC='${FW_E2E_NODE_BIN_RLOC:-}')" >&2
+  echo "ERROR: bazel-managed node not in runfiles (DATALIB_TEST_E2E_NODE_BIN_RLOC='${DATALIB_TEST_E2E_NODE_BIN_RLOC:-}')" >&2
   echo "Did @nodejs_host//:node_bin drop out of _E2E_DATA / _E2E_ENV?" >&2
   exit 1
 fi
 if [[ ! -f "$QMD_PKG_RUNFILE" ]]; then
-  echo "ERROR: qmd runtime package.json not in runfiles (FW_E2E_QMD_PKG_RLOC='${FW_E2E_QMD_PKG_RLOC:-}')" >&2
+  echo "ERROR: qmd runtime package.json not in runfiles (DATALIB_TEST_E2E_QMD_PKG_RLOC='${DATALIB_TEST_E2E_QMD_PKG_RLOC:-}')" >&2
   exit 1
 fi
 
@@ -341,9 +342,9 @@ fi
 # inside the runfiles tree, so the suite passed while the documented
 # `bazel run … -- --update-snapshots` path failed. Anchoring on a
 # generated artifact resolves correctly in both modes.
-QMD_DIR_RUNFILE="$(rlocation "${FW_E2E_QMD_DIR_RLOC:-}")" || QMD_DIR_RUNFILE=""
+QMD_DIR_RUNFILE="$(rlocation "${DATALIB_TEST_E2E_QMD_DIR_RLOC:-}")" || QMD_DIR_RUNFILE=""
 if [[ -z "$QMD_DIR_RUNFILE" || ! -d "$QMD_DIR_RUNFILE" ]]; then
-  echo "ERROR: qmd package dir not in runfiles (FW_E2E_QMD_DIR_RLOC='${FW_E2E_QMD_DIR_RLOC:-}')" >&2
+  echo "ERROR: qmd package dir not in runfiles (DATALIB_TEST_E2E_QMD_DIR_RLOC='${DATALIB_TEST_E2E_QMD_DIR_RLOC:-}')" >&2
   echo "Did //third-party/qmd/runtime:qmd_package_dir drop out of _E2E_DATA?" >&2
   exit 1
 fi
@@ -355,7 +356,7 @@ if [[ ! -d "$QMD_STORE" ]]; then
   exit 1
 fi
 
-RUNTIME_STAGE="$FW_E2E_RUN_DIR/runtime"
+RUNTIME_STAGE="$DATALIB_TEST_E2E_RUN_DIR/runtime"
 mkdir -p "$RUNTIME_STAGE/node/bin" "$RUNTIME_STAGE/qmd/$QMD_VERSION"
 ln -sfn "$NODE_BIN_RUNFILE" "$RUNTIME_STAGE/node/bin/node"
 ln -sfn "$QMD_STORE" "$RUNTIME_STAGE/qmd/$QMD_VERSION/node_modules"

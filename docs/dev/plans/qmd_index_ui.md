@@ -110,7 +110,7 @@ on stderr; the worker's `TaskBoard` (`http/src/worker.rs:86`) folds
 `progress_message` / `step_finish` / `run_summary` into a per-task board
 and fans it out over `GET /api/sync/stream` as SSE
 (`http/src/lib.rs:1124`), which the UI already consumes
-(`ui/src/api.ts:openJobStream`, `ui/src/sync/progress.ts`).
+(`ui/src/live.ts`).
 
 **Applets cannot stream.** The gateway's `forward`
 (`http/src/applets.rs:841`) is a hand-rolled HTTP/1.1 client that

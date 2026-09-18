@@ -1,0 +1,24 @@
+[package]
+name = "datalib-etl-claude-code-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "datalib_etl_claude_code_render"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = "../.." }
+datalib-etl-render = { path = "../../render" }
+datalib-etl-chat-common = { path = "../../chat-common" }
+datalib-etl-claude-code = { path = "../claude_code" }
+datalib-id = { path = "../../../id" }
+datalib-schema = { path = "../../../schema" }
+datalib-time = { path = "../../../time" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

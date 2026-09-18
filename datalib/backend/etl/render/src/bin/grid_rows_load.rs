@@ -5,15 +5,13 @@
 //! `<out>/unified_index/grid/db.doltlite_db`.
 
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use datalib_etl_render::grid_index::{build_grid_index, init_schema};
+use datalib_etl_render::grid_index::{build_grid_index, open_index};
 use datalib_obs::{init as init_obs, ObsArgs};
 use datalib_qmd_indexer::{discover_groups, run_index, IndexOptions, LEGACY_COLLECTION_NAME};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{debug, info, info_span};
 
 #[derive(Parser, Debug)]
@@ -24,7 +22,7 @@ use tracing::{debug, info, info_span};
 struct Args {
     /// Input root. The loader reads each stanza's render store at
     /// `<out>/<stanza>/render_markdown/indexed_markdown.doltlite_db`.
-    #[arg(long, env = "FW_OUT")]
+    #[arg(long, env = "DATALIB_OUT")]
     out: PathBuf,
 
     /// Path to the doltlite database file. Defaults to
@@ -35,12 +33,12 @@ struct Args {
     /// After loading, run the qmd indexer over `<out>`. qmd
     /// update is incremental — repeated invocations only re-index changed
     /// `.md` files.
-    #[arg(long, env = "FW_QMD_INDEX")]
+    #[arg(long, env = "DATALIB_QMD_INDEX")]
     qmd_index: bool,
 
     /// Skip the embedding pass when running the qmd indexer. Useful for
     /// CI / smoke tests where the ~300MB model download isn't desired.
-    #[arg(long, env = "FW_QMD_NO_EMBED")]
+    #[arg(long, env = "DATALIB_QMD_NO_EMBED")]
     qmd_no_embed: bool,
 
     #[command(flatten)]
@@ -66,20 +64,7 @@ async fn main() -> Result<()> {
         db = %db_path.display(),
     );
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
-    // Pool size 1: doltlite's per-connection HEAD pointer means
-    // pool sizes >1 produce silent dolt_log dropouts and
-    // `commit conflict` errors on interleaved writes. See
-    // `datalib_etl::doltlite_raw` module docs.
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(opts)
-        .await
-        .context("open doltlite file")?;
-    init_schema(&pool).await?;
+    let pool = open_index(&db_path).await?;
 
     let span = info_span!(
         "grid_rows_load",

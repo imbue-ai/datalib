@@ -77,6 +77,15 @@ describe("browseQuery", () => {
   /// A group id is its directory under the data root, and `source_id:`
   /// matches the first segment of a row's `qmd_path` — the same string.
   it("filters on the group id", () => {
-    expect(browseQuery("tiny-slack")).toBe("source_id:tiny-slack");
+    expect(browseQuery("tiny-slack")).toBe("source_id:tiny-slack is:document");
+  });
+
+  /// A diff group's browse is every row that moved, the diff columns
+  /// leading, and not one row per document.
+  it("a diff group browses its changed rows", () => {
+    expect(browseQuery("slack-diff", "diff")).toBe("source_id:slack-diff -change:unchanged");
+    const cols = browseColumns("diff")!;
+    expect(cols.slice(0, 2)).toEqual(["diff_status", "diff_changed_columns"]);
+    expect(cols.at(-1)).toBe("snippet");
   });
 });

@@ -29,8 +29,27 @@ use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// After the parent is gone, how long the steps get to checkpoint on
+/// their SIGINT before they are killed. The same grace the app server's
+/// worker gives a cancel.
+const PARENT_GONE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    // First, so a spawner that asked for the watch and forgot the pipe
+    // is refused before the runner lock is taken. The app server's
+    // worker spawns this binary with the pipe; a run it started must not
+    // outlive it, or the next boot finds a job it cannot account for and
+    // a runner lock it did not take.
+    datalib_parent_watch::exit_with_parent(|| {
+        datalib_parent_watch::report("datalib-dag: parent gone; interrupting the steps");
+        subprocess::interrupt_children();
+        std::thread::sleep(PARENT_GONE_GRACE);
+        datalib_parent_watch::report("datalib-dag: steps still running after the grace, exiting");
+        subprocess::kill_children();
+        std::process::exit(130);
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
          [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--run-id ID] [--parallelism N] \
          [--reset-and-redownload] [--refetch-blobs]\n       \
@@ -137,7 +156,7 @@ async fn main() -> Result<()> {
     let graph = checked.graph;
 
     // One runner per data root, taken before anything is written.
-    let _lock = datalib_dag::lock::FileLock::acquire_runner(&data_root).map_err(|e| {
+    let _lock = datalib_dag::lock::acquire_runner(&data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(
                 "another datalib-dag is already running against {}{}.\n\
@@ -209,8 +228,7 @@ async fn main() -> Result<()> {
     // Cancellation: forward the first SIGINT/SIGTERM to running steps
     // as SIGINT so each can checkpoint-commit and exit with a
     // `cancelled` outcome; the scheduler drains normally. A second
-    // signal gives up waiting and exits hard (kill_on_drop reaps any
-    // stragglers).
+    // signal gives up waiting and exits hard, taking the steps with it.
     tokio::spawn(async {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("install SIGTERM handler");
@@ -222,6 +240,7 @@ async fn main() -> Result<()> {
             }
             interrupts += 1;
             if interrupts >= 2 {
+                subprocess::kill_children();
                 std::process::exit(130);
             }
             subprocess::interrupt_children();
@@ -246,8 +265,10 @@ async fn main() -> Result<()> {
                 // as the run's lines with no step — and only there:
                 // stderr is the NDJSON event stream, which a fmt layer
                 // would interleave prose into.
-                let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+                let filter =
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new(datalib_runs::DEFAULT_LOG_FILTER)
+                    });
                 let _ = tracing_subscriber::registry()
                     .with(filter)
                     .with(datalib_runs::StoreLayer::new(store.log_sink()))

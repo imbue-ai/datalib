@@ -59,6 +59,28 @@ rust_test(
     deps = [
         ":datalib_etl_garmin",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The prune gate: a listing that is not an enumeration prunes nothing
+# and leaves a `problems` row; the next enumeration clears it.
+rust_test(
+    name = "garmin_prune_gate",
+    size = "medium",
+    srcs = ["tests/prune_gate.rs"],
+    data = [":tng_fixture"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl_garmin",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",

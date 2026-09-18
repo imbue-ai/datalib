@@ -240,7 +240,7 @@ mkdir -p "$LATCHKEY_DIR" && chmod 700 "$LATCHKEY_DIR"
 
 Credentials you paste go in directly. For Claude.ai, copy the
 `sessionKey` cookie as described in
-[getting your data](getting_your_data.md#claudeai), then:
+[getting your data](getting_your_data.md#claude), then:
 
 ```sh
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
@@ -251,14 +251,17 @@ pbpaste | docker run --rm -i -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 
 The browser login flows (`latchkey auth browser slack`, `google-gmail`,
 `github`, `fastmail`, `chatgpt`) cannot run inside the container, which has no
-browser. Run them on your host as usual, then re-encrypt the result
-into the container's store. The first container run against the folder
-creates its key; the re-encrypt reads that key from standard input:
+browser. Run them on your host as usual (with the `latchkey` the
+datalib installer put on your `PATH`, or `npx -y latchkey@<the pin in
+datalib/backend/runtime/src/node_runtime.rs>` if you have only the
+image), then re-encrypt the result into the container's store. The
+first container run against the folder creates its key; the re-encrypt
+reads that key from standard input:
 
 ```sh
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" latchkey auth list
-npx -y latchkey auth browser slack
-npx -y latchkey auth re-encrypt "$LATCHKEY_DIR" --services slack \
+latchkey auth browser slack
+latchkey auth re-encrypt "$LATCHKEY_DIR" --services slack \
   < "$LATCHKEY_DIR/encryption_key"
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" latchkey auth list
 ```

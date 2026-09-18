@@ -15,19 +15,19 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles we strive towards for the **ingestion (download) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the download stage aims for. It is aspirational as much as descriptive: a new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.when_ts` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the render-store contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
+The **parse and render stage** — deserializing a stored payload, projecting it to `GridRow` + markdown, its data-quality rules, its incrementality, and the `GridRow.created_at` policy — is [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md). The tables render writes into are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "download" requires a downstream concept (the render-store contract render emits, the `GridRow` projection the UI reads), this document touches on it briefly.
 
 Practitioner-facing material — how we test, how to add a provider, how the schema evolves, and the open questions — lives in the companion [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md).
 
 # General pipeline structure
 
-The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`pipeline_dag_architecture.md`](pipeline_dag_architecture.md) for the orchestration design and [`step_protocol.md`](step_protocol.md) for the step contract:
+The ETL pipeline currently has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<data_source>/ingest/entities.doltlite_db` (entities) and `<data_root>/<data_source>/ingest/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
 2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
 3. **Grid index (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
-Each provider (data source) is **two** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Download and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
+Each provider (data source) is **three** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>-config` is the config schema (serde structs, nothing else), `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Ingest and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
 
 ## Layering of concerns: download is downstream-agnostic
 The per-stage modules within a provider crate form a strict layer with a single allowed dependency direction:
@@ -73,6 +73,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent object ide
 - Every raw-store entity table keys by the upstream provider's identifier — no surrogate `AUTOINCREMENT`. That's what makes `dolt diff` stable across re-fetches, what makes `ON CONFLICT(id) DO UPDATE` work, and what makes cross-table references (e.g. `messages.conversation_id`) mean something.
 - When an upstream doesn't expose a stable UUID, we **synthesize one via UUIDv5** from a per-provider namespace and the most stable available fields. This is done in the data source's schema_raw.rs DDL.
 - We do **not** use row autoincrement or hashes-of-content as identity for objects. Both break the Ship-of-Theseus property: autoincrement isn't deterministic across re-ingest; content hashes change every time the content does.
+- **Sanctioned divergence: a content-hash id when the export carries no stable field at all.** Facebook's export gives most records — posts, comments, the profile — no `fbid` or any other id, so `facebook` mints `uuidv5(table, canonical JSON)` for those. The cost is named and accepted: an edit to such a record is a delete plus an add in `dolt_diff`, never a modification. Reach for this only after confirming there is no stable field; a synthesized UUIDv5 over stable fields is always preferred.
 - The **projection** side of identity — `GridRow.uuid`, the `upstream_*` backpointers, `source_url`, and the per-provider cross-references the UI links sideways through — moved to [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#identity-and-backpointers-are-first-class-in-the-projection).
 
 ### `schema_raw.rs`: Per-provider schema layout
@@ -104,6 +105,8 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 
 The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed, and the sidecar churn stays out of any cross-stage fingerprint.
 
+**Sanctioned divergence: no sidecar for a snapshot input read whole every run.** `facebook`, `claude_code` and `airvisual` read a local export or tree from the start every run; there is no per-row fetch to record, so a sidecar would only churn `last_attempt_at_utc` on every row for nothing. Those tables have no `<t>_bookkeeping`. A provider that fetches records one at a time from a service keeps the sidecar — it is what makes a partial run resumable and a failed row visible.
+
 ### Blobs and the CAS split
 Attachment bytes are split out of the entity database into a sibling content-addressable store. We do this because:
 
@@ -118,7 +121,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 
 Every provider with attachments owns a small four-column edge table that maps `(owning_id, ref_id) → blake3`. Bytes still live in the shared `cas_objects`; the edge table is provider-specific so providers that happen to use the same upstream id format don't collide, and so per-provider semantics (refetch policies, dolt_diff fanout) don't bleed across sources. The legacy shared `blob_refs` table has been retired entirely.
 
-The four-column shape is universal — `id` (synth PK `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]` struct. The derive emits the DDL, the two indices, the synth-PK recipe, and the `BulkUpsertable` impl. See [`provider_migration_dolt_diff_and_cas_edge.md`](/docs/dev/provider_migration_dolt_diff_and_cas_edge.md) for the full recipe.
+The four-column shape is universal — `id` (synth PK `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]` struct. The derive emits the DDL, the two indices, the synth-PK recipe, and the `BulkUpsertable` impl. The render side of the same edge — how a document's attachments are loaded and materialized — is in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md).
 
 ### Shared attachment-flush primitives
 Per-bucket attachment-fetch flow is consolidated into three shared pieces in `datalib_etl::blob_cas`:
@@ -249,13 +252,13 @@ Corollary: **the raw store is the source of truth; downstream stages are rebakea
 ## Verifiable via `--reset-and-redownload`
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to wipe the entity tables and the incremental cursors, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-- **`--reset-and-redownload`** wipes every entity table + its `_bookkeeping` sidecar. Per-provider CAS edge tables (`<provider>_attachments`) are preserved so already-fetched blob bytes are not re-pulled. Missing-from-the-prior-pass blobs are still picked up via the normal entity-walk → blob-fetch path.
-- **`--refetch-blobs`** clears the `blake3` column on the per-provider edge tables, forcing every attachment to re-download. The re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows.
-- Pass both for a full reset. Pass `--reset-and-redownload` alone for the common "check for entity gaps without burning bandwidth on blobs" case.
+- **`--reset-and-redownload`** wipes every entity table + its `_bookkeeping` sidecar, and the per-provider CAS edge table (`<provider>_attachments`) with them — every provider lists its edge table in `DATA_TABLES`. The edge row's `blake3` is the "already have these bytes" index, so with it gone every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows.
+- **`--refetch-blobs`** clears only the `blake3` column on the edge tables, forcing the same re-download without touching the entities.
+- Pass `--reset-and-redownload` for a full reset; `--refetch-blobs` alone re-pulls the attachments of a store whose entities are fine. A reset that keeps the edge rows, so a gap check costs no blob bandwidth, would be a change to every provider's `reset()`; none makes it today.
 
-The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
+The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS.
 
-`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. A `blob_cas::gc_orphans()` sweep existed once and was removed, uncalled, in `7f588ba1`; three docs went on recommending it for months. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
+`cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
 ## Noticing when the *upstream* loses data
 
@@ -299,10 +302,10 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 8 of the 20 providers with a download side use `DownloadRun`**
-(beeper, chatgpt, claude, email, github, gitlab, notion, slack; checked
-2026-09-05). The other twelve write no `sync_runs` row and no deltas at
-all — their history is still in the commits, but nothing precomputes it.
+**Only 8 of the 26 providers with a download side use `DownloadRun`**
+(beeper, chatgpt, claude, email, github, gitlab, notion, slack). The
+other eighteen write no `sync_runs` row and no deltas at all — their
+history is still in the commits, but nothing precomputes it.
 
 One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
@@ -319,7 +322,7 @@ the input dropped is simply not written back. The old rows stay in
 history, so `dolt_diff` still says what went.
 
 Mechanically it is the config-driven form of `--reset-and-redownload`:
-[`download.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
+[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
 two together, and every provider already truncates on that knob. The
 blob CAS keeps its bytes — orphans there wait on a collector we have not
 built.
@@ -332,17 +335,8 @@ use it. A partial export of a normally-complete source is the same trap.
 
 ### What limits it
 
-**Detection needs a re-enumeration**, and the per-provider audit that
-sentence used to defer is now done. What each source re-enumerates, and
+**Detection needs a re-enumeration.** What each source re-enumerates, and
 therefore what it can see:
-
-**A deletion the download notices now reaches the grid.** That used to
-be a second gap and is not any more — see
-[parse and render](data_architecture_parse_and_render.md), "Two
-mechanisms, because there are two kinds of renderer". It is worth
-keeping the two apart when reading a bug report: "we never noticed"
-(this section) and "we noticed and the grid still shows it" (that one)
-look identical from the UI.
 
 | source | re-enumeration | prunes |
 | --- | --- | --- |
@@ -387,25 +381,23 @@ net, where a plain mirror would have to choose between guessing and
 freezing. What remains is `prune::record`, which WARNs on an unusually
 large prune — a signal to investigate, not a veto.
 
-**A deletion the download notices now reaches the grid.** That used to
-be a second gap and is not any more — see
+**A deletion the download notices reaches the grid** — see
 [parse and render](data_architecture_parse_and_render.md), "Two
-mechanisms, because there are two kinds of renderer". It is worth
-keeping the two apart when reading a bug report: "we never noticed"
-(this section) and "we noticed and the grid still shows it" (that one)
-look identical from the UI.
+mechanisms, because there are two kinds of renderer". Keep the two apart
+when reading a bug report: "we never noticed" (this section) and "we
+noticed and the grid still shows it" (that one) look identical from the
+UI.
 
-**The two lists no longer barely overlap**, which they did when this
-section was written: every provider that records deltas can now also
-detect a deletion, and `media` / `fsindex` / `pdf` still detect
-structurally while recording none. The remaining mismatch is only that
-the structural detectors write no `sync_runs` row.
+Every provider that records deltas can also detect a deletion, and
+`media` / `fsindex` / `pdf` detect structurally while recording none;
+the one mismatch is that the structural detectors write no `sync_runs`
+row.
 
 **`deleted_upstream_at` is specified but not built.** [Transient vs
 non-transient](#transient-vs-non-transient) below says a confirmed 404
-should carry that marker. No such column exists anywhere in the tree
-(checked 2026-09-05). A provider that hard-deletes the row instead keeps
-the fact only in history, not in current state.
+should carry that marker. No such column exists anywhere in the tree. A
+provider that hard-deletes the row instead keeps the fact only in
+history, not in current state.
 
 **False positives track canonicalization.** An unchanged record that
 serializes differently from itself manufactures a `modified`. That is
@@ -417,8 +409,8 @@ changed this" wastes trust.
 
 ### The gap
 
-Nothing reads `summary.deltas` back — zero hits in
-`datalib/backend/http` and `datalib/ui` (checked 2026-09-05). The only
+Nothing reads `summary.deltas` back — nothing in `datalib/backend/http`
+or `datalib/ui` does. The only
 place any of this reaches a human is `fsindex`'s standalone CLI printing
 `vs last scan: N added, M modified, K removed`, which is one provider's
 local convenience rather than a product surface. `sync_runs` also
@@ -426,11 +418,38 @@ records no commit hashes (`run_id`, `started_at`, `finished_at`,
 `config`, `status`, `summary`), so recovering the exact commit range for
 a past run means reading `dolt_log` by hand.
 
-Detection is available, not delivered. See [`TODO.md`](/TODO.md).
+Detection is available; delivery is partial. The part that is
+delivered is the delta itself, as a thing a person can read — see the
+next section. The rest — `summary.deltas` read back, a run's commit
+range recorded in `sync_runs` — is #513.
+
+### The delta as a source: diff groups
+
+The commits answer "what changed?" at the level of rows; a person asks
+it at the level of the things the rows make up. A **diff group**
+(`type = "diff"`, `source = <group>`, two raw commits under
+`params.diff`) is the source's own render step run at both commits and
+subtracted, written as an ordinary render tree — documents with the
+changes marked, `grid_rows` with `diff_status` set — so everything that
+serves a source serves the difference. "Compare two syncs…" on the
+Manage screen writes one; [`config_model.md`](config_model.md) has the
+shape and [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) the design
+and what it cost to build.
+
+What a diff can show is bounded by what the ingest carried into the
+store. A provider that syncs forward from a cursor — an API
+`conversations.history` bounded by `oldest` — brings in what is newer
+and never sees a deletion, so a diff over such a source shows adds and
+edits but not removals until something re-walks the range. A provider
+that reads a whole export or file each time (the `.vcf` address books,
+a Takeout tree) sees deletions on every sync. When you build a
+provider, this is one more reason to prefer the full re-read where it
+is cheap, and to record in `scope_config` what a cursor was taken
+under when it is not.
 
 ## Timestamps: one clock, no fabrication
 
-What goes in `GridRow.when_ts` — the global-ordering policy, the
+What goes in `GridRow.created_at` — the global-ordering policy, the
 microsecond-bump recipe for sub-items, no-fabricated-timestamps, and
 which entity kinds legitimately have none — is a projection concern and
 lives in [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#6-timestamps).
@@ -490,7 +509,7 @@ The per-bucket fingerprint pattern has been **replaced with `dolt_diff_<table>` 
 
 Mechanism: on render success, the render step records the doltlite HEAD the provider pinned in the render store's `render_cursor` row, in the same transaction as the run's last document. On the next render, the provider is handed that hash (`RenderCtx::raw_cursor`) and `parse` runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { global_fanout_tables, bucket_query })`, which cold-starts if any `dolt_diff_<global_fanout_table>` row is non-`unchanged` (those fan out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
 
-The `source_fingerprint` compare is gone too (2026-09-14; this paragraph said for a year that it would stay, then that both had shipped and answered different questions). Render got the cursor treatment described here, and once it had, the fingerprint was a second answer to a question doltlite already settles — rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. See [`data_architecture_parse_and_render.md` §2](data_architecture_parse_and_render.md#where-this-is-heading-the-artifact-becomes-a-database) for the record of how it went wrong both ways it was kept. This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
+There is no `source_fingerprint` compare beside it: once render had the cursor, a fingerprint was a second answer to a question doltlite already settles — rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. This swap moves the "what's different?" decision from Rust-computed hash trees to doltlite's native diff, which it maintains anyway for `dolt diff`. The per-row `payload_blake3` columns are gone — the `WirePayloadRow` derive no longer emits them.
 
 **Rule for new stages.** Any new derivation added to the pipeline (future Annotate step, future index shard, future projection) follows the same recipe: declare what the inputs are (content + dependency hashes), compute a deterministic hash over them, store it alongside the output, compare on re-run. The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 
@@ -597,13 +616,14 @@ We want enough transient error handling that syncs "usually" work.  The goals ar
 Distinctions every provider should try to follow.  
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (see [Retry and fetch durability](#transient-vs-non-transient) below), advance the cursor, keep going. The run's `FetchSummary` reports `errors=N`.
+- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), which render carries forward and the Manage row counts. A configured entry upstream does not have — a label, a channel, a conversation id — goes through [`download_problems::report`](/datalib/backend/etl/src/download_problems.rs), which writes one config-keyed row per entry, every run until the config is corrected. How the rows travel: [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
 - **Auth failures and consecutive-failure budgets are fatal.** A workspace-wide 401 / 403 from the auth provider, or N back-to-back per-item failures on the same source, should return `Err` from `fetch(...)`. Even on auth failure, the orchestrator should still `dolt_commit` to record what *did* get pulled before the failure plus a note about the problem, then exit non-zero once other pipeline pathways finish.
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for the second pattern.
 
-There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`)
+There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`).
 
-ChatGPT seems to have a 200 requests/hour rate limit.  You have to stop for a while once you hit it.  What's the right approach?  Do you want to sleep for an hour?  Or just run it again in an hour?  Josh: right option is run forever, up to some "how long to run without making progress before giving up".
+A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

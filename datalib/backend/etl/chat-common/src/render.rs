@@ -48,10 +48,10 @@ use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
-use datalib_etl_render::section::msg_div_open;
+use datalib_etl_render::section::{join, msg_div_open, Section};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::html::escape_text;
@@ -81,11 +81,11 @@ pub struct RenderProfile {
     /// rows — the `entity_kind` component of the `datalib_id` recipe
     /// that minted their `uuid`.
     pub chat_entity_kind: &'static str,
-    /// Precision of the `when_ts` this provider stamps on its grid
+    /// Precision of the `created_at` this provider stamps on its grid
     /// rows. Not a free choice: changing it changes every row, so the
     /// provider's whole tree re-renders. Beeper is the one source whose
     /// upstream timestamps are meaningful below the second.
-    pub when_ts_precision: WhenTsPrecision,
+    pub stamp_precision: RecordStampPrecision,
     /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
@@ -185,8 +185,8 @@ fn render_one(
     };
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let md = render_markdown(profile, chat, doc, &chat_title, &doc_title);
-    fs::write(&md_path, &md).with_context(|| format!("write {}", md_path.display()))?;
+    let sections = render_markdown(profile, chat, doc, &chat_title, &doc_title);
+    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
         .strip_prefix(out_dir)
@@ -194,7 +194,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows = build_grid_rows(
         profile,
         chat,
@@ -220,6 +220,7 @@ fn render_one(
         md_path,
         render_version: profile.render_version,
         rows,
+        sections,
         edges: Vec::new(),
         problems,
     })
@@ -295,8 +296,8 @@ fn render_markdown(
     // heading takes them apart, so a clamp cannot eat the period.
     chat_title: &str,
     title: &str,
-) -> String {
-    let mut s = String::with_capacity(8 * 1024);
+) -> Vec<Section> {
+    let mut s = String::with_capacity(1024);
     s.push_str("---\n");
     s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
     s.push_str(&format!("provider: {}\n", profile.provider));
@@ -338,9 +339,10 @@ fn render_markdown(
 
     if doc.items.is_empty() {
         s.push_str("_(no messages)_\n");
-        return s;
+        return vec![Section::unkeyed(s)];
     }
 
+    let mut sections = vec![Section::unkeyed(s)];
     let mut i = 0;
     while i < doc.items.len() {
         let run_end = doc.items[i..]
@@ -348,23 +350,26 @@ fn render_markdown(
             .position(|it| !it.is_aside)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
-            render_aside_run(&mut s, profile, &doc.items[i..run_end]);
+            render_aside_run(&mut sections, profile, &doc.items[i..run_end]);
             i = run_end;
         } else {
-            render_item(&mut s, profile, &doc.items[i]);
+            sections.push(render_item(profile, &doc.items[i]));
             i += 1;
         }
     }
-    render_orphan_reactions(&mut s, doc);
-    s
+    if let Some(orphans) = render_orphan_reactions(doc) {
+        sections.push(Section::unkeyed(orphans));
+    }
+    sections
 }
 
 /// Reactions the provider could not place on any message in this
 /// document, listed at the end under the upstream id they name.
-fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
+fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
     if doc.orphan_reactions.is_empty() {
-        return;
+        return None;
     }
+    let mut s = String::new();
     s.push_str("---\n\n## Reactions to messages not in this mirror\n\n");
     for group in &doc.orphan_reactions {
         s.push_str(&format!(
@@ -382,6 +387,7 @@ fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
         }
     }
     s.push('\n');
+    Some(s)
 }
 
 /// Wrap one run of adjacent asides in a single collapsed `<details>`.
@@ -389,20 +395,26 @@ fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
 /// The `<details>` sits *outside* the per-message `<div>`s so every
 /// anchor, copy button and grid-row highlight inside it keeps working
 /// unchanged — the frontend opens the enclosing `<details>` when it
-/// scrolls to a section within one.
-fn render_aside_run(s: &mut String, profile: &RenderProfile, items: &[NormalizedChatItem]) {
+/// scrolls to a section within one. Its opener and closer are unkeyed
+/// sections of their own, so each aside stays its own keyed section.
+fn render_aside_run(
+    sections: &mut Vec<Section>,
+    profile: &RenderProfile,
+    items: &[NormalizedChatItem],
+) {
     let plural = if items.len() == 1 { "" } else { "s" };
-    s.push_str(&format!(
+    sections.push(Section::unkeyed(format!(
         "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
         n = items.len(),
-    ));
+    )));
     for item in items {
-        render_item(s, profile, item);
+        sections.push(render_item(profile, item));
     }
-    s.push_str("</details>\n\n");
+    sections.push(Section::unkeyed("</details>\n\n".to_string()));
 }
 
-fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatItem) {
+fn render_item(profile: &RenderProfile, item: &NormalizedChatItem) -> Section {
+    let mut s = String::with_capacity(512);
     s.push_str(&msg_div_open(&item.message_uuid, profile.provider));
     s.push_str("\n\n");
 
@@ -421,7 +433,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 ts = timestamp_html(item.date_ms)
             ));
             s.push_str("</div>\n\n");
-            return;
+            return Section::keyed(&item.message_uuid, s);
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -454,7 +466,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 s.push_str("\n*[attachment metadata missing]*\n");
             }
             for att in &item.attachments {
-                render_attachment(s, att);
+                render_attachment(&mut s, att);
             }
         }
         ItemKind::System => unreachable!(),
@@ -482,6 +494,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
     }
 
     s.push_str("\n</div>\n\n");
+    Section::keyed(&item.message_uuid, s)
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -567,23 +580,29 @@ fn build_grid_rows(
     chat_title: &str,
     md_rel: &str,
     source_id: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
-    // The chat-level row is stamped with the earliest *real* timestamp
-    // in the bucket. `min()` over the items that have one rather than
-    // "the first item's", for two reasons: an undated item sorts to the
-    // front (`None < Some` in every provider's `sort_by_key`), so
-    // reading item 0 would hand a whole conversation a null; and a
-    // bucket with no dated item at all — including the empty bucket
-    // `render_markdown` renders as "_(no messages)_" — then correctly
-    // gets `None` instead of the 1970 stamp it used to get. Providers
-    // sort ascending, so for a fully-dated bucket this is the same value
-    // `items.first()` gave.
-    let first_ts = when_ts_from_ms(
-        doc.items.iter().filter_map(|i| i.date_ms).min(),
-        profile.when_ts_precision,
+    // The document row brackets the bucket: created at the earliest
+    // *real* stamp in it, modified at the latest — a reaction counts, it
+    // is a change to the thread. `min()`/`max()` over the items that
+    // have a stamp rather than the first and last items', because an
+    // undated item sorts to the front (`None < Some` in every provider's
+    // `sort_by_key`), and a bucket with no dated item at all — including
+    // the empty bucket `render_markdown` renders as "_(no messages)_" —
+    // then gets `None` rather than a 1970 stamp.
+    let dated = || doc.items.iter().filter_map(|i| i.date_ms);
+    let first_ts = stamp_from_ms(dated().min(), profile.stamp_precision);
+    let last_ts = stamp_from_ms(
+        dated()
+            .chain(
+                doc.items
+                    .iter()
+                    .flat_map(|i| i.reactions.iter().filter_map(|r| r.date_ms)),
+            )
+            .max(),
+        profile.stamp_precision,
     );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
@@ -595,7 +614,9 @@ fn build_grid_rows(
             .provider(profile.provider)
             .kind(profile.chat_kind.clone())
             .source_label(profile.source_label.clone())
-            .when_ts(first_ts)
+            .is_document(true)
+            .created_at(first_ts)
+            .modified_at(last_ts)
             .byte_size(Some(bodies.iter().map(|b| b.len() as i64).sum()))
             .item_count(Some(doc.items.len() as i64))
             .author(chat.author.clone())
@@ -632,6 +653,20 @@ fn build_grid_rows(
     let _ = chat_title; // reserved for future per-message title context
 
     for (idx, (item, text)) in doc.items.iter().zip(bodies).enumerate() {
+        // What the provider could not do with the item while
+        // normalizing it: a document-scoped row per problem, keyed to
+        // the item, swept with the document like the builder's own.
+        problems.extend(item.problems.iter().map(|p| {
+            ProblemRow::new(
+                source_id,
+                Stage::Parse,
+                Scope::Markdown(&doc.markdown_uuid),
+                Some(&item.message_uuid),
+                Outcome::Nulled,
+                p.clone(),
+                Some(profile.render_version),
+            )
+        }));
         rows.extend(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
@@ -649,7 +684,7 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same `Scope::Upstream`.
                 .upstream_scope(chat.upstream_scope.clone())
-                .when_ts(when_ts_from_ms(item.date_ms, profile.when_ts_precision))
+                .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))
                 .item_count(Some(1))
                 // An empty display is "upstream named nobody", which is a
@@ -723,7 +758,7 @@ fn reaction_row(
     entire_chat: &str,
     md_rel: &str,
     source_id: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(r.reaction_uuid.clone())
@@ -733,7 +768,7 @@ fn reaction_row(
         .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
         .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
         .upstream_scope(chat.upstream_scope.clone())
-        .when_ts(when_ts_from_ms(r.date_ms, profile.when_ts_precision))
+        .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
         .account(chat.account.clone())
         .org_uuid(chat.org_uuid.clone())
@@ -785,12 +820,12 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 }
 
 // Format helpers
-use datalib_time::{when_ts_from_unix_millis, WhenTsPrecision};
+use datalib_time::{record_stamp_from_unix_millis, RecordStampPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-render every document chat-common has written.
-fn when_ts_from_ms(ms: Option<i64>, precision: WhenTsPrecision) -> Option<String> {
-    when_ts_from_unix_millis(ms, precision)
+fn stamp_from_ms(ms: Option<i64>, precision: RecordStampPrecision) -> Option<String> {
+    record_stamp_from_unix_millis(ms, precision)
 }
 
 fn human_bytes(n: i64) -> String {
@@ -809,7 +844,7 @@ fn human_bytes(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_schema::render_problems::{Problem, Reason};
+    use datalib_schema::problems::{Outcome, Reason, ScopeKind, Severity, Stage};
 
     fn rows_of(profile: &RenderProfile, chat: &NormalizedChat) -> Vec<GridRow> {
         let mut problems = Vec::new();
@@ -867,6 +902,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    problems: Vec::new(),
                 }],
             }],
         }
@@ -909,29 +945,82 @@ mod tests {
 
         assert_eq!(problems.len(), 1, "exactly one problem: {problems:?}");
         let p = &problems[0];
-        assert_eq!(p.outcome, "dropped");
-        assert_eq!(p.stage, "grid_row");
+        assert_eq!(p.outcome, Outcome::Dropped);
+        assert_eq!(p.severity, Severity::Error);
+        assert_eq!(p.stage, Stage::GridRow);
         assert_eq!(p.source_id, "test_source");
         assert_eq!(
             p.scope_key, chat.buckets[0].markdown_uuid,
             "swept with the document it belongs to"
         );
-        assert_eq!(p.scope_kind, "markdown");
-        assert_eq!(p.render_version, i64::from(profile.render_version));
-        // A row with no uuid gets the content-derived surrogate, so the
-        // same bad record does not accumulate a new row every run.
-        assert!(p.uuid.starts_with("noid:"), "{}", p.uuid);
+        assert_eq!(p.scope_kind, ScopeKind::Markdown);
+        assert_eq!(p.render_version, Some(i64::from(profile.render_version)));
+        // A row with no uuid names no item; its id comes from the scope
+        // and the field, so the same bad record does not accumulate a
+        // new row every run.
+        assert!(p.item_uuid.is_none());
         // Never a count without a reason.
-        let parsed: Vec<Problem> = serde_json::from_str(&p.problems).expect("problems json");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].reason, Reason::NoIdentity);
-        assert_eq!(parsed[0].field.as_deref(), Some("uuid"));
+        assert_eq!(p.reason, Reason::NoIdentity);
+        assert_eq!(p.field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
         assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
     }
 
-    /// The surrogate is content-derived, so a record that stays broken
-    /// keeps one row across runs rather than growing one per run.
+    /// A problem the provider found while normalizing an item — a
+    /// stamp that would not parse — reaches the store as a parse-stage
+    /// row on the document, keyed to the item, beside the builder's
+    /// own rows.
+    #[test]
+    fn an_items_own_problems_become_document_rows_keyed_to_it() {
+        use crate::types::own_stamp_ms;
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        let ms = own_stamp_ms(
+            Some("stardate 47988.1"),
+            "created_at",
+            |_| None,
+            &mut item.problems,
+        );
+        assert_eq!(ms, None);
+        assert_eq!(item.problems.len(), 1);
+        let mut problems = Vec::new();
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "x.md",
+            "test_source",
+            &mut problems,
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        let p = &problems[0];
+        assert_eq!(p.stage, Stage::Parse);
+        assert_eq!(p.severity, Severity::Warning);
+        assert_eq!(p.reason, Reason::CoercionFailed);
+        assert_eq!(p.field.as_deref(), Some("created_at"));
+        assert_eq!(p.sample, "stardate 47988.1");
+        assert_eq!(p.scope_key, chat.buckets[0].markdown_uuid);
+        assert_eq!(
+            p.item_uuid.as_deref(),
+            Some(chat.buckets[0].items[0].message_uuid.as_str())
+        );
+        // An absent stamp is an absence, not a problem.
+        let mut none = Vec::new();
+        assert_eq!(
+            own_stamp_ms(None, "created_at", |_| Some(1), &mut none),
+            None
+        );
+        assert_eq!(
+            own_stamp_ms(Some("  "), "created_at", |_| Some(1), &mut none),
+            None
+        );
+        assert!(none.is_empty());
+    }
+
+    /// The id is minted from the scope and the field, so a record that
+    /// stays broken keeps one row across runs rather than growing one per run.
     #[test]
     fn the_same_bad_record_keys_to_the_same_surrogate_twice() {
         let profile = test_profile();
@@ -958,7 +1047,7 @@ mod tests {
             args.2,
             &mut b,
         );
-        assert_eq!(a[0].uuid, b[0].uuid);
+        assert_eq!(a[0].problem_uuid, b[0].problem_uuid);
     }
 
     /// A message weighs its body in bytes, the document weighs the sum
@@ -981,6 +1070,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         });
         let rows = rows_of(&profile, &chat);
 
@@ -1013,17 +1103,17 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let chat = mk_chat();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &profile,
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(md.contains("Make it so."));
         assert!(md.contains("🫡 Will Riker"));
         assert!(md.contains("id=\"m-33333333"));
@@ -1037,13 +1127,13 @@ mod tests {
     #[test]
     fn message_header_is_an_h2_with_a_hoverable_short_timestamp() {
         let chat = mk_chat();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(
             md.contains("## <span class=\"msg-author\">Picard</span> "),
             "{md}"
@@ -1061,13 +1151,13 @@ mod tests {
     fn an_author_named_in_markup_cannot_break_out_of_the_header() {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].author_display = "<script>x</script> & co".to_string();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
             "{md}"
@@ -1096,13 +1186,13 @@ mod tests {
                 source_ref: None,
             }],
         }];
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test \u{b7} Bridge Crew",
             "Test \u{b7} Bridge Crew (2364-04)",
-        );
+        ));
 
         assert!(
             md.contains(
@@ -1133,6 +1223,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            problems: Vec::new(),
         }
     }
 
@@ -1149,13 +1240,13 @@ mod tests {
             spoken,
             aside_item("aside-3", "third tool"),
         ];
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
 
         assert_eq!(
             md.matches("<details class=\"tool-group\">").count(),
@@ -1169,6 +1260,60 @@ mod tests {
         for uuid in ["aside-1", "aside-2", "aside-3"] {
             assert!(md.contains(&format!("id=\"m-{uuid}\"")), "{md}");
         }
+    }
+
+    /// A document's sections are one per item, each keyed by the item
+    /// it wraps, with the frontmatter and the `<details>` wrappers
+    /// unkeyed between them — the shape a diff subtracts by. And their
+    /// join is the document: sectioning changed no byte.
+    #[test]
+    fn every_item_is_one_keyed_section_and_the_join_is_the_document() {
+        let mut chat = mk_chat();
+        let spoken = chat.buckets[0].items[0].clone();
+        chat.buckets[0].items = vec![
+            spoken.clone(),
+            aside_item("aside-1", "first tool"),
+            aside_item("aside-2", "second tool"),
+            spoken.clone(),
+        ];
+        let sections = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
+        );
+        let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                None,
+                Some(spoken.message_uuid.as_str()),
+                None,
+                Some("aside-1"),
+                Some("aside-2"),
+                None,
+                Some(spoken.message_uuid.as_str()),
+            ],
+            "{sections:#?}"
+        );
+        for s in &sections {
+            if let Some(uuid) = &s.uuid {
+                assert!(
+                    s.md.starts_with(&msg_div_open(uuid, Provider::Test)),
+                    "{}",
+                    s.md
+                );
+                assert!(s.md.ends_with("</div>\n\n"), "{}", s.md);
+            }
+        }
+        assert!(
+            sections[0].md.starts_with("---\ntitle:"),
+            "{}",
+            sections[0].md
+        );
+        assert!(sections[2].md.starts_with("<details"), "{}", sections[2].md);
+        assert_eq!(sections[5].md, "</details>\n\n");
     }
 
     #[test]
@@ -1194,10 +1339,16 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1211,14 +1362,20 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1242,7 +1399,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1267,14 +1424,20 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1301,7 +1464,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();
@@ -1321,7 +1484,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         }
     }
@@ -1330,7 +1493,7 @@ mod tests {
     /// upstream never stamped used to land in the grid as a real-looking
     /// `1970-01-01T00:00:00+00:00`. It must be null instead.
     #[test]
-    fn undated_item_gets_a_null_when_ts_not_the_epoch() {
+    fn undated_item_gets_a_null_created_at_not_the_epoch() {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
@@ -1339,17 +1502,47 @@ mod tests {
         let rows = rows_of(&profile, &chat);
         for r in &rows {
             assert_eq!(
-                r.when_ts, None,
+                r.created_at, None,
                 "{} row fabricated a timestamp: {:?}",
-                r.kind, r.when_ts
+                r.kind, r.created_at
             );
         }
         assert!(
-            !rows
-                .iter()
-                .any(|r| r.when_ts.as_deref().is_some_and(|t| t.starts_with("1970"))),
+            !rows.iter().any(|r| r
+                .created_at
+                .as_deref()
+                .is_some_and(|t| t.starts_with("1970"))),
             "no row may carry an epoch stand-in",
         );
+    }
+
+    /// The chat row is the one document row, created at the first
+    /// message and modified at the last change — here the reaction,
+    /// which lands ten seconds after the only message.
+    #[test]
+    fn chat_row_is_the_document_and_brackets_the_bucket() {
+        let profile = test_profile();
+        let rows = rows_of(&profile, &mk_chat());
+        let docs: Vec<&GridRow> = rows.iter().filter(|r| r.is_document).collect();
+        assert_eq!(docs.len(), 1, "{rows:?}");
+        let chat = docs[0];
+        assert_eq!(chat.kind, profile.chat_kind);
+        assert_eq!(
+            chat.created_at.as_deref(),
+            Some("2364-04-11T00:00:00+00:00")
+        );
+        assert_eq!(
+            chat.modified_at.as_deref(),
+            Some("2364-04-11T00:00:10+00:00")
+        );
+        for r in rows.iter().filter(|r| !r.is_document) {
+            assert!(
+                r.modified_at.is_none(),
+                "{} row: {:?}",
+                r.kind,
+                r.modified_at
+            );
+        }
     }
 
     /// An empty bucket is reachable — `render_markdown` renders it as
@@ -1363,7 +1556,7 @@ mod tests {
 
         let rows = rows_of(&profile, &chat);
         assert_eq!(rows.len(), 1, "only the chat-level row");
-        assert_eq!(rows[0].when_ts, None);
+        assert_eq!(rows[0].created_at, None);
     }
 
     /// A dated bucket is unaffected, and a bucket whose *first* item is
@@ -1383,7 +1576,7 @@ mod tests {
 
         let rows = rows_of(&profile, &chat);
         assert_eq!(
-            rows[0].when_ts.as_deref(),
+            rows[0].created_at.as_deref(),
             Some("2364-04-11T00:00:00+00:00"),
             "chat row keeps the bucket's earliest real stamp",
         );
@@ -1394,7 +1587,13 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
     }
@@ -1408,7 +1607,7 @@ mod tests {
             message_kind: "Test Message".to_string(),
             reaction_kind: "Test Reaction".to_string(),
             chat_entity_kind: ENTITY_KIND_CONVERSATION,
-            when_ts_precision: WhenTsPrecision::Seconds,
+            stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
         let mut chat = mk_chat();

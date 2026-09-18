@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
-use datalib_etl::pin::{head, install_views, Pin};
+use datalib_etl::pin::Pin;
 use serde_json::{json, Value};
 
 const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT NULL)";
@@ -29,6 +29,11 @@ const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KE
 /// Rows the seeding writer commits before anyone pins to it. Small and odd,
 /// so a count that picked up a later chunk is obvious.
 const SEED_ROWS: usize = 3;
+
+/// Rows the `hold` writer loads after deleting the seed, inside the same
+/// transaction. Different from `SEED_ROWS` so the three states a reader can
+/// be in -- before, half-done, after -- each count differently.
+const RELOAD_ROWS: usize = 5;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -48,6 +53,8 @@ async fn main() -> Result<()> {
         "probe" => probe(&args).await,
         "hang" => hang(&args).await,
         "reopen" => reopen(&args).await,
+        "hold" => hold(&args).await,
+        "watch" => watch(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
     write_atomic(&out, &serde_json::to_vec_pretty(&report)?)
@@ -60,9 +67,14 @@ async fn main() -> Result<()> {
 async fn write(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let started = Instant::now();
-    let pool = doltlite_raw::open(&db, &[TABLE_DDL])
-        .await
-        .context("open read-write")?;
+    // A refused open is a result, not a crash: the test reads what the
+    // refusal said.
+    let pool = match doltlite_raw::open(&db, &[TABLE_DDL]).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            return Ok(json!({ "role": "write", "open_error": format!("{e:#}") }));
+        }
+    };
     let open_ms = started.elapsed().as_millis() as u64;
     if !doltlite_raw::has_dolt_extensions(&pool).await {
         pool.close().await;
@@ -115,15 +127,14 @@ async fn write(args: &Args) -> Result<Value> {
 /// sample the pinned view repeatedly. Every sample must agree.
 async fn read(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
-    let pin = Pin::at(args.str("pin")?)?;
+    let pin = args.str("pin")?;
     let started = Instant::now();
-    let pool = doltlite_raw::open_reader(&db)
+    let reader = doltlite_raw::open_reader(&db, Some(pin))
         .await
-        .context("open read-only")?;
+        .context("open read-only")?
+        .context("the seed commit was published, so there is something to pin")?;
     let open_ms = started.elapsed().as_millis() as u64;
-    let views = install_views(&pool, &pin)
-        .await
-        .context("install pinned views")?;
+    let pool = reader.pool();
     write_atomic(&args.path("ready-out")?, b"ready")?;
 
     let interval = Duration::from_millis(args.num("interval-ms", 250));
@@ -131,7 +142,7 @@ async fn read(args: &Args) -> Result<Value> {
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
         match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pinned_entities")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
         {
             Ok(n) => samples.push(json!({ "count": n, "at_ms": now_ms() })),
@@ -140,12 +151,12 @@ async fn read(args: &Args) -> Result<Value> {
         tokio::time::sleep(interval).await;
     }
 
-    pool.close().await;
+    let pin = reader.pin().commit().to_string();
+    reader.close().await;
     Ok(json!({
         "role": "read",
         "open_ms": open_ms,
-        "views": views,
-        "pin": pin.commit(),
+        "pin": pin,
         "samples": samples,
         "errors": errors,
     }))
@@ -170,23 +181,26 @@ async fn churn(args: &Args) -> Result<Value> {
             break;
         }
         samples.push(json!({ "at_ms": now_ms() }));
-        let pool = match doltlite_raw::open_reader(&db).await {
-            Ok(p) => p,
+        let reader = match doltlite_raw::open_reader(&db, None).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                opened += 1;
+                continue;
+            }
             Err(e) => {
                 errors.push(format!("round {round}: open: {e:#}"));
                 continue;
             }
         };
         opened += 1;
-        match one_pinned_pass(&pool, cursor.as_deref()).await {
-            Ok(Some(head)) => {
+        match one_pinned_pass(&reader, cursor.as_deref()).await {
+            Ok(head) => {
                 pinned += 1;
                 cursor = Some(head);
             }
-            Ok(None) => {}
             Err(e) => errors.push(format!("round {round}: {e:#}")),
         }
-        pool.close().await;
+        reader.close().await;
     }
     Ok(json!({
         "role": "churn",
@@ -232,12 +246,10 @@ async fn history(args: &Args) -> Result<Value> {
     }))
 }
 
-/// The commit this pass read at; `None` when the store had nothing to pin.
-async fn one_pinned_pass(pool: &sqlx::SqlitePool, cursor: Option<&str>) -> Result<Option<String>> {
-    let Some(pin) = head(pool).await? else {
-        return Ok(None);
-    };
-    install_views(pool, &pin).await?;
+/// The commit this pass read at.
+async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
+    let pool = reader.pool();
+    let pin = reader.pin();
     let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pinned_entities")
         .fetch_one(pool)
         .await?;
@@ -249,13 +261,15 @@ async fn one_pinned_pass(pool: &sqlx::SqlitePool, cursor: Option<&str>) -> Resul
     .bind(pin.commit())
     .fetch_one(pool)
     .await?;
-    Ok(Some(pin.commit().to_string()))
+    Ok(pin.commit().to_string())
 }
 
 /// Two read-write pools on one file inside ONE process — the shape
 /// `AGENTS.md` warns about, and the one the two-process scenarios do not
 /// reach. Both opens are bounded, so a pool that really does wait for the
 /// other reports a timeout instead of hanging out the test's clock.
+/// Nowadays the second open is refused outright; this reports what it
+/// said, and that the first still commits.
 async fn double_open(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let budget = Duration::from_millis(args.num("budget-ms", 20_000));
@@ -387,13 +401,178 @@ async fn reopen(args: &Args) -> Result<Value> {
 /// What a fresh process sees once everyone else has let go.
 async fn probe(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
-    let pool = doltlite_raw::open_reader(&db)
+    let pool = datalib_pin::open_reader(&db)
         .await
         .context("open read-only")?;
     let head = doltlite_raw::head_commit(&pool).await?;
     let committed = committed_rows(&pool).await;
     pool.close().await;
     Ok(json!({ "role": "probe", "head": head, "committed_rows": committed }))
+}
+
+/// What `grid_index` does to the index on every pass, one step at a time:
+/// seed and commit, then inside one SQL transaction delete every row and
+/// load a different number back, then `COMMIT`, then `dolt_commit`. Each
+/// step waits for a go-file from the test and announces itself with an
+/// out-file, so a reader in another process can be sampled between any
+/// two of them. The report is what the writer itself saw at each step.
+async fn hold(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let pool = doltlite_raw::open(&db, &[TABLE_DDL])
+        .await
+        .context("open read-write")?;
+    if !doltlite_raw::has_dolt_extensions(&pool).await {
+        pool.close().await;
+        return Ok(json!({ "role": "hold", "dolt": false }));
+    }
+    for i in 0..SEED_ROWS {
+        insert(&pool, &format!("seed-{i}")).await?;
+    }
+    let seed = doltlite_raw::commit_run(&pool, "seed")
+        .await?
+        .ok_or_else(|| anyhow!("the seed commit committed nothing"))?;
+    write_atomic(&args.path("pin-out")?, seed.as_bytes())?;
+
+    let mut conn = pool.acquire().await.context("acquire")?;
+    let mut steps: Vec<Value> = Vec::new();
+    let mut step = |name: &str, own: i64| steps.push(json!({ "step": name, "working": own }));
+
+    await_file(&args.path("delete-when")?)?;
+    sqlx::query("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .context("BEGIN")?;
+    sqlx::query("DELETE FROM entities")
+        .execute(&mut *conn)
+        .await
+        .context("DELETE")?;
+    step("deleted", count_on(&mut conn).await?);
+    write_atomic(&args.path("deleted-out")?, b"deleted")?;
+
+    await_file(&args.path("reload-when")?)?;
+    for i in 0..RELOAD_ROWS {
+        sqlx::query("INSERT INTO entities (id, body) VALUES (?, ?)")
+            .bind(format!("reload-{i}"))
+            .bind("y")
+            .execute(&mut *conn)
+            .await
+            .context("insert reload row")?;
+    }
+    step("reloaded", count_on(&mut conn).await?);
+    write_atomic(&args.path("reloaded-out")?, b"reloaded")?;
+
+    await_file(&args.path("sql-commit-when")?)?;
+    sqlx::query("COMMIT")
+        .execute(&mut *conn)
+        .await
+        .context("COMMIT")?;
+    step("sql_committed", count_on(&mut conn).await?);
+    write_atomic(&args.path("sql-committed-out")?, b"sql-committed")?;
+
+    await_file(&args.path("dolt-commit-when")?)?;
+    drop(conn);
+    let commit = doltlite_raw::commit_run(&pool, "reload")
+        .await?
+        .ok_or_else(|| anyhow!("the reload commit committed nothing"))?;
+    write_atomic(&args.path("dolt-committed-out")?, commit.as_bytes())?;
+
+    let committed = committed_rows(&pool).await;
+    pool.close().await;
+    Ok(json!({
+        "role": "hold",
+        "dolt": true,
+        "seed_pin": seed,
+        "commit": commit,
+        "steps": steps,
+        "committed_rows": committed,
+    }))
+}
+
+async fn count_on(conn: &mut sqlx::SqliteConnection) -> Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM entities")
+        .fetch_one(conn)
+        .await
+        .context("count on the writer's connection")
+}
+
+/// A long-lived read-only handle -- the shape the search applet holds --
+/// sampling three things on every tick: the working set (`COUNT(*)` on the
+/// bare table), `dolt_hashof('HEAD')`, and the count at that HEAD through
+/// `dolt_at_`. Each sample is tagged with the phase the test says the
+/// writer is in, read from `--phase-file`, so the test can say what a
+/// reader sees at each point of the writer's pass.
+async fn watch(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    // Unpinned on purpose: the working-set count is one of the things
+    // measured.
+    let pool = datalib_pin::open_reader(&db)
+        .await
+        .context("open read-only")?;
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+    let phase_file = args.path("phase-file")?;
+    let until = args.path("until")?;
+    let interval = Duration::from_millis(args.num("interval-ms", 25));
+
+    let mut samples: Vec<Value> = Vec::new();
+    while !until.exists() {
+        let phase = std::fs::read_to_string(&phase_file).unwrap_or_default();
+        let started = Instant::now();
+        let working = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| e.to_string());
+        let head = sqlx::query_scalar::<_, Option<String>>("SELECT dolt_hashof('HEAD')")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| e.to_string());
+        let pinned = match &head {
+            Ok(Some(h)) => match Pin::at(h.clone()) {
+                Ok(pin) => {
+                    // Audited: `Pin::at` checked the hash is 40 hex characters;
+                    // the table name is a literal.
+                    let sql = format!("SELECT COUNT(*) FROM dolt_at_entities('{}')", pin.commit());
+                    sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+                Err(e) => Err(e.to_string()),
+            },
+            Ok(None) => Err("no HEAD".into()),
+            Err(e) => Err(e.clone()),
+        };
+        let phase_after = std::fs::read_to_string(&phase_file).unwrap_or_default();
+        samples.push(json!({
+            "phase": phase,
+            // A sample that straddled a phase change proves nothing about
+            // either phase; the test drops it.
+            "phase_after": phase_after,
+            "at_ms": now_ms(),
+            "ms": started.elapsed().as_millis() as u64,
+            "working": working.as_ref().ok(),
+            "working_error": working.as_ref().err(),
+            "head": head.as_ref().ok().cloned().flatten(),
+            "head_error": head.as_ref().err(),
+            "pinned": pinned.as_ref().ok(),
+            "pinned_error": pinned.as_ref().err(),
+        }));
+        tokio::time::sleep(interval).await;
+    }
+    pool.close().await;
+    Ok(json!({ "role": "watch", "samples": samples }))
+}
+
+/// Wait for a go-file the test writes, giving up rather than hanging the
+/// test's clock.
+fn await_file(path: &Path) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !path.exists() {
+        if Instant::now() > deadline {
+            bail!("timed out waiting for {}", path.display());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 // ── store helpers ───────────────────────────────────────────────────

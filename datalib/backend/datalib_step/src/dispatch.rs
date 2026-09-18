@@ -111,7 +111,7 @@ pub fn plan(
             match phase {
                 Phase::Ingest => {
                     let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse --params as a {source_type} download config")
+                        format!("parse the params as a {source_type} download config")
                     })?;
                     // No global `defaults:` stanza in DAG mode (each step
                     // is self-contained): fold the built-in defaults only.
@@ -139,7 +139,7 @@ pub fn plan(
                     // params on a render step fail loudly). No defaults to
                     // fold — render carries no cross-source knobs.
                     let mut cfg: $rcfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse --params as a {source_type} render config")
+                        format!("parse the params as a {source_type} render config")
                     })?;
                     cfg.common.resolve_paths(raw_dir.clone());
                     let raw_path = cfg.common.raw_path().to_path_buf();
@@ -170,7 +170,7 @@ pub fn plan(
             match phase {
                 Phase::Ingest => {
                     let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse --params as a {source_type} download config")
+                        format!("parse the params as a {source_type} download config")
                     })?;
                     cfg.common.fold_defaults(&Defaults::default());
                     cfg.common.resolve_paths(raw_dir.clone());
@@ -188,7 +188,7 @@ pub fn plan(
                 }
                 Phase::Render => {
                     let mut cfg: $rcfgty = serde_json::from_value(source).with_context(|| {
-                        format!("parse --params as a {source_type} render config")
+                        format!("parse the params as a {source_type} render config")
                     })?;
                     cfg.common.resolve_paths(raw_dir.clone());
                     PlannedSource {
@@ -268,6 +268,12 @@ pub fn plan(
             datalib_etl_linkedin,
             datalib_etl_linkedin_render
         ),
+        SourceType::Facebook => arm!(
+            datalib_etl_facebook_config::FacebookConfig,
+            datalib_etl_facebook_config::FacebookRenderConfig,
+            datalib_etl_facebook,
+            datalib_etl_facebook_render
+        ),
         SourceType::GoogleTakeout => arm!(
             datalib_etl_google_takeout_config::GoogleTakeoutConfig,
             datalib_etl_google_takeout_config::GoogleTakeoutRenderConfig,
@@ -321,6 +327,12 @@ pub fn plan(
             datalib_etl_whatsapp,
             datalib_etl_whatsapp_render
         ),
+        SourceType::ClaudeCode => arm!(
+            datalib_etl_claude_code_config::ClaudeCodeConfig,
+            datalib_etl_claude_code_config::ClaudeCodeRenderConfig,
+            datalib_etl_claude_code,
+            datalib_etl_claude_code_render
+        ),
         SourceType::SmsBackupRestore => arm!(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,
@@ -364,7 +376,7 @@ mod tests {
     }
 
     /// `common.always_clear_before_ingest` has to survive the trip from the
-    /// step's `--params` to the planned source, because the download driver
+    /// step's params to the planned source, because the download driver
     /// is the only thing that reads it. A flag that parses and then goes
     /// nowhere reads exactly like one that works: the sync succeeds, and
     /// the deletions the user asked us to notice stay invisible.
@@ -733,7 +745,7 @@ mod tests {
         )
         .unwrap_err();
         // `{:#}` for the whole chain: `to_string()` gives only the
-        // outermost context ("parse --params as a media download
+        // outermost context ("parse the params as a media download
         // config"), and the field name lives in serde's error under it.
         let err = format!("{err:#}");
         assert!(err.contains("playlist"), "{err}");

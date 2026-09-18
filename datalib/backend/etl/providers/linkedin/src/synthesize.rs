@@ -8,7 +8,7 @@ use datalib_etl::http::HttpResponse;
 use datalib_etl::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
 
 use crate::ingest::photos::photo_request;
-use crate::ingest::strip_notes_preamble;
+use crate::ingest::{csv_reader, strip_notes_preamble};
 
 pub struct LinkedinSynth {
     /// The unzipped export directory (holds `Connections.csv`).
@@ -95,10 +95,7 @@ fn connection_urls(export_dir: &Path) -> Result<Vec<String>> {
         return Ok(Vec::new());
     };
     let body = strip_notes_preamble(&raw);
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_reader(body.as_bytes());
+    let mut rdr = csv_reader(&body);
     let headers = rdr
         .headers()
         .context("read Connections.csv header")?

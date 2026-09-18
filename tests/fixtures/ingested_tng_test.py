@@ -123,6 +123,44 @@ SCOPE_TAG_BY_PROVIDER = {
 # a silent pass.
 PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 
+# Every `problems` row the fixture produces, per source. The ids are
+# `datalib_id::problem_id` over (source, stage, scope, item, field,
+# reason, rule) and nothing else, which is why they can be written down.
+# The columns are `_problems()`'s, `|`-joined by the doltlite shell.
+#
+# Two are what the fixture's own gaps look like once a download records
+# what it could not fetch instead of only logging it: an attachment
+# whose bytes the claude fixture never had, and the facebook video that
+# is deliberately absent from the export. The third is the one record
+# built to fail: conversation `c0000006`'s reply carries
+# `created_at = "stardate 47988.1"`, which the claude renderer records as
+# a nulled `created_at` on that message.
+POISONED_PROBLEM = (
+    "37f8fe60-9c94-5398-a0d9-4be95d77089b"  # problem_uuid
+    "|warning|parse|markdown"
+    "|fb0232cd-d04b-5372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
+    "|dcce3451-eb4f-53dd-bce7-7e0b22d3af16"  # the reply's item uuid
+    "|created_at|coercion_failed|stardate 47988.1"
+)
+CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
+    "7e0bd203-7160-5b88-9b5a-40f601984129"
+    "|warning|fetch|entity"
+    "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
+    "#f0000001-1701-4d00-8000-0000000f0001"
+    "|||fetch_failed|no bytes"
+)
+FACEBOOK_VIDEO_NOT_IN_EXPORT = (
+    "22997b9d-2f29-5ffc-a555-7ab9b876a337"
+    "|warning|fetch|entity"
+    "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
+    "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
+    "|||fetch_failed|media file not in the export"
+)
+EXPECTED_PROBLEMS = {
+    "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+}
+
 
 def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
     """UUIDv5 over the five-component recipe, joined with \x1f.
@@ -142,11 +180,21 @@ UUID_SQL_REGEX = (
     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+# The diff groups run_sync_pipeline.py adds between each of two stores'
+# first and second commits. Not sources: they mirror nothing and so
+# measure nothing, and their rows carry the underlying provider with
+# `diff_status` set.
+CONTACTS_DIFF_GROUP = "tng_contacts-diff"
+SLACK_DIFF_GROUP = "slack-diff"
+DIFF_GROUPS = (CONTACTS_DIFF_GROUP, SLACK_DIFF_GROUP)
+
 EXPECTED_PROVIDERS = frozenset(
     {
         # File-backed, from two Pros' data folders; one page of plots.
         "airvisual",
         "claude",
+        # File-backed: the fixture is a `~/.claude/projects` tree.
+        "claude_code",
         "beeper",
         "contacts",
         # Not a source: the per-source storage report every render wave
@@ -158,6 +206,9 @@ EXPECTED_PROVIDERS = frozenset(
         "gitlab",
         "google_takeout",
         "email",
+        # File-backed: the TNG export's posts, album, comments, reactions
+        # and friends.
+        "facebook",
         "linkedin",
         "notion",
         "chatgpt",
@@ -323,9 +374,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         every source in `markdowns` should also appear as an
         `upstream_scope` on some `provider='datalib'` row.
 
-        The failure this catches is silent and partial. Eight providers
-        declare their whole document set via `RunCtx::retain_documents`,
-        and the sweep that follows deletes anything they did not name —
+        The failure this catches is silent and partial. A full walk ends
+        in a sweep that deletes anything the run did not produce —
         which is every storage report, since a provider's processors
         know nothing about them. `render.rs` exempts the report by id,
         and if that exemption breaks, only those eight sources lose
@@ -339,8 +389,63 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "WHERE m.source_id NOT IN ("
             "  SELECT upstream_scope FROM grid_rows "
             "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
-            ") ORDER BY m.source_id;",
+            f") AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)}) ORDER BY m.source_id;",
         )
+
+    def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
+        """A diff group's rows: author → (status, changed columns), for a
+        group whose rows have one author each.
+
+        The contacts diff is one add, one delete and one edit, which is
+        every row of the table in docs/dev/plans/completed/diff_renderer.md; the
+        edit names the columns that moved. A real source's rows carry
+        NULL, and the diff's rows carry their own ids — the source's
+        Picard and the diff's Picard are two rows, or the index would
+        have refused the second as a duplicate claim.
+        """
+        rows = self._query(
+            self._index_db,
+            "SELECT g.author || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' ORDER BY g.author;",
+        )
+        out: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            author, status, changed = row.split("|", 2)
+            out[author] = (status, changed)
+        return out
+
+    def _diff_fates(self, group: str) -> dict[str, int]:
+        """A diff group's rows counted by `diff_status`."""
+        rows = self._query(
+            self._index_db,
+            "SELECT g.diff_status || '|' || COUNT(*) FROM grid_rows g "
+            "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' GROUP BY g.diff_status ORDER BY g.diff_status;",
+        )
+        return {status: int(n) for status, n in (r.split("|") for r in rows)}
+
+    def _diff_rows_by_text(self, group: str, needle: str) -> list[tuple[str, str, str]]:
+        """A diff group's rows whose text contains `needle`:
+        (kind, status, changed columns)."""
+        rows = self._query(
+            self._index_db,
+            "SELECT g.kind || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%' ORDER BY g.kind;",
+        )
+        return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
+
+    def _diff_markdown(self, group: str, needle: str) -> str:
+        """A diff group's one document whose rows' text carries `needle`,
+        off the tree."""
+        qmd_path = self._scalar(
+            self._index_db,
+            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%';",
+        )
+        return (self.workspace / qmd_path).read_text()
 
     def _pdf_shape(self) -> dict[str, int]:
         """The `pdf` source's contribution, by grid_rows kind.
@@ -462,6 +567,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         would not produce this row — and the round-trip back to the
         upstream API is broken in a way nothing else would notice,
         because both columns still look perfectly plausible.
+
+        A diff group's rows are left out: they carry the source's
+        provider and its `upstream_id` — the backpointer to the real
+        thing — but their uuid is minted under the diff group
+        (`docs/dev/entity_ids.md` §"Rows datalib itself mints"), so the
+        source's recipe is not meant to regenerate it.
         """
         rows = self._query(
             self._index_db,
@@ -469,6 +580,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
             "FROM grid_rows "
             f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            "  AND diff_status IS NULL "
             "ORDER BY uuid;",
         )
         failures = []
@@ -574,11 +686,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     missing.append(f"{md.name} -> blobs/{target}")
         return linked, missing, placeholders
 
-    def _render_problems(self) -> dict[str, list[str]]:
-        """Per-source `render_problems` rows, as `source -> [summary…]`.
+    def _problems(self) -> dict[str, list[str]]:
+        """Per-source `problems` rows, as `source -> [summary…]`.
 
-        Each entry is `<outcome>|<uuid>|<problems-json>` so a failure
-        message names what was dropped rather than only how many.
+        Each entry names the id, the severity, the stage, the scope, the
+        item, the field, the reason and the sample, so a failure message
+        says what was dropped rather than only how many — and so the id
+        can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
         for store in sorted(
@@ -586,11 +700,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
         ):
             rows = self._query(
                 store,
-                "SELECT outcome, uuid, problems FROM render_problems ORDER BY uuid;",
+                "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
+                "item_uuid, field, reason, sample "
+                "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
                 out[store.parent.parent.name] = rows
         return out
+
+    def _index_problems(self) -> list[str]:
+        """The index's copy of every source's problems, same columns."""
+        return self._query(
+            self._index_db,
+            "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
+            "item_uuid, field, reason, sample "
+            "FROM problems ORDER BY problem_uuid;",
+        )
 
     def _source_cursors(self) -> dict[str, str]:
         """`source_id -> store_commit` from the index's cursor table."""
@@ -741,6 +866,82 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "every source that rendered must also have measured itself",
         )
+        self.assertEqual(
+            self._diff_shape(CONTACTS_DIFF_GROUP),
+            {
+                "Data": ("removed", ""),
+                "Jean-Luc Picard": ("modified", "modified_at|text"),
+                "Worf": ("added", ""),
+            },
+            "the contacts diff between the two fixture commits",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                "SELECT COUNT(*) FROM grid_rows g JOIN markdowns m "
+                "ON g.markdown_uuid = m.markdown_uuid WHERE g.diff_status IS NOT NULL "
+                f"AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)});",
+            ),
+            "0",
+            "diff_status is NULL on every real source's rows",
+        )
+        picard = self._diff_markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
+        self.assertIn('<div class="diff-modified">', picard)
+        self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
+        self.assertIn(
+            "| <ins>Phone (home)</ins> | <ins>+33-555-LABARRE</ins> |", picard
+        )
+        self.assertIn(
+            '<div class="diff-removed">',
+            self._diff_markdown(CONTACTS_DIFF_GROUP, "Data"),
+        )
+        self.assertIn(
+            '<div class="diff-added">', self._diff_markdown(CONTACTS_DIFF_GROUP, "Worf")
+        )
+
+        # The Slack diff, which is chat-common under a diff: three #bridge
+        # threads moved between the two captures. A new thread (its chat
+        # row and message added); the "status report" thread grown by a
+        # reply (the reply added, the chat row modified, its three
+        # messages and three reactions unchanged); Worf's one-message
+        # thread edited (the message and chat row modified, the new
+        # reaction added). Nothing removed: an incremental sync cannot
+        # carry a deletion, which is the contacts diff's job.
+        self.assertEqual(
+            self._diff_fates(SLACK_DIFF_GROUP),
+            {"added": 4, "modified": 3, "unchanged": 6},
+            "the slack diff between the two captures",
+        )
+        self.assertEqual(
+            self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
+            [
+                ("Slack Message", "modified", "byte_size|text"),
+                ("Slack Thread", "modified", "byte_size|text"),
+            ],
+            "the edited message names its text (and its length), and its thread follows",
+        )
+        self.assertEqual(
+            self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
+            [
+                ("Slack Message", "added", ""),
+                ("Slack Thread", "modified", "byte_size|item_count|modified_at|text"),
+            ],
+            "the reply added to the grown thread, whose own row grew with it",
+        )
+        status_report = self._diff_markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
+        self.assertEqual(
+            status_report.count('<div class="diff-added">'),
+            1,
+            "one added section in the grown thread, the rest verbatim",
+        )
+        self.assertNotIn("<ins>", status_report.split('<div class="diff-added">')[0])
+        worf = self._diff_markdown(SLACK_DIFF_GROUP, "raising shields")
+        self.assertIn(
+            "raising <del>shields,</del><ins>shields **now**,</ins> Captain.",
+            worf,
+            "a word edit inside a chat message",
+        )
+        self.assertIn("<ins>🛡️ Jean-Luc Picard</ins>", worf, "the reaction added")
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,
@@ -838,22 +1039,31 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Nothing in the TNG fixture may land in the problem sink.
-        #
-        # This is the assertion that keeps the sink honest in both
-        # directions. Every renderer now drops-and-records a row it
-        # cannot build instead of failing the step, which is what stops
-        # one bad record from poisoning `grid_index` for every other
-        # source — but the same change means a projection that quietly
-        # started dropping rows would no longer show up as a failure
-        # anywhere. Here it does: the fixture is known-good, so any
-        # `render_problems` row is a regression, and the message names
-        # the row and the reason rather than just a count.
+        # Exactly three records in the TNG fixture may land in the problem
+        # sink: the one built to, and the two its downloads cannot fetch
+        # (`EXPECTED_PROBLEMS`). Every renderer drops-and-records a row
+        # it cannot build instead of failing the step, which is what
+        # stops one bad record from poisoning `grid_index` for every
+        # other source — but the same change means a projection that
+        # quietly started dropping rows would no longer show up as a
+        # failure anywhere. Here it does: any row outside the expected
+        # three is a regression and the message names it. The poisoned
+        # row is what proves the sink works end to end — through the
+        # real render, into the source's store, and copied into the
+        # index — and every id is pinned so a later run mints the same
+        # one (asserted after run 2 and run 4).
+        problems1 = self._problems()
         self.assertEqual(
-            self._render_problems(),
-            {},
-            "the TNG fixture must render clean; a row here means a "
-            "projection started dropping or nulling data",
+            problems1,
+            EXPECTED_PROBLEMS,
+            "the TNG fixture renders clean apart from its poisoned reply "
+            "and the two things its downloads cannot fetch; any other row "
+            "here means a projection started dropping or nulling data",
+        )
+        self.assertEqual(
+            self._index_problems(),
+            sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
+            "grid_index copies every source's problems into the index",
         )
 
         # ── id-space guardrails ─────────────────────────────────
@@ -862,6 +1072,43 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # confirms the PK is real in doltlite, which is the assumption
         # the whole collision story rests on.
         self.assertEqual(self._duplicate_uuids(), [], "grid_rows.uuid must be unique")
+        # One document row per rendered document, across every
+        # provider: `is_document` is what a Browse opens on and what the
+        # store enforces per document, and this is the check that no
+        # renderer got past that with a document the index never saw.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT m.markdown_uuid, COUNT(g.uuid) FROM markdowns m "
+                "  LEFT JOIN grid_rows g "
+                "    ON g.markdown_uuid = m.markdown_uuid AND g.is_document = 1 "
+                "GROUP BY m.markdown_uuid HAVING COUNT(g.uuid) != 1;",
+            ),
+            [],
+            "every markdown must have exactly one is_document row",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db, "SELECT COUNT(*) FROM grid_rows WHERE is_document = 1;"
+            ),
+            self._scalar(self._index_db, "SELECT COUNT(*) FROM markdowns;"),
+            "the document rows and the markdowns are the same set",
+        )
+        # A document's stamps are the document row's, on every provider:
+        # created no later than modified, and `markdowns` a copy of them.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT g.provider, g.kind, g.created_at, g.modified_at, m.created_at, m.modified_at "
+                "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.uuid "
+                "WHERE g.is_document = 1 AND ("
+                "  IFNULL(g.created_at, '') != IFNULL(m.created_at, '') "
+                "  OR IFNULL(g.modified_at, '') != IFNULL(m.modified_at, '') "
+                "  OR g.created_at_utc > g.modified_at_utc);",
+            ),
+            [],
+            "a document row's stamps are what markdowns carries, and ordered",
+        )
         # No two sources may claim one markdown. This is the overlap
         # that used to erase a source's rows without an error.
         self.assertEqual(
@@ -957,6 +1204,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
+        )
+        self.assertEqual(
+            self._problems(),
+            problems1,
+            "run 2 re-rendered nothing, and the poisoned row — its id "
+            "included — is exactly what run 1 left",
         )
         # Ids specifically, not just how many of them there are.
         #
@@ -1086,6 +1339,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._index_shape(), shape1, "run 4 must rebuild the same index"
         )
         self.assertEqual(
+            self._problems(),
+            problems1,
+            "run 4 re-derived everything from scratch, and the poisoned "
+            "row's id is a function of the record, so it is the same id",
+        )
+        self.assertEqual(
             self._index_ids(),
             ids1,
             "a fresh data root over the same fixture must mint "
@@ -1165,7 +1424,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_step(
             "claude-api", "render_markdown", "claude", inputs=("claude-api/ingest",)
         )
-        self._run_step("unified_index", "grid_index")
+        # The fan-in reads the sources its inputs name, as the runner
+        # would hand them over; here, the one source under test.
+        self._run_step(
+            "unified_index", "grid_index", inputs=("claude-api/render_markdown",)
+        )
 
         self.assertEqual(
             self._query(
@@ -1244,7 +1507,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "SELECT dolt_commit('-Am', 'test: upstream dropped a pull request');",
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
-        self._run_step("unified_index", "grid_index")
+        self._run_step(
+            "unified_index", "grid_index", inputs=("github/render_markdown",)
+        )
 
         github_docs_after = set(
             self._query(

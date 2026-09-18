@@ -20,6 +20,7 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { sanitizeRenderedHtml } from "./sanitize";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
 import {
@@ -138,8 +139,12 @@ for (const rule of ["html_block", "html_inline"] as const) {
   };
 }
 
+// Sanitized last, after every rewrite: the body is whatever the source
+// sent, and `html: true` above lets it through as HTML.
 const html = computed(() =>
-  md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
+  sanitizeRenderedHtml(
+    md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
+  ),
 );
 const root = ref<HTMLElement | null>(null);
 
@@ -378,12 +383,49 @@ onMounted(() => {
    the box. Declared BEFORE the per-provider rules below so their
    `border-left-color` still wins. */
 .chat-body > .msg,
-.chat-body > details.tool-group {
+.chat-body > details.tool-group,
+.chat-body > [class^="diff-"] > .msg,
+.chat-body > [class^="diff-"] > details.tool-group {
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-left-width: 3px;
   border-radius: 8px;
   background: var(--datalib-card-bg, #fafafa);
   margin: 0.4rem 0;
+}
+/* A diff group's document (docs/dev/plans/completed/diff_renderer.md): a whole
+   section wrapped by what happened to it between the two commits, and
+   inside a modified one the words that moved. The tints sit over the
+   card background so they read in either colour scheme. */
+.chat-body .diff-added,
+.chat-body .diff-removed,
+.chat-body .diff-modified {
+  border-left: 4px solid;
+  border-radius: 8px;
+  padding: 0.25rem 0.6rem;
+  margin: 0.5rem 0;
+}
+.chat-body .diff-added {
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+.chat-body .diff-removed {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+.chat-body .diff-modified {
+  border-left-color: #eab308;
+  background: rgba(234, 179, 8, 0.07);
+}
+.chat-body ins {
+  background: rgba(34, 197, 94, 0.28);
+  text-decoration: none;
+  border-radius: 2px;
+}
+.chat-body del {
+  background: rgba(239, 68, 68, 0.22);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.7);
+  border-radius: 2px;
 }
 .chat-body .msg--claude {
   border-left-color: var(--datalib-accent, #6366f1);

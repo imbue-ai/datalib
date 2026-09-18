@@ -37,8 +37,8 @@ import {
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
 declare const process: { env: Record<string, string | undefined> };
 
-const STEP_BIN = process.env.FW_E2E_DATALIB_STEP;
-const PLAYBACK = process.env.FW_E2E_PLAYBACK_DIR;
+const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
+const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
@@ -109,7 +109,7 @@ async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
       const status: Record<string, string | null> = {};
       const activity: Record<string, string> = {};
       for (const id of ids) {
-        const row = deepQuery(`.ag-row[row-id="${CSS.escape(id)}"]`);
+        const row = deepQuery(`.slick-row[data-key="${CSS.escape(id)}"]`);
         status[id] =
           row?.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null;
         activity[id] =
@@ -177,7 +177,7 @@ test.describe("a streaming sync, watched live", () => {
 
   test.skip(
     !STEP_BIN || !PLAYBACK,
-    "needs FW_E2E_DATALIB_STEP + FW_E2E_PLAYBACK_DIR from run_e2e.sh",
+    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR from run_e2e.sh",
   );
 
   // Carry the `[[applets]]` stanza forward from whatever was there.
@@ -236,7 +236,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     // is that it updates itself.
     const grid = await context.newPage();
     await grid.goto("/");
-    await searchAndSettle(grid, `source_id:${SOURCES[0]} type:all`);
+    await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
     await recordFrames(page, STEPS);
@@ -316,7 +316,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     await settleRunner(page, 120_000);
     const search = (await (
       await page.request.get(
-        `/applet/unified_index/search?q=${encodeURIComponent(`source_id:${SOURCES[0]} type:all`)}&limit=1000`,
+        `/applet/unified_index/search?q=${encodeURIComponent(`source_id:${SOURCES[0]}`)}&limit=1000`,
       )
     ).json()) as { rows: unknown[] };
     expect(search.rows.length, "the tapes hold more than one conversation").toBeGreaterThan(

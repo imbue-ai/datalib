@@ -13,6 +13,14 @@ use tracing_subscriber::Layer;
 
 use crate::store::{now_split, LogSink};
 
+/// What a datalib process records when `RUST_LOG` does not say: its
+/// own lines down to `debug` — the store is cheap and rotates, and a
+/// question about a sync is easier to answer with more than with less
+/// — and the libraries that would talk over it kept to warnings.
+/// `sqlx` matters most: at `debug` it logs every statement, including
+/// the writes that put these lines in the store.
+pub const DEFAULT_LOG_FILTER: &str = "debug,sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn";
+
 pub struct StoreLayer {
     /// Weak on purpose: the subscriber is global and lives until the
     /// process ends, and a strong handle from it would keep the writer

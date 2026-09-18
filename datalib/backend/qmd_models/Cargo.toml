@@ -1,0 +1,19 @@
+[package]
+name = "datalib-qmd-models"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "datalib_qmd_models"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+datalib-fetch = { path = "../fetch" }
+datalib-obs = { path = "../obs" }
+datalib-runtime = { path = "../runtime" }
+
+[dev-dependencies]
+tempfile = "3"

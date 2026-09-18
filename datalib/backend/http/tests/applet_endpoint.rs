@@ -39,8 +39,9 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 "Slack Thread"
             })
             .source_label("Slack")
+            .is_document(index.is_none())
             .channel(Some(channel.to_string()))
-            .when_ts(Some(when.to_string()))
+            .created_at(Some(when.to_string()))
             .author(author.map(str::to_string))
             .message_index(index)
             .conversation_uuid(md)
@@ -75,11 +76,14 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 md_path: tree.join(format!("{md}.md")),
                 render_version: 1,
                 rows,
+                sections: Vec::new(),
                 edges: Vec::new(),
                 problems: Vec::new(),
             },
         )
         .unwrap();
+    // The applet reads at HEAD, as the render step leaves it.
+    store.commit("test").unwrap();
     store.close();
 }
 
@@ -151,6 +155,36 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }
+}
+
+/// Save a config the way the wizard does. The writer reconciles the
+/// applets before it answers, which is the contract these tests drive.
+async fn put_config(app: &axum::Router, text: &str) {
+    let body = serde_json::json!({ "text": text }).to_string();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::put("/api/config")
+                .header("x-datalib-token", TEST_TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let verdict: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(verdict["ok"], true, "the config was refused: {verdict}");
+}
+
+async fn reload(registry: &Arc<AppletRegistry>) {
+    let registry = registry.clone();
+    tokio::task::spawn_blocking(move || registry.reload())
+        .await
+        .unwrap();
 }
 
 async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -267,7 +301,7 @@ async fn a_restart_rebuilds_applet_namespaces_and_spares_user() {
     assert!(view["namespaces"]["goes"].is_object());
 
     // Drop one applet from the config.
-    std::fs::write(tmp.path().join("config.toml"), config_for(&["stays"])).unwrap();
+    put_config(&app, &config_for(&["stays"])).await;
     let (_, view) = get_json(&app, "/api/frontend").await;
     assert!(
         view["namespaces"]["goes"].is_null(),
@@ -376,9 +410,10 @@ async fn a_listening_applet_that_never_announces_is_not_adopted() {
     assert_eq!(status, StatusCode::BAD_GATEWAY);
 }
 
-/// A config edit shows up without restarting the server.
+/// A saved config shows up without restarting the server: the writer
+/// has reconciled by the time it answers.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_config_edit_is_picked_up_without_a_restart() {
+async fn a_saved_config_is_picked_up_without_a_restart() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
     let app = router(state_with(tmp.path(), &config_for(&["first"])).await);
@@ -386,11 +421,7 @@ async fn a_config_edit_is_picked_up_without_a_restart() {
     let (_, view) = get_json(&app, "/api/frontend").await;
     assert!(view["namespaces"]["second"].is_null());
 
-    std::fs::write(
-        tmp.path().join("config.toml"),
-        config_for(&["first", "second"]),
-    )
-    .unwrap();
+    put_config(&app, &config_for(&["first", "second"])).await;
 
     let (_, view) = get_json(&app, "/api/frontend").await;
     assert_eq!(
@@ -399,6 +430,75 @@ async fn a_config_edit_is_picked_up_without_a_restart() {
         "the edit was not picked up"
     );
     // …and the newly-started applet is serving.
+    let (status, _) = get_json(&app, "/applet/second/channels").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// The contract this is about: a request reads the registry and never
+/// reconciles it. A file edited behind the server's back is not seen by
+/// a read; it is seen once a reload runs — which in the server the
+/// watcher does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_never_reconciles() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let state = state_with(tmp.path(), &config_for(&["first"])).await;
+    let registry = state.applets.clone();
+    let app = router(state);
+
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        config_for(&["first", "second"]),
+    )
+    .unwrap();
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(
+        view["namespaces"]["second"].is_null(),
+        "a read reconciled the registry: {view}"
+    );
+    let (status, _) = get_json(&app, "/applet/second/channels").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_GATEWAY,
+        "a proxy reconciled the registry"
+    );
+
+    reload(&registry).await;
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["namespaces"]["second"].is_object(), "{view}");
+    let (status, _) = get_json(&app, "/applet/second/channels").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// The whole chain for a hand edit: the root watcher reports the write,
+/// `watch_config` reloads, and the next read sees the new applet — with
+/// nobody having asked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let state = state_with(tmp.path(), &config_for(&["first"])).await;
+    datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone());
+    datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
+    let app = router(state);
+
+    // An atomic write, the way every writer in the tree does it.
+    let tmp_file = tmp.path().join("config.tmp");
+    std::fs::write(&tmp_file, config_for(&["first", "second"])).unwrap();
+    std::fs::rename(&tmp_file, tmp.path().join("config.toml")).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (_, view) = get_json(&app, "/api/frontend").await;
+        if view["namespaces"]["second"].is_object() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watcher never reached the registry: {view}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
     let (status, _) = get_json(&app, "/applet/second/channels").await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -445,15 +545,15 @@ async fn adding_an_applet_leaves_the_running_ones_alone() {
     let app = router(state_with(tmp.path(), &applet_stanza("keep", &cmd, None)).await);
     assert_eq!(starts(&log, "keep"), 1, "boot should start it once");
 
-    std::fs::write(
-        tmp.path().join("config.toml"),
-        format!(
+    put_config(
+        &app,
+        &format!(
             "{}{}",
             applet_stanza("keep", &cmd, None),
             applet_stanza("added", &cmd, None)
         ),
     )
-    .unwrap();
+    .await;
 
     let (_, view) = get_json(&app, "/api/frontend").await;
     assert!(view["namespaces"]["added"].is_object(), "{view}");
@@ -494,7 +594,7 @@ async fn editing_one_applet_restarts_only_it() {
         "Slack — b"
     );
 
-    std::fs::write(tmp.path().join("config.toml"), cfg(Some("Renamed"))).unwrap();
+    put_config(&app, &cfg(Some("Renamed"))).await;
     let (_, view) = get_json(&app, "/api/frontend").await;
 
     assert_eq!(starts(&log, "a"), 1, "`a` restarted over an edit to `b`");
@@ -511,8 +611,9 @@ async fn editing_one_applet_restarts_only_it() {
     );
 }
 
-/// Restarting sits on a polled endpoint, so an unchanged config must
-/// not restart every applet each tick.
+/// Neither a read nor a reload of an unchanged config restarts anything:
+/// the watcher reloads on every burst that touches the file, and a save
+/// that changed nothing about the applets must leave them running.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unchanged_config_does_not_restart_anything() {
     let tmp = tempfile::tempdir().unwrap();
@@ -531,7 +632,9 @@ async fn an_unchanged_config_does_not_restart_anything() {
         "[[applets]]\nid = \"a\"\ncommand = \"sh {}\"\n[applets.params]\ntree = \"slack/rendered_md\"\n",
         wrapper.display()
     );
-    let app = router(state_with(tmp.path(), &cfg).await);
+    let state = state_with(tmp.path(), &cfg).await;
+    let registry = state.applets.clone();
+    let app = router(state);
     let starts = || {
         std::fs::read_to_string(&counter)
             .unwrap_or_default()
@@ -542,8 +645,11 @@ async fn an_unchanged_config_does_not_restart_anything() {
 
     for _ in 0..5 {
         let _ = get_json(&app, "/api/frontend").await;
+        reload(&registry).await;
     }
-    assert_eq!(starts(), 1, "polling restarted the applets");
+    assert_eq!(starts(), 1, "an unchanged config restarted the applets");
+    put_config(&app, &cfg).await;
+    assert_eq!(starts(), 1, "saving the same config restarted the applets");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -564,14 +670,18 @@ async fn no_applets_and_no_store_is_an_empty_view() {
 async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
-    let app = router(state_with(tmp.path(), &config_for(&["unified_index"])).await);
+    let state = state_with(tmp.path(), &config_for(&["unified_index"])).await;
+    let registry = state.applets.clone();
+    let app = router(state);
 
-    // Break the file under the running server, the way a hand edit does.
+    // Break the file under the running server, the way a hand edit does;
+    // the reload is what the watcher would run on it.
     std::fs::write(
         tmp.path().join("config.toml"),
         "[[applets]\nid = \"oops\"\n",
     )
     .unwrap();
+    reload(&registry).await;
 
     let (status, body) = get_json(&app, "/applet/unified_index/search").await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
@@ -680,4 +790,120 @@ async fn frontend_routes_are_behind_the_token_gate() {
             "{uri} answered without a token"
         );
     }
+}
+
+/// The first requests after a config change arrive together — the
+/// Manage screen asks for `/api/frontend` and the grid's search in
+/// the same tick after `POST /api/config/init` — and every one of
+/// them must be served. With the reload unserialized, each caller ran
+/// its own reconcile from the same "nothing running" baseline, and
+/// the second one's `stop_except` killed the applet the first had
+/// just started, which then answered its request with 502. Requests no
+/// longer reconcile; the writer does, and the requests after it only
+/// read.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_requests_after_a_saved_config_all_succeed() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let log = tmp.path().join("starts.log");
+    let cmd = start_logging_command(tmp.path(), &log);
+
+    // No config at all: the state a fresh root is in before onboarding
+    // writes one.
+    let state = state_with(tmp.path(), "").await;
+    std::fs::remove_file(tmp.path().join("config.toml")).unwrap();
+    let app = router(AppState {
+        applets: Arc::new(AppletRegistry::from_data_root(tmp.path(), None)),
+        ..state
+    });
+    let (status, _) = get_json(&app, "/applet/a/channels").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "no config, so no applet");
+
+    for round in 0..5 {
+        put_config(
+            &app,
+            &applet_stanza("a", &cmd, Some(&format!("round {round}"))),
+        )
+        .await;
+        let mut tasks = Vec::new();
+        for i in 0..8 {
+            let app = app.clone();
+            let uri = if i % 2 == 0 {
+                "/api/frontend"
+            } else {
+                "/applet/a/channels"
+            };
+            tasks.push(tokio::spawn(
+                async move { (uri, get_json(&app, uri).await) },
+            ));
+        }
+        for t in tasks {
+            let (uri, (status, body)) = t.await.unwrap();
+            assert_eq!(status, StatusCode::OK, "round {round}: {uri} → {body}");
+        }
+        assert_eq!(
+            starts(&log, "a"),
+            round + 1,
+            "round {round}: one config change is one start"
+        );
+    }
+}
+
+/// The writer and the watcher can both reload the same edit at once —
+/// that is the #488 shape, now between the two owners rather than
+/// between requests. One of them reconciles; the other waits and finds
+/// the file current. One start, every request answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_reloads_of_one_edit_start_the_applet_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_tree(tmp.path());
+    let log = tmp.path().join("starts.log");
+    let cmd = start_logging_command(tmp.path(), &log);
+    let state = state_with(tmp.path(), "").await;
+    std::fs::remove_file(tmp.path().join("config.toml")).unwrap();
+    let registry = Arc::new(AppletRegistry::from_data_root(tmp.path(), None));
+    let app = router(AppState {
+        applets: registry.clone(),
+        ..state
+    });
+
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        applet_stanza("a", &cmd, None),
+    )
+    .unwrap();
+    let mut reloads = Vec::new();
+    for _ in 0..4 {
+        let registry = registry.clone();
+        reloads.push(tokio::task::spawn_blocking(move || registry.reload()));
+    }
+    let mut requests = Vec::new();
+    for i in 0..8 {
+        let app = app.clone();
+        let uri = if i % 2 == 0 {
+            "/api/frontend"
+        } else {
+            "/applet/a/channels"
+        };
+        requests.push(tokio::spawn(
+            async move { (uri, get_json(&app, uri).await) },
+        ));
+    }
+    for r in reloads {
+        r.await.unwrap();
+    }
+    // Requests that raced the reloads may have seen no applet yet; the
+    // ones after all reloads must all succeed.
+    for t in requests {
+        let _ = t.await.unwrap();
+    }
+    for uri in ["/api/frontend", "/applet/a/channels"] {
+        let (status, body) = get_json(&app, uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri} → {body}");
+    }
+    assert_eq!(
+        starts(&log, "a"),
+        1,
+        "four reloads of one edit is one start"
+    );
 }

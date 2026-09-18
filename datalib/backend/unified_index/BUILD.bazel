@@ -24,6 +24,7 @@ rust_library(
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
@@ -33,6 +34,7 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
     ],
 )
@@ -92,7 +94,7 @@ rust_test(
         "@nodejs_host//:node_bin",
         "//third-party/qmd/runtime:qmd_package_dir",
         "//third-party/qmd/runtime:qmd_tree",
-        "@qmd_model_embeddinggemma//file",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
@@ -102,7 +104,7 @@ rust_test(
         # into the source directory, where `node_modules/` does not
         # exist. See the same note in //datalib/ui:BUILD.bazel.
         "QMD_DAEMON_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
-        "QMD_DAEMON_TEST_EMBED_MODEL_RLOC": "$(rlocationpath @qmd_model_embeddinggemma//file)",
+        "QMD_DAEMON_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
     },
     deps = [
         ":datalib_unified_index",
@@ -120,7 +122,10 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_unified_index",
+        "//datalib/backend/core:datalib_core",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/table:datalib_table",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

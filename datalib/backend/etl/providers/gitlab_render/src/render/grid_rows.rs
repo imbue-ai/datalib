@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{MergeRequestRow, NoteRow, NoteSection};
 
@@ -56,7 +56,7 @@ pub fn rows_for_mr(
     stanza: &str,
     mr: &MergeRequestRow,
     notes: &[NoteRow],
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let qmd = super::render::mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
     let entire_chat = format!("/chat/{}", mr.uuid);
@@ -68,7 +68,9 @@ pub fn rows_for_mr(
             .provider(Provider::Gitlab)
             .kind("GitLab MR")
             .source_label("GitLab")
-            .when_ts(mr.updated_at.clone().or_else(|| mr.created_at.clone()))
+            .is_document(true)
+            .created_at(mr.created_at.clone())
+            .modified_at(mr.updated_at.clone())
             .author(mr.author_username.clone())
             .project(Some(mr.project_full_path.clone()))
             .conversation_name(Some(mr.title.clone()))
@@ -95,7 +97,10 @@ pub fn rows_for_mr(
                 .provider(Provider::Gitlab)
                 .kind(n.kind)
                 .source_label("GitLab")
-                .when_ts(Some(n.created_at.clone()))
+                .created_at(Some(n.created_at.clone()))
+                // Same convention as GitHub: `updated_at` equals
+                // `created_at` until the note is edited.
+                .modified_at(n.updated_at.clone().filter(|u| *u != n.created_at))
                 .author(n.author_username.clone())
                 .project(Some(mr.project_full_path.clone()))
                 .conversation_name(Some(mr.title.clone()))

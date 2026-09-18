@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Mutex;
 
 use anyhow::Result;
-use datalib_etl::pin::{self, Pin};
+use datalib_etl::pin::Pin;
 use sqlx::SqlitePool;
 
 pub use crate::indexed_markdown::Input;
@@ -41,14 +41,6 @@ impl<'a> RawRange<'a> {
         Self {
             cursor,
             ..Self::default()
-        }
-    }
-
-    /// The driver's pin, else HEAD; `None` when nothing is committed.
-    pub async fn pin(&self, pool: &SqlitePool) -> Result<Option<Pin>> {
-        match self.pin {
-            Some(commit) => Pin::at(commit).map(Some),
-            None => pin::head(pool).await,
         }
     }
 

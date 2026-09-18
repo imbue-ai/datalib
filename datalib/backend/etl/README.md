@@ -37,6 +37,13 @@ invocation is a local event with no upstream identity.
 `payload` is content and stays on the object table. `fetched_at_utc`,
 `attempt_count`, `last_attempt_at_utc`, `last_error`, `volatile_payload`
 and `tz_offset` go in `<table>_bookkeeping` (see `bookkeeping_ddl_for`).
+A failed attempt is also a row in the store's `problems` table (next
+section), keyed `<table>:<id>`, an error when the record has never
+fetched and a warning when an earlier fetch left a copy; a successful
+attempt — through `record_object_attempt` or the bulk path — clears
+it. **Report a per-record failure through `record_object_error`**, not
+only through `warn!`: a log line is about a run, a problem row is about
+the record, stays until the record fetches, and reaches the screen.
 The two stamps are UTC and `tz_offset` is the offset the writer's clock
 was in — the pair every stamp we mint is stored as (AGENTS.md,
 "Timestamp convention").
@@ -47,6 +54,23 @@ only, not re-fetch churn — which is what makes the `--reset-and-redownload`
 
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
+
+## Problems flow downstream with the data
+
+Every store a step owns holds a `problems` table (`datalib_problems`,
+in every raw store's `SHARED_DDL`): one row per thing the step could
+not fully do to one record, with a severity, a deterministic id and a
+sweep key. The owner sweeps it — per document in a render store, per
+entity in a raw store — and each consumer that reads a store pinned
+copies that store's rows for the source **wholesale** into its own,
+then adds its own: render copies the raw store's fetch-stage rows
+(minting them again under the source's id, which a download does not
+know), `grid_index` copies every render store's into the index. The
+pinned store is the complete truth about its source's problems at that
+commit, so the copy is the sweep and there is nothing to diff. Stamps
+travel with the row. The step then reports whole-store counts as
+`problems{severity=…}` metrics, which the Manage screen reads. Design
+and surfaces: `docs/dev/plans/problem_visibility.md`.
 
 ## Volatile fields: split them out, don't diff them
 
@@ -72,47 +96,59 @@ signal, sort it instead.
 `sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and worth
 being greppable.
 
-## Connection pools against a doltlite file are always size 1
+## Connection pools: one writer per file, readers pinned
 
 Doltlite's HEAD pointer, working set and active branch are **per
-connection**. A pool bigger than one lands statements on connections that
-disagree about the tree, which shows up as a `dolt_commit` whose hash never
-appears in `dolt_log`, or as `commit conflict: another connection committed
-to this branch`. The dolt maintainers confirm the same is true of Dolt
-itself and recommend the same fix.
+connection**, and the working set is also **per file**, shared across
+processes. Two facts, two rules, both built into `doltlite_raw` rather
+than left to convention.
 
-`open` pins `max_connections(1)` and also disables `idle_timeout` and
-`max_lifetime`. The timeouts matter for the same reason: sqlx would retire
-the very connection whose session state is load-bearing, and its replacement
-starts on `main` with a clean working set. An fsindex scan on a non-`main`
-branch would silently start writing to `main` after 30 minutes and report
-success — and multi-million-entry scans reach that window.
+### Every pool is size 1 and never recycled
 
-Any other code opening a `SqlitePool` against a `.doltlite_db` must do the
-same — and one pool, not two. Size 1 is necessary, not sufficient. A second
-pool shares the first's working set, so an `-Am` commit through either
-sweeps up whatever the other has in flight; and while the two are actually
-mid-write they contend for a lock `dolt_commit` takes without waiting, so
-one of them fails with `commit conflict: another connection committed to
-this branch`. The message names a commit that need not have happened; read
-it as "someone else is writing this store right now".
+A pool bigger than one lands statements on connections that disagree
+about the tree, which shows up as a `dolt_commit` whose hash never
+appears in `dolt_log`, or as `commit conflict: another connection
+committed to this branch`. The dolt maintainers confirm the same is true
+of Dolt itself and recommend the same fix. So every open here pins
+`max_connections(1)` and disables `idle_timeout` and `max_lifetime`:
+sqlx would otherwise retire the very connection whose session state is
+load-bearing, and its replacement starts on `main` with a clean working
+set — an fsindex scan on a non-`main` branch would silently start
+writing to `main` after 30 minutes and report success.
 
-An idle peer costs neither of those —
-`//datalib/backend/etl:doltlite_two_process_test` measures a second
-read-write open landing in ~2ms with both pools then committing — which is
-what makes a second pool a timing bug rather than an immediate one. And a
-pool you dropped is not yet a pool that is gone: sqlx closes its
-connections on a background task, so a store reopened right after the
-previous handle went out of scope can still find the old connection
-there.
+### One writer per file, by construction
 
-So there are two ways to be right, and dropping a handle is neither. Hold
-one handle for as long as the store is in use. Or, where a fresh connection
-is the point — proving a cursor survived the pool that wrote it, or
-mirroring a binary that opens the store per run — `await` a `close()`
-before the next `open`. Every `RawDb` has one; it closes the blob CAS
-alongside the entity pool, which the older `db.pool().clone()` /
-`pool.close()` idiom silently left open.
+`open` and `open_derived` are the only ways to a handle that can commit,
+and each takes the file's writer lock — `flock(2)` on the sibling
+`<store>.doltlite_db.lock`, `datalib_flock` — and gives it to the
+connection, which holds it until it closes. A second writer on the same
+file, in another process or in this one, is refused at open with the
+holder named (`<program> (pid N)`) instead of sharing the first's
+working set: an `-Am` commit through either pool sweeps up whatever the
+other has in flight, and two mid-write pools contend for a lock
+`dolt_commit` takes without waiting. The kernel releases the lock when
+the holder dies, so a killed run leaves no stale claim; the next `open`
+finds its dirty rows and seals them into a rescue commit.
+
+The lock lives exactly as long as the connection: `close().await` waits
+for the connection to close, and that is the moment the store is free.
+A dropped-but-never-closed handle keeps its connection, and so the lock,
+until sqlx's worker thread gets to it a moment later — the window the
+rule "close, not drop" has always been about. A writer that finds its
+own process still holding the lock waits up to two seconds for that
+close and logs that it had to, so a stray drop is a warning rather than
+a refusal that depends on the machine's speed; a second *live* writer in
+the same process is refused after the wait.
+
+Per file, not per root, so two sources with nothing in common can be
+written by two runners at once (#247): the lock says who owns *this*
+store, and nothing about the others.
+
+`datalib-fsindex` and the provider `*_ingest` binaries write through
+`RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
+stores it is given through `datalib_pin::open_reader` and writes only
+its own scratch. `datalib-doltlite` is the raw shell and takes no lock:
+run it `-readonly` against a store a sync may be writing.
 
 ### A download takes the store; it never opens one
 
@@ -120,21 +156,62 @@ Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
 not a path and not an `Option`. **Whoever opens a store closes it**, and
 for a download that is always the caller: the step's processor, the
 provider's `*_download` binary, or the test. `fetch` borrows it for the
-run and returns.
+run and returns. A `fetch` that opened its own store while the caller
+held one would now be refused at open rather than failing the caller's
+commit later.
 
-The rule is there because the alternative was tried. `db` used to be
-`Option<RawDb>`, and `fetch` opened its own store when the caller passed
-`None`. That pool was never closed, so a caller which then read the store
-back — every download test does — had two live connections on one file,
-and one of the two `dolt_commit`s could fail. Because sqlx closes
-connections on a background task, whether the two actually collided came
-down to timing: green on a quiet laptop, intermittently red on a loaded CI
-runner, always at `commit schema after DDL` inside the second `open`.
+### A reader opens read-only and pinned, and never asks `dolt_status`
 
-`scripts/lint_repo.py`'s check 6 keeps the field non-optional, and
-`two_live_pools_on_one_store_break_each_others_commits` in
-`doltlite_raw.rs` pins the underlying behavior: two pools committing in
-lockstep on one store, and one of them gets `commit conflict`.
+`open_reader(path, commit)` is the read path: read-only, so "a reader
+must not write" is the engine's rule (`attempt to write a readonly
+database`); never creates the file; takes no lock; and pins at open —
+at the commit the caller names (the render driver's) or at HEAD — with
+the `pinned_<table>` views installed, so every content read through
+[`Reads::At`] names one commit however long the pass runs. It hands
+back a `Reader`, or `None` when the store has nothing committed, which
+the caller must decide about (a consumer does nothing that pass) rather
+than fall through to the working set. The `pin.rs` `Pin` refuses `HEAD`
+by name, and the shared loaders take a mandatory `Reads`, so a call site
+has to say whose store it is reading.
+
+The one unpinned reader is the blob CAS (`open_cas_reader`): most
+downloads never commit it, so a read at HEAD would find no blob, and
+content addressing is what makes the working-set read safe — a row is
+keyed by the blake3 of its own bytes.
+
+The two-process test measures what a read-only connection may issue
+beside a live writer — `dolt_hashof`, `sqlite_master`,
+`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_`
+views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
+`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table — and
+that list is the allowlist. **`dolt_status` is not on it**: issued from
+a read-only connection while the writer commits, it fails that commit
+and the rows inserted before it are gone (dolthub/doltlite#2832). The
+same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
+against a store a sync is writing. Any other statement a reader adds is
+presumed guilty until `doltlite_two_process_test` has run with it.
+
+Two traps for a reader that holds its connection across another
+process's commits, both measured in `datalib_pin`'s tests. A scalar
+function answers from the session's last view of the store, so a bare
+`dolt_hashof('HEAD')` keeps reporting the HEAD the connection opened at;
+`datalib_pin::head` reads `sqlite_master` first, which reloads the root.
+And the `dolt_at_<table>` modules are registered when the connection
+opens, from the commits that exist then: a table another process commits
+later has no module on this connection, and never will. A long-lived
+reader — the search applet — checks `has_unpinnable_tables` and reopens.
+Everything that opens per pass sees neither.
+
+Open the store once per pass — a stage that needs to load rows, run a
+`dolt_diff` scan and probe for ids does all three on one pool — and
+`close().await` before the next open, on the error path too. And never
+run a store call on a runtime you are about to drop: sqlx returns a
+checked-out connection from a task spawned at drop, and a per-call
+`Runtime::new().block_on(..)` dies before that task runs, leaving the
+next open a second handle on the same file (`indexed_markdown::blocking`
+keeps one process-wide runtime for the no-runtime case).
+
+[`Reads::At`]: src/pin.rs
 
 ## Schema self-healing, and why the DDL runs in two passes
 
@@ -149,7 +226,15 @@ added it — leaving every older store unopenable.
 
 Dropping and recreating is safe here specifically because raw-store rows are
 a cache of upstream, re-fetched on the next sync, and doltlite keeps the
-dropped rows in history.
+dropped rows in history. "Re-fetched" has to be made true, though: a cursor
+that says "read through here" would let the next run resume past rows the
+recreated table no longer has, and the table would stay empty until upstream
+changed, with nothing saying why. So a recreate also clears every store-wide
+cursor (`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
+that it did; the next run walks from the start, and the tables that kept
+their rows absorb it as no-op upserts. Per-row cursors — a sidecar's
+`last_ts_ms`, an address book's `ctag` — live on the table that holds them
+and go with it.
 
 `declared_columns` learns a DDL's columns by parsing it into a probe table in
 an **in-memory** database. Never against the store being opened: a
@@ -195,6 +280,15 @@ arrive and drains the bundle at end of bucket; parse loads one document's
 refs in two queries regardless of how many attachments it has; render then
 consumes an already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn
 blob reader.
+
+**A source that keeps a CAS opens its session with the CAS attached**
+(`RunCtx::open_store_with_blobs`), so every seal commits `blobs.doltlite_db`
+before `entities.doltlite_db`. The order is the point: a reader pinned at an
+entities commit must never find a row naming bytes that are not committed
+yet, and a CAS with no commits can be neither pinned nor versioned. Nothing
+in the CAS uses doltlite's diff or history — a hash is either present or it
+is not — so which container the bytes should live in at all is an open
+question; the `BlobCas` API is narrow enough that changing it is contained.
 
 **Filenames dedupe on the content hash, not on the derived name.** A blob's
 rendered filename has a content-addressed stem and an extension derived from
@@ -257,7 +351,7 @@ silently reshape the page.
 is built from `unwrap_or_default()` over a few field lookups, so a record
 whose fields don't match yields `""`. Tolerating that loses data twice — every
 unkeyable record collapses onto one entry, and callers then skip the empty
-key, so a whole entity stream reads as "no records". `tests/fixtures/gitlab_api`
+key, so a whole entity stream reads as "no records". `datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api`
 spelled the project path `project_path` while every consumer had moved to
 `project_full_path`; gitlab contributed zero rows for three months with no
 failing test.

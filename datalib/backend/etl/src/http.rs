@@ -108,10 +108,10 @@ impl HttpService {
     }
 
     /// Whether this service's requests must carry the
-    /// Chrome-impersonation marker, so the dispatch curl routes them to
+    /// Chrome-impersonation marker, so the router curl hands them to
     /// the impersonating curl: these hosts reject a vanilla curl TLS
     /// fingerprint. Services that return false still go through the
-    /// dispatch curl, unmarked, and so use the system curl.
+    /// router curl, unmarked, and so use the system curl.
     ///
     /// The single source of truth for which services impersonate.
     pub const fn impersonates(self) -> bool {
@@ -381,43 +381,24 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
     None
 }
 
-/// The marker header the dispatch curl routes on (see
-/// `src/bin/latchkey_curl_dispatch.rs`, which matches it by name and
+/// The marker header the router curl routes on (`latchkey-curl-router`
+/// in github.com/imbue-ai/latchkey-curl-shims matches it by name and
 /// ignores the value).
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 /// URL prefix that makes a request leave from the user's own machine rather
-/// than from the workspace's own egress: the older of the two mechanisms minds
-/// uses for this (the newer is [`DESKTOP_PROXY_HEADER_ENV`]), kept so that
-/// workspaces created by a minds that still publishes it keep working.
-///
-/// A minds publishes one mechanism or the other, never both, so a request is
-/// either prefixed or marked. Remove this once no supported minds publishes
-/// the prefix.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
-
-/// Env var naming the header that asks for a request to leave from the
-/// user's own machine rather than from the workspace's own egress. minds sets
-/// it when (and only when) the two differ.
+/// than from the workspace's own egress. Kept so that workspaces created by
+/// a minds that still publishes it keep working; a current minds decides
+/// this inside the gateway instead, by the router curl's
+/// `LATCHKEY_DESKTOP_PROXY_CONFIG` file, with no help from datalib. Remove
+/// this once no supported minds publishes the prefix.
 ///
 /// Only the impersonating providers ask for it: a remote workspace runs on a
 /// VPS and reaches third parties through a gateway on that same VPS, so its
 /// requests carry a datacenter IP — and the providers that need TLS
 /// impersonation are the same ones that block those ranges outright, where a
 /// fingerprint fix does not help.
-pub const DESKTOP_PROXY_HEADER_ENV: &str = "MINDS_DESKTOP_PROXY_HEADER";
-
-/// The `-H` argument marking a request for desktop egress, when this request
-/// should leave from the user's machine; `None` otherwise.
-fn maybe_desktop_proxy_header(service: HttpService, bypass_latchkey: bool) -> Option<String> {
-    if bypass_latchkey || !service.impersonates() {
-        return None;
-    }
-    match std::env::var(DESKTOP_PROXY_HEADER_ENV) {
-        Ok(header_name) if !header_name.is_empty() => Some(format!("{header_name}: 1")),
-        _ => None,
-    }
-}
+pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
 
 fn maybe_via_desktop_url(url: &str, service: HttpService, bypass_latchkey: bool) -> String {
     if bypass_latchkey || !service.impersonates() {
@@ -546,7 +527,10 @@ mod live {
             // `latchkey [--account <acct>] curl` — the account selector is a
             // latchkey *global* option and so must precede the subcommand;
             // `latchkey_curl_command` is the one place that knows that.
-            crate::latchkey::latchkey_curl_command(&req.latchkey)
+            crate::latchkey::latchkey_curl_command(&req.latchkey).map_err(|e| HttpError::Spawn {
+                service: req.service,
+                message: format!("{e:#}"),
+            })?
         };
         cmd.arg("-sS");
         // -D - dumps the response header block to stdout so we can
@@ -564,17 +548,11 @@ mod live {
             cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
         }
         // Route CF-fronted providers to the impersonating curl via the
-        // dispatch curl's marker header. Only on the latchkey path -- a
-        // bypass_latchkey request uses plain curl, which has no dispatch
+        // router curl's marker header. Only on the latchkey path -- a
+        // bypass_latchkey request uses plain curl, which has no router
         // curl to act on the marker and would just send it upstream.
         if !req.bypass_latchkey && req.service.impersonates() {
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
-        }
-        // Same providers, same reasoning: ask for the request to leave from
-        // the user's machine when minds says this workspace's egress differs
-        // from it (see `DESKTOP_PROXY_HEADER_ENV`).
-        if let Some(header) = maybe_desktop_proxy_header(req.service, req.bypass_latchkey) {
-            cmd.arg("-H").arg(header);
         }
         let writes_body_to_stdin = req.body.is_some();
         if writes_body_to_stdin {
@@ -810,46 +788,6 @@ mod tests {
         out
     }
 
-    fn with_desktop_proxy_header<T>(header_name: Option<&str>, body: impl FnOnce() -> T) -> T {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
-        match header_name {
-            Some(value) => std::env::set_var(DESKTOP_PROXY_HEADER_ENV, value),
-            None => std::env::remove_var(DESKTOP_PROXY_HEADER_ENV),
-        }
-        let out = body();
-        std::env::remove_var(DESKTOP_PROXY_HEADER_ENV);
-        out
-    }
-
-    #[test]
-    fn desktop_proxy_header_marks_impersonating_providers_with_whatever_name_minds_gives() {
-        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
-            assert_eq!(
-                maybe_desktop_proxy_header(HttpService::Slack, false).as_deref(),
-                Some("X-Imbue-Desktop-Proxy: 1"),
-            );
-        });
-        with_desktop_proxy_header(Some("X-Some-Other-Marker"), || {
-            assert_eq!(
-                maybe_desktop_proxy_header(HttpService::Slack, false).as_deref(),
-                Some("X-Some-Other-Marker: 1"),
-            );
-        });
-    }
-
-    #[test]
-    fn desktop_proxy_header_is_omitted_when_it_would_change_nothing() {
-        // A local workspace already egresses from the user's machine, so minds
-        // hands it an empty value; outside minds the variable is unset. Both
-        // must add no header rather than producing a nameless one.
-        for header_name in [Some(""), None] {
-            with_desktop_proxy_header(header_name, || {
-                assert_eq!(maybe_desktop_proxy_header(HttpService::Slack, false), None);
-            });
-        }
-    }
-
     fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
         static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -923,21 +861,6 @@ mod tests {
                     Some(url),
                 );
             }
-        });
-    }
-
-    #[test]
-    fn desktop_proxy_header_is_scoped_to_impersonating_latchkey_requests() {
-        with_desktop_proxy_header(Some("X-Imbue-Desktop-Proxy"), || {
-            // A provider that does not need impersonation does not need the
-            // user's IP either, and pays no extra hop for it.
-            assert_eq!(
-                maybe_desktop_proxy_header(HttpService::Linkedin, false),
-                None
-            );
-            // A bypass_latchkey request runs plain curl, with no dispatch curl
-            // to act on the marker, so it would only leak upstream.
-            assert_eq!(maybe_desktop_proxy_header(HttpService::Slack, true), None);
         });
     }
 

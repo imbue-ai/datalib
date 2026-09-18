@@ -1,6 +1,6 @@
 # Design: a data-centric UI
 
-**Status: built (2026-09-15), except §5's per-table change frames.**
+**Status: built (2026-09-15; §5 on 2026-09-16).**
 Written 2026-09-09 against `a4752fb5`; revised 2026-09-15 against
 `9a45cff4`; landed through #454 and #466 (tracked in #455). Kept as
 the record of what was decided, and for the checkpoint at the end of
@@ -59,7 +59,7 @@ to get the scope wrong.
   the precedent for an endpoints-only applet. See
   [`applets.md`](../../applets.md).
 - **A live channel.** One SSE connection for the whole page, carrying
-  payload-free `root` frames (`config_changed`, `dag_changed`,
+  payload-free `root` frames (`config_changed`, `table_changed`,
   `frontend_changed`, `index_changed`) that mean "ask again".
   `ui/src/live.ts` explains why there is exactly one connection.
 - **A queryable run store.** `system/runs.sqlite` holds every run's
@@ -112,7 +112,7 @@ The rules are the ones `pipelineStatus.ts` and `groupRows.ts` held,
 ported to Rust with their tests (`manage/status.rs`, `manage/group.rs`);
 the assembly is `Manager2View`'s old `entryRow`/`groupRow`
 (`manage/mod.rs`). The aggregation table in
-[`groups_and_functions.md`](groups_and_functions.md) is the spec for
+[`config_model.md`](../../config_model.md) is the spec for
 the group row. A row carries the entry's id and kind, its `path` in
 the tree, its group, its name, its type, status with reason, last
 synced, bytes with the measured series, what a sync of it starts at,
@@ -221,7 +221,7 @@ button opens a Vue modal. The `runBlocked` / `editBlocked` /
 `browseBlocked` reasons the view computes per row are the
 `disabled_reason` strings, served.
 
-### 5. Publishing changes, per dataset
+### 5. Publishing changes, per dataset — built
 
 `root` frames grow a table-scoped kind, still payload-free:
 
@@ -232,9 +232,23 @@ button opens a Vue modal. The `runBlocked` / `editBlocked` /
 A card subscribes to the tables it reads and refetches those. This
 keeps the discipline `live.ts` is built on — the event says only "ask
 again", because every consumer already diffs what it fetches — while
-letting a card ignore a change that isn't its. Until it exists, the
-sources card refetches on `config_changed` and `dag_changed`, which is
-what `Manager2View` does now.
+letting a card ignore a change that isn't its.
+
+What forced it was the server's own log landing in `runs.sqlite`
+(#475): the file then had two writers for two audiences, and the
+sources card, which reads a run's progress from that file but never
+the server's lines, was refetching on its own log lines — a refetch
+that logged a line was the cause of the next one. It got a guard ("only
+while a run is live"), a proxy for "the runner is the writer". The
+exact statement needs the store's help, because a filesystem watcher
+sees one file: the store now counts its writes per part
+(`store_changes`: runs, step runs, metrics, a run's log lines, a
+process's log lines) inside the same transaction, and `watch.rs`
+diffs those counters on each burst and names the datasets each moved
+part feeds. The in-process writer — the storage sampler — publishes
+its own frame instead. The datasets are `watch::Table`, mirrored in
+`live.ts`; `dag_changed` and `run_store_changed` are gone, and the
+guard with them.
 
 ### 6. One typed table viewer
 
@@ -331,6 +345,8 @@ ones are the speculative ones.
    is the pure product of §2 — specs in, column definitions out — and
    `TableGrid` is a thin grid over it for the hosts that want only a
    table. `GridCard` calls `typedColumns` and keeps its own grid.
+7. **Per-dataset change frames** (§5). Done, last, once the guard it
+   replaces had been written and read as the proxy it was.
 
 **The checkpoint, read at (5) and again at (6).** The sources tree
 became a card with these escape hatches, each named honestly:

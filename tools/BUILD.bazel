@@ -13,6 +13,7 @@ exports_files([
     "check_cargo_lock_versions.sh",
     "check_qmd_model_cache_path.sh",
     "check_version_consistency.sh",
+    "fetch_pinned.py",
     "insta_update.sh",
     "repin_cargo.sh",
     "workspace_status.sh",
@@ -87,7 +88,6 @@ py_test(
         "//:requirements.txt",
         "//datalib/backend/runtime:src/node_runtime.rs",
         "//datalib/backend/runtime:src/qmd.rs",
-        "//datalib/docker:Dockerfile",
         "//datalib/ui:pnpm-lock.yaml",
         "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",
@@ -96,6 +96,34 @@ py_test(
         "//third-party/qmd/runtime:package.json",
     ],
     main = "check_version_pins.py",
+)
+
+# The qmd model pins (repo, revision, file, sha256) live in the build's
+# fetch rule and in the Rust table the shipped binaries verify against.
+py_test(
+    name = "qmd_model_pins_test",
+    size = "small",
+    srcs = ["check_qmd_model_pins.py"],
+    data = [
+        "//datalib/backend/runtime:src/qmd.rs",
+        "//third-party/qmd_models:BUILD.bazel",
+    ],
+    main = "check_qmd_model_pins.py",
+)
+
+# cargo-about (the release's third-party notices) must accept every
+# license cargo-deny (the PR gate) allows, or a release fails where a
+# PR passed.
+py_test(
+    name = "license_lists_test",
+    size = "small",
+    srcs = ["check_license_lists.py"],
+    data = [
+        "//datalib/backend:about.toml",
+        "//datalib/backend:deny.toml",
+        "//datalib/tauri:deny.toml",
+    ],
+    main = "check_license_lists.py",
 )
 
 # The shipped-binary list lives in two places that must agree:

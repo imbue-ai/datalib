@@ -2,7 +2,8 @@
 // bucket's render asked for, found or not. The reverse of a provider's
 // bucket query — a changed raw row names the buckets that read it — and
 // the deletion record: a bucket whose inputs are gone re-renders to
-// nothing, and its documents go with it. See docs/dev/plans/render_inputs.md.
+// nothing, and its documents go with it. See
+// docs/dev/data_architecture_parse_and_render.md.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

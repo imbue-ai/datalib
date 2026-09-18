@@ -58,7 +58,9 @@ impl DataProcessor for WhatsappIngest {
         let db = ingest::RawDb::open(&db_path).await?;
         // Open the session (snapshot + interrupt hook) BEFORE fetch borrows
         // `&db`: it captures the write pool the commit + report run against.
-        let session = ctx.open_store(db.pool().clone(), db_path).await;
+        let session = ctx
+            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), db_path)
+            .await;
 
         let env_var = self
             .sync

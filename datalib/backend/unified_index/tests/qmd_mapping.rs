@@ -16,7 +16,9 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         provider: provider.into(),
         kind: kind.into(),
         source_label: provider.into(),
-        when_ts: Some("2369-04-14T10:00:00+00:00".into()),
+        created_at: Some("2369-04-14T10:00:00+00:00".into()),
+        modified_at: None,
+        is_document: false,
         author: None,
         account: None,
         project: None,
@@ -28,7 +30,6 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         message_index: None,
         entire_chat: format!("/chat/{uuid}"),
         text: String::new(),
-        slack_link: None,
         qmd_path: Some(qmd_path.into()),
         source_url: None,
         git_sha: None,
@@ -40,6 +41,8 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         markdown_uuid: Some(uuid.into()),
         byte_size: None,
         item_count: None,
+        diff_status: None,
+        diff_changed_columns: None,
     }
 }
 
@@ -62,6 +65,7 @@ impl Rendered {
                 kind: r.kind.clone(),
                 qmd_path: r.qmd_path.clone().unwrap_or_default(),
                 provider: r.provider.clone(),
+                is_document: r.is_document,
             })
             .collect()
     }

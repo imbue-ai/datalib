@@ -61,6 +61,9 @@ pub struct GridRowRef {
     pub kind: String,
     pub qmd_path: String,
     pub provider: String,
+    /// The row that is the whole document at `qmd_path`, as opposed to
+    /// a place inside it.
+    pub is_document: bool,
 }
 
 pub fn norm_path(p: &str) -> String {
@@ -174,7 +177,34 @@ impl GridIndex {
                 return vec![row.clone()];
             }
         }
-        file_rows.clone()
+        // A hit that cannot be placed inside the document is a hit on
+        // the document: its row, when the file has one, else every row.
+        let documents: Vec<GridRowRef> = file_rows
+            .iter()
+            .filter(|r| r.is_document)
+            .cloned()
+            .collect();
+        if documents.is_empty() {
+            file_rows.clone()
+        } else {
+            documents
+        }
+    }
+
+    /// [`Self::rows_for_hit`] lifted to the document: whichever row a
+    /// hit lands on, the row that *is* that document. What an
+    /// `is:document` search wants from a hit inside a message — the
+    /// message row would only be filtered out afterwards. Empty when the
+    /// file has no document row, so an orphan stays an orphan.
+    pub fn document_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
+        self.rows_for_hit(hit)
+            .first()
+            .and_then(|r| self.by_norm_path.get(&norm_path(&r.qmd_path)))
+            .into_iter()
+            .flatten()
+            .filter(|r| r.is_document)
+            .cloned()
+            .collect()
     }
 
     /// Read `<root>/<qmd_path>` and return the `data-section-uuid` of the
@@ -230,12 +260,17 @@ impl GridIndex {
     pub fn ranked_rows_one_per_doc(
         &self,
         hits: &[QmdHit],
+        documents_only: bool,
         mut on_orphan: impl FnMut(&QmdHit),
     ) -> Vec<(GridRowRef, f64)> {
         let mut seen_docs: HashSet<String> = HashSet::new();
         let mut out: Vec<(GridRowRef, f64)> = Vec::new();
         for h in hits {
-            let rows = self.rows_for_hit(h);
+            let rows = if documents_only {
+                self.document_for_hit(h)
+            } else {
+                self.rows_for_hit(h)
+            };
             if rows.is_empty() {
                 on_orphan(h);
                 continue;
@@ -272,6 +307,14 @@ mod tests {
             kind: kind.to_string(),
             qmd_path: qmd_path.to_string(),
             provider: provider.to_string(),
+            is_document: false,
+        }
+    }
+
+    fn document(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRowRef {
+        GridRowRef {
+            is_document: true,
+            ..row(uuid, kind, qmd_path, provider)
         }
     }
 
@@ -457,6 +500,55 @@ mod tests {
         assert_eq!(uuids, ["u1", "u2"].into_iter().collect());
     }
 
+    /// With a document row in the file, an unplaceable hit is a hit on
+    /// the document rather than on every row.
+    #[test]
+    fn rows_for_hit_unplaceable_prefers_the_document_row() {
+        let rel = "claude/acct/llm_chats/conv/index.md";
+        let idx = GridIndex::new(
+            "/nonexistent-root",
+            vec![
+                row("u1", "User Input", rel, "claude"),
+                document("doc", "Chat", rel, "claude"),
+                row("u2", "LLM Response", rel, "claude"),
+            ],
+        );
+        let h = hit(rel, "@@ -9,4 @@ (2 before, 5 after)\nx");
+        let got = idx.rows_for_hit(&h);
+        let uuids: Vec<&str> = got.iter().map(|r| r.uuid.as_str()).collect();
+        assert_eq!(uuids, ["doc"]);
+    }
+
+    /// `is:document` with free text: a hit pinned to a message still
+    /// answers with the message's document, and a file without a
+    /// document row answers with nothing rather than a message that the
+    /// SQL filter would then drop.
+    #[test]
+    fn document_for_hit_lifts_a_pinned_message_to_its_document() {
+        let td = tempfile::tempdir().unwrap();
+        let rel = "claude/acct/llm_chats/conv/index.md";
+        let mut rows = write_two_message_doc(td.path(), rel);
+        let h = hit(rel, "@@ -13,4 @@ (2 before, 3 after)\n## Assistant");
+        let pinned = GridIndex::new(td.path(), rows.clone()).rows_for_hit(&h);
+        assert_eq!(
+            pinned.iter().map(|r| r.uuid.as_str()).collect::<Vec<_>>(),
+            ["bbbbbbbb-0000-0000-0000-000000000002"],
+            "the hit itself lands on the second message"
+        );
+        assert!(
+            GridIndex::new(td.path(), rows.clone())
+                .document_for_hit(&h)
+                .is_empty(),
+            "no document row, no document"
+        );
+        rows.push(document("conv", "Chat", rel, "claude"));
+        let lifted = GridIndex::new(td.path(), rows).document_for_hit(&h);
+        assert_eq!(
+            lifted.iter().map(|r| r.uuid.as_str()).collect::<Vec<_>>(),
+            ["conv"]
+        );
+    }
+
     #[test]
     fn rows_for_hit_unknown_path_is_empty() {
         // A hit whose file matches no grid rows resolves to nothing — the
@@ -623,7 +715,7 @@ mod tests {
         ];
 
         let mut orphans = 0;
-        let ranked = idx.ranked_rows_one_per_doc(&hits, |_| orphans += 1);
+        let ranked = idx.ranked_rows_one_per_doc(&hits, false, |_| orphans += 1);
 
         assert_eq!(orphans, 1, "the unknown-path hit is an orphan");
         let got: Vec<(&str, f64)> = ranked.iter().map(|(r, s)| (r.uuid.as_str(), *s)).collect();

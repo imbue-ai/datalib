@@ -68,7 +68,7 @@ KNOWN_GAPS: dict[str, str] = {
 # Columns of the render store whose value is a stamp of *when* rather
 # than *what*: identical content renders them differently on every run.
 _VOLATILE = {
-    "render_problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
+    "problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
     "render_cursor": ("rendered_at_utc", "tz_offset", "raw_commit"),
 }
 
@@ -172,7 +172,9 @@ class RenderContractTest(unittest.TestCase):
         }
         argv = [str(self.cwd / self.step_bin)]
         if step.get("params"):
-            argv += ["--params", json.dumps(step["params"])]
+            params_file = data_root / f"{group}.render.params.json"
+            params_file.write_text(json.dumps(step["params"]))
+            argv += ["--params-file", str(params_file)]
         result = subprocess.run(
             argv,
             check=False,
@@ -447,36 +449,66 @@ class RenderContractTest(unittest.TestCase):
 
     # ── the render store, logically ─────────────────────────────────
 
+    _DUMPED_TABLES = (
+        "markdowns",
+        "grid_rows",
+        "edges",
+        "problems",
+        "render_cursor",
+    )
+
+    def _render_columns(self, db: Path) -> dict[str, list[str]]:
+        """The columns of every dumped table. Read once: the render store's
+        schema is `datalib_schema`'s, the same in every source's store,
+        and this test dumps stores thousands of times."""
+        if not hasattr(self, "_render_columns_cache"):
+            sql = " ".join(
+                f"SELECT '#{t}'; SELECT name FROM pragma_table_info('{t}');"
+                for t in self._DUMPED_TABLES
+            )
+            self._render_columns_cache = {
+                t: [line.split("|")[0] for line in rows]
+                for t, rows in self._split_by_sentinel(self._rows(db, sql)).items()
+            }
+        return self._render_columns_cache
+
+    @staticmethod
+    def _split_by_sentinel(lines: list[str]) -> dict[str, list[str]]:
+        """Rows of several SELECTs run in one invocation, split at the
+        `#name` rows a `SELECT '#name';` between them emits. Safe because
+        every dumped table leads with a key column, which never starts
+        with `#`."""
+        out: dict[str, list[str]] = {}
+        current: list[str] | None = None
+        for line in lines:
+            if line.startswith("#"):
+                current = out.setdefault(line[1:], [])
+            elif current is not None:
+                current.append(line)
+        return out
+
     def _logical_dump(self, source_dir: Path) -> dict[str, list[str]]:
         """Every row the provider wrote to the render store, minus the
         volatile stamps, plus the `.md` tree as (path, digest) — the
         content two renders of one raw store must agree on. Datalib's own
         storage report is left out: it carries a byte-count history, so
-        it is a function of the run, not of the raw store."""
+        it is a function of the run, not of the raw store. One doltlite
+        invocation for all the tables: spawning the shell is what this
+        test's runtime is made of."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
         out: dict[str, list[str]] = {}
         if db.is_file():
-            for t in (
-                "markdowns",
-                "grid_rows",
-                "edges",
-                "render_problems",
-                "render_cursor",
-            ):
-                cols = [
-                    line.split("|")[0]
-                    for line in self._rows(
-                        db, f"SELECT name FROM pragma_table_info('{t}');"
-                    )
-                ]
+            selects = []
+            for t, cols in self._render_columns(db).items():
                 keep = [c for c in cols if c not in _VOLATILE.get(t, ())]
                 if not keep:
                     continue
                 where = " WHERE provider <> 'datalib'" if "provider" in cols else ""
-                out[t] = self._rows(
-                    db,
-                    f"SELECT {', '.join(keep)} FROM {t}{where} ORDER BY {', '.join(keep)};",
+                selects.append(
+                    f"SELECT '#{t}'; SELECT {', '.join(keep)} FROM {t}{where} "
+                    f"ORDER BY {', '.join(keep)};"
                 )
+            out = self._split_by_sentinel(self._rows(db, " ".join(selects)))
         files = []
         root = source_dir / "render_markdown"
         for p in sorted(root.rglob("*")):

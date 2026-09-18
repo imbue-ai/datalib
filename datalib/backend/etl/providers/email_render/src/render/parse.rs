@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -64,6 +65,9 @@ pub struct ParsedEmail {
     /// into the render summary.
     pub docs_skipped: usize,
     pub scan: ScanResult,
+    /// Rows whose stored payload would not read as JSON, dropped —
+    /// reported by the processor rather than skipped in silence.
+    pub unparsed: Vec<Unparsed>,
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
@@ -106,14 +110,23 @@ async fn parse_async(
     range: RawRange<'_>,
     label_filter: bool,
 ) -> Result<ParsedEmail> {
-    let pool = datalib_etl::doltlite_raw::open_reader(db_path)
+    // Pinned at open — at the driver's commit, else HEAD — with the views
+    // installed before anything reads. No commit means nothing has been
+    // committed here to render: emptiness, not a reason to read the
+    // working set.
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
-        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?;
+        .with_context(|| format!("open raw doltlite for render at {}", db_path.display()))?
+    else {
+        return Ok(ParsedEmail::default());
+    };
+    let pool = reader.pool().clone();
+    let pin = reader.pin().clone();
 
     let cas_path = blob_cas::cas_path_for(db_path);
     let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         Some(
-            datalib_etl::doltlite_raw::open_reader(&cas_path)
+            datalib_etl::blob_cas::open_cas_reader(&cas_path)
                 .await
                 .with_context(|| format!("open CAS for render at {}", cas_path.display()))?,
         )
@@ -121,21 +134,22 @@ async fn parse_async(
         None
     };
 
-    // Pin before anything reads this store. The diff below and the rows
-    // behind it have to name one commit, and the `pinned_<table>` views must
-    // already exist when the diff runs — its bucket query joins live tables.
-    // No commit at all means nothing has been committed here to render, which
-    // is emptiness, not a reason to read the working set.
-    let Some(pin) = range.pin(&pool).await? else {
-        return Ok(ParsedEmail::default());
-    };
-    datalib_etl::pin::install_views(&pool, &pin)
-        .await
-        .context("pin the email raw store for render")?;
-
-    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
-    let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
-    let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
+    let mut unparsed: Vec<Unparsed> = Vec::new();
+    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin), &mut unparsed).await?;
+    let mailboxes = load_payloads(
+        &pool,
+        datalib_etl::pin::Reads::At(&pin),
+        "mailboxes",
+        &mut unparsed,
+    )
+    .await?;
+    let threads = load_payloads(
+        &pool,
+        datalib_etl::pin::Reads::At(&pin),
+        "threads",
+        &mut unparsed,
+    )
+    .await?;
     // Every thread with at least one email — the load set on a cold
     // start, the denominator of the skipped count otherwise, and the
     // map from the driver's bucket keys back to thread keys.
@@ -191,6 +205,7 @@ async fn parse_async(
         docs,
         docs_skipped,
         scan,
+        unparsed,
     })
 }
 
@@ -374,6 +389,7 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
 async fn load_accounts(
     pool: &SqlitePool,
     reads: datalib_etl::pin::Reads<'_>,
+    unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<(String, Value)>> {
     let table = reads.table("accounts");
     let sql = format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
@@ -386,8 +402,9 @@ async fn load_accounts(
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
         let s: String = r.try_get("payload").unwrap_or_default();
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            out.push((id, v));
+        match serde_json::from_str::<Value>(&s) {
+            Ok(v) => out.push((id, v)),
+            Err(_) => unparsed.push(Unparsed::new("accounts", &id, &s)),
         }
     }
     Ok(out)
@@ -396,10 +413,12 @@ async fn load_accounts(
 async fn load_payloads(
     pool: &SqlitePool,
     reads: datalib_etl::pin::Reads<'_>,
-    table: &str,
+    table: &'static str,
+    unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<Value>> {
-    let table = reads.table(table);
-    let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
+    let pinned = reads.table(table);
+    let sql =
+        format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal at both callsites.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -407,9 +426,11 @@ async fn load_payloads(
         .with_context(|| format!("load_payloads {table}"))?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
         let s: String = r.try_get("payload").unwrap_or_default();
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            out.push(v);
+        match serde_json::from_str::<Value>(&s) {
+            Ok(v) => out.push(v),
+            Err(_) => unparsed.push(Unparsed::new(table, &id, &s)),
         }
     }
     Ok(out)

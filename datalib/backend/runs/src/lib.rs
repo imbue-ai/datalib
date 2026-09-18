@@ -10,14 +10,14 @@ pub mod store;
 pub mod tracing_layer;
 
 pub use app_schema::runs::{
-    LogLevel, LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, Stream,
+    LogLevel, LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, StorePart, Stream,
 };
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, LogSink,
-    ProcessLogWriter, RunWriter, Snapshot,
+    canonical_labels, latest_metric, log_after, open_or_create, runs, snapshot, snapshot_of,
+    versions, LogSink, ProcessLogWriter, RunWriter, Snapshot,
 };
-pub use tracing_layer::StoreLayer;
+pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
 
 use std::path::{Path, PathBuf};
 
@@ -59,13 +59,17 @@ pub fn is_terminal(state: &str) -> bool {
     LiveState::parse(state).is_none()
 }
 
-/// How much history to keep. Both limits apply; a run older than
-/// `max_age_days` goes even when fewer than `max_runs` exist. A log
-/// line outside any run has only the age limit.
+/// How much history to keep. Both run limits apply; a run older than
+/// `max_age_days` goes even when fewer than `max_runs` exist. The lines
+/// outside any run — the server's own log — have their own two, both
+/// shorter: at `debug` a server between syncs writes steadily, and a
+/// month of that is a file nobody reads back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retention {
     pub max_runs: u32,
     pub max_age_days: u32,
+    pub process_log_days: u32,
+    pub process_log_lines: u32,
 }
 
 impl Default for Retention {
@@ -73,6 +77,8 @@ impl Default for Retention {
         Self {
             max_runs: 100,
             max_age_days: 30,
+            process_log_days: 3,
+            process_log_lines: 200_000,
         }
     }
 }
@@ -81,7 +87,7 @@ impl Default for Retention {
 /// version is deleted and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

@@ -1,9 +1,12 @@
 # Builds the `//datalib/backend:dist` bins on every supported
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
-# per-triple tarball to a GitHub Release. The `x86_64-apple-darwin`
-# leg is curl-only: it publishes just the `curl-<triple>.tar.gz`
-# tarball (see the matrix `curl-only` flag below).
+# per-triple tarball to a GitHub Release.
+# The `runtime` job publishes the Node runtime the binaries run `qmd`
+# and `latchkey` from as its own asset per platform
+# (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
+# from the `runtime.manifest` the `build` job writes beside them — see
+# docs/dev/runtime_fetch.md.
 # The `macos-app` job additionally builds, signs, and notarizes the
 # Datalib desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
@@ -13,9 +16,9 @@
 #
 # Bazel action cache is served by BuildBuddy (see the "Configure
 # BuildBuddy remote cache" step below); there's no GHA-side bazel
-# cache and no main-branch warmup run. Tag pushes hit BuildBuddy's
-# warm cache directly — populated by every contributor build and by
-# the `test.yml` workflow on main / PRs.
+# cache and no main-branch warmup run. Tag pushes read the RELEASE
+# group's cache — populated only by `test.yml` runs of commits on
+# main, never by contributor laptops or PR runs — and write nothing.
 name: release
 
 on:
@@ -35,9 +38,141 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
+  # and `latchkey` trees, only this platform's CPU binding of
+  # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
+  # platform. Its own job rather than a step of `build` so that the
+  # musl legs (whose glibc host runs the same runtime as their gnu
+  # sibling) can name an asset that already exists, with its sha256:
+  # the `build` legs read the `.sha256` sidecars published here when
+  # they write `runtime.manifest`. The tarball no longer carries the
+  # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
+  #
+  # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
+  # targets and an rsync: a few minutes, most of it runner setup.
+  runtime:
+    name: runtime (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `cuda`: also publish `runtime-<triple>-cuda.tar.gz`, the two
+        # CUDA packages the resolver overlays where an NVIDIA driver is
+        # present. Only Linux x86_64 has prebuilt CUDA bindings.
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-14  # Apple Silicon
+            cuda: false
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            cuda: true
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+            cuda: false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same cache layering as the build job below; see its comment.
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: true
+          external-cache: false
+
+      # See the build job's identically-named step for the full story:
+      # the release group's key, and no uploads.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy-release-readonly
+          EOF
+              echo "BuildBuddy release cache enabled for this job (read-only)."
+          else
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
+          fi
+
+      # The trees come out of Bazel; the script prunes the bindings this
+      # platform cannot use and proves the one it keeps loads. The
+      # archive holds the tree's contents at its top (`node/`, `qmd/`,
+      # `latchkey/`), which is how the resolver unpacks it into
+      # `~/.cache/datalib/runtime/<sha12>/`.
+      - name: Stage the runtime
+        id: stage
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          CUDA: ${{ matrix.cuda }}
+        run: |
+          set -euo pipefail
+          checksum() {
+              if command -v sha256sum >/dev/null; then
+                  sha256sum "$1" > "$1.sha256"
+              else
+                  shasum -a 256 "$1" > "$1.sha256"
+              fi
+          }
+          cuda_flag=()
+          if [[ "${CUDA}" == "true" ]]; then
+              cuda_flag=(--cuda runtime-cuda)
+          fi
+          scripts/stage_runtime.sh runtime "${cuda_flag[@]}"
+          # Smoke the staged tree on the runner (same triple as the
+          # asset): the Node runs, and qmd loads from it. latchkey is
+          # left out — its `--version` initializes a keyring, which a
+          # bare runner has none of.
+          runtime/node/bin/node --version
+          runtime/node/bin/node runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
+
+          tarball="runtime-${TRIPLE}.tar.gz"
+          tar -czf "${tarball}" -C runtime .
+          checksum "${tarball}"
+          ls -la "${tarball}"
+          files="${tarball} ${tarball}.sha256"
+          if [[ "${CUDA}" == "true" ]]; then
+              cuda_tarball="runtime-${TRIPLE}-cuda.tar.gz"
+              tar -czf "${cuda_tarball}" -C runtime-cuda .
+              checksum "${cuda_tarball}"
+              ls -la "${cuda_tarball}"
+              files="${files} ${cuda_tarball} ${cuda_tarball}.sha256"
+          fi
+          echo "files=${files}" >> "$GITHUB_OUTPUT"
+
+      # Plain `gh`, create-if-missing, retry once: see the build job's
+      # publish step.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          FILES: ${{ steps.stage.outputs.files }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
+              gh release create "$REF_NAME" --verify-tag --notes "" || true
+          fi
+          # shellcheck disable=SC2086
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber $FILES; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
+
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
+    # After the runtime assets, whose sha256s the manifest below
+    # carries. `!cancelled()` rather than the default `success()`: a
+    # runtime leg that failed costs the tarballs that name it (their
+    # manifest step fails), not every tarball.
+    needs: runtime
+    if: ${{ !cancelled() }}
     strategy:
       # One platform failing shouldn't cancel the others: a successful
       # build's tarball can still be published to the release while we
@@ -59,23 +194,14 @@ jobs:
         # ~30s analysis pass versus the gnu legs' shared-config
         # optimization described above the build steps.
         #
-        # `curl-only`: build and publish only the curl tarball
-        # (`//datalib/backend:curl_dist` -> `curl-<triple>.tar.gz`),
-        # skipping the full datalib tarball. Used for
-        # x86_64-apple-darwin, where curl-tarball consumers (e.g. the
-        # minds latchkey gateway on Intel macs) need a native binary
-        # but nothing installs the full toolchain (scripts/install.sh
-        # only maps Darwin/arm64).
+        # No x86_64-apple-darwin leg: nothing installs the full toolchain
+        # there (scripts/install.sh only maps Darwin/arm64), and the
+        # curl shims an Intel mac needs ship from
+        # github.com/imbue-ai/latchkey-curl-shims.
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-14  # Apple Silicon
             bazel-config: ""
-          - triple: x86_64-apple-darwin
-            # GitHub's Intel macOS runner (macos-13 retired 2025-12;
-            # macos-15-intel is supported through Aug 2027).
-            runs-on: macos-15-intel
-            bazel-config: ""
-            curl-only: true
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
             bazel-config: ""
@@ -90,7 +216,7 @@ jobs:
             bazel-config: "--config=musl-aarch64"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
@@ -115,7 +241,7 @@ jobs:
       #     workspaces — small win and historically the flakiest layer.
       #   * bazelisk-cache saves a ~20s binary download, not worth
       #     a slot in the 10 GB-per-repo actions/cache quota.
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false
@@ -135,15 +261,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake
 
-      # The macos-15-intel image (unlike macos-14) doesn't ship cmake —
-      # v0.23.1's Intel leg died with "is `cmake` not installed?" back
-      # when the impersonating curl was compiled here. Today that leg
-      # builds only `:curl_dist`, which needs no cmake (the impersonating
-      # curl is a fetched archive and the dispatch is std-only Rust), so
-      # this step is kept for the full-dist legs, where protobuf-src
-      # needs it. Homebrew on Intel macs installs to /usr/local/bin,
-      # which is on bazel's default strict action PATH. Guarded so an
-      # image that gains cmake later doesn't fail on "already installed".
+      # protobuf-src needs cmake. Guarded so an image that gains or
+      # loses it doesn't fail on "already installed".
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
@@ -153,42 +272,63 @@ jobs:
           fi
           cmake --version | head -1
 
+      # cargo-about writes licenses/rust-crates.md for the tarball (the
+      # copyright notice of every crate linked into the binaries; see
+      # scripts/third_party_notices.sh). A prebuilt release binary,
+      # pinned by version and sha256, the way test.yml takes cargo-deny.
+      # It needs the network to fetch crate sources the first time.
+      - name: Install cargo-about (pinned)
+        env:
+          VERSION: 0.9.2
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+              Linux-x86_64)  triple=x86_64-unknown-linux-musl;  sha=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+              Linux-aarch64) triple=aarch64-unknown-linux-musl; sha=af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8 ;;
+              Darwin-arm64)  triple=aarch64-apple-darwin;       sha=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
+              *) echo "no pinned cargo-about for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          name="cargo-about-${VERSION}-${triple}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${name}.tar.gz" \
+              "https://github.com/EmbarkStudios/cargo-about/releases/download/${VERSION}/${name}.tar.gz"
+          echo "${sha}  ${name}.tar.gz" | shasum -a 256 -c -
+          tar -xzf "${name}.tar.gz"
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 0755 "${name}/cargo-about" "$HOME/.cargo/bin/cargo-about"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo-about" --version
+
       - name: Show toolchain versions
         run: |
           bazel version
           rustc --version || true
 
-      # Wire BuildBuddy remote cache for this build. `.bazelrc.user` is
-      # gitignored so we can drop the API key into it from a repo
+      # Wire the BuildBuddy remote cache for this build. `.bazelrc.user`
+      # is gitignored so we can drop the API key into it from a repo
       # secret without polluting the source tree; the `try-import` at
-      # the bottom of `.bazelrc` picks it up automatically, and the
-      # `build:buildbuddy` config block does the rest.
+      # the bottom of `.bazelrc` picks it up automatically.
       #
-      # If the secret isn't set (e.g. a PR from a fork; manual local
-      # `act` runs without secrets configured) the step writes nothing
-      # and bazel runs without remote caching — actions still execute
-      # locally, just without the cross-machine cache hits.
-      #
-      # `--remote_upload_local_results=true` is the BuildBuddy default
-      # but we name it explicitly in `.bazelrc` so a future reader
-      # doesn't wonder why CI's outputs land in the shared cache. For
-      # CI specifically the read+write semantics are exactly what we
-      # want: matrix builds populate linux-amd64 + linux-arm64 (and
-      # darwin-arm64) action results that subsequent devcontainer
-      # warmups + contributor builds cache-hit.
+      # SUPPLY CHAIN: a release build replays action-cache hits into
+      # what it ships, and bazel verifies none of them. So this is the
+      # RELEASE group's key — a cache only `test.yml` runs of commits on
+      # `main` write to, which is what makes a hit here "what main just
+      # built" — and `--config=buildbuddy-release-readonly`, which
+      # reads and never writes. Never the contributor key: every laptop and every
+      # PR run writes that cache. Without the secret this leg runs cold
+      # (~20 min), which is the right failure mode.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy
+          build --config=buildbuddy-release-readonly
           EOF
-              echo "BuildBuddy remote cache enabled for this job."
+              echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
           fi
 
       # Defense in depth against "tagged the wrong version" or "forgot
@@ -223,15 +363,7 @@ jobs:
       # below catches any future regression where stamping gets
       # silently disabled.
       - name: Build dist bins
-        env:
-          CURL_ONLY: ${{ matrix.curl-only }}
-        run: |
-          set -euo pipefail
-          targets="//datalib/backend:dist //datalib/backend:curl_dist"
-          if [[ "${CURL_ONLY}" == "true" ]]; then
-              targets="//datalib/backend:curl_dist"
-          fi
-          bazel build ${targets} -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
+        run: bazel build //datalib/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
 
       # musl legs only: refuse to publish anything that isn't fully
       # static. A regression here (say, a new crate sneaking in a
@@ -251,8 +383,8 @@ jobs:
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
               bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin \
-              bazel-bin/datalib/backend/etl/latchkey_curl_impersonate \
-              bazel-bin/datalib/backend/etl/latchkey_curl_dispatch \
+              bazel-bin/third-party/latchkey-curl-shims/curl-impersonate \
+              bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router \
               bazel-bin/third-party/doltlite/doltlite; do
               echo "--- ${bin}"
               file -L "${bin}"
@@ -275,11 +407,7 @@ jobs:
       # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
       # suffix, or a mismatched tag — fails the release before any
       # tarball is staged.
-      #
-      # Skipped on curl-only legs: datalib_dag isn't built there, and
-      # the curl bins' `--version` speaks curl, not the tag.
       - name: Assert release binary reports tag version
-        if: matrix.curl-only != true
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -304,9 +432,9 @@ jobs:
       - name: Stage tarball
         id: stage
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
-          CURL_ONLY: ${{ matrix.curl-only }}
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
@@ -322,65 +450,82 @@ jobs:
               fi
           }
 
-          # The full tarball is skipped on curl-only legs — nothing
-          # installs the full toolchain there (scripts/install.sh has no
-          # mapping for those hosts), and //datalib/backend:dist
-          # wasn't built.
-          if [[ "${CURL_ONLY}" != "true" ]]; then
-              stage="datalib-${version}-${TRIPLE}"
-              mkdir -p "${stage}"
+          stage="datalib-${version}-${TRIPLE}"
+          mkdir -p "${stage}"
 
-              # Map bazel output paths -> public installed names. Add a line
-              # here when you add a binary to //datalib/backend:dist.
-              # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
-              # datalib-http resolves them via sibling lookup (see
-              # http/src/worker.rs resolve_bin) — and the impersonator's
-              # installed name must stay in sync with `SIBLING_NAMES` in
-              # datalib/backend/etl/src/latchkey.rs (datalib-step
-              # resolves it via a sibling lookup at runtime).
-              cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
-              cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
-              cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
-              cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
-              cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
-              # Not under datalib/backend/ — the doltlite shell is
-              # third-party C. `//datalib/backend:bin` reaches it via a
-              # second `root_paths` entry; here the path is just spelled
-              # out. //tools:dist_names_test compares the two.
-              cp bazel-bin/third-party/doltlite/doltlite "${stage}/datalib-doltlite"
-              cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
-              cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
-              cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${stage}/latchkey-curl-dispatch"
-              cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
-              chmod +x "${stage}"/*
+          # Map bazel output paths -> public installed names. Add a line
+          # here when you add a binary to //datalib/backend:dist.
+          # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
+          # datalib-http resolves them via sibling lookup (see
+          # http/src/worker.rs resolve_bin) — and the two curl shims keep
+          # theirs: datalib-step looks for `latchkey-curl-router` next to
+          # itself (datalib/backend/etl/src/latchkey.rs) and the router
+          # looks for `curl-impersonate` next to itself.
+          cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
+          cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
+          cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
+          cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
+          cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
+          # Not under datalib/backend/ — the doltlite shell is
+          # third-party C. `//datalib/backend:bin` reaches it via a
+          # second `root_paths` entry; here the path is just spelled
+          # out. //tools:dist_names_test compares the two.
+          cp bazel-bin/third-party/doltlite/doltlite "${stage}/datalib-doltlite"
+          cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
+          cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
+          cp bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router "${stage}/latchkey-curl-router"
+          cp bazel-bin/third-party/latchkey-curl-shims/curl-impersonate "${stage}/curl-impersonate"
+          chmod +x "${stage}"/*
 
-              tarball="datalib-${TRIPLE}.tar.gz"
-              tar -czf "${tarball}" "${stage}"
-              checksum "${tarball}"
+          # The `latchkey` launcher: runs the bundled latchkey with
+          # the router curl beside it, from `runtime/` when one
+          # is staged beside it (the docker image) and else from
+          # the fetched tree in the user's cache.
+          install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
 
-              echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-              echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
-          fi
+          # `runtime.manifest`: which runtime asset of THIS release
+          # the binaries fetch on first use, with its sha256 and
+          # size read back from what the `runtime` job published.
+          # The musl legs name their gnu sibling's asset: the Node
+          # in it is a glibc build (nodejs.org ships no musl one),
+          # and a musl datalib on a glibc host — the common case —
+          # runs it fine; a musl host is refused by the resolver
+          # with the reason named. The format is
+          # datalib/backend/runtime/src/runtime_manifest.rs's.
+          runtime_triple="${TRIPLE/-musl/-gnu}"
+          manifest="${stage}/runtime.manifest"
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${REF_NAME}"
+          manifest_line() { # kind, asset name
+              local kind="$1" name="$2" sha bytes
+              gh release download "${REF_NAME}" --pattern "${name}.sha256" --clobber --dir manifest-src
+              sha="$(cut -d' ' -f1 "manifest-src/${name}.sha256")"
+              bytes="$(gh release view "${REF_NAME}" --json assets \
+                  --jq ".assets[] | select(.name == \"${name}\") | .size")"
+              [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 for ${name}: ${sha}" >&2; exit 1; }
+              [[ "${bytes}" =~ ^[0-9]+$ ]] || { echo "no size for ${name} on the release" >&2; exit 1; }
+              echo "${kind} ${name} ${sha} ${bytes} ${base_url}/${name}"
+          }
+          {
+              echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
+              manifest_line cpu "runtime-${runtime_triple}.tar.gz"
+              if [[ "${runtime_triple}" == "x86_64-unknown-linux-gnu" ]]; then
+                  manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
+              fi
+          } > "${manifest}"
+          cat "${manifest}"
 
-          # The curl-only tarball: just the dispatch curl + the impersonator it
-          # fronts (see //datalib/backend:curl_dist). Its own inner
-          # dir + stable, un-versioned filename, parallel to the main
-          # tarball above. Consumers like the minds latchkey gateway pull
-          # this instead of the full toolchain. The two public names here
-          # (`latchkey-curl-{dispatch,impersonate}`) are what those
-          # consumers resolve by; keep the impersonator name in sync with
-          # `SIBLING_NAMES` in datalib/backend/etl/src/latchkey.rs.
-          curl_stage="curl-${version}-${TRIPLE}"
-          mkdir -p "${curl_stage}"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
-          chmod +x "${curl_stage}"/*
-          curl_tarball="curl-${TRIPLE}.tar.gz"
-          tar -czf "${curl_tarball}" "${curl_stage}"
-          checksum "${curl_tarball}"
+          # Third-party notices beside the binaries. Runs a
+          # default-config bazel build of its own, which repoints
+          # bazel-bin; every copy out of bazel-bin above is already
+          # done.
+          scripts/third_party_notices.sh "${stage}/licenses"
 
-          echo "curl_tarball=${curl_tarball}" >> "$GITHUB_OUTPUT"
-          echo "curl_sha256=${curl_tarball}.sha256" >> "$GITHUB_OUTPUT"
+          tarball="datalib-${TRIPLE}.tar.gz"
+          tar -czf "${tarball}" "${stage}"
+          checksum "${tarball}"
+
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
       # Plain `gh` instead of softprops/action-gh-release (an
       # individually-owned action; see the macos-app job's SUPPLY CHAIN
@@ -395,20 +540,20 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           TARBALL: ${{ steps.stage.outputs.tarball }}
           SHA256: ${{ steps.stage.outputs.sha256 }}
-          CURL_TARBALL: ${{ steps.stage.outputs.curl_tarball }}
-          CURL_SHA256: ${{ steps.stage.outputs.curl_sha256 }}
         run: |
           set -euo pipefail
           if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
               gh release create "$REF_NAME" --verify-tag --notes "" || true
           fi
-          # Curl-only legs stage no full tarball, so TARBALL/SHA256 are
-          # empty there; upload whatever the stage step produced.
-          files=("$CURL_TARBALL" "$CURL_SHA256")
-          if [[ -n "${TARBALL:-}" ]]; then
-              files=("$TARBALL" "$SHA256" "${files[@]}")
-          fi
-          gh release upload "$REF_NAME" --clobber "${files[@]}"
+          files=("$TARBALL" "$SHA256")
+          # Once more on failure — see the macos-app job's publish step.
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber "${files[@]}"; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
 
   # Build, sign, and notarize the Datalib desktop app (Tauri) and
   # attach the dmg to the GitHub Release. Deliberately NOT gated on the
@@ -439,6 +584,13 @@ jobs:
   # replaces softprops/action-gh-release, and there's deliberately no
   # cargo cache (Swatinem/rust-cache) — a cold compile only costs a few
   # minutes on a rare tag build and doesn't eat the 10 GB cache quota.
+  #
+  # The same rule for what the build FETCHES: everything that talks to
+  # a registry or a cache — the pinned Tauri CLI from pnpm-lock.yaml,
+  # the cargo crates, the Bazel actions the beforeBuildCommand and the
+  # runtime staging run — is fetched or built in the steps BEFORE the
+  # secrets export, so the signing step itself is a cache hit that
+  # downloads nothing. The export is the last setup step, on purpose.
   macos-app:
     name: macos-app (signed + notarized)
     runs-on: macos-14  # Apple Silicon
@@ -449,33 +601,34 @@ jobs:
     env:
       VAULT_AUTH_ROLE: datalib_release_gh
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The tauri beforeBuildCommand bazel-builds the bundled
       # datalib-http / datalib-dag / datalib-step binaries; same cache layering
       # rationale as the build job above (BuildBuddy serves actions,
       # repository-cache keeps the crate_universe / rules tarballs).
-      - uses: bazel-contrib/setup-bazel@0.19.0
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false
           repository-cache: true
           external-cache: false
 
-      # See the build job's identically-named step for the full story.
+      # See the build job's identically-named step for the full story:
+      # the release group's key, and no uploads.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy
+          build --config=buildbuddy-release-readonly
           EOF
-              echo "BuildBuddy remote cache enabled for this job."
+              echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
           fi
 
       # The tauri crate is built by cargo (not bazel's hermetic rust
@@ -484,7 +637,7 @@ jobs:
       # says rust-version = "1.83"). Plain rustup, no third-party action;
       # the runner image carries rustup, with the official installer as
       # fallback in case a future image drops it.
-      - name: Install Rust (stable)
+      - name: Install Rust (1.98.0, the version Bazel builds with)
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -493,24 +646,84 @@ jobs:
               echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
               export PATH="$HOME/.cargo/bin:$PATH"
           fi
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+          rustup toolchain install 1.98.0 --profile minimal --no-self-update
+          rustup default 1.98.0
           rustc --version
 
       # scripts/ensure_pnpm.sh bootstraps pnpm via corepack, but corepack
       # is being removed from newer Node distributions — install the
       # pinned pnpm (packageManager in datalib/ui/package.json)
       # directly so the runner image's Node choices can't break us.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: datalib/ui/package.json
+
+      # The Tauri CLI at the version pnpm-lock.yaml names, from the
+      # tarballs it names, install scripts off. build-signed-app.sh runs
+      # the same install (a no-op here) and then `pnpm exec tauri`, never
+      # `pnpm dlx`, which resolved whatever 2.x was current at signing
+      # time.
+      - name: Install the pinned Tauri CLI
+        run: |
+          set -euo pipefail
+          cd datalib/tauri
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm exec tauri --version
+
+      # stage-runtime.sh assembles the .app's Resources/licenses/ with
+      # scripts/third_party_notices.sh, which runs cargo-about. Same
+      # pinned binary as the build job's step.
+      - name: Install cargo-about (pinned)
+        env:
+          VERSION: 0.9.2
+          SHA256: ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e
+        run: |
+          set -euo pipefail
+          name="cargo-about-${VERSION}-aarch64-apple-darwin"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${name}.tar.gz" \
+              "https://github.com/EmbarkStudios/cargo-about/releases/download/${VERSION}/${name}.tar.gz"
+          echo "${SHA256}  ${name}.tar.gz" | shasum -a 256 -c -
+          tar -xzf "${name}.tar.gz"
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 0755 "${name}/cargo-about" "$HOME/.cargo/bin/cargo-about"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo-about" --version
+
+      # Every fetch the build will make, made now: the shell's crates
+      # and the backend's (`cargo fetch` against the committed
+      # Cargo.locks — cargo-about reads license files out of the
+      # backend's crate sources), and the Bazel targets the
+      # beforeBuildCommand copies out and stage-runtime.sh rsyncs — so
+      # the signing step's bazel invocations are analysis + cache hits
+      # with no network, and no crate lands after the certs are in
+      # scope. The target list mirrors tauri.conf.json's
+      # beforeBuildCommand plus those in scripts/stage_runtime.sh and
+      # scripts/third_party_notices.sh.
+      - name: Prebuild the bundled binaries and runtime
+        run: |
+          set -euo pipefail
+          (cd datalib/tauri && cargo fetch --locked)
+          (cd datalib/backend && cargo fetch --locked)
+          bazel build --build_metadata=ROLE=CI \
+              //datalib/backend/http:datalib_http_bin \
+              //datalib/backend/dag:datalib_dag_bin \
+              //datalib/backend/datalib_step:datalib_step \
+              //datalib/backend/applets:datalib_applet \
+              //datalib/backend/migrate_config:datalib_migrate_config_bin \
+              //third-party/latchkey-curl-shims \
+              //datalib/tauri:bundled_node \
+              //datalib/ui:dist \
+              //third-party:bundled_licenses \
+              //third-party/qmd/runtime:qmd_tree \
+              //third-party/latchkey/runtime:latchkey_tree
 
       - name: Export signing credentials
         # CERTS_TAR_GZ is the base64 certs tarball; APPLE_API_KEY_ID /
         # APPLE_API_ISSUER identify the notarization key inside it. The
         # action leaves all three in $GITHUB_ENV for the build step,
-        # where build-signed-app.sh picks them up.
-        uses: imbue-ai/use-vault-secrets@main
+        # where build-signed-app.sh picks them up. LAST of the setup
+        # steps — see the SUPPLY CHAIN note on the job.
+        uses: imbue-ai/use-vault-secrets@38aac6d2f537009c6e58849f8fdd34ea16084103 # main, 2026-09-17
         with:
           role: ${{ env.VAULT_AUTH_ROLE }}
           secrets: |
@@ -558,9 +771,20 @@ jobs:
           if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
               gh release create "$REF_NAME" --verify-tag --notes "" || true
           fi
-          gh release upload "$REF_NAME" --clobber \
-              Datalib-aarch64-apple-darwin.dmg \
-              Datalib-aarch64-apple-darwin.dmg.sha256
+          # Once more on failure. The dmg is 175 MB, and a slow upload
+          # that succeeded server-side can still come back as a client
+          # error; the retry's `--clobber` replaces what landed
+          # (v0.34.0: HTTP 422 "ReleaseAsset.name already exists", with
+          # the asset sitting on the release).
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber \
+                  Datalib-aarch64-apple-darwin.dmg \
+                  Datalib-aarch64-apple-darwin.dmg.sha256; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
 
   # Build and push the multi-arch runtime image to ghcr.io. Runs after
   # the matrix `build` job has uploaded both Linux tarballs to the
@@ -575,10 +799,10 @@ jobs:
   # shouldn't block publishing the Linux image.
   docker-publish:
     name: docker-publish (ghcr.io)
-    needs: build
+    needs: [runtime, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
       # fit a buildx run of our ~2.7 GB image × two architectures plus
@@ -615,8 +839,11 @@ jobs:
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout datalib/docker/Dockerfile
       # expects (`dist/<arch>/<tarball>`), via `gh release download`
-      # with the workflow's GITHUB_TOKEN. The demo library's inputs
-      # come from the checkout (datalib/docker/stage_demo.sh).
+      # with the workflow's GITHUB_TOKEN: the binaries, and the CPU
+      # runtime asset with its `.sha256` sidecar, which the Dockerfile
+      # checks before unpacking it beside the binaries — an image is a
+      # bundle, so it does not fetch at run time. The demo library's
+      # inputs come from the checkout (datalib/docker/stage_demo.sh).
       - name: Stage tarballs and the demo into docker build context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -627,18 +854,24 @@ jobs:
           cp datalib/docker/Dockerfile ctx/Dockerfile
           cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
           datalib/docker/stage_demo.sh ctx
-          gh release download "${REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
-              --clobber --dir ctx/dist/amd64
-          gh release download "${REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
-              --clobber --dir ctx/dist/arm64
+          for pattern in 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
+                         'runtime-x86_64-unknown-linux-gnu.tar.gz*'; do
+              gh release download "${REF_NAME}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --pattern "${pattern}" \
+                  --clobber --dir ctx/dist/amd64
+          done
+          for pattern in 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
+                         'runtime-aarch64-unknown-linux-gnu.tar.gz*'; do
+              gh release download "${REF_NAME}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --pattern "${pattern}" \
+                  --clobber --dir ctx/dist/arm64
+          done
           ls -la ctx/dist/amd64 ctx/dist/arm64
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       # Pin a recent BuildKit explicitly. The `buildx-stable-1` tag that
       # `setup-buildx-action` defaults to was on a BuildKit old enough to
@@ -651,12 +884,12 @@ jobs:
       # ≥ 0.18 speaks the v2 API; `moby/buildkit:latest` keeps us on
       # whatever's current.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
           driver-opts: image=moby/buildkit:latest
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -765,115 +998,3 @@ jobs:
           version="${REF_NAME#v}"
           DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${version}" \
               datalib/docker/doc_test.sh
-
-  # Build and push the devcontainer image to ghcr.io. The devcontainer
-  # image inherits from the prod image (`FROM
-  # ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`), so this MUST
-  # run after `docker-publish` has uploaded prod:${version}. We pass
-  # `--build-arg PROD_IMAGE_TAG=${version}-slim` so the published
-  # devcontainer:${version} inherits from the model-free prod variant at
-  # the matching tag, rather than the default baked into
-  # `.devcontainer/Dockerfile`. See the build step below for why -slim.
-  #
-  # Consumer: `.github/workflows/test.yml` runs `bazel test //...`
-  # inside this image. The image carries the full Bazel/cmake
-  # toolchain that the prod image deliberately omits — see the
-  # top-of-file comment in `.devcontainer/Dockerfile`.
-  #
-  # `WARM_BAZEL_CACHE=false` skips the in-image `bazelisk fetch` +
-  # `bazelisk build` warmup. Two reasons:
-  #   * The warmup compiles tokio / sqlx / doltlite etc. under
-  #     QEMU emulation on the arm64 leg, which would push tag-time
-  #     publish wall-clock from ~10 min to ~1 hour.
-  #   * BuildBuddy is the cross-run action cache for the test
-  #     workflow — disk-baked outputs in the image would just
-  #     duplicate what BuildBuddy already serves. Repository-cache
-  #     fetches still happen at test time, but those are network-
-  #     bound (cheap) rather than compile-bound.
-  # Local devcontainer users still get warmup because they build
-  # `.devcontainer/Dockerfile` themselves with the default
-  # `WARM_BAZEL_CACHE=true`.
-  devcontainer-publish:
-    name: devcontainer-publish (ghcr.io)
-    needs: docker-publish
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          # `.devcontainer/Dockerfile`'s bazelisk warmup is gated off
-          # (WARM_BAZEL_CACHE=false) so we don't actually need full
-          # history here, but the bind-mounted workspace is the build
-          # context regardless. Cheap to fetch deep; keep parity with
-          # the build job above.
-          fetch-depth: 0
-
-      # Same disk-pressure reasoning and same inlined cleanup as
-      # docker-publish above: multi-arch buildx + `type=gha,mode=max`
-      # cache export needs more than the ~14 GB free that ubuntu-latest
-      # ships with.
-      - name: Free up runner disk
-        run: |
-          set -euo pipefail
-          echo "Free disk before:" && df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
-              /opt/ghc /usr/local/.ghcup || true
-          sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
-              '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
-              google-chrome-stable firefox powershell mono-devel \
-              libgl1-mesa-dri >/dev/null || true
-          sudo apt-get autoremove -y >/dev/null || true
-          sudo apt-get clean || true
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile || true
-          echo "Free disk after:" && df -h /
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # See note in docker-publish above: pin a current BuildKit so
-      # GHA Cache Service v2 works.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: image=moby/buildkit:latest
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Image is published under `<repo>_devcontainer` rather than a
-      # `devcontainer-` tag prefix on the prod image so the two are
-      # cleanly separable in the GHCR UI and ghcr retention policies
-      # can be set independently.
-      - name: Build and push the devcontainer image (amd64)
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          BUILDKIT_PROGRESS: plain
-        run: |
-          set -euo pipefail
-          version="${REF_NAME#v}"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}_devcontainer"
-          # `${version}-slim` rather than `${version}`: see the slim
-          # build in docker-publish above. CI is the only consumer of
-          # this image, and it does not need the qmd models.
-          #
-          # amd64 only, because the slim base is amd64 only and CI runs
-          # on x86_64. Contributors are unaffected — `devcontainer.json`
-          # sets `build.dockerfile`, so a local devcontainer is built
-          # from `.devcontainer/Dockerfile` against the FULL prod image,
-          # models included.
-          docker buildx build \
-              --file .devcontainer/Dockerfile \
-              --platform linux/amd64 \
-              --build-arg PROD_IMAGE_TAG=${version}-slim \
-              --build-arg WARM_BAZEL_CACHE=false \
-              --tag "${image}:${version}" \
-              --tag "${image}:latest" \
-              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --cache-from type=gha,scope=devcontainer,version=2 \
-              --cache-to type=gha,mode=max,scope=devcontainer,version=2 \
-              --push \
-              .

@@ -63,7 +63,9 @@ impl DataProcessor for SlackIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let mut db = ingest::RawDb::open(&entity_db).await?;
-        let session = ctx.open_store(db.pool().clone(), entity_db).await;
+        let session = ctx
+            .open_store_with_blobs(db.pool().clone(), Some(db.cas().pool().clone()), entity_db)
+            .await;
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
         // resolved shared config leaves it enabled. (The orchestrator used to
         // attach this; now the one provider that consumes it does.)

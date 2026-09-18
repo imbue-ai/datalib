@@ -19,8 +19,10 @@ pub mod markdowns {
     include!("markdowns.rs");
 }
 
-pub mod render_problems {
-    include!("render_problems.rs");
+/// The `problems` table is a leaf crate of its own so the ingest side
+/// can write it too; render crates reach it from here.
+pub mod problems {
+    pub use datalib_problems::*;
 }
 
 pub mod source_cursors {
@@ -39,6 +41,10 @@ pub mod measurements {
     include!("measurements.rs");
 }
 
+pub mod diff_status {
+    include!("diff_status.rs");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -48,10 +54,13 @@ mod tests {
         let (_, cols) = super::grid_rows::COLUMNS[0];
         assert!(cols.contains(&"uuid"));
         assert!(cols.contains(&"channel"));
-        // The two load-time-derived columns are present in the DDL /
+        // The load-time-derived columns are present in the DDL /
         // COLUMNS metadata even though they are absent from the struct.
-        assert!(cols.contains(&"when_ts_utc"));
-        assert!(cols.contains(&"when_offset"));
+        assert!(cols.contains(&"created_at_utc"));
+        assert!(cols.contains(&"created_offset"));
+        assert!(cols.contains(&"modified_at_utc"));
+        assert!(cols.contains(&"modified_offset"));
+        assert!(cols.contains(&"is_document"));
     }
 
     #[test]
@@ -65,11 +74,17 @@ mod tests {
     }
 
     #[test]
-    fn render_problems_table_present() {
-        assert_eq!(super::render_problems::TABLES.len(), 1);
-        assert_eq!(super::render_problems::DDL.len(), 1);
-        let (_, cols) = super::render_problems::COLUMNS[0];
-        for want in ["uuid", "scope_key", "scope_kind", "outcome", "problems"] {
+    fn problems_table_present() {
+        assert_eq!(super::problems::TABLES.len(), 1);
+        assert_eq!(super::problems::DDL.len(), 1);
+        let (_, cols) = super::problems::COLUMNS[0];
+        for want in [
+            "problem_uuid",
+            "scope_key",
+            "scope_kind",
+            "severity",
+            "outcome",
+        ] {
             assert!(cols.contains(&want), "missing {want}: {cols:?}");
         }
     }
@@ -93,7 +108,7 @@ mod tests {
     kind VARCHAR(32) NOT NULL,
     title TEXT,
     created_at VARCHAR(40),
-    updated_at VARCHAR(40),
+    modified_at VARCHAR(40),
     md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),

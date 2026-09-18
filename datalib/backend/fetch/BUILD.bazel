@@ -1,0 +1,37 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Pinned first-use fetches: a URL, the sha256 the caller already knows,
+# and nothing kept unless the bytes hash as expected. Two users: qmd's
+# GGUF models (`datalib_qmd_models`) and the Node runtime a release
+# tarball names in its manifest (`RuntimeFetcher` here, the manifest and
+# the hook in `datalib_runtime`). Linked by the step, the applet and the
+# app server — NOT by //datalib/backend/qmd_indexer, which is a tool
+# input to the fixture's ~90s embed action and must stay tiny.
+rust_library(
+    name = "datalib_fetch",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_fetch",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:reqwest",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:tar",
+    ],
+)
+
+rust_test(
+    name = "fetch_unittests",
+    size = "small",
+    crate = ":datalib_fetch",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
