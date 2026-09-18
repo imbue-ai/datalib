@@ -57,6 +57,7 @@ copy_to_bin(
     ) + [
         "index.html",
         "package.json",
+        "tools/thirdPartyNotices.ts",
         "tsconfig.json",
         "vite.config.ts",
     ],
@@ -361,6 +362,7 @@ copy_to_bin(
         allow_empty = False,
     ) + [
         "package.json",
+        "tools/thirdPartyNotices.ts",
         "tsconfig.json",
         "vite.config.ts",
     ],

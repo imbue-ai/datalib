@@ -1,0 +1,26 @@
+# cargo-about config: what `scripts/third_party_notices.sh` runs to put
+# every crate's copyright notice into the release tarball and the .app.
+# The `accepted` list is the allow list in deny.toml, which is the gate;
+# this one only has to be wide enough that generation does not fail.
+
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+]
+
+# The workspace's own crates: MIT, ../../LICENSE.
+private = { ignore = true }

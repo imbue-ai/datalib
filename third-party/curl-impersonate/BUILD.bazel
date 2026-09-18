@@ -77,6 +77,21 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+# The LICENSE-* files build.sh packs beside the binary, for the same
+# platform the binary above is chosen for.
+alias(
+    name = "licenses",
+    actual = select({
+        ":darwin_aarch64": "@curl_impersonate_aarch64_apple_darwin//:licenses",
+        ":darwin_x86_64": "@curl_impersonate_x86_64_apple_darwin//:licenses",
+        ":linux_x86_64_gnu": "@curl_impersonate_x86_64_unknown_linux_gnu//:licenses",
+        ":linux_aarch64_gnu": "@curl_impersonate_aarch64_unknown_linux_gnu//:licenses",
+        ":linux_x86_64_musl": "@curl_impersonate_x86_64_unknown_linux_musl//:licenses",
+        ":linux_aarch64_musl": "@curl_impersonate_aarch64_unknown_linux_musl//:licenses",
+    }),
+    visibility = ["//visibility:public"],
+)
+
 # pin.env names the release the workflow publishes; MODULE.bazel names
 # the release the archives are fetched from. They are edited by hand in
 # two files, so check they agree.
