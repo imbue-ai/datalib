@@ -116,9 +116,9 @@ rust_test(
     ],
 )
 
-# Render golden test. Fixture lives in-crate; resolved via
-# CARGO_MANIFEST_DIR which bazel doesn't surface in sandbox runfiles,
-# so tag manual. Run via `cargo test -p datalib-etl-chatgpt`.
+# Downloads one real conversation through latchkey and snapshots it;
+# `#[ignore]`d and manual because it talks to chatgpt.com. Run it with
+# `bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_live.update`.
 rust_test(
     name = "chatgpt_live",
     srcs = ["tests/chatgpt_live.rs"],

@@ -252,11 +252,11 @@ Corollary: **the raw store is the source of truth; downstream stages are rebakea
 ## Verifiable via `--reset-and-redownload`
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to wipe the entity tables and the incremental cursors, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-- **`--reset-and-redownload`** wipes every entity table + its `_bookkeeping` sidecar. Per-provider CAS edge tables (`<provider>_attachments`) are preserved so already-fetched blob bytes are not re-pulled. Missing-from-the-prior-pass blobs are still picked up via the normal entity-walk → blob-fetch path.
-- **`--refetch-blobs`** clears the `blake3` column on the per-provider edge tables, forcing every attachment to re-download. The re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows.
-- Pass both for a full reset. Pass `--reset-and-redownload` alone for the common "check for entity gaps without burning bandwidth on blobs" case.
+- **`--reset-and-redownload`** wipes every entity table + its `_bookkeeping` sidecar, and the per-provider CAS edge table (`<provider>_attachments`) with them — every provider lists its edge table in `DATA_TABLES`. The edge row's `blake3` is the "already have these bytes" index, so with it gone every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows.
+- **`--refetch-blobs`** clears only the `blake3` column on the edge tables, forcing the same re-download without touching the entities.
+- Pass `--reset-and-redownload` for a full reset; `--refetch-blobs` alone re-pulls the attachments of a store whose entities are fine. A reset that keeps the edge rows, so a gap check costs no blob bandwidth, would be a change to every provider's `reset()`; none makes it today.
 
-The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS, and `--reset-and-redownload` is the "invalidate entity data, keep the cache" path.
+The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS.
 
 `cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
