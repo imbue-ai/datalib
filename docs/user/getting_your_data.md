@@ -366,6 +366,17 @@ a minute, so a large mailbox backfills over several runs. A Takeout
 `.mbox` of the same mailbox is the no-credentials route — see
 [Email](#email).
 
+## Google Chat
+
+`type = "google_takeout"` — the **Chat** product of a Google Takeout
+export (`export`, with `google_chat = true`). Mirrors your Google Chat
+DMs, spaces and bots with their attachments, rendered to markdown.
+
+Request a Takeout with **Chat** ticked and unpack it — see
+[Google Takeout](#google-takeout), which is the source this is one
+feed of. Every feed is off until you turn it on, so set
+`google_chat = true` beside `export.path`.
+
 ## Google Takeout
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk
@@ -383,9 +394,24 @@ unzip ~/Downloads/takeout-*.zip -d ~/backups/
 
 Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
 **Gemini** (read by this source from the unpacked tree), and **Mail**
-(a single `.mbox`, read by the [email](#email) source instead). A
-Takeout is a complete snapshot, so it is also the way to notice what
-Google has deleted since the last one.
+(a single `.mbox`, read by the [email](#email) source instead). Every
+feed is off until its flag beside `export.path` turns it on
+(`google_chat = true`, `google_voice = true`, …), because an export
+holds whatever you asked Google for; [Google Chat](#google-chat) and
+[Google Voice](#google-voice) have sections of their own. A Takeout is
+a complete snapshot, so it is also the way to notice what Google has
+deleted since the last one.
+
+## Google Voice
+
+`type = "google_takeout"` — the **Voice** product of a Google Takeout
+export (`export`, with `google_voice = true`). Mirrors your texts,
+voicemails and call records, rendered to markdown.
+
+Request a Takeout with **Voice** ticked and unpack it — see
+[Google Takeout](#google-takeout), which is the source this is one
+feed of. Set `google_voice = true` beside `export.path`; the spam
+folder stays out unless `google_voice_include_spam = true`.
 
 ## Lightroom
 
