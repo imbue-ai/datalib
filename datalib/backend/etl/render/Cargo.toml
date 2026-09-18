@@ -27,6 +27,7 @@ async-trait = { workspace = true }
 blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+similar = "2"
 sqlx = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true }

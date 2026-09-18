@@ -35,7 +35,11 @@ Args (positional):
                                    BeeperTexts-shaped dir from it)
     14: carddav_tng   fixture dir (vCard files; file mode — extract
                                    walks `.vcf` files straight from
-                                   `vcf.path`)
+                                   `vcf.path`). Copied into the
+                                   workspace so its sibling
+                                   `carddav_tng_v2/` can be laid over
+                                   it for the second ingest — see
+                                   `_run_pipeline_twice_and_diff`.
     15: signal_tng    JSON spec for the TNG signal backup; the path is
                       to the .json file itself. We run
                       `signal-make-fixture` against it to materialize
@@ -101,6 +105,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -184,6 +189,24 @@ def main() -> int:
     raw_root.mkdir(exist_ok=True)
     playback = workspace / "playback"
 
+    # Contacts are ingested twice: once from the checked-in address
+    # books, once after `carddav_tng_v2/` is copied over them, so the
+    # raw store has two commits for the diff group to compare. The path
+    # in the config stays the same across both, which is what keeps the
+    # second run an ordinary re-sync rather than a config change.
+    carddav_v2 = carddav_fx.parent / "carddav_tng_v2"
+    carddav_work = workspace / "carddav_work"
+    reset = os.environ.get("INGESTED_TNG_RESET") == "1"
+    if reset:
+        # The raw stores are about to be thrown away, and the two commits
+        # the diff group named with them: start the contacts story over
+        # from the first address books.
+        shutil.rmtree(carddav_work, ignore_errors=True)
+        shutil.rmtree(workspace / CONTACTS_DIFF_GROUP, ignore_errors=True)
+        _diff_pair_file(workspace).unlink(missing_ok=True)
+    if not carddav_work.exists():
+        shutil.copytree(carddav_fx, carddav_work)
+
     # Materialize a BeeperTexts-shaped directory from the SQL +
     # media fixtures. Beeper doesn't go through the synth/playback
     # flow — its extractor reads on-disk SQLite directly — so we
@@ -263,7 +286,7 @@ def main() -> int:
         "gitlab": ("gitlab", gl_fx, raw_root / "gitlab"),
         "notion": ("notion", notion_fx, raw_root / "notion"),
         "beeper": ("beeper", beeper_data_dir, raw_root / "beeper"),
-        "tng_contacts": ("contacts", carddav_fx, carddav_fx),
+        "tng_contacts": ("contacts", carddav_fx, carddav_work),
         "signal": ("signal", signal_snapshot_root, raw_root / "signal"),
         "whatsapp": ("whatsapp", whatsapp_dir, raw_root / "whatsapp"),
         "tng_email": ("email", email_mbox, email_mbox),
@@ -378,42 +401,75 @@ params = {params}
         # store, so there every source is shaped like a pre-seeded one:
         # a group, a render step with no inputs, no ingest step.
         root_entries.append(group_block + render_block + render_params_line)
-    # The fan-in names its inputs; there is no glob to stand in for
-    # "every render step".
-    rendered = ", ".join(f'"{n}/render_markdown"' for n in sources)
-    steps.append(
-        f"""[[groups]]
+    dag_config = workspace / "dag.toml"
+
+    def write_config(diff: tuple[str, str] | None) -> None:
+        """The config, with the contacts diff group once its two commits
+        are known. A diff group is `type = "diff"` + `source`; its one
+        step is `render_markdown` reading the source's ingest tree, and
+        the fan-in names it like any render step. Written twice: the
+        DAG's own, and the body of a materialized root's, where the diff
+        step — like every render step there — declares no inputs."""
+        blocks = list(steps)
+        root_blocks = list(root_entries)
+        rendered = [f'"{n}/render_markdown"' for n in sources]
+        if diff is not None:
+            from_commit, to_commit = diff
+            group_block = (
+                f'[[groups]]\nid = "{CONTACTS_DIFF_GROUP}"\ntype = "diff"\n'
+                'source = "tng_contacts"\n\n'
+                f'[[steps]]\ngroup = "{CONTACTS_DIFF_GROUP}"\nfunction = "render_markdown"'
+            )
+            params_line = (
+                f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
+            )
+            blocks.append(
+                f'{group_block}\ninputs = ["tng_contacts/ingest"]\n{params_line}'
+            )
+            root_blocks.append(f"{group_block}\n{params_line}")
+            rendered.append(f'"{CONTACTS_DIFF_GROUP}/render_markdown"')
+        # The fan-in names its inputs; there is no glob to stand in for
+        # "every render step".
+        rendered_list = ", ".join(rendered)
+        blocks.append(
+            f"""[[groups]]
 id = "unified_index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = [{rendered}]"""
-    )
-    dag_config = workspace / "dag.toml"
-    dag_config.write_text(
-        f"data_root = {_toml_value(str(workspace))}\n\n" + "\n\n".join(steps) + "\n"
-    )
-    # Everything a materialized root's config needs but `data_root` and
-    # the applet, which only the materializer knows. Both fan-ins are
-    # declared and wired the way a real root's are; the index arrives
-    # pre-built, so neither has to run for the root to be browsable.
-    root_entries.append(
-        f"""[[groups]]
+inputs = [{rendered_list}]"""
+        )
+        dag_config.write_text(
+            f"data_root = {_toml_value(str(workspace))}\n\n"
+            + "\n\n".join(blocks)
+            + "\n"
+        )
+        # Everything a materialized root's config needs but `data_root`
+        # and the applet, which only the materializer knows. Both
+        # fan-ins are declared and wired the way a real root's are; the
+        # index arrives pre-built, so neither has to run for the root to
+        # be browsable.
+        root_blocks.append(
+            f"""[[groups]]
 id = "unified_index"
 name = "Unified Index"
 
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = [{rendered}]
+inputs = [{rendered_list}]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = [{rendered}]"""
-    )
-    (workspace / "config_body.toml").write_text("\n\n".join(root_entries) + "\n")
+inputs = [{rendered_list}]"""
+        )
+        (workspace / "config_body.toml").write_text("\n\n".join(root_blocks) + "\n")
+
+    # A workspace shared across pipeline runs already has its diff group;
+    # the config has to keep naming it, or the index drops its rows.
+    write_config(_load_diff_pair(workspace))
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -470,10 +526,92 @@ inputs = [{rendered}]"""
     # ingested_tng_test's multi-run case to exercise the
     # --reset-and-redownload code path without changing the positional
     # arg signature.
-    if os.environ.get("INGESTED_TNG_RESET") == "1":
+    if reset:
         pipeline_argv.append("--reset-and-redownload")
     _run(pipeline_argv, env=pipeline_env)
+
+    _run_pipeline_twice_and_diff(
+        workspace, carddav_work, carddav_v2, pipeline_argv, pipeline_env, write_config
+    )
     return 0
+
+
+CONTACTS_DIFF_GROUP = "tng_contacts-diff"
+
+
+def _run_pipeline_twice_and_diff(
+    workspace: Path,
+    carddav_work: Path,
+    carddav_v2: Path,
+    pipeline_argv: list[str],
+    pipeline_env: dict[str, str],
+    write_config,
+) -> None:
+    """Give the contacts raw store a second commit, then a diff group
+    between the two.
+
+    The first pipeline run has ingested `carddav_tng`. Lay `carddav_tng_v2`
+    over the working copy and sync the contacts chain again: the ingest
+    re-reads the changed file, so the store gains one commit with one card
+    added, one removed and one edited. Then write the diff group with the
+    two commits and sync its chain, so its render tree is there for the
+    index and the goldens. Both are `--sync` runs of one chain — what
+    "Compare…" on a source would do — so nothing else in the workspace
+    re-runs, and a test reading one full run's events sees exactly one.
+
+    Skipped when the pair is already recorded — the workspace is shared
+    across `ingested_tng_test`'s runs, and the diff group was then in the
+    config from the start.
+    """
+    if _load_diff_pair(workspace) is not None:
+        print("[run_sync_pipeline] contacts diff group already rendered", flush=True)
+        return
+    before = _contacts_ingest_commit(workspace)
+    for f in carddav_v2.glob("*.vcf"):
+        shutil.copy(f, carddav_work / f.name)
+    argv = [a for a in pipeline_argv if a != "--reset-and-redownload"]
+    print("[run_sync_pipeline] second contacts ingest → v2", flush=True)
+    _run([*argv, "--sync", "tng_contacts/ingest"], env=pipeline_env)
+    after = _contacts_ingest_commit(workspace)
+    if before == after:
+        raise SystemExit(
+            f"the second contacts ingest left the raw store at {after}: carddav_tng_v2 "
+            "changed nothing, so there is no delta to diff"
+        )
+    write_config((before, after))
+    _diff_pair_file(workspace).write_text(json.dumps({"from": before, "to": after}))
+    print(
+        f"[run_sync_pipeline] contacts diff {before[:12]}..{after[:12]}",
+        flush=True,
+    )
+    # `--sync` names a source step; the diff step is downstream of the
+    # contacts ingest and runs as part of its chain.
+    _run([*argv, "--sync", "tng_contacts/ingest"], env=pipeline_env)
+
+
+def _diff_pair_file(workspace: Path) -> Path:
+    return workspace / "contacts_diff.json"
+
+
+def _load_diff_pair(workspace: Path) -> tuple[str, str] | None:
+    f = _diff_pair_file(workspace)
+    if not f.exists():
+        return None
+    pair = json.loads(f.read_text())
+    return (pair["from"], pair["to"])
+
+
+def _contacts_ingest_commit(workspace: Path) -> str:
+    """The contacts raw store's HEAD, as the runner recorded it after the
+    ingest step: the `entities:<hash>` in the step's output version in
+    `system/dag_state.json` (`datalib_step::ingest::raw_store_version`)."""
+    state = json.loads((workspace / "system" / "dag_state.json").read_text())
+    versions = state["steps"]["tng_contacts/ingest"]["output_versions"]
+    version = versions["tng_contacts/ingest"]
+    m = re.search(r"entities:([0-9a-f]+)", version)
+    if m is None:
+        raise SystemExit(f"no entities commit in {version!r} for tng_contacts/ingest")
+    return m.group(1)
 
 
 def _toml_value(v: object) -> str:

@@ -1338,7 +1338,6 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-render",
  "datalib-schema",
- "tracing",
 ]
 
 [[package]]
@@ -1956,6 +1955,7 @@ dependencies = [
  "datalib-time",
  "serde",
  "serde_json",
+ "similar",
  "sqlx",
  "tempfile",
  "tokio",

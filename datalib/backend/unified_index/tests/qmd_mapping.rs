@@ -42,6 +42,8 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         markdown_uuid: Some(uuid.into()),
         byte_size: None,
         item_count: None,
+        diff_status: None,
+        diff_changed_columns: None,
     }
 }
 

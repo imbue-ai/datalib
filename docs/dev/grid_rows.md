@@ -388,6 +388,17 @@ a kind here means adding a row to this table.
 job to say: a Table counts rows, a Source Size counts files, a PDF
 document counts pages, a conversation counts messages.
 
+### `diff_status`, `diff_changed_columns`
+
+**NULL on every row a real source renders.** Set only by a diff group
+(`docs/dev/plans/diff_renderer.md`), whose rows are two renders of the
+same source subtracted: `diff_status` is `added`, `removed`, `modified`
+or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
+modified row `diff_changed_columns` names the columns that differ,
+sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
+says a row came from a diff tree; nothing else about the row changes —
+`provider` is still the source's, so its icon and CSS apply.
+
 ## Storage rows: what a source weighs
 
 Every source's render wave ends by measuring its own raw store and

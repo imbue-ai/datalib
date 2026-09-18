@@ -288,6 +288,22 @@
    the text's box, which the theme's flex centring is not. */
 .slick-cell .datalib-clamp-2 { line-height: 1.25; }
 
+/* ── a diff group's rows (docs/dev/plans/diff_renderer.md) ──────── */
+/* By what happened to the row between the two commits, and the cells
+   of a modified row that moved — classes from GridCard's item metadata.
+   The tints sit over the theme's own row background in either scheme. */
+.slick-row.datalib-diff-added .slick-cell {
+  background-color: rgba(34, 197, 94, 0.14);
+}
+.slick-row.datalib-diff-removed .slick-cell {
+  background-color: rgba(239, 68, 68, 0.12);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.6);
+}
+.slick-row.datalib-diff-modified .slick-cell.datalib-diff-cell {
+  background-color: rgba(234, 179, 8, 0.3);
+}
+
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
 /* The line is the separator element's own: the slot is a disabled
    item, and the theme forces a disabled item's border transparent. */

@@ -1210,6 +1210,40 @@ function gridOptions(): GridOption {
   };
 }
 
+/// A diff group's rows say how they differ from the other commit
+/// (`diff_status`; null on every real source's rows), and a modified
+/// row names the columns that moved (`diff_changed_columns`, the
+/// `grid_rows` names, `|`-joined). The row takes a band for the first
+/// and the cell a highlight for the second — through the data view's
+/// item metadata, which the grid reads for every row it paints. The
+/// grouping extension installs its own provider for group rows, so
+/// this wraps whatever is there rather than replacing it.
+function changedColumns(row: SearchRow | undefined): Set<string> {
+  const names = row?.diff_changed_columns;
+  if (!names) return new Set();
+  // The one column the grid shows under another name.
+  return new Set(names.split("|").map((c) => (c === "text" ? "snippet" : c)));
+}
+
+function installDiffMetadata(dataView: Grid["dataView"]) {
+  const inner = dataView.getItemMetadata.bind(dataView);
+  dataView.getItemMetadata = (row: number) => {
+    const meta = inner(row);
+    const item = dataView.getItem(row) as SearchRow | undefined;
+    const status = item?.diff_status;
+    if (!status || status === "unchanged") return meta;
+    const columns: Record<string, { cssClass: string }> = {};
+    if (status === "modified") {
+      for (const id of changedColumns(item)) columns[id] = { cssClass: "datalib-diff-cell" };
+    }
+    return {
+      ...(meta ?? {}),
+      cssClasses: [meta?.cssClasses, `datalib-diff-${status}`].filter(Boolean).join(" "),
+      columns: { ...(meta?.columns ?? {}), ...columns },
+    };
+  };
+}
+
 /// Build the grid, once the box is on the page and the applet has
 /// declared its columns — whichever comes second. Handing a grid new
 /// definitions resets its layout, so the columns it is built with are
@@ -1228,6 +1262,7 @@ function createGrid() {
     rows.value,
   ) as Grid;
   vueGrid = bundle;
+  installDiffMetadata(bundle.dataView);
   const grid = bundle.slickGrid;
   grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
   grid.onClick.subscribe(onClick);
