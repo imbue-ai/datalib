@@ -565,9 +565,12 @@ async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
 #[tokio::test]
 async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let td = tempfile::tempdir().unwrap();
+    // The rows below are stamped on a fixed date; only `max_runs` is
+    // under test, so neither age limit may reach them.
     let keep = Retention {
         max_runs: 1,
         max_age_days: 36500,
+        process_log_days: 36500,
         ..Retention::default()
     };
     let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
