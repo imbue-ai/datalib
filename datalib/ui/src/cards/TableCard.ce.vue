@@ -14,6 +14,7 @@ const props = defineProps<{ url: string; title?: string; ctx: CardCtx }>();
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<Record<string, unknown>[]>([]);
 const tree = ref(false);
+const rowKey = ref("key");
 const error = ref<string | null>(null);
 
 props.ctx.setTitle(props.title ?? props.url.replace(/^\/api\//, ""));
@@ -24,6 +25,7 @@ async function load() {
     columns.value = t.columns ?? [];
     rows.value = t.rows ?? [];
     tree.value = !!t.tree;
+    rowKey.value = t.row_key ?? "key";
     error.value = t.error ?? (t.errors?.length ? t.errors.join(" · ") : null);
   } catch (e) {
     error.value = (e as Error).message;
@@ -42,7 +44,13 @@ onBeforeUnmount(() => unsubscribe?.());
   <div class="table-card">
     <div v-if="error" class="table-card-error">{{ error }}</div>
     <div class="table-card-grid">
-      <TableGrid :columns="columns" :rows="rows" :tree="tree" :selectable="true" />
+      <TableGrid
+        :columns="columns"
+        :rows="rows"
+        :rowKey="rowKey"
+        :tree="tree"
+        :selectable="true"
+      />
     </div>
   </div>
 </template>

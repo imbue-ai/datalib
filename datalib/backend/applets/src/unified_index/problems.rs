@@ -129,6 +129,8 @@ pub fn columns() -> Vec<ColumnSpec> {
 #[derive(Debug, Serialize)]
 pub struct Response {
     pub columns: Vec<ColumnSpec>,
+    /// The field that identifies a row, for the viewer.
+    pub row_key: &'static str,
     pub rows: Vec<ProblemView>,
     pub total: usize,
     /// Filters the grammar refused, and anything the read could not
@@ -157,6 +159,7 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
         .collect();
     Json(Response {
         columns: columns(),
+        row_key: "problem_uuid",
         total: rows.len(),
         rows,
         errors,

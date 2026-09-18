@@ -823,6 +823,8 @@ export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<
 export type TableResponse = {
   columns: ColumnSpec[];
   rows: Record<string, unknown>[];
+  /// The field that identifies a row; `key` when the endpoint does not say.
+  row_key?: string;
   tree?: boolean;
   error?: string | null;
   /// Things the endpoint could not do and still answered — a filter
