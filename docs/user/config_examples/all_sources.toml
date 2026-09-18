@@ -448,12 +448,13 @@ only_extract_labels = []
 # full_resync = false
 # request_concurrency = 8
 # Google's per-user ceiling is 6000 quota units/minute and messages.get
-# costs 20, so ~300 messages/minute. The default stays under 6000 to
-# leave headroom for retries.
+# costs 20, so ~300 messages/minute. The default stays under 6000, and
+# the download lowers it further on its own whenever Google rate-limits
+# a request, so a long backfill just runs until it is done.
 # quota_units_per_minute = 5000
-# Stop after this many messages, commit the cursor, exit SUCCESSFULLY
-# with a partial result. A 100k-message mailbox is ~6 hours of backfill,
-# so a first pass is naturally spread over several runs.
+# Stop after this many messages and exit with a partial result. Not
+# needed for a large mailbox — the run paces itself — but handy for a
+# quick first look.
 # message_budget = 20000
 
 [[steps]]

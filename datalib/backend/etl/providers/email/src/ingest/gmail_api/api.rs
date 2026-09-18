@@ -1,6 +1,8 @@
 //! Gmail REST API transport: the handful of endpoints we call, plus the
 //! client-side quota throttle.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -8,7 +10,10 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use datalib_etl::http::{latchkey_curl, HttpRequest, HttpResponse, HttpService, LatchkeySettings};
+use datalib_etl::http::{
+    default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
+    HttpResponse, HttpService, LatchkeySettings, Retryability,
+};
 
 /// Playback key. `HttpService::Gmail.impersonates()` is false — Google
 /// does not front the API with a JA3 wall.
@@ -26,28 +31,62 @@ pub const UNITS_HISTORY_LIST: u32 = 2;
 pub const UNITS_LABELS_LIST: u32 = 1;
 pub const UNITS_GET_PROFILE: u32 = 1;
 
+/// What every request carries: the latchkey identity to send as, and the
+/// counter the retry classifier bumps on each rate-limit response so the
+/// [`QuotaThrottle`] that minted it can hear about it.
+#[derive(Debug, Clone)]
+pub struct Client {
+    latchkey: LatchkeySettings,
+    rate_limited: Arc<AtomicU64>,
+}
+
+/// Fraction of the current ceiling the throttle keeps after a request
+/// was rate-limited, and the floor it never goes below (as a fraction
+/// of the configured ceiling).
+const RATE_LIMIT_CUT: f64 = 0.8;
+const RATE_LIMIT_FLOOR: f64 = 0.25;
+
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
-/// "quota units per minute" limit.
+/// "quota units per minute" limit. Google's own answer is the authority:
+/// a request it rate-limits lowers the ceiling for the rest of the run,
+/// so a long backfill settles under the real limit instead of bumping
+/// into it once a minute.
 #[derive(Debug)]
 pub struct QuotaThrottle {
+    configured_units_per_minute: u32,
     units_per_minute: u32,
     /// Units available right now. Refills continuously, not on a minute
     /// boundary, so a burst at 0:59 can't double-spend at 1:01.
     available: f64,
     last_refill: Instant,
     spent_total: u64,
+    /// Rate-limit responses the classifier has counted, shared with every
+    /// [`Client`] this throttle minted; `rate_limited_seen` is how many
+    /// the throttle has already acted on.
+    rate_limited: Arc<AtomicU64>,
+    rate_limited_seen: u64,
 }
 
 impl QuotaThrottle {
     pub fn new(units_per_minute: u32) -> Self {
         let units = units_per_minute.max(1);
         Self {
+            configured_units_per_minute: units,
             units_per_minute: units,
             // Start full: a fresh run should not wait before its first
             // request.
             available: f64::from(units),
             last_refill: Instant::now(),
             spent_total: 0,
+            rate_limited: Arc::new(AtomicU64::new(0)),
+            rate_limited_seen: 0,
+        }
+    }
+
+    pub fn client(&self, latchkey: LatchkeySettings) -> Client {
+        Client {
+            latchkey,
+            rate_limited: Arc::clone(&self.rate_limited),
         }
     }
 
@@ -55,7 +94,12 @@ impl QuotaThrottle {
         self.spent_total
     }
 
+    pub fn units_per_minute(&self) -> u32 {
+        self.units_per_minute
+    }
+
     pub async fn acquire(&mut self, cost: u32) {
+        self.absorb_rate_limits();
         // A single request costing more than the whole per-minute budget
         // would never be satisfiable; let it through rather than hang.
         let cost = f64::from(cost).min(f64::from(self.units_per_minute));
@@ -73,6 +117,30 @@ impl QuotaThrottle {
             );
             tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.01))).await;
         }
+    }
+
+    /// One cut per rate-limited *request*, however many attempts it took,
+    /// and an empty bucket: the request the chokepoint just retried went
+    /// out at the old rate, and the next one must not be another burst.
+    fn absorb_rate_limits(&mut self) {
+        let seen = self.rate_limited.load(Ordering::Relaxed);
+        let hits = seen.saturating_sub(self.rate_limited_seen);
+        if hits == 0 {
+            return;
+        }
+        self.rate_limited_seen = seen;
+        let floor = f64::from(self.configured_units_per_minute) * RATE_LIMIT_FLOOR;
+        let ceiling = (f64::from(self.units_per_minute) * RATE_LIMIT_CUT).max(floor);
+        self.units_per_minute = (ceiling.round() as u32).max(1);
+        self.available = 0.0;
+        self.last_refill = Instant::now();
+        warn!(
+            event = "gmail_quota_lowered",
+            rate_limit_responses = hits,
+            units_per_minute = self.units_per_minute,
+            configured = self.configured_units_per_minute,
+            "Google rate-limited us; lowering the client-side ceiling for the rest of the run",
+        );
     }
 
     fn refill(&mut self) {
@@ -95,11 +163,60 @@ fn wait_seconds(available: f64, cost: f64, units_per_minute: u32) -> f64 {
     deficit * 60.0 / f64::from(units_per_minute.max(1))
 }
 
-async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
+/// Gmail's rate-limit signal is not one status code. Google answers a
+/// per-user overrun with 429 `rateLimitExceeded` *or* 403
+/// `userRateLimitExceeded`, and a transient backend failure with 500
+/// `backendError`; its guidance for all three is exponential backoff.
+/// The default classifier sees only the 429, so the rest are named here.
+/// A 403 that is not a rate limit (scope, revoked token) stays terminal —
+/// retrying would only delay the message that says how to fix it.
+fn gmail_retryability(resp: &HttpResponse) -> Retryability {
+    if is_rate_limited(resp) {
+        return Retryability::Retry {
+            retry_after: parse_retry_after(resp.header("retry-after")),
+        };
+    }
+    if resp.status == 500 {
+        return Retryability::Retry { retry_after: None };
+    }
+    default_retryability(resp)
+}
+
+fn is_rate_limited(resp: &HttpResponse) -> bool {
+    resp.status == 429 || (resp.status == 403 && body_names_a_rate_limit(&resp.body_str()))
+}
+
+/// Matches `rateLimitExceeded`, `userRateLimitExceeded` and the newer
+/// `RATE_LIMIT_EXCEEDED` in `ErrorInfo.reason`, and not
+/// `dailyLimitExceeded`, which no backoff shorter than a day can wait out.
+fn body_names_a_rate_limit(body: &str) -> bool {
+    let normalized: String = body
+        .chars()
+        .filter(|c| *c != '_')
+        .flat_map(char::to_lowercase)
+        .collect();
+    normalized.contains("ratelimitexceeded")
+}
+
+/// True for the error the shared retry loop returns once it has backed
+/// off as long as the run's give-up bounds allow. Nothing after it will
+/// fare better, so a caller stops the run rather than walking on.
+pub fn is_gave_up(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<HttpError>()
+        .is_some_and(|e| matches!(e, HttpError::GaveUp { .. }))
+}
+
+async fn get_json(url: &str, client: &Client) -> Result<Value> {
     let req = HttpRequest::get(HTTP_SERVICE, url)
         .timeout(REQUEST_TIMEOUT)
-        .latchkey(latchkey.clone());
-    let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;
+        .latchkey(client.latchkey.clone());
+    let resp = latchkey_curl_classified(&req, |resp| {
+        if is_rate_limited(resp) {
+            client.rate_limited.fetch_add(1, Ordering::Relaxed);
+        }
+        gmail_retryability(resp)
+    })
+    .await?;
     if !(200..300).contains(&resp.status) {
         return Err(api_error(url, &resp));
     }
@@ -111,6 +228,12 @@ async fn get_json(url: &str, latchkey: &LatchkeySettings) -> Result<Value> {
 fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
     if resp.status == 404 {
         return anyhow::Error::new(GmailApiError::NotFound);
+    }
+    if resp.status == 403 && resp.body_str().contains("dailyLimitExceeded") {
+        return anyhow!(
+            "Gmail API {url} → HTTP 403: the project's daily quota is spent. It resets at \
+             midnight Pacific time; the next run resumes where this one stopped."
+        );
     }
     if resp.status == 401 || resp.status == 403 {
         let body = resp.body_str();
@@ -143,8 +266,8 @@ pub enum GmailApiError {
     NotFound,
 }
 
-pub async fn get_profile(user_id: &str, latchkey: &LatchkeySettings) -> Result<Profile> {
-    let v = get_json(&format!("{BASE}/{user_id}/profile"), latchkey).await?;
+pub async fn get_profile(user_id: &str, client: &Client) -> Result<Profile> {
+    let v = get_json(&format!("{BASE}/{user_id}/profile"), client).await?;
     Ok(Profile {
         email_address: str_field(&v, "emailAddress")
             .ok_or_else(|| anyhow!("users.getProfile returned no emailAddress"))?,
@@ -160,8 +283,8 @@ pub struct Profile {
     pub messages_total: Option<u64>,
 }
 
-pub async fn list_labels(user_id: &str, latchkey: &LatchkeySettings) -> Result<Vec<Label>> {
-    let v = get_json(&format!("{BASE}/{user_id}/labels"), latchkey).await?;
+pub async fn list_labels(user_id: &str, client: &Client) -> Result<Vec<Label>> {
+    let v = get_json(&format!("{BASE}/{user_id}/labels"), client).await?;
     Ok(v.get("labels")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Label::from_json).collect())
@@ -217,14 +340,14 @@ fn messages_list_url(
 
 pub async fn list_messages(
     user_id: &str,
-    latchkey: &LatchkeySettings,
+    client: &Client,
     page_token: Option<&str>,
     page_size: u32,
     label_id: Option<&str>,
 ) -> Result<MessagePage> {
     let v = get_json(
         &messages_list_url(user_id, page_token, page_size, label_id),
-        latchkey,
+        client,
     )
     .await?;
     Ok(MessagePage {
@@ -237,14 +360,10 @@ pub async fn list_messages(
     })
 }
 
-pub async fn get_message_raw(
-    user_id: &str,
-    latchkey: &LatchkeySettings,
-    id: &str,
-) -> Result<GmailMessage> {
+pub async fn get_message_raw(user_id: &str, client: &Client, id: &str) -> Result<GmailMessage> {
     let v = get_json(
         &format!("{BASE}/{user_id}/messages/{id}?format=RAW"),
-        latchkey,
+        client,
     )
     .await?;
     GmailMessage::from_json(&v)
@@ -307,7 +426,7 @@ pub struct HistoryPage {
 
 pub async fn list_history(
     user_id: &str,
-    latchkey: &LatchkeySettings,
+    client: &Client,
     start_history_id: &str,
     page_token: Option<&str>,
 ) -> Result<HistoryPage> {
@@ -316,7 +435,7 @@ pub async fn list_history(
         url.push_str("&pageToken=");
         url.push_str(&urlencode(token));
     }
-    let v = get_json(&url, latchkey).await?;
+    let v = get_json(&url, client).await?;
     Ok(parse_history(&v))
 }
 
@@ -630,5 +749,101 @@ mod tests {
         let mut t = QuotaThrottle::new(6_000);
         t.acquire(1_000_000).await;
         assert!(t.spent_total() > 0);
+    }
+
+    fn response(status: u16, body: &str) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: std::collections::BTreeMap::new(),
+            body: body.as_bytes().to_vec(),
+            duration_ms: 0,
+        }
+    }
+
+    const RATE_LIMIT_403: &str = r#"{"error":{"code":403,"errors":[{"domain":"usageLimits",
+        "reason":"userRateLimitExceeded","message":"User-rate limit exceeded."}]}}"#;
+    const SCOPE_403: &str = r#"{"error":{"code":403,"status":"PERMISSION_DENIED",
+        "details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
+
+    /// Google's per-user rate limit arrives as a 403 as often as a 429,
+    /// and a 403 read as an auth failure held the cursor and walked on —
+    /// the run "succeeded" with every remaining message marked failed.
+    #[test]
+    fn retries_the_403_that_is_really_a_rate_limit() {
+        assert!(matches!(
+            gmail_retryability(&response(403, RATE_LIMIT_403)),
+            Retryability::Retry { .. }
+        ));
+        assert!(matches!(
+            gmail_retryability(&response(
+                429,
+                r#"{"error":{"reason":"rateLimitExceeded"}}"#
+            )),
+            Retryability::Retry { .. }
+        ));
+        // The newer error shape spells it in ErrorInfo.reason.
+        assert!(body_names_a_rate_limit(
+            r#"{"error":{"details":[{"reason":"RATE_LIMIT_EXCEEDED"}]}}"#
+        ));
+    }
+
+    /// A scope or token problem is fixed by a person, not by waiting;
+    /// retrying it for half an hour only delays the message that says so.
+    #[test]
+    fn does_not_retry_a_403_about_scopes_or_the_daily_quota() {
+        assert_eq!(
+            gmail_retryability(&response(403, SCOPE_403)),
+            Retryability::Accept
+        );
+        assert_eq!(
+            gmail_retryability(&response(403, r#"{"reason":"dailyLimitExceeded"}"#)),
+            Retryability::Accept
+        );
+        assert_eq!(gmail_retryability(&response(401, "")), Retryability::Accept);
+    }
+
+    /// Google documents 500 `backendError` as transient; the default
+    /// classifier stops at 502.
+    #[test]
+    fn retries_a_500_as_transient() {
+        assert!(matches!(
+            gmail_retryability(&response(500, r#"{"error":{"reason":"backendError"}}"#)),
+            Retryability::Retry { .. }
+        ));
+        // ...but a 500 is not a rate limit, and must not slow the throttle.
+        assert!(!is_rate_limited(&response(500, "")));
+        assert!(is_rate_limited(&response(403, RATE_LIMIT_403)));
+    }
+
+    /// The point of the counter: a rate-limited request lowers the
+    /// ceiling for the rest of the run and empties the bucket, so the
+    /// next request is not another burst at the rate Google just refused.
+    #[tokio::test]
+    async fn lowers_the_ceiling_after_a_rate_limit_response() {
+        let mut t = QuotaThrottle::new(6_000);
+        let client = t.client(LatchkeySettings::default());
+        assert_eq!(t.units_per_minute(), 6_000);
+
+        client.rate_limited.fetch_add(1, Ordering::Relaxed);
+        let start = std::time::Instant::now();
+        t.acquire(UNITS_MESSAGES_GET).await;
+        assert_eq!(t.units_per_minute(), 4_800);
+        // The bucket was emptied: 20 units at 4800/min is 0.25s.
+        assert!(
+            start.elapsed() >= Duration::from_millis(200),
+            "did not drain the bucket: waited {:?}",
+            start.elapsed()
+        );
+
+        // One cut per rate-limited request, however many attempts the
+        // chokepoint made, and never below the floor.
+        client.rate_limited.fetch_add(5, Ordering::Relaxed);
+        t.acquire(0).await;
+        assert_eq!(t.units_per_minute(), 3_840);
+        for _ in 0..20 {
+            client.rate_limited.fetch_add(1, Ordering::Relaxed);
+            t.acquire(0).await;
+        }
+        assert_eq!(t.units_per_minute(), 1_500);
     }
 }
