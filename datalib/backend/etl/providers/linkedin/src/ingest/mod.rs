@@ -237,11 +237,27 @@ async fn ingest_one(
 ) -> Result<usize> {
     let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let body = strip_notes_preamble(&raw);
+    let rows = parse_rows(table, &body)?;
+    replace_table(tx, table, &rows).await?;
+    Ok(rows.len())
+}
 
-    let mut rdr = csv::ReaderBuilder::new()
+/// The export mixes two quoting dialects: `Comments_<id>.csv` escapes an
+/// embedded quote as `\"`, while `Shares_<id>.csv`, `Positions.csv` and
+/// the message feeds double it (`""`). Both are accepted at once — the
+/// escape only applies inside a quoted field, and `double_quote` stays on.
+/// Without the escape a `\"` closes the field and the rest of the message
+/// splits into fragment rows, one of which lands its text in `Date`.
+pub(crate) fn csv_reader(body: &str) -> csv::Reader<&[u8]> {
+    csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
-        .from_reader(body.as_bytes());
+        .escape(Some(b'\\'))
+        .from_reader(body.as_bytes())
+}
+
+fn parse_rows(table: &str, body: &str) -> Result<Vec<(String, String)>> {
+    let mut rdr = csv_reader(body);
     let headers = dedup_headers(rdr.headers().context("read CSV header")?);
     let id_cols = known_file(table)
         .map(|f| f.id_cols)
@@ -259,9 +275,7 @@ async fn ingest_one(
         let id = row_id(table, &payload, id_cols);
         rows.push((id, payload.to_string()));
     }
-
-    replace_table(tx, table, &rows).await?;
-    Ok(rows.len())
+    Ok(rows)
 }
 
 /// Discover every `*.html` under an `Articles/` directory in the export
@@ -481,6 +495,40 @@ mod tests {
         assert_eq!(strip_notes_preamble(csv), "First Name,URL\nA,u");
         let plain = "A,B\n1,2\n";
         assert_eq!(strip_notes_preamble(plain), plain);
+    }
+
+    /// The export's two quoting dialects, seen in one real export:
+    /// Comments escapes a quote as `\"` (also `\""` where the quoted text
+    /// ends the field), Shares doubles it. Without the escape the first
+    /// row here splits into fragments, and a fragment's text becomes a
+    /// `Date`.
+    #[test]
+    fn parses_backslash_and_doubled_quotes() {
+        let body = "Date,Link,Message\n\
+            2024-06-10 18:53:49,https://x/feed/a,\"Back on the \\\"Hey Google\\\" team,\n\nkeystrokes \u{1f600}\"\n\
+            2024-06-11 00:00:00,https://x/feed/b,\"He said: \\\"make it so.\\\"\"\n\
+            2024-06-12 00:00:00,https://x/feed/c,\"They call it \"\"now more than ever\"\"!\"\n";
+        let rows = parse_rows("comments", body).expect("parse");
+        let payloads: Vec<Value> = rows
+            .iter()
+            .map(|(_, p)| serde_json::from_str(p).expect("json"))
+            .collect();
+        assert_eq!(payloads.len(), 3, "one row per record, no fragments");
+        assert_eq!(
+            payloads[0]["Message"],
+            "Back on the \"Hey Google\" team,\n\nkeystrokes \u{1f600}"
+        );
+        assert_eq!(payloads[1]["Message"], "He said: \"make it so.\"");
+        assert_eq!(
+            payloads[2]["Message"],
+            "They call it \"now more than ever\"!"
+        );
+        for p in &payloads {
+            assert!(
+                p["Date"].as_str().unwrap().starts_with("2024-06-1"),
+                "every Date is a date: {p}"
+            );
+        }
     }
 
     #[test]
