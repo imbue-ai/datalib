@@ -226,7 +226,15 @@ added it — leaving every older store unopenable.
 
 Dropping and recreating is safe here specifically because raw-store rows are
 a cache of upstream, re-fetched on the next sync, and doltlite keeps the
-dropped rows in history.
+dropped rows in history. "Re-fetched" has to be made true, though: a cursor
+that says "read through here" would let the next run resume past rows the
+recreated table no longer has, and the table would stay empty until upstream
+changed, with nothing saying why. So a recreate also clears every store-wide
+cursor (`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
+that it did; the next run walks from the start, and the tables that kept
+their rows absorb it as no-op upserts. Per-row cursors — a sidecar's
+`last_ts_ms`, an address book's `ctag` — live on the table that holds them
+and go with it.
 
 `declared_columns` learns a DDL's columns by parsing it into a probe table in
 an **in-memory** database. Never against the store being opened: a

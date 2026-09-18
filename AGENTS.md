@@ -67,6 +67,7 @@ how the system works; when a completed plan stops being worth keeping,
 **Audits**
 
 - [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
+- [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
 
 **User-facing**
 
@@ -200,7 +201,8 @@ datalib/
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
 tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
-docs/          dev/ architecture notes; user/ guides; dev/plans/.
+docs/          dev/ architecture notes; user/ guides; dev/plans/; assets/ images
+               only the docs use (the README grid shares the UI's marks).
 third-party/   vendored upstream code.
 ```
 

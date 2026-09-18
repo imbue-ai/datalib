@@ -1028,6 +1028,29 @@ async fn get_conversation_with_403_retry(
     ))
 }
 
+/// claude.ai's replicas disagree about whether a field with no value
+/// is spelled `key: null` or left out — the same untouched conversation
+/// came back both ways five minutes apart, on `chat_messages[].content[]`
+/// down to `display_content.link.*`. Every reader here treats the two
+/// alike, so absent is the stored spelling. Array elements stay:
+/// `[null, 1]` is positional.
+pub(crate) fn canonicalize_conversation_payload(payload: &Value) -> Value {
+    let mut out = payload.clone();
+    drop_null_keys(&mut out);
+    out
+}
+
+fn drop_null_keys(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.retain(|_, v| !v.is_null());
+            m.values_mut().for_each(drop_null_keys);
+        }
+        Value::Array(a) => a.iter_mut().for_each(drop_null_keys),
+        _ => {}
+    }
+}
+
 async fn save_conversation(
     db: &RawDb,
     org_uuid: &str,
@@ -1036,6 +1059,7 @@ async fn save_conversation(
     full: &Value,
     now: &IsoOffsetTimestamp,
 ) -> Result<()> {
+    let full = &canonicalize_conversation_payload(full);
     let payload = serde_json::to_string(full).context("serialize conversation")?;
     let name = full.get("name").and_then(|v| v.as_str()).map(String::from);
     let updated_at = full
@@ -1463,5 +1487,156 @@ mod tests {
             serde_json::json!([1, 2, "a"]),
             "mixed types still get a total order rather than panicking"
         );
+    }
+
+    // ── null-vs-absent from the API ──────────────────────────────────
+
+    /// The two spellings claude.ai used for the same untouched
+    /// conversation on the 2026-09-18 bake: one replica sent every
+    /// no-value field of a content block as `null`, the other left it
+    /// out. `stop_timestamp: null` is the deliberate kind — an in-flight
+    /// message — and reads the same either way.
+    fn conversation_with_nulls() -> Value {
+        json!({
+            "uuid": "e2afda7d-3b67-42a7-90e6-e84017fee652",
+            "name": "Warp core diagnostics",
+            "updated_at": "2026-09-18T10:00:00Z",
+            "chat_messages": [{
+                "uuid": "m1",
+                "sender": "assistant",
+                "stop_timestamp": null,
+                "content": [{
+                    "type": "text",
+                    "text": "Running level-3 diagnostic.",
+                    "flags": null,
+                    "alternative_display_type": null,
+                    "approval_key": null,
+                    "approval_options": null,
+                    "context": null,
+                    "integration_icon_url": null,
+                    "integration_name": null,
+                    "is_mcp_app": null,
+                    "mcp_server_url": null,
+                    "message": null,
+                    "meta": null,
+                    "structured_content": null,
+                    "display_content": {
+                        "type": "link",
+                        "link": {"url": "https://x.test", "resource_type": null, "subtitles": null}
+                    },
+                    "citations": [null, {"uuid": "cite-1"}]
+                }]
+            }]
+        })
+    }
+
+    fn conversation_without_nulls() -> Value {
+        json!({
+            "uuid": "e2afda7d-3b67-42a7-90e6-e84017fee652",
+            "name": "Warp core diagnostics",
+            "updated_at": "2026-09-18T10:00:00Z",
+            "chat_messages": [{
+                "uuid": "m1",
+                "sender": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": "Running level-3 diagnostic.",
+                    "display_content": {
+                        "type": "link",
+                        "link": {"url": "https://x.test"}
+                    },
+                    "citations": [null, {"uuid": "cite-1"}]
+                }]
+            }]
+        })
+    }
+
+    #[test]
+    fn null_and_absent_canonicalize_the_same() {
+        assert_eq!(
+            canonicalize_conversation_payload(&conversation_with_nulls()),
+            canonicalize_conversation_payload(&conversation_without_nulls()),
+            "a key present as null and a key left out must store identically"
+        );
+        assert_eq!(
+            canonicalize_conversation_payload(&conversation_without_nulls()),
+            conversation_without_nulls(),
+            "a payload with no nulls is stored as-is"
+        );
+    }
+
+    /// Only object keys go. A null *element* is positional, and a real
+    /// value in place of the null is still a change.
+    #[test]
+    fn canonicalize_keeps_array_nulls_and_real_values() {
+        let out = canonicalize_conversation_payload(&conversation_with_nulls());
+        assert_eq!(
+            out["chat_messages"][0]["content"][0]["citations"],
+            json!([null, {"uuid": "cite-1"}])
+        );
+        let mut valued = conversation_without_nulls();
+        valued["chat_messages"][0]["content"][0]["message"] = json!("approved");
+        assert_ne!(
+            canonicalize_conversation_payload(&valued),
+            canonicalize_conversation_payload(&conversation_with_nulls()),
+            "a field that gained a value must still read as a change"
+        );
+    }
+
+    /// The bake's symptom, end to end: two fetches of an unchanged
+    /// conversation, one spelling each, must leave one row and no
+    /// `modified` delta between the commit and the working set.
+    #[tokio::test]
+    async fn refetch_with_the_other_null_spelling_is_not_a_modification() {
+        use datalib_etl::doltlite_raw::commit_run;
+
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
+        let now = datalib_time::parse_strict("2026-09-18T10:05:00-07:00").unwrap();
+        let uuid = "e2afda7d-3b67-42a7-90e6-e84017fee652";
+        for (k, v) in [
+            ("user.name", "null-test"),
+            ("user.email", "null-test@datalib.local"),
+        ] {
+            sqlx::query("SELECT dolt_config(?, ?)")
+                .bind(k)
+                .bind(v)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+
+        save_conversation(&db, "org-a", "A", uuid, &conversation_with_nulls(), &now)
+            .await
+            .unwrap();
+        let head = commit_run(db.pool(), "first fetch").await.unwrap();
+        save_conversation(&db, "org-a", "A", uuid, &conversation_without_nulls(), &now)
+            .await
+            .unwrap();
+
+        let stored: Vec<String> = sqlx::query_scalar("SELECT json(payload) FROM conversations")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 1, "one row for one conversation");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stored[0]).unwrap(),
+            canonicalize_conversation_payload(&conversation_without_nulls())
+        );
+
+        let head = head.expect("doltlite is linked into this test binary");
+        let modified: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dolt_diff_conversations \
+              WHERE from_ref = ? AND to_ref = 'WORKING'",
+        )
+        .bind(head)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            modified, 0,
+            "the second spelling of the same conversation must not dirty the row"
+        );
+        db.close().await;
     }
 }

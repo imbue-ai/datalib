@@ -240,7 +240,7 @@ mkdir -p "$LATCHKEY_DIR" && chmod 700 "$LATCHKEY_DIR"
 
 Credentials you paste go in directly. For Claude.ai, copy the
 `sessionKey` cookie as described in
-[getting your data](getting_your_data.md#claudeai), then:
+[getting your data](getting_your_data.md#claude), then:
 
 ```sh
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \

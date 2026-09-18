@@ -18,6 +18,8 @@ use crate::fsscan::{FileScanCursor, ScannedFile};
 /// Scope names should be `"<provider>/<feed>"` (e.g.
 /// `"google_takeout/maps_reviews"`); collisions across providers are
 /// the caller's responsibility to avoid.
+pub const INGESTED_FILES_TABLE: &str = "ingested_files";
+
 pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files (
     scope TEXT NOT NULL,
     rel_path TEXT NOT NULL,

@@ -263,9 +263,9 @@ jobs:
           # CI was green through both. They were caught only because
           # someone happened to run the suite locally.
           #
-          # The suite's Playwright report — video and trace per test —
-          # rides along as this job's `outputs.zip` with no second
-          # invocation needed; see
+          # The suite's Playwright report — video and trace per failed
+          # test — lands in bazel's `outputs.zip` for the target, which
+          # the step after this one uploads when the run is red; see
           # datalib/ui/tests/e2e/README-artifacts.md.
           #
           # It is `no-sandbox` + `requires-network` and takes ~4 min, so
@@ -336,6 +336,31 @@ jobs:
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
 
+      # The e2e suite's Playwright report, when the run is red: a trace
+      # per failed test, scrubbable action by action with the DOM before
+      # and after each. Without this a spec that fails only on these
+      # runners is undiagnosable from the console log alone — the trace
+      # is what says which element was under the pointer.
+      # The testlogs directory is per configuration, so the flags are the
+      # test step's; `cp -L` because the path is a symlink farm.
+      - name: Keep the e2e report
+        if: failure()
+        run: |
+          set -euo pipefail
+          flags=(-c opt --config=release --config=ci --nostamp)
+          zip="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.outputs/outputs.zip"
+          if [[ -f "${zip}" ]]; then
+            mkdir -p e2e-report && cp -L "${zip}" e2e-report/playwright-report.zip
+          else
+            echo "no e2e outputs at ${zip} — the suite did not run, or passed"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure() && hashFiles('e2e-report/playwright-report.zip') != ''
+        with:
+          name: e2e-playwright-report
+          path: e2e-report/playwright-report.zip
+          retention-days: 7
+
       # Make the build downloadable: every shipped binary under its
       # public name (`//datalib/backend:bin` does the rename), in a
       # tarball laid out like the release's. Nearly free — the test
@@ -366,7 +391,7 @@ jobs:
           tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
           ls -la artifact
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: success()
         with:
           name: datalib-x86_64-unknown-linux-gnu
