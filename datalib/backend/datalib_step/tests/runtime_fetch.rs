@@ -13,13 +13,26 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use datalib_runtime::node_runtime::{AssetKind, Manifest, RuntimeAsset, MANIFEST_FILE};
 use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 use sha2::{Digest, Sha256};
+
+/// Held while a binary is being copied and while one is being spawned,
+/// never across both. The tests run on parallel threads, and a fork
+/// inherits every open descriptor: a child forked by one test while
+/// another is mid-`fs::copy` holds that copy's write descriptor until
+/// it execs, and an exec of the copy in that window fails with ETXTBSY
+/// on Linux. `Command::spawn` returns only once the child has exec'd,
+/// so releasing the lock there leaves no descriptor at large.
+static COPY_OR_SPAWN: Mutex<()> = Mutex::new(());
+
+fn copy_or_spawn() -> MutexGuard<'static, ()> {
+    COPY_OR_SPAWN.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// A tarball-shaped install: the binary copied (not linked — the
 /// resolver canonicalises its own path before looking beside it) into
@@ -34,8 +47,11 @@ impl Install {
         fs::create_dir_all(&dir).unwrap();
         let src = PathBuf::from(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"));
         let bin = dir.join("datalib-step");
-        fs::copy(&src, &bin).unwrap();
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        {
+            let _copying = copy_or_spawn();
+            fs::copy(&src, &bin).unwrap();
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Self { dir }
     }
 
@@ -44,13 +60,19 @@ impl Install {
     }
 
     fn pull_runtime(&self, cache_home: &Path) -> std::process::Output {
-        Command::new(self.dir.join("datalib-step"))
-            .arg("pull-runtime")
-            .env("XDG_CACHE_HOME", cache_home)
-            .env_remove("DATALIB_RUNTIME_DIR")
-            .env_remove("DATALIB_ALLOW_NPX")
-            .output()
-            .unwrap()
+        let child = {
+            let _spawning = copy_or_spawn();
+            Command::new(self.dir.join("datalib-step"))
+                .arg("pull-runtime")
+                .env("XDG_CACHE_HOME", cache_home)
+                .env_remove("DATALIB_RUNTIME_DIR")
+                .env_remove("DATALIB_ALLOW_NPX")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        child.wait_with_output().unwrap()
     }
 }
 
