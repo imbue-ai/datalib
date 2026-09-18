@@ -1,6 +1,6 @@
 # `grid_rows` — the union table behind the grid
 
-The AG Grid in `datalib/ui` shows one row per "displayable thing" in
+The grid in `datalib/ui` shows one row per "displayable thing" in
 the mirror: chat conversations, individual messages, content blocks
 (tool_use / tool_result / thinking), Slack threads, Slack messages.
 Rather than have the Rust backend dispatch per-provider — five queries
@@ -81,8 +81,9 @@ translates each row into a `SearchRow` for the HTTP API.
    `datalib/ui/src/api.ts` and declare it in `columns()` in
    `datalib/backend/applets/src/unified_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
-   draws them by type (`cards/typedColumns.ts`); a width or a hover the
-   type cannot know goes in `GridCard`'s `columnOverrides`.
+   draws them by type (`cards/typedColumns.ts`, over the renderers in
+   `cards/cellRenderers.ts`); a width or a hover the type cannot know
+   goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider

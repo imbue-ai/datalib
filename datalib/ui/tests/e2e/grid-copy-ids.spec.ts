@@ -20,7 +20,9 @@ async function rows(request: import("@playwright/test").APIRequestContext) {
 }
 
 function menuItem(page: import("@playwright/test").Page, name: RegExp) {
-  return page.locator(".ag-menu .ag-menu-option").filter({ hasText: name });
+  // The item's text, beside its icon slot — which is a bullet character
+  // when the item has no icon, and so part of the item's own text.
+  return page.locator(".slick-context-menu .slick-menu-content").filter({ hasText: name });
 }
 
 test("a row with an upstream id offers both copies, and they differ", async ({
@@ -42,7 +44,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 
@@ -82,7 +84,7 @@ test("a row with no upstream id hides the upstream-id action", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 

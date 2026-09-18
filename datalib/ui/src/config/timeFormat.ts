@@ -56,8 +56,8 @@ export function formatTimeOfDay(iso: string | null): string {
 ///
 /// A timestamp column that *displays* "5 minutes ago" must not sort on
 /// that text — alphabetically "10 minutes ago" precedes "2 hours ago"
-/// precedes "seconds ago", which is three kinds of wrong at once. AG Grid
-/// sorts on the row's value rather than what a `cellRenderer` painted,
+/// precedes "seconds ago", which is three kinds of wrong at once. The grid
+/// sorts on the row's value rather than what a formatter painted,
 /// so the text is never the key; this is about the value.
 export function compareStamps(a: string | null, b: string | null): number {
   if (a === b) return 0;

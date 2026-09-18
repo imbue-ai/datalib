@@ -12,10 +12,10 @@ const toggle = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-bool`);
 const picker = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
-const rows = (page: Page, caption: string) => picker(page, caption).locator(".ag-row");
+const rows = (page: Page, caption: string) => picker(page, caption).locator(".slick-row");
 const tick = (page: Page, caption: string, id: string) =>
   picker(page, caption)
-    .locator(`.ag-row[row-id="${id}"] .ag-selection-checkbox input`)
+    .locator(`.slick-row[data-key="${id}"] .slick-cell-checkboxsel label`)
     .first()
     .click();
 

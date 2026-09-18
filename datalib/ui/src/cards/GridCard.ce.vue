@@ -1,35 +1,33 @@
 <script setup lang="ts">
-// Search-grid card: a search bar + AG Grid over the unified_index
+// Search-grid card: a search bar + a slickgrid over the unified_index
 // applet's /search results.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { AgGridVue } from "ag-grid-vue3";
-import { typedColumns } from "./typedColumns";
-import {
-  ModuleRegistry,
-  AllCommunityModule,
-  themeQuartz,
-  colorSchemeVariable,
-  type ColDef,
-  type ColumnState,
-  type GridApi,
-  type GridOptions,
-  type GridReadyEvent,
-  type RowSelectedEvent,
-  type CellContextMenuEvent,
-  type IRowNode,
-  type GetRowIdParams,
-  type MenuItemDef,
-  type DefaultMenuItem,
-  type GetContextMenuItemsParams,
-  type RowClassParams,
-  type CellClassParams,
-} from "ag-grid-community";
-import { AllEnterpriseModule } from "ag-grid-enterprise";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+// The grid is the framework-agnostic bundle, not the Vue wrapper: a
+// card is a custom element, and the wrapper finds its container by a
+// selector on `document`, which cannot see into a shadow root. The
+// bundle takes the element itself.
+import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
+import type {
+  Column,
+  CurrentColumn,
+  CurrentSorter,
+  Formatter,
+  GridOption,
+  GridStateChange,
+  MenuCommandItem,
+  MenuFromCellCallbackArgs,
+  OnClickEventArgs,
+  OnDblClickEventArgs,
+  OnSelectedRowsChangedEventArgs,
+  SlickDraggableGrouping,
+  SlickEventData,
+} from "@slickgrid-universal/common";
+import { typedColumns, groupTitle } from "./typedColumns";
 import {
   fetchAccounts,
   fetchQmdState,
@@ -52,12 +50,8 @@ import {
 import { openExternal } from "@/externalLinks";
 import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
-import { keepExcludeItems, withToken } from "@/grid/query";
+import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import type { CardCtx } from "./types";
-
-ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
-
-const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -84,7 +78,7 @@ watch(
   (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"),
   { immediate: true },
 );
-const rows = ref<SearchRow[]>([]);
+const rows = shallowRef<SearchRow[]>([]);
 /// The columns the applet declares for its rows — see `ColumnSpec`.
 const columns = ref<ColumnSpec[]>([]);
 // The query whose results are actually painted right now — not `query`
@@ -126,10 +120,10 @@ function currentMarkdownUuids(): string[] {
 // server-side, so this is what keeps the feature free for everyone who
 // isn't using it.
 function qmdColumnsVisible(): boolean {
-  if (!gridApi) return false;
-  return ["qmd_indexed", "qmd_embedded"].some(
-    (id) => gridApi!.getColumn(id)?.isVisible() ?? false,
-  );
+  if (!vueGrid) return false;
+  return vueGrid.slickGrid
+    .getColumns()
+    .some((c) => (c.id === "qmd_indexed" || c.id === "qmd_embedded") && !c.hidden);
 }
 
 async function refreshQmdState() {
@@ -149,7 +143,7 @@ async function refreshQmdState() {
     const m = new Map<string, QmdDocState>();
     for (const [uuid, st] of Object.entries(r.docs)) m.set(uuid, st);
     // Empty when the columns are hidden — which is also the state the
-    // valueGetters need to see, so an un-hide refetches rather than
+    // formatters need to see, so an un-hide refetches rather than
     // painting whatever the last visible result set held.
     qmdState.value = m;
     qmdSummary.value = r.summary;
@@ -177,11 +171,10 @@ const qmdSummaryTitle = computed(() => {
     : "Every indexed document has embeddings.";
 });
 
-// Repaint just the two index columns. The valueGetters read
-// `qmdState`, which AG Grid has no way to observe on its own.
+// Repaint the rows: the two index columns' formatters read `qmdState`,
+// which the grid has no way to observe on its own.
 function refreshIndexCells() {
-  if (!gridApi) return;
-  gridApi.refreshCells({ columns: ["qmd_indexed", "qmd_embedded"], force: true });
+  vueGrid?.slickGrid.invalidate();
 }
 
 // Tri-state cell: true → ✅, false → ❌, null/unknown → an em dash. The
@@ -222,20 +215,34 @@ function qmdFlagTooltip(
     : "No complete set of embedding vectors yet — semantic search will not find this document.";
 }
 
-function flagCellRenderer(p: { value: unknown }): HTMLElement {
-  const span = document.createElement("span");
-  span.className = "qmd-flag";
-  span.textContent =
-    p.value === "yes" ? "\u2705" : p.value === "no" ? "\u274c" : "\u2014";
-  return span;
+function flagFormatter(which: "indexed" | "embedded"): Formatter<SearchRow> {
+  return (_r, _c, _v, _col, row) => {
+    const flag = indexFlag(qmdDocState(row)?.[which]);
+    const span = document.createElement("span");
+    span.className = "qmd-flag";
+    span.dataset.flag = flag;
+    span.textContent = flag === "yes" ? "✅" : flag === "no" ? "❌" : "—";
+    return { html: span, toolTip: qmdFlagTooltip(row, which) };
+  };
 }
 const selectedRow = ref<SearchRow | null>(null);
 // Selected row uuid as persisted state — survives reloads so the
 // deep-linked column highlights the same row.
 const sel = ref<string | null>(initialState.get("sel"));
 
-// AG Grid handle for applying / reading column state. Set by onGridReady.
-let gridApi: GridApi<SearchRow> | null = null;
+// The grid, once created: the SlickGrid and DataView objects and the
+// services around them. `dataView` and `slickGrid` are optional on the
+// bundle's type only because it can be asked for them before `init`;
+// here it is never handed out before both exist.
+type Grid = SlickVanillaGridBundle<SearchRow> & {
+  dataView: NonNullable<SlickVanillaGridBundle<SearchRow>["dataView"]>;
+  slickGrid: NonNullable<SlickVanillaGridBundle<SearchRow>["slickGrid"]>;
+};
+let vueGrid: Grid | null = null;
+let groupingPlugin: SlickDraggableGrouping | null = null;
+/// The element the grid is built in — the resizer measures it, and
+/// the grid's own stylesheet goes into the root it sits in.
+const boxEl = ref<HTMLDivElement | null>(null);
 
 // Suppress state writes (and column-open side effects) while we're
 // applying state from the URL ourselves — otherwise the grid's
@@ -248,29 +255,37 @@ let restoring = false;
 // score-vs-time default on subsequent query result loads.
 let userSortedManually = false;
 
-function encodeColumnState(state: ColumnState[]): string {
+/// What the URL keeps of the grid's shape: every column in order with
+/// whether it is hidden and how wide it is, the sort, the grouping.
+type Layout = {
+  cols: { id: string; hidden?: boolean; width?: number }[];
+  sort?: { id: string; asc: boolean }[];
+  group?: string[];
+};
+
+function encodeLayout(layout: Layout): string {
   // Compact base64url so the URL stays vaguely readable when it shows up
   // in dev tools / shared links.
-  const json = JSON.stringify(state);
+  const json = JSON.stringify(layout);
   return btoa(unescape(encodeURIComponent(json)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 }
 
-function decodeColumnState(s: string): ColumnState[] | null {
+function decodeLayout(s: string): Layout | null {
   try {
     const padded = s.replace(/-/g, "+").replace(/_/g, "/");
     const json = decodeURIComponent(escape(atob(padded)));
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as ColumnState[]) : null;
+    const parsed = JSON.parse(json) as Layout;
+    return Array.isArray(parsed?.cols) ? parsed : null;
   } catch {
     return null;
   }
 }
 
-// Latest encoded column state; null while the columns are still at
-// their defaults (so a pristine grid serializes to a short segment).
+// Latest encoded layout; null while the columns are still at their
+// defaults (so a pristine grid serializes to a short segment).
 let colsEncoded: string | null = initialState.get("cols");
 
 function saveState() {
@@ -282,55 +297,104 @@ function saveState() {
   props.ctx.host.setState(params.toString());
 }
 
+/// The grid's shape as it is now.
+function readLayout(): Layout {
+  const grid = vueGrid!.slickGrid;
+  const cols = grid.getColumns().map((c) => ({
+    id: String(c.id),
+    ...(c.hidden ? { hidden: true } : {}),
+    ...(c.width ? { width: c.width } : {}),
+  }));
+  const sort = grid.getSortColumns().map((s) => ({ id: String(s.columnId), asc: s.sortAsc !== false }));
+  const group = groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
+  return { cols, ...(sort.length ? { sort } : {}), ...(group.length ? { group } : {}) };
+}
+
 // Reflect any user-driven column change (resize / sort / move /
-// visibility) into the persisted state. Skipped during programmatic
-// mutation (`restoring`).
+// visibility / grouping) into the persisted state. Skipped during
+// programmatic mutation (`restoring`).
 function updateCols() {
-  if (restoring || !gridApi) return;
-  const state = gridApi.getColumnState();
-  colsEncoded = state.length > 0 ? encodeColumnState(state) : null;
+  if (restoring || !vueGrid) return;
+  colsEncoded = encodeLayout(readLayout());
   saveState();
+}
+
+/// Give the grid a column order, visibility and widths. Every column
+/// the grid has is named, in the order wanted; one left out keeps its
+/// place at the end.
+function applyColumns(cols: CurrentColumn[]) {
+  if (!vueGrid) return;
+  const known = new Set(cols.map((c) => c.columnId));
+  const rest = vueGrid.slickGrid
+    .getColumns()
+    .filter((c) => !known.has(String(c.id)))
+    .map((c) => ({ columnId: String(c.id), hidden: !!c.hidden, width: c.width }));
+  restoring = true;
+  vueGrid.gridStateService.applyColumnLayout([...cols, ...rest], false);
+  restoring = false;
+}
+
+/// Hide or show columns by id, keeping their order and widths.
+function setHidden(hidden: Record<string, boolean>) {
+  if (!vueGrid) return;
+  applyColumns(
+    vueGrid.slickGrid.getColumns().map((c) => ({
+      columnId: String(c.id),
+      hidden: hidden[String(c.id)] ?? !!c.hidden,
+      width: c.width,
+    })),
+  );
+}
+
+function applySort(sorters: CurrentSorter[]) {
+  if (!vueGrid) return;
+  restoring = true;
+  if (sorters.length === 0) vueGrid.sortService.clearSorting(false);
+  else vueGrid.sortService.updateSorting(sorters, false, false);
+  restoring = false;
 }
 
 function rowKey(row: SearchRow): string {
   return row.uuid;
 }
 
+/// The record at a grid row, or null where the row is a group header
+/// or its totals — the data view hands those out as items too.
+function rowData(row: number): SearchRow | null {
+  const item = vueGrid?.dataView.getItem(row) as
+    | (SearchRow & { __group?: boolean; __groupTotals?: boolean })
+    | undefined;
+  if (!item || item.__group || item.__groupTotals) return null;
+  return item;
+}
+
+/// The rows the grid has selected, in grid order.
+function selectedRows(): SearchRow[] {
+  if (!vueGrid) return [];
+  return vueGrid.slickGrid
+    .getSelectedRows()
+    .map(rowData)
+    .filter((r): r is SearchRow => r != null);
+}
+
 // Lightroom-style: if multiple rows are selected and the right-click anchor
 // is part of that selection, the action targets all selected rows;
 // otherwise it targets only the anchor row. The selection itself is left
 // alone either way — a right-click aims the action, it does not re-select.
-function resolveTargetRows(
-  api: GridApi<SearchRow>,
-  anchor: IRowNode<SearchRow> | null | undefined,
-): SearchRow[] {
-  if (!anchor?.data) return [];
-  const selected = api.getSelectedNodes() as IRowNode<SearchRow>[];
-  if (selected.length > 1 && anchor.isSelected()) {
-    return selected.map((n) => n.data).filter((d): d is SearchRow => d != null);
-  }
-  return [anchor.data];
+function resolveTargetRows(anchor: SearchRow | null | undefined): SearchRow[] {
+  if (!anchor) return [];
+  const selected = selectedRows();
+  if (selected.length > 1 && selected.some((r) => r.uuid === anchor.uuid)) return selected;
+  return [anchor];
 }
-
-// The DOM element under the most recent right-click. Stashed in
-// `onCellContextMenu` so a follow-up "Feedback…" menu action can
-// reconstruct the breadcrumb pointing at the exact cell the user was
-// looking at — AG Grid's `getContextMenuItems` callback doesn't get
-// the originating MouseEvent, so we capture it on the side.
-const contextAnchorEl = ref<Element | null>(null);
-// Column id (e.g. "author") + raw cell value snapshot for the feedback
-// payload. Captured at right-click time so the modal sees what the user
-// right-clicked even if selection changed since.
-const contextCellInfo = ref<{ column: string; cellValue: string } | null>(null);
 
 // Feedback modal state
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
 const feedbackSurfaceLabel = ref("");
 
-// Filter context for a right-clicked cell — built on the fly inside
-// `getContextMenuItems`. Null for non-filterable columns (Time,
-// Contents) or rows with no value in the clicked column.
+// Filter context for a right-clicked cell. Null for non-filterable
+// columns (Time, Contents) or rows with no value in the clicked column.
 type FilterCtx = {
   // Query-language key (e.g. "source", "channel"); maps to a backend Field.
   key: string;
@@ -341,7 +405,7 @@ type FilterCtx = {
   value: string;
 };
 
-// Map AG Grid colId → query-language key + header. Keep in sync with
+// Map column id → query-language key + header. Keep in sync with
 // `column_for_field` in backend/unified_index/src/db.rs.
 //
 // `uuidCol` (when set) names a sibling row field carrying the load-bearing
@@ -452,7 +516,7 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_CACHE_MAX = 16;
 // Backend's hard ceiling — anything lower surfaces as silently-missing
 // rows for the user. Memory/render cost is fine at this size thanks to
-// AG Grid's row virtualization.
+// the grid's row virtualization.
 const SEARCH_LIMIT = 100_000;
 type SearchCacheEntry = {
   rows: SearchRow[];
@@ -527,30 +591,22 @@ watch(query, (q) => {
 });
 
 // Restore the selected row from persisted state after rows load (or
-// after the grid first becomes ready, whichever happens last —
-// onGridReady can race with the initial fetch). Selection state
-// outlives the result set: searches that drop the selected row leave
-// selection cleared, which is the right behavior for a deep-link.
-async function tryRestoreSelection() {
+// after the grid is first created, whichever happens last — creation
+// can race with the initial fetch). Selection state outlives the
+// result set: searches that drop the selected row leave selection
+// cleared, which is the right behavior for a deep-link.
+function tryRestoreSelection() {
   const target_sel = sel.value;
-  if (!target_sel || !gridApi || rows.value.length === 0) return;
+  if (!target_sel || !vueGrid || rows.value.length === 0) return;
   if (selectedRow.value && rowKey(selectedRow.value) === target_sel) return;
   const target = rows.value.find((r) => rowKey(r) === target_sel);
   if (!target) return;
-  // AG Grid creates row nodes from rowData asynchronously after Vue
-  // pushes the data. Wait one tick so forEachNode actually sees them.
-  await nextTick();
-  if (!gridApi) return;
+  const row = vueGrid.dataView.getRowById(target_sel);
+  if (row == null) return;
   restoring = true;
-  let found = false;
-  gridApi.forEachNode((node) => {
-    if (node.data && rowKey(node.data) === target_sel) {
-      node.setSelected(true);
-      gridApi!.ensureNodeVisible(node, "middle");
-      found = true;
-    }
-  });
-  if (found) selectedRow.value = target;
+  vueGrid.slickGrid.setSelectedRows([row]);
+  vueGrid.slickGrid.scrollRowIntoView(row);
+  selectedRow.value = target;
   restoring = false;
 }
 
@@ -560,72 +616,21 @@ async function tryRestoreSelection() {
 //   - everything else    → time ascending, scroll to bottom so the most
 //                          recent rows are what the user lands on.
 function applyDefaultSort() {
-  if (!gridApi || userSortedManually) return;
+  if (!vueGrid || userSortedManually) return;
   const hasScores = rows.value.some((r) => typeof r.score === "number");
-  restoring = true;
-  if (hasScores) {
-    gridApi.applyColumnState({
-      state: [
-        { colId: "score", sort: "desc", sortIndex: 0 },
-        { colId: "created_at", sort: null, sortIndex: null },
-      ],
-      defaultState: { sort: null },
-    });
-  } else {
-    gridApi.applyColumnState({
-      state: [
-        { colId: "score", sort: null, sortIndex: null },
-        { colId: "created_at", sort: "asc", sortIndex: 0 },
-      ],
-      defaultState: { sort: null },
-    });
-  }
-  restoring = false;
-  // ensureIndexVisible needs the post-sort row order to be computed
-  // AND the new rowData to be ingested by AG Grid's virtualizer. We
-  // listen for the grid's own `rowDataUpdated` event, which fires once
-  // the new rows are in place; the listener runs at most once per
-  // applyDefaultSort call.
+  applySort(
+    hasScores
+      ? [{ columnId: "score", direction: "DESC" }]
+      : [{ columnId: "created_at", direction: "ASC" }],
+  );
   if (sel.value) {
     // tryRestoreSelection will scroll to the pinned row; don't fight it.
     return;
   }
-  const target: "top" | "bottom" = hasScores ? "top" : "bottom";
-  const api = gridApi;
-  const scrollToEnd = () => {
-    if (target === "top") {
-      api.ensureIndexVisible(0, "top");
-    } else {
-      const last = api.getDisplayedRowCount() - 1;
-      if (last >= 0) api.ensureIndexVisible(last, "bottom");
-    }
-  };
-  // The grid is mounted once its rows and columns have landed, so at
-  // grid-ready they are already in: scroll now, before the first paint
-  // is seen at the wrong end. The two paths below cover rows that
-  // arrive into a grid that already exists.
-  if (api.getDisplayedRowCount() > 0) scrollToEnd();
-  // Subscribe to the next rowDataUpdated event, then deregister.
-  // Wrapped in a try/catch because ag-grid versions disagree on
-  // whether one-shot subscriptions are allowed.
-  const handler = () => {
-    scrollToEnd();
-    api.removeEventListener("rowDataUpdated", handler);
-  };
-  try {
-    api.addEventListener("rowDataUpdated", handler);
-  } catch {
-    /* fall through to the rAF-based scroll */
-  }
-  // Also schedule a deferred scroll via two animation frames — covers
-  // the case where rowDataUpdated already fired before we subscribed
-  // (the row prop assignment that triggered this applyDefaultSort
-  // call also lands in AG Grid synchronously in some code paths).
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      scrollToEnd();
-    });
-  });
+  const grid = vueGrid.slickGrid;
+  const last = grid.getDataLength() - 1;
+  if (last < 0) return;
+  grid.scrollRowIntoView(hasScores ? 0 : last);
 }
 
 // Adaptive column visibility: on every results load, columns whose
@@ -635,8 +640,8 @@ function applyDefaultSort() {
 //
 // This list is what the rule may *reveal*, so it is deliberately not
 // "every optional column": a column named here appears in the default
-// grid whenever its values vary, which is exactly what `hide: true` on
-// a colDef is there to prevent. It stays the set it has always been.
+// grid whenever its values vary, which is exactly what `hidden` on a
+// definition is there to prevent. It stays the set it has always been.
 /// Column id → the row field it reads. The Provider column is the
 /// resolved `provider_ref`, but "is it the same on every row" is a
 /// question about the `source` string behind it.
@@ -683,17 +688,13 @@ function stringifyForCompare(v: unknown): string {
 }
 
 function applyAdaptiveVisibility() {
-  if (!gridApi || rows.value.length === 0) return;
-  const state = adaptiveFields().map(([colId, field]) => {
+  if (!vueGrid || rows.value.length === 0) return;
+  const hidden: Record<string, boolean> = {};
+  for (const [colId, field] of adaptiveFields()) {
     const first = stringifyForCompare(rows.value[0][field]);
-    const allSame = rows.value.every(
-      (r) => stringifyForCompare(r[field]) === first,
-    );
-    return { colId, hide: allSame };
-  });
-  restoring = true;
-  gridApi.applyColumnState({ state });
-  restoring = false;
+    hidden[colId] = rows.value.every((r) => stringifyForCompare(r[field]) === first);
+  }
+  setHidden(hidden);
 }
 
 /// Show exactly the preset's columns, in its order, and hide every
@@ -701,24 +702,29 @@ function applyAdaptiveVisibility() {
 /// paint is already the right shape rather than flickering through the
 /// default set.
 function applyPresetColumns() {
-  const columns = props.columns;
-  if (!gridApi || !columns?.length || colsEncoded) return;
-  const wanted = new Set(columns);
-  const state: ColumnState[] = [
-    // Order the preset's own columns as written…
-    ...columns.map((colId) => ({ colId, hide: false })),
-    // …and hide everything else the grid offers. `snippet` is in every
-    // preset, so nothing here can hide the text column by accident.
-    ...allColumnIds()
-      .filter((colId) => colId && !wanted.has(colId))
-      .map((colId) => ({ colId, hide: true })),
-  ];
-  restoring = true;
-  gridApi.applyColumnState({ state, applyOrder: true });
-  restoring = false;
+  const wanted = props.columns;
+  if (!vueGrid || !wanted?.length || colsEncoded) return;
+  const widths = new Map(vueGrid.slickGrid.getColumns().map((c) => [String(c.id), c.width]));
+  const ordered: CurrentColumn[] = wanted.map((columnId) => ({
+    columnId,
+    hidden: false,
+    width: widths.get(columnId),
+  }));
+  // …and hide everything else the grid offers. `snippet` is in every
+  // preset, so nothing here can hide the text column by accident.
+  const set = new Set(wanted);
+  const rest: CurrentColumn[] = vueGrid.slickGrid
+    .getColumns()
+    .filter((c) => !set.has(String(c.id)))
+    .map((c) => ({ columnId: String(c.id), hidden: true, width: c.width }));
+  applyColumns([...ordered, ...rest]);
 }
 
-watch(rows, () => {
+// Hand the grid the new rows, then shape the columns and the sort
+// around them.
+watch(rows, (r) => {
+  if (!vueGrid) return;
+  vueGrid.dataset = r;
   applyAdaptiveVisibility();
   applyDefaultSort();
   tryRestoreSelection();
@@ -762,59 +768,70 @@ function openRow(row: SearchRow) {
   window.open(href, "_blank", "noopener");
 }
 
+/// A cell's text with the account name where the value is an account's
+/// uuid.
+const accountFormatter: Formatter<SearchRow> = (_r, _c, value) => {
+  const v = typeof value === "string" ? value : "";
+  const label = accountLabel(v);
+  return { text: label, toolTip: v && label !== v ? v : "" };
+};
+
 /// What this card adds to the applet's declared columns: the widths and
 /// hovers a type cannot know, the account-name formatting on the
 /// author/account cells (the accounts map is the browser's), and the
 /// two-line clamp on the text.
-const columnOverrides: Record<string, ColDef<SearchRow>> = {
-  score: {
-    // Default sort is applied programmatically on row updates (see
-    // applyDefaultSort) — not baked into the colDef so a user re-sort
-    // sticks across query changes. QMD scores aren't comparable across
-    // queries; hide the filter UI but keep the column sortable.
-    filter: false,
-  },
-  provider_ref: { width: 110 },
-  source_ref: { width: 130 },
-  kind: { width: 110 },
-  conversation_name: { width: 200 },
-  channel: { width: 130 },
-  // The default order, in the definition so the first paint is already
-  // sorted rather than re-sorted a beat after rows land. Safe to bake
-  // in now that the definitions are built once: `applyDefaultSort`
-  // still switches to score when a free-text search returns scores,
-  // and a user's own sort sticks because nothing rebuilds the columns.
-  created_at: { sort: "asc" },
+const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
+  // Default sort is applied programmatically on row updates (see
+  // applyDefaultSort) — not baked into the definition so a user re-sort
+  // sticks across query changes.
+  provider_ref: { width: 110, minWidth: 110 },
+  source_ref: { width: 130, minWidth: 130 },
+  kind: { width: 110, minWidth: 110 },
+  conversation_name: { width: 200, minWidth: 200 },
+  channel: { width: 130, minWidth: 130 },
   snippet: {
-    flex: 1,
+    width: 600,
     minWidth: 200,
-    // Two-line clamp via a custom cellRenderer. autoHeight is
-    // intentionally OFF (per-row measurement was the dominant render
-    // cost on large result sets), and the row height is fixed at 52px
-    // to fit two lines. We render our own <div> so the clamp styles
-    // land on the direct text container — AG Grid's default
-    // .ag-cell-value span sits inside a flex cell and won't clamp
-    // reliably.
-    cellRenderer: (p: { value: unknown }) => {
+    // Two-line clamp via our own <div>, so the clamp styles land on the
+    // direct text container. The row height is fixed at 52px to fit
+    // two lines; per-row measurement was the dominant render cost on
+    // large result sets.
+    formatter: (_r, _c, value) => {
       const div = document.createElement("div");
       div.className = "datalib-clamp-2";
-      div.textContent = p.value == null ? "" : String(p.value);
+      div.textContent = value == null ? "" : String(value);
       return div;
     },
   },
   author: {
     width: 130,
-    valueFormatter: (p) => {
-      const v = p.value as string | undefined;
-      if (!v) return "";
-      return accounts.value[v]?.label ?? v;
+    minWidth: 130,
+    formatter: accountFormatter,
+    grouping: {
+      getter: (row: SearchRow) => accountLabel(row.author ?? ""),
+      formatter: groupTitle("Author"),
+      collapsed: false,
     },
   },
-  account: { valueFormatter: (p) => accountLabel(p.value as string) },
+  account: {
+    formatter: accountFormatter,
+    grouping: {
+      getter: (row: SearchRow) => accountLabel(row.account ?? ""),
+      formatter: groupTitle("Account"),
+      collapsed: false,
+    },
+  },
   // Cell renders the human-readable org_name; the row also carries
   // org_uuid (shown on hover) so filtering / scripts can target the
   // stable opaque key.
-  org_name: { width: 130, tooltipField: "org_uuid" },
+  org_name: {
+    width: 130,
+    minWidth: 130,
+    formatter: (_r, _c, value, _col, row) => ({
+      text: value == null ? "" : String(value),
+      toolTip: row?.org_uuid ?? "",
+    }),
+  },
 };
 
 /// Two columns rather than one combined "search state": `qmd update`
@@ -824,74 +841,383 @@ const columnOverrides: Record<string, ColDef<SearchRow>> = {
 /// result needs to see. The card's own, not the applet's: they are
 /// answered by a second request the card makes only when they are on
 /// screen.
-const extraColumns: ColDef<SearchRow>[] = [
+const extraColumns: Column<SearchRow>[] = [
   {
-    colId: "qmd_indexed",
-    headerName: "Indexed",
-    hide: true,
-    headerTooltip:
+    id: "qmd_indexed",
+    field: "markdown_uuid",
+    name: "Indexed",
+    hidden: true,
+    toolTip:
       "Whether this row's rendered document is in the qmd keyword index, at its current content",
     width: 100,
-    valueGetter: (p) => indexFlag(qmdDocState(p.data)?.indexed),
-    cellRenderer: flagCellRenderer,
-    tooltipValueGetter: (p) => qmdFlagTooltip(p.data, "indexed"),
-    cellStyle: { "text-align": "center" } as Record<string, string>,
+    minWidth: 100,
+    cssClass: "tg-center",
+    cellAttrs: { "col-id": "qmd_indexed" },
+    headerCellAttrs: { "col-id": "qmd_indexed" },
+    formatter: flagFormatter("indexed"),
+    sortable: false,
   },
   {
-    colId: "qmd_embedded",
-    headerName: "Embedded",
-    hide: true,
-    headerTooltip:
+    id: "qmd_embedded",
+    field: "markdown_uuid",
+    name: "Embedded",
+    hidden: true,
+    toolTip:
       "Whether this document has a complete set of embedding vectors — semantic search cannot reach it until it does",
     width: 110,
-    valueGetter: (p) => indexFlag(qmdDocState(p.data)?.embedded),
-    cellRenderer: flagCellRenderer,
-    tooltipValueGetter: (p) => qmdFlagTooltip(p.data, "embedded"),
-    cellStyle: { "text-align": "center" } as Record<string, string>,
+    minWidth: 110,
+    cssClass: "tg-center",
+    cellAttrs: { "col-id": "qmd_embedded" },
+    headerCellAttrs: { "col-id": "qmd_embedded" },
+    formatter: flagFormatter("embedded"),
+    sortable: false,
   },
 ];
 
-/// The preset's columns, then the column state the URL carries. The
-/// grid is mounted only once the applet has declared its columns, so
-/// by grid-ready there is something to apply them to.
-function applyInitialColumnState() {
-  if (!gridApi) return;
+/// The preset's columns, then the layout the URL carries. The grid is
+/// created only once the applet has declared its columns, so by then
+/// there is something to apply them to.
+function applyInitialLayout() {
+  if (!vueGrid) return;
   applyPresetColumns();
-  if (colsEncoded) {
-    const state = decodeColumnState(colsEncoded);
-    if (state) {
-      restoring = true;
-      gridApi.applyColumnState({ state, applyOrder: true });
-      restoring = false;
-      // An explicit persisted column state carries the user's sort
-      // choice — don't clobber it with our default.
-      if (state.some((c) => c.sort != null)) userSortedManually = true;
-    }
+  if (!colsEncoded) return;
+  const layout = decodeLayout(colsEncoded);
+  if (!layout) return;
+  applyColumns(layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })));
+  if (layout.sort?.length) {
+    applySort(layout.sort.map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" })));
+    // An explicit persisted layout carries the user's sort choice —
+    // don't clobber it with our default.
+    userSortedManually = true;
+  }
+  if (layout.group?.length && groupingPlugin) {
+    restoring = true;
+    groupingPlugin.setDroppedGroups(layout.group);
+    restoring = false;
   }
 }
 
 /// The grid's columns: the applet's, drawn by type, refined by the
 /// overrides above, with the card's own beside `project` — among the
-/// facets, where a 640px card still has them on screen.
-const columnDefs = computed<ColDef<SearchRow>[]>(() => {
-  const typed = typedColumns<SearchRow>(columns.value, {
-    rows: () => rows.value,
-    overrides: columnOverrides,
-  });
-  const at = typed.findIndex((c) => c.colId === "project") + 1;
-  return [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];
-});
+/// facets, where a 640px card still has them on screen. Built once per
+/// declaration, since handing the grid new definitions resets its
+/// layout.
+const gridColumns = shallowRef<Column<SearchRow>[]>([]);
+watch(
+  columns,
+  (specs) => {
+    // Nothing declared yet: the card's own two columns alone are not a
+    // grid worth building.
+    if (specs.length === 0) return;
+    const typed = typedColumns<SearchRow>(specs, {
+      rows: () => rows.value,
+      overrides: columnOverrides,
+      groupable: true,
+      filterable: true,
+    });
+    const at = typed.findIndex((c) => c.id === "project") + 1;
+    gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];
+    createGrid();
+  },
+  { immediate: true },
+);
 
-/// Every column id the grid can show, declared or the card's own.
-function allColumnIds(): string[] {
-  return columnDefs.value.map((c) => (c.colId ?? c.field) as string);
+/// A menu entry drawn like the built-in ones (icon slot, then text),
+/// with a label decided when the menu opens. The grid copies the options
+/// it is given, so an entry cannot be retitled from outside once the
+/// menu exists; a renderer is handed the cell instead.
+function entry(
+  command: string,
+  label: (m: MenuScope) => string | null,
+  run: (m: MenuScope) => void,
+): MenuCommandItem {
+  return {
+    command,
+    itemVisibilityOverride: (args) => label(menuScope(args as MenuFromCellCallbackArgs)) !== null,
+    slotRenderer: (_item, args) => {
+      const wrap = document.createElement("div");
+      // The menu item lays its icon and text out itself; the wrapper
+      // only exists because a renderer returns one element.
+      wrap.style.display = "contents";
+      const icon = document.createElement("div");
+      icon.className = "slick-menu-icon";
+      icon.textContent = "◦";
+      const text = document.createElement("span");
+      text.className = "slick-menu-content";
+      text.textContent = label(menuScope(args as MenuFromCellCallbackArgs)) ?? "";
+      wrap.append(icon, text);
+      return wrap;
+    },
+    action: (_e, args) => run(menuScope(args as MenuFromCellCallbackArgs)),
+  };
+}
+
+/// A divider that shows only when something above it did.
+function dividerAfter(shown: (m: MenuScope) => boolean): MenuCommandItem {
+  return {
+    command: "",
+    divider: true,
+    itemVisibilityOverride: (args) => shown(menuScope(args as MenuFromCellCallbackArgs)),
+  };
+}
+
+/// What one right-click is about: the row under it, the rows it aims
+/// at, and the filters its cell offers.
+type MenuScope = {
+  anchor: SearchRow | null;
+  /// The cell under the click: its column, its painted text (closer to
+  /// what the user saw — an author's name, not their uuid — than the
+  /// row's field), and its element, for the feedback breadcrumb.
+  cell: { column: string; cellValue: string; el: HTMLElement | null } | null;
+  targets: SearchRow[];
+  filter: FilterEntry[];
+  notion: FilterEntry[];
+  links: { web: SearchRow[]; local: string[] };
+};
+
+const linkOf = (r: SearchRow): string => r.source_url || r.slack_link || "";
+
+function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
+  const anchor = args.row != null ? rowData(args.row) : null;
+  const colId = String((args.column as Column | undefined)?.id ?? "");
+  const el =
+    args.row != null && args.cell != null ? (args.grid.getCellNode(args.row, args.cell) ?? null) : null;
+  const cell = colId ? { column: colId, cellValue: el?.textContent?.trim() ?? "", el } : null;
+  const targets = resolveTargetRows(anchor);
+  const filterCtx = anchor ? buildFilterCtx(colId, anchor) : null;
+  // Optional "Filter by Notion Page" entries, populated when the right-
+  // clicked row has a non-empty `notion_page_uuid`. Lets users zoom into
+  // all rows on a single Notion page from any cell of any row on that
+  // page — useful because the page UUID isn't always the same as
+  // conversation_uuid (e.g. comment threads use the discussion UUID).
+  const notionCtx: FilterCtx | null = anchor?.notion_page_uuid
+    ? {
+        key: "notion_page",
+        header: "Notion Page",
+        value: formatSlugUuid(
+          anchor.conversation_uuid === anchor.notion_page_uuid ? anchor.conversation_name : "",
+          anchor.notion_page_uuid,
+        ),
+      }
+    : null;
+  // A row's outbound linkout: the generic source_url (Slack permalink,
+  // LinkedIn post, …), falling back to the legacy slack_link column.
+  // Local files (today: the `pdf` source) carry a `file://` URL, which
+  // `window.open` cannot usefully follow from an http origin — a
+  // browser blocks it silently. Split on the URL SCHEME rather than on
+  // provider, so any future local-file source inherits this.
+  const linked = targets.filter((r) => linkOf(r));
+  return {
+    anchor,
+    cell,
+    targets,
+    filter: filterCtx ? keepExcludeEntries(filterCtx) : [],
+    notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
+    links: {
+      web: linked.filter((r) => !filePathFromUrl(linkOf(r))),
+      local: linked
+        .map((r) => filePathFromUrl(linkOf(r)))
+        .filter((p): p is string => p !== null),
+    },
+  };
+}
+
+const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
+const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
+
+function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
+  const rowUuids = m.targets.map((r) => r.uuid);
+  const anchor = m.cell?.el ?? null;
+  if (surface === "grid_cell" && m.cell) {
+    feedbackContext.value = buildContext({
+      surface,
+      anchor,
+      targetUuids: rowUuids,
+      payload: { column: m.cell.column, row_uuids: rowUuids, cell_value: m.cell.cellValue || null },
+    });
+    feedbackSurfaceLabel.value = `Grid cell · ${m.cell.column}${
+      m.targets.length > 1 ? ` · ${m.targets.length} rows` : ""
+    }`;
+  } else {
+    feedbackContext.value = buildContext({
+      surface: "grid_row",
+      anchor,
+      targetUuids: rowUuids,
+      payload: { row_uuids: rowUuids },
+    });
+    feedbackSurfaceLabel.value =
+      m.targets.length === 1 ? "Grid row" : `Grid rows · ${m.targets.length}`;
+  }
+  feedbackOpen.value = true;
+}
+
+// The right-click menu, ahead of the grid's own entries (copy the cell,
+// the grouping commands). Each entry decides for itself whether the
+// cell under the click gives it anything to do.
+const menuItems: (MenuCommandItem | "divider")[] = [
+  entry("keep", (m) => m.filter[0]?.label ?? null, (m) => appendFilterToQuery(m.filter[0].token)),
+  entry("exclude", (m) => m.filter[1]?.label ?? null, (m) => appendFilterToQuery(m.filter[1].token)),
+  dividerAfter((m) => m.filter.length > 0),
+  entry("keep-notion", (m) => m.notion[0]?.label ?? null, (m) => appendFilterToQuery(m.notion[0].token)),
+  entry("exclude-notion", (m) => m.notion[1]?.label ?? null, (m) => appendFilterToQuery(m.notion[1].token)),
+  dividerAfter((m) => m.notion.length > 0),
+  entry(
+    "copy-uuids",
+    (m) => (m.targets.length ? `Copy UUID${plural(m)}` : null),
+    (m) => void copyIds(m.targets, (r) => r.uuid),
+  ),
+  // Only offered when at least one selected row actually carries an
+  // upstream id — a provider that hasn't been ported onto
+  // `datalib_id` writes NULL here, and a menu item that silently
+  // copies nothing is worse than no menu item.
+  entry(
+    "copy-upstream",
+    (m) => (m.targets.some((r) => r.upstream_id) ? `Copy upstream ID${plural(m)}` : null),
+    (m) => void copyIds(m.targets, (r) => r.upstream_id ?? ""),
+  ),
+  entry(
+    "open-source",
+    (m) => (m.links.web.length ? `Open source${countSuffix(m.links.web.length)}` : null),
+    (m) => {
+      for (const r of m.links.web) {
+        // `openExternal`, not `window.open`: the desktop app has no
+        // tabs and does not implement `window.open`, so the bare
+        // call was a silent no-op there.
+        void openExternal(linkOf(r));
+      }
+    },
+  ),
+  // Only offered in the desktop app: revealing a file is something a
+  // browser fundamentally cannot do. In a browser the honest fallback
+  // is handing over the path, rather than an "Open" that quietly does
+  // nothing.
+  entry(
+    "reveal",
+    (m) =>
+      m.links.local.length
+        ? isDesktopApp()
+          ? `${revealActionLabel()}${countSuffix(m.links.local.length)}`
+          : `Copy file path${countSuffix(m.links.local.length)}`
+        : null,
+    (m) => {
+      const paths = m.links.local;
+      if (!isDesktopApp()) {
+        void navigator.clipboard.writeText(paths.join("\n"));
+        return;
+      }
+      void (async () => {
+        const failed: string[] = [];
+        for (const p of paths) {
+          if (!(await revealInFileManager(p))) failed.push(p);
+        }
+        // The IPC bridge can be present while the reveal command is
+        // unauthorized (a capability whose URL patterns stopped
+        // matching, say). Silently doing nothing is the worst outcome,
+        // so degrade to the same thing the browser offers.
+        if (failed.length > 0) void navigator.clipboard.writeText(failed.join("\n"));
+      })();
+    },
+  ),
+  entry(
+    "feedback-cell",
+    (m) => (m.targets.length && m.cell ? "Feedback on this cell…" : null),
+    (m) => openFeedback("grid_cell", m),
+  ),
+  entry(
+    "feedback-row",
+    (m) => (m.targets.length ? `Feedback on row${plural(m)}…` : null),
+    (m) => openFeedback("grid_row", m),
+  ),
+  "divider",
+];
+
+const GROUP_HINT =
+  "Drag columns here to group rows by them — source, then type, say";
+
+function isDark(): boolean {
+  return document.documentElement.dataset.theme === "dark";
+}
+
+function gridOptions(): GridOption {
+  return {
+    datasetIdPropertyName: "uuid",
+    // Cells are text, never markup: a row's snippet is the source's own.
+    enableHtmlRendering: false,
+    enableEmptyDataWarningMessage: false,
+    darkMode: isDark(),
+    enableAutoResize: true,
+    autoResize: {
+      // The frame around the box, not the box: the resizer sizes the
+      // box to what it measures, and a box it also measured would then
+      // stop following the card. The frame is what the card sizes.
+      container: boxEl.value!.parentElement!,
+      calculateAvailableSizeBy: "container",
+      resizeDetection: "container",
+      autoHeight: false,
+      bottomPadding: 0,
+      minHeight: 200,
+    },
+    // Tall enough for two lines of clamped snippet text plus padding.
+    rowHeight: 52,
+    enableTextSelectionOnCells: true,
+    // Rows select on click, several with a modifier — so right-click
+    // "Copy UUID(s)" can target several rows, like Lightroom. The
+    // document column follows whichever row was most recently selected.
+    enableCellNavigation: true,
+    enableSelection: true,
+    multiSelect: true,
+    selectionOptions: { selectActiveRow: true },
+    // Per-column filters in a row under the header; the query bar is
+    // the one the server answers, these narrow what it returned.
+    enableFiltering: true,
+    showHeaderRow: true,
+    headerRowHeight: 28,
+    defaultFilterPlaceholder: "",
+    filterTypingDebounce: 250,
+    enableSorting: true,
+    multiColumnSort: false,
+    enableColumnReorder: true,
+    enableHeaderMenu: true,
+    enableGridMenu: true,
+    enableColumnPicker: true,
+    // Grouping this grid by source is the single most useful thing to do
+    // with it — the unified projection holds every source at once, and
+    // "which of my things is this" is the first question anyone asks —
+    // and the bar that does it reads as decoration until you know. So it
+    // says what it is for.
+    enableGrouping: true,
+    enableDraggableGrouping: true,
+    createPreHeaderPanel: true,
+    showPreHeaderPanel: true,
+    preHeaderPanelHeight: 30,
+    draggableGrouping: {
+      dropPlaceHolderText: GROUP_HINT,
+      // One control to fold or open every group, shown only while
+      // something is grouped; the right-click menu has the same pair.
+      hideToggleAllButton: false,
+      toggleAllButtonText: "Expand / collapse all",
+      toggleAllPlaceholderText: "Fold every group, or open every one",
+      deleteIconCssClass: "mdi mdi-close",
+      sortAscIconCssClass: "mdi mdi-arrow-up",
+      sortDescIconCssClass: "mdi mdi-arrow-down",
+      onGroupChanged: () => updateCols(),
+      onExtensionRegistered: (plugin) => {
+        groupingPlugin = plugin;
+      },
+    },
+    enableContextMenu: true,
+    contextMenu: { commandItems: menuItems },
+  };
 }
 
 /// A diff group's rows say how they differ from the other commit
 /// (`diff_status`; null on every real source's rows), and a modified
 /// row names the columns that moved (`diff_changed_columns`, the
 /// `grid_rows` names, `|`-joined). The row takes a band for the first
-/// and the cell a highlight for the second.
+/// and the cell a highlight for the second — through the data view's
+/// item metadata, which the grid reads for every row it paints. The
+/// grouping extension installs its own provider for group rows, so
+/// this wraps whatever is there rather than replacing it.
 function changedColumns(row: SearchRow | undefined): Set<string> {
   const names = row?.diff_changed_columns;
   if (!names) return new Set();
@@ -899,325 +1225,158 @@ function changedColumns(row: SearchRow | undefined): Set<string> {
   return new Set(names.split("|").map((c) => (c === "text" ? "snippet" : c)));
 }
 
-const rowClassRules: GridOptions<SearchRow>["rowClassRules"] = {
-  "datalib-diff-added": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "added",
-  "datalib-diff-removed": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "removed",
-  "datalib-diff-modified": (p: RowClassParams<SearchRow>) => p.data?.diff_status === "modified",
-};
+function installDiffMetadata(dataView: Grid["dataView"]) {
+  const inner = dataView.getItemMetadata.bind(dataView);
+  dataView.getItemMetadata = (row: number) => {
+    const meta = inner(row);
+    const item = dataView.getItem(row) as SearchRow | undefined;
+    const status = item?.diff_status;
+    if (!status || status === "unchanged") return meta;
+    const columns: Record<string, { cssClass: string }> = {};
+    if (status === "modified") {
+      for (const id of changedColumns(item)) columns[id] = { cssClass: "datalib-diff-cell" };
+    }
+    return {
+      ...(meta ?? {}),
+      cssClasses: [meta?.cssClasses, `datalib-diff-${status}`].filter(Boolean).join(" "),
+      columns: { ...(meta?.columns ?? {}), ...columns },
+    };
+  };
+}
 
-const defaultColDef: ColDef = {
-  resizable: true,
-  sortable: true,
-  filter: true,
-  enableRowGroup: true,
-  cellClassRules: {
-    "datalib-diff-cell": (p: CellClassParams<SearchRow>) =>
-      changedColumns(p.data).has(p.colDef.colId ?? p.colDef.field ?? ""),
-  },
-};
+/// Build the grid, once the box is on the page and the applet has
+/// declared its columns — whichever comes second. Handing a grid new
+/// definitions resets its layout, so the columns it is built with are
+/// the ones it keeps.
+function createGrid() {
+  if (vueGrid || !boxEl.value || gridColumns.value.length === 0) return;
+  const options = gridOptions();
+  const root = boxEl.value.getRootNode();
+  // The grid's own stylesheet must live in this card's shadow root,
+  // where the grid is.
+  if (root instanceof ShadowRoot) options.shadowRoot = root;
+  const bundle = new SlickVanillaGridBundle<SearchRow>(
+    boxEl.value,
+    gridColumns.value,
+    options,
+    rows.value,
+  ) as Grid;
+  vueGrid = bundle;
+  installDiffMetadata(bundle.dataView);
+  const grid = bundle.slickGrid;
+  grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
+  grid.onClick.subscribe(onClick);
+  grid.onDblClick.subscribe(onDblClick);
+  bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
+    "onGridStateChanged",
+    onGridStateChanged,
+  );
+  // Expose the grid so e2e tests can scroll virtualized rows into view
+  // before clicking. Last grid card wins when several are open — fine
+  // for tests, which drive a single grid.
+  (window as unknown as { __fwGridApi?: unknown }).__fwGridApi = {
+    rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
+    uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
+    rows: () => bundle.dataView.getItems() as SearchRow[],
+    filteredRows: () => bundle.dataView.getFilteredItems() as SearchRow[],
+    scrollToRow: (row: number) => grid.scrollRowIntoView(row),
+    scrollToColumn: (id: string) => {
+      const idx = grid.getColumnIndex(id);
+      if (idx != null) grid.scrollColumnIntoView(idx);
+    },
+    isSelected: (uuid: string) => selectedRows().some((r) => r.uuid === uuid),
+    hiddenColumns: () =>
+      grid
+        .getColumns()
+        .filter((c) => c.hidden)
+        .map((c) => String(c.id)),
+    // What the column picker and the group bar do, without the mouse.
+    showColumns: (ids: string[]) => {
+      setHidden(Object.fromEntries(ids.map((id) => [id, false])));
+      onColumnsShown();
+    },
+    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
+  };
+  applyInitialLayout();
+  // The rows may already be loaded by the time the grid exists — the
+  // columns arrive with the first results — so this is the moment the
+  // `rows` watcher would otherwise have.
+  applyAdaptiveVisibility();
+  applyDefaultSort();
+  tryRestoreSelection();
+  refreshQmdState();
+}
 
-const gridOptions: GridOptions<SearchRow> = {
-  theme: gridTheme,
-  rowClassRules,
-  animateRows: false,
-  // Two dozen columns is nothing to virtualize, and with it on a column
-  // past the right edge has no header cell in the DOM at all — which
-  // reads, to a test asking "is this column shown", exactly like a
-  // hidden one.
-  suppressColumnVirtualisation: true,
-  // Empty results are reported once, by the "no matches." line below the
-  // grid — which is gated so it stays hidden while a search is in flight
-  // or the error banner is up. AG Grid's own "No Rows To Show" overlay
-  // has no such gating, so it is suppressed rather than shown alongside.
-  suppressNoRowsOverlay: true,
-  // Enterprise: drag-to-group panel above the grid + columns tool panel on
-  // the right. Both are pure UI affordances over existing column state, so
-  // they cost nothing when unused. Object form (not the "columns"
-  // shorthand) so no `defaultToolPanel` is set and the side bar starts
-  // collapsed — just the tab strip.
-  rowGroupPanelShow: "always",
-  sideBar: { toolPanels: ["columns"] },
-  // Grouping this grid by source is the single most useful thing to do
-  // with it — the unified projection holds every source at once, and
-  // "which of my things is this" is the first question anyone asks —
-  // and the bar that does it reads as decoration until you know. So it
-  // says what it is for. AG Grid's own text ("Drag here to set row
-  // groups") names the mechanism and not the result.
-  //
-  // Plural throughout: more than one column is not an edge case here but
-  // the useful case — source then type, say — and the sentence is the
-  // only place that is visible before you have tried it.
-  localeText: {
-    rowGroupColumnsEmptyMessage: "Drag columns here to group rows by them",
-  },
-  // The other half, for once a grouping exists: the placeholder above is
-  // gone by then, replaced by the chip for the column now in it, which
-  // is exactly when "you can change this" stops being discoverable. The
-  // group column is always present while a grouping is, so the
-  // explanation lives on it.
-  autoGroupColumnDef: {
-    minWidth: 220,
-    headerTooltip:
-      "Drag a column into the bar above to group by something else, or " +
-      "drag this one out to flatten the list. Drop a second column beside " +
-      "it to group within a group.",
-  },
-  // `preventDefaultOnContextMenu: true` makes AG Grid call
-  // preventDefault() synchronously on the contextmenu event so the
-  // browser's native menu never shows over the grid's. Our
-  // app-specific entries are prepended to AG Grid's defaults via
-  // `getContextMenuItems` below.
-  preventDefaultOnContextMenu: true,
-  getContextMenuItems: (
-    params: GetContextMenuItemsParams<SearchRow>,
-  ): (MenuItemDef<SearchRow> | DefaultMenuItem)[] => {
-    const defaults = params.defaultItems ?? [];
-    if (!gridApi) return defaults;
-    const node = params.node as IRowNode<SearchRow> | null;
-    if (!node?.data) return defaults;
-    const targets = resolveTargetRows(gridApi, node);
-    if (targets.length === 0) return defaults;
-    const rowUuids = targets.map((r) => r.uuid);
-    const colId = params.column?.getColId() ?? "";
-    const filterCtx = buildFilterCtx(colId, node.data);
-    // Optional "Filter by Notion Page" entry, populated when the right-
-    // clicked row has a non-empty `notion_page_uuid`. Lets users zoom into
-    // all rows on a single Notion page from any cell of any row on that
-    // page — useful because the page UUID isn't always the same as
-    // conversation_uuid (e.g. comment threads use the discussion UUID).
-    const notionCtx: FilterCtx | null = node.data.notion_page_uuid
-      ? {
-          key: "notion_page",
-          header: "Notion Page",
-          value: formatSlugUuid(
-            node.data.conversation_uuid === node.data.notion_page_uuid
-              ? node.data.conversation_name
-              : "",
-            node.data.notion_page_uuid,
-          ),
-        }
-      : null;
-    // A row's outbound linkout: the generic source_url (Slack permalink,
-    // LinkedIn post, …), falling back to the legacy slack_link column.
-    const linkOf = (r: SearchRow): string => r.source_url || r.slack_link || "";
-    const linkTargets = targets.filter((r) => linkOf(r));
-    // Anchor + cell info come from onCellContextMenu (it fires before
-    // getContextMenuItems on the same right-click). Snapshot now so
-    // each item action closes over the right values even if the user
-    // dismisses and re-opens the menu before clicking.
-    const anchor = contextAnchorEl.value;
-    const cellInfo = contextCellInfo.value;
-    const plural = targets.length === 1 ? "" : "s";
+function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
+  if (!vueGrid) return;
+  const previous = new Set(args.previousSelectedRows ?? []);
+  const added = args.rows.filter((r) => !previous.has(r));
+  if (added.length === 0) return;
+  const data = rowData(added[added.length - 1]);
+  if (!data) return;
+  selectedRow.value = data;
+  sel.value = rowKey(data);
+  // `restoring` is true when this is a URL-driven re-selection — the
+  // document column is already in the URL, so don't open a duplicate
+  // (and don't rewrite the state we just read).
+  if (restoring) return;
+  saveState();
+  const md = data.markdown_uuid ?? data.uuid;
+  props.ctx.host.openCards(docSource(md, data.uuid));
+}
 
-    const items: (MenuItemDef<SearchRow> | DefaultMenuItem)[] = [];
-    for (const ctx of [filterCtx, notionCtx]) {
-      if (!ctx) continue;
-      items.push(
-        ...keepExcludeItems<SearchRow>({
-          header: ctx.header,
-          key: ctx.key,
-          value: ctx.value,
-          apply: appendFilterToQuery,
-        }),
-      );
-    }
-    items.push({
-      name: `Copy UUID${plural}`,
-      action: () => {
-        void copyIds(targets, (r) => r.uuid);
-      },
-    });
-    // Only offered when at least one selected row actually carries an
-    // upstream id — a provider that hasn't been ported onto
-    // `datalib_id` writes NULL here, and a menu item that silently
-    // copies nothing is worse than no menu item.
-    if (targets.some((r) => r.upstream_id)) {
-      items.push({
-        name: `Copy upstream ID${plural}`,
-        action: () => {
-          void copyIds(targets, (r) => r.upstream_id ?? "");
-        },
-      });
-    }
-    // Local files (today: the `pdf` source) carry a `file://` URL, which
-    // `window.open` cannot usefully follow from an http origin — a
-    // browser blocks it silently. Split on the URL SCHEME rather than on
-    // provider, so any future local-file source inherits this.
-    const localTargets = linkTargets.filter((r) => filePathFromUrl(linkOf(r)));
-    const webTargets = linkTargets.filter((r) => !filePathFromUrl(linkOf(r)));
-
-    if (webTargets.length > 0) {
-      items.push({
-        name: `Open source${
-          webTargets.length === 1 ? "" : ` (${webTargets.length})`
-        }`,
-        action: () => {
-          for (const r of webTargets) {
-            // `openExternal`, not `window.open`: the desktop app has no
-            // tabs and does not implement `window.open`, so the bare
-            // call was a silent no-op there.
-            void openExternal(linkOf(r));
-          }
-        },
-      });
-    }
-    if (localTargets.length > 0) {
-      const paths = localTargets
-        .map((r) => filePathFromUrl(linkOf(r)))
-        .filter((p): p is string => p !== null);
-      const suffix = paths.length === 1 ? "" : ` (${paths.length})`;
-      items.push(
-        isDesktopApp()
-          ? {
-              // Only offered in the desktop app: revealing a file is
-              // something a browser fundamentally cannot do.
-              name: `${revealActionLabel()}${suffix}`,
-              action: () => {
-                void (async () => {
-                  const failed: string[] = [];
-                  for (const p of paths) {
-                    if (!(await revealInFileManager(p))) failed.push(p);
-                  }
-                  // The IPC bridge can be present while the reveal
-                  // command is unauthorized (a capability whose URL
-                  // patterns stopped matching, say). Silently doing
-                  // nothing is the worst outcome, so degrade to the
-                  // same thing the browser offers.
-                  if (failed.length > 0) {
-                    void navigator.clipboard.writeText(failed.join("\n"));
-                  }
-                })();
-              },
-            }
-          : {
-              // In a browser the honest fallback is handing over the
-              // path, rather than an "Open" that quietly does nothing.
-              name: `Copy file path${suffix}`,
-              action: () => {
-                void navigator.clipboard.writeText(paths.join("\n"));
-              },
-            },
-      );
-    }
-    if (cellInfo) {
-      items.push({
-        name: "Feedback on this cell…",
-        action: () => {
-          feedbackContext.value = buildContext({
-            surface: "grid_cell",
-            anchor,
-            targetUuids: rowUuids,
-            payload: {
-              column: cellInfo.column,
-              row_uuids: rowUuids,
-              cell_value: cellInfo.cellValue || null,
-            },
-          });
-          feedbackSurfaceLabel.value = `Grid cell · ${cellInfo.column}${
-            targets.length > 1 ? ` · ${targets.length} rows` : ""
-          }`;
-          feedbackOpen.value = true;
-        },
-      });
-    }
-    items.push({
-      name: `Feedback on row${plural}…`,
-      action: () => {
-        feedbackContext.value = buildContext({
-          surface: "grid_row",
-          anchor,
-          targetUuids: rowUuids,
-          payload: { row_uuids: rowUuids },
-        });
-        feedbackSurfaceLabel.value =
-          targets.length === 1 ? "Grid row" : `Grid rows · ${targets.length}`;
-        feedbackOpen.value = true;
-      },
-    });
-    if (defaults.length > 0) items.push("separator", ...defaults);
-    return items;
-  },
-  // Tall enough for two lines of clamped snippet text plus padding.
-  rowHeight: 52,
-  // multiRow so right-click "Copy UUID(s)" can target several rows, like
-  // Lightroom. Single-click still narrows to one row; the document column
-  // follows whichever row was most recently toggled on.
-  rowSelection: { mode: "multiRow", checkboxes: false, enableClickSelection: true },
-  ensureDomOrder: true,
-  getRowId: (p: GetRowIdParams<SearchRow>) => p.data.uuid,
-  onGridReady: (e: GridReadyEvent<SearchRow>) => {
-    gridApi = e.api;
-    // Expose the grid api so e2e tests can scroll virtualized rows
-    // into view before clicking. Last grid card wins when several are
-    // open — fine for tests, which drive a single grid.
-    (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
-      e.api;
-    applyInitialColumnState();
-    // The rows are already loaded by the time the grid is ready — it is
-    // mounted once they and their columns have landed — so this is the
-    // moment the `rows` watcher below would otherwise have.
-    applyAdaptiveVisibility();
-    applyDefaultSort();
-    tryRestoreSelection();
-    refreshQmdState();
-  },
-  onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
-    if (!e.node.isSelected() || !e.data) return;
-    selectedRow.value = e.data;
-    sel.value = rowKey(e.data);
-    // `restoring` is true when this is a URL-driven re-selection — the
-    // document column is already in the URL, so don't open a duplicate
-    // (and don't rewrite the state we just read).
-    if (restoring) return;
+function onClick(_e: SlickEventData, args: OnClickEventArgs) {
+  // A data row that is already the one selected selects again as far
+  // as the reader is concerned, though the selection model sees no
+  // change: keep the persisted selection on it.
+  const data = rowData(args.row);
+  const selected = selectedRows();
+  if (data && selected.length === 1 && selected[0].uuid === data.uuid) {
+    selectedRow.value = data;
+    sel.value = rowKey(data);
     saveState();
-    const md = e.data.markdown_uuid ?? e.data.uuid;
-    props.ctx.host.openCards(docSource(md, e.data.uuid));
-  },
-  onRowDoubleClicked: (e) => {
-    if (e.data) openRow(e.data);
-  },
-  onCellContextMenu: (e: CellContextMenuEvent<SearchRow>) => {
-    if (!gridApi) return;
-    const me = e.event as MouseEvent | null;
-    contextAnchorEl.value = me?.target instanceof Element ? me.target : null;
-    // Snapshot the cell value for the eventual "Feedback…" action. The
-    // `e.value` here is the displayed value (post-valueFormatter), which
-    // is closer to what the user actually sees (e.g. author UUID → label)
-    // than the raw row field.
-    const colId = e.column?.getColId() ?? "";
-    const v = e.value;
-    const cellRendered = typeof v === "string" ? v : v == null ? "" : String(v);
-    contextCellInfo.value = { column: colId, cellValue: cellRendered };
-  },
-  // Any change a USER can make to columns gets reflected in the
-  // persisted state. Filtered by event source: the grid also fires
-  // these events for its own layout work (flex sizing on load,
-  // adaptive visibility, programmatic default sort), and persisting
-  // those would stamp a column-state blob into the URL of a grid the
-  // user never touched.
-  onColumnVisible: (e) => {
-    if (e.source === "toolPanelUi" || e.source === "contextMenu") updateCols();
-    // Turning an index-state column on is the first moment we owe the
-    // user per-document answers. Guarded on an empty map so hiding and
-    // re-showing doesn't refetch state we already hold for these rows;
-    // the `rows` watcher covers the case where the result set moved.
-    if (qmdColumnsVisible() && qmdState.value.size === 0 && rows.value.length > 0) {
-      refreshQmdState();
-    }
-  },
-  onColumnResized: (e) => {
-    if (e.finished && e.source === "uiColumnResized") updateCols();
-  },
-  onColumnMoved: (e) => {
-    if (e.finished && e.source === "uiColumnMoved") updateCols();
-  },
-  onColumnRowGroupChanged: () => updateCols(),
-  onSortChanged: (e) => {
-    if (restoring || e.source !== "uiColumnSorted") return;
-    userSortedManually = true;
-    updateCols();
-  },
-};
+  }
+}
+
+function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
+  const data = rowData(args.row);
+  if (data) openRow(data);
+}
+
+// Any change a USER can make to columns gets reflected in the persisted
+// state: the grid reports resize, reorder, picker and sort changes
+// here, and only those — its own layout work (a fit to the card's
+// width, the adaptive visibility above) never does.
+function onGridStateChanged(change: GridStateChange) {
+  if (restoring) return;
+  if (change.change?.type === "sorter") userSortedManually = true;
+  updateCols();
+  if (change.change?.type === "columns") onColumnsShown();
+}
+
+// Turning an index-state column on is the first moment we owe the
+// user per-document answers. Guarded on an empty map so hiding and
+// re-showing doesn't refetch state we already hold for these rows;
+// the `rows` watcher covers the case where the result set moved.
+function onColumnsShown() {
+  if (qmdColumnsVisible() && qmdState.value.size === 0 && rows.value.length > 0) {
+    refreshQmdState();
+  }
+}
+
+/// The app's theme is an attribute on `<html>`; the grid's is an option.
+let themeWatch: MutationObserver | null = null;
+onMounted(() => {
+  createGrid();
+  themeWatch = new MutationObserver(() => vueGrid?.setDarkMode(isDark()));
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+});
+onBeforeUnmount(() => {
+  themeWatch?.disconnect();
+  themeWatch = null;
+  vueGrid?.dispose();
+  vueGrid = null;
+});
 </script>
 
 <template>
@@ -1260,20 +1419,15 @@ const gridOptions: GridOptions<SearchRow> = {
     <p v-if="error" class="error">error: {{ error }}</p>
 
     <div class="grid-wrap" :data-shown-query="shownQuery">
-      <!-- Mounted once the applet has declared its columns: AG Grid
-           resets column state whenever it is handed new definitions,
-           so a grid created before them would lose the preset, the
-           URL's column state and the tool panel's toggles the moment
-           they arrived. -->
-      <AgGridVue
-        v-if="columns.length > 0"
-        class="grid"
-        :class="{ 'grid--loading': loading }"
-        :rowData="rows"
-        :columnDefs="columnDefs"
-        :defaultColDef="defaultColDef"
-        :gridOptions="gridOptions"
-      />
+      <!-- The grid is built into this box by `createGrid`, once the
+           applet has declared its columns. -->
+      <!-- Two elements: the grid adds classes of its own to the box it
+           is built in (its theme's dark mode among them), and a Vue
+           class binding on that same element would wipe them on every
+           change. -->
+      <div class="grid" :class="{ 'grid--loading': loading }">
+        <div ref="boxEl" class="grid-box" />
+      </div>
       <div v-if="loading" class="grid-spinner" aria-label="searching">
         <div class="grid-spinner__ring" />
         <div class="grid-spinner__label">searching…</div>
@@ -1389,6 +1543,9 @@ const gridOptions: GridOptions<SearchRow> = {
   inset: 0;
   transition: filter 120ms ease-out;
 }
+.grid-box {
+  height: 100%;
+}
 .grid--loading {
   filter: blur(2px);
   pointer-events: none;
@@ -1422,21 +1579,6 @@ const gridOptions: GridOptions<SearchRow> = {
 </style>
 
 <style>
-/* A diff group's rows, by what happened to them between the two
-   commits, and the cells of a modified row that moved. AG Grid owns
-   these elements, so the rules are unscoped, like the two below. The
-   tints sit over the theme's own row background in either scheme. */
-.ag-row.datalib-diff-added .ag-cell {
-  background-color: rgba(34, 197, 94, 0.14);
-}
-.ag-row.datalib-diff-removed .ag-cell {
-  background-color: rgba(239, 68, 68, 0.12);
-  text-decoration: line-through;
-  text-decoration-color: rgba(239, 68, 68, 0.6);
-}
-.ag-row.datalib-diff-modified .ag-cell.datalib-diff-cell {
-  background-color: rgba(234, 179, 8, 0.3);
-}
 /* Built by a cellRenderer, so it never receives the scoped-style
    attribute — same reason `.datalib-clamp-2` lives in
    this unscoped block. */

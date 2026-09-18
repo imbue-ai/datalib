@@ -8,7 +8,7 @@
 // likely to regress.
 
 import { test, expect, type Page } from "@playwright/test";
-import { selectRowByUuid } from "./grid-helpers";
+import { SEARCH_ROWS, TABLE_ROWS, firstRowUuid, selectRowByUuid } from "./grid-helpers";
 
 declare global {
   interface Window {
@@ -39,11 +39,8 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   // The grid, then a document opened from it: card source evaluated,
   // rendered markdown sanitized and mounted in a shadow root.
   await page.goto("/");
-  const first = page.locator('.ag-grid-scrolling-rows [role="row"]').first();
-  await expect(first).toBeVisible({ timeout: 15_000 });
-  const rowId = await first.getAttribute("row-id");
-  expect(rowId).toBeTruthy();
-  await selectRowByUuid(page, rowId!);
+  await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
+  await selectRowByUuid(page, await firstRowUuid(page));
   await expect(page.locator(".chat-preview")).toBeVisible();
   expect(await violations(page)).toEqual([]);
 
@@ -55,7 +52,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   expect(await violations(page)).toEqual([]);
 
   await page.goto("/sources2");
-  await expect(page.locator(".ag-root").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(TABLE_ROWS).first()).toBeVisible({ timeout: 15_000 });
   expect(await violations(page)).toEqual([]);
 
   expect(consoleCsp).toEqual([]);

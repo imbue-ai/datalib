@@ -4,9 +4,10 @@
 // sandbox root of its own — see `config-mutating.ts`.
 
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, groupRow, pipelineRow } from "./grid-helpers";
+import { MENU_DISABLED, SELECTED_ROWS, expandGroup, groupRow, menuEntry, pipelineRow } from "./grid-helpers";
 
-const menuEntries = (page: Page) => page.locator(".ag-menu-option .ag-menu-option-text");
+/// The menu's entries by their text — separators carry none.
+const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-menu-content");
 
 async function openManager(page: Page) {
   await page.goto("/sources2");
@@ -49,15 +50,17 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(grid).toBeVisible();
   await grid.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
-  await expect(page.locator(".ag-row-selected")).toHaveCount(2);
+  await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
 
   await qmd.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
   // The one-row actions say so, and a reason names the row it came from.
-  const history = page.locator(".ag-menu-option", { hasText: "Show commit history" });
-  await expect(history).toHaveClass(/ag-menu-option-disabled/);
-  await history.hover();
-  await expect(page.getByText("QMD index: The QMD index keeps no doltlite store")).toBeVisible();
+  const history = menuEntry(page, "Show commit history");
+  await expect(history).toHaveClass(MENU_DISABLED);
+  await expect(history.locator(".slick-menu-content")).toHaveAttribute(
+    "title",
+    /QMD index: The QMD index keeps no doltlite store/,
+  );
   await page.keyboard.press("Escape");
 
   // A row outside the selection is the one target, and the selection
@@ -67,8 +70,8 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(menuEntries(page).last()).toHaveText(
     "Remove from config, with everything under it",
   );
-  await expect(page.locator(".ag-row-selected")).toHaveCount(2);
-  await expect(group).not.toHaveClass(/ag-row-selected/);
+  await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
+  await expect(group.locator(".slick-cell.selected")).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
 
@@ -82,9 +85,18 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   await row.locator('[col-id="name"]').click({ button: "right" });
-  await page.locator(".ag-menu-option", { hasText: "Rename…" }).click();
-  const input = page.locator(".ag-cell-inline-editing input");
+  await menuEntry(page, "Rename…").click();
+  const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
+  // The table repaints itself on a clock ("12 seconds ago" goes stale),
+  // and a repaint that rebuilt this row would close the editor under
+  // the typist. Force one and expect the same input to survive it.
+  await page.locator(".tg-grid").first().evaluate((el) => {
+    (el as HTMLElement & { __api: { refreshCells(): void } }).__api.refreshCells();
+  });
+  await page.waitForTimeout(200);
+  await expect(input).toBeVisible();
+  await expect(input).toBeFocused();
   await input.fill("Everything, indexed");
   await input.press("Enter");
 

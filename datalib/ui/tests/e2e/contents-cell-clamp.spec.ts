@@ -41,13 +41,13 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
 
   await page.goto("/");
   await expect(
-    page.locator('.ag-grid-scrolling-rows [role="row"]').first(),
+    page.locator(".grid-box .slick-row").first(),
   ).toBeVisible({ timeout: 10_000 });
   // A collapsed grid keeps its rows in the DOM but paints nothing, and
   // a nudge into a zero-height viewport scrolls nowhere. Assert the
   // paint first so that failure reads as the layout bug it is rather
   // than as a missing clamp element.
-  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
+  await expectGridPainted(page.locator(".grid-box .slickgrid-container").first(), "Explore grid");
 
   // Reading one cell means bringing the row *and* the Contents column
   // into view — the grid virtualizes both axes — and re-nudging until

@@ -20,7 +20,17 @@
 
 .tg-none { color: var(--datalib-muted); opacity: 0.55; }
 
-.tg-identity { display: inline-flex; align-items: center; gap: 8px; }
+.tg-identity { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+/* The label is what the eye lands on: the id beside it gives way first. */
+.tg-identity > span:first-of-type { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4ch; }
+.tg-identity > .tg-id { flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The tree cell: indent, chevron, then the column's own drawing, which
+   gives way before the chevron does. One flex row, so the cell's own
+   ellipsis never swallows the lot — an overflowing inline-block is
+   replaced whole by it. */
+.tg-tree { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.tg-tree > .slick-tree-toggle { flex: 0 0 auto; }
+.tg-tree > .slick-tree-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tg-brand { width: 18px; height: 18px; object-fit: contain; }
 .tg-parent { font-weight: 600; }
 .tg-mark {
@@ -214,3 +224,94 @@
 .tg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .tg-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
 .tg-link { color: inherit; text-decoration: underline dotted; }
+
+/* ── slickgrid cells ───────────────────────────────────────────── */
+/* The theme, brought closer to the app: its own font rather than
+   Roboto, a one-line header with the sort mark beside the name rather
+   than a two-line one with the mark below, and column rules in the
+   app's border colour — the theme draws none between cells, and a row
+   of unrelated values reads as one line without them. */
+.grid-pane {
+  --slick-font-family: inherit;
+  --slick-font-size-base: 13px;
+  --slick-header-font-size: 13px;
+  --slick-header-font-weight: 600;
+  --slick-header-row-count: 1;
+  --slick-header-column-height: 20px;
+  --slick-icon-sort-position-top: 4px;
+  --slick-header-column-name-margin-right: 18px;
+  --slick-cell-border-right: 1px solid var(--datalib-border);
+  --slick-header-column-border-right: 1px solid var(--datalib-border);
+}
+.grid-pane .slick-header-column {
+  display: flex;
+  align-items: center;
+}
+/* Centred in a tall row, but still a block: a flex cell would turn its
+   text into an item that no longer takes the ellipsis. */
+.grid-pane .slick-cell {
+  align-content: center;
+}
+/* The theme dresses the filter row for Bootstrap, which is not here:
+   the boxes are the app's inputs instead. */
+.grid-pane .slick-headerrow input.form-control {
+  width: 100%;
+  box-sizing: border-box;
+  height: 22px;
+  margin: 2px 0;
+  padding: 0 6px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 3px;
+  background: var(--datalib-input-bg, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.grid-pane .slick-headerrow input.form-control:focus {
+  outline: none;
+  border-color: var(--datalib-accent, #4a8bff);
+}
+.grid-pane .slick-row.slick-group .slick-group-title {
+  font-weight: 600;
+}
+/* Rows are what get selected here; the cell the click landed in is
+   not a thing to outline. */
+.slick-cell.active { box-shadow: none; border-color: transparent; }
+.slick-cell.tg-right { text-align: right; }
+/* A group row spans the grid in one cell that borrows the first
+   column's class; a number column first would push the title off the
+   right edge. */
+.slick-row.slick-group .slick-cell { text-align: left; }
+.slick-cell.tg-center { text-align: center; }
+.tg-group-count { color: var(--datalib-muted); }
+/* Text selection and a two-line clamp both want the cell's box to be
+   the text's box, which the theme's flex centring is not. */
+.slick-cell .datalib-clamp-2 { line-height: 1.25; }
+
+/* ── a diff group's rows (docs/dev/plans/diff_renderer.md) ──────── */
+/* By what happened to the row between the two commits, and the cells
+   of a modified row that moved — classes from GridCard's item metadata.
+   The tints sit over the theme's own row background in either scheme. */
+.slick-row.datalib-diff-added .slick-cell {
+  background-color: rgba(34, 197, 94, 0.14);
+}
+.slick-row.datalib-diff-removed .slick-cell {
+  background-color: rgba(239, 68, 68, 0.12);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.6);
+}
+.slick-row.datalib-diff-modified .slick-cell.datalib-diff-cell {
+  background-color: rgba(234, 179, 8, 0.3);
+}
+
+/* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+.slick-menu-item:has(.menu-slot-separator) {
+  padding: 0;
+  margin: 4px 0;
+  border-top: 1px solid var(--datalib-border);
+  min-height: 0;
+  height: 0;
+  pointer-events: none;
+}
+.menu-slot-separator { display: none; }
+.slick-menu-content.menu-danger { color: var(--datalib-log-error); }
