@@ -63,6 +63,14 @@ test("a cell's right-click keeps only its value, and the query clears again", as
 // nothing — not even dragend on the release — and no gesture ends a
 // drag the browser has forgotten. Chromium and WebKit on Linux drive a
 // real drag fine; this is the same on all three.
+//
+// The drag ends with `drop` on the bar and then `dragend` on the header,
+// the pair a browser fires. The grouping plugin (SortableJS) finishes
+// the drag from either: `drop` through a listener on the document,
+// `dragend` through one on the header itself. On a loaded CI runner the
+// `drop` alone was sometimes lost between the two — the header stayed
+// parked in the bar, still marked as dragging, and no group appeared —
+// and the `dragend` is the one a browser would have sent anyway.
 async function dragHeaderInto(page: Page, header: Locator, bar: Locator) {
   const from = (await header.boundingBox())!;
   const to = (await bar.boundingBox())!;
@@ -85,6 +93,7 @@ async function dragHeaderInto(page: Page, header: Locator, bar: Locator) {
       [type, to.x + 40, to.y + to.height / 2, dataTransfer] as const,
     );
   }
+  await header.dispatchEvent("dragend", { dataTransfer });
   await page.mouse.up();
 }
 
