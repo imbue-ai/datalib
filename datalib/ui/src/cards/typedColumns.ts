@@ -199,8 +199,8 @@ function text(value: unknown): string {
 const plain: Formatter = (_r, _c, value) => ({ text: text(value), toolTip: text(value) });
 
 /// The column a tree hangs its chevrons off: the first one that is not
-/// a row of buttons, so an `actions` column can sit at the far left
-/// without becoming the tree.
+/// a row of buttons, so an `actions` column never becomes the tree
+/// wherever it sits.
 export function treeColumnField(specs: ColumnSpec[]): string {
   return (specs.find((s) => s.type !== "actions") ?? specs[0])?.field ?? "";
 }
