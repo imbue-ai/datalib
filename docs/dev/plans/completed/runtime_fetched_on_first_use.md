@@ -1,11 +1,17 @@
 # The Node runtime, fetched on first use instead of shipped in every tarball
 
-**Status: proposal (2026-09-18). Nothing here is built.** The sizes are
-read off the v0.33.0 and v0.34.1 GitHub releases; the resolver and
-model-fetch claims are checked against the tree at `a4262b94`
-(`datalib/backend/runtime/src/node_runtime.rs`,
-`datalib/backend/qmd_models/src/lib.rs`, `scripts/stage_runtime.sh`,
-`.github/workflows/release.yml`).
+**Status: built (2026-09-18), kept as the record of what was decided.**
+How it works now is [`../../runtime_fetch.md`](../../runtime_fetch.md).
+Three things landed differently from the design below: the fetched
+tree lives in `~/.cache/datalib/runtime/`, not the data root, so two
+roots share one copy and the `latchkey` launcher can find it with no
+data root in hand; it is named by the asset's sha256 rather than the
+datalib version, so presence is the whole check and no stamp file is
+needed; and the runtime is built in its own `runtime` job ahead of the
+binaries rather than in the same job, because the musl legs must name
+an asset their gnu sibling publishes, with its hash. The sizes below
+are read off the v0.33.0 and v0.34.1 GitHub releases; the resolver and
+model-fetch claims were checked against the tree at `a4262b94`.
 
 ## What we have, and what it costs
 
