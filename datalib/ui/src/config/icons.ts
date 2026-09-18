@@ -3,6 +3,9 @@
 import appleMessagesIconUrl from "@/assets/apple_messages.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import claudeIconUrl from "@/assets/claude.svg";
+// Not a service's mark: a diff group is datalib's own, and its icon is
+// the three fates a diff sorts rows into.
+import diffIconUrl from "@/assets/diff.svg";
 import emailIconUrl from "@/assets/email.svg";
 import facebookIconUrl from "@/assets/facebook.svg";
 // Fastmail publishes no mark on Simple Icons; this is the vector
@@ -26,6 +29,7 @@ const ICONS: Record<string, string> = {
   apple_messages: appleMessagesIconUrl,
   chatgpt: chatgptIconUrl,
   claude: claudeIconUrl,
+  diff: diffIconUrl,
   email: emailIconUrl,
   facebook: facebookIconUrl,
   fastmail: fastmailIconUrl,

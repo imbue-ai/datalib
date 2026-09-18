@@ -29,7 +29,16 @@ describe("rowMenu", () => {
   it("offers every row action, enabled, for one ordinary group", () => {
     const menu = rowMenu([target()], opts);
     const actions = menu.filter((m) => !m.separator).map((m) => !m.separator && m.action);
-    expect(actions).toEqual(["browse", "sync", "edit", "log", "history", "reveal", "remove"]);
+    expect(actions).toEqual([
+      "browse",
+      "sync",
+      "edit",
+      "compare",
+      "log",
+      "history",
+      "reveal",
+      "remove",
+    ]);
     for (const m of menu) if (!m.separator) expect(m.disabled).toBeNull();
   });
 
@@ -54,6 +63,22 @@ describe("rowMenu", () => {
     expect(entry(menu, "remove").name).toBe("Remove 2 entries from config");
     const blocked = rowMenu([target(), target({ id: "mail", name: "Mail", kind: "applet" })], opts);
     expect(entry(blocked, "history").disabled).toBe("Mail: An applet writes no store");
+  });
+
+  it("offers Compare on a source, and says why not on anything else", () => {
+    expect(entry(rowMenu([target()], opts), "compare").disabled).toBeNull();
+    expect(entry(rowMenu([target({ kind: "step", func: "ingest" })], opts), "compare").disabled).toBe(
+      "Compare a source, not a step under it",
+    );
+    expect(entry(rowMenu([target({ type: null })], opts), "compare").disabled).toBe(
+      "The index mirrors nothing to compare",
+    );
+    expect(entry(rowMenu([target({ type: "diff" })], opts), "compare").disabled).toBe(
+      "Already a comparison — make another from its source",
+    );
+    expect(entry(rowMenu([target(), target({ id: "b" })], opts), "compare").disabled).toBe(
+      "One row at a time",
+    );
   });
 
   it("turns Sync into Stop only when every target is claimed", () => {

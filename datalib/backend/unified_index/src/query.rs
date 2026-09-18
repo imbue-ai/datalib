@@ -39,6 +39,10 @@ pub enum Field {
     Project,
     /// UUID-load-bearing filter on `notion_page_uuid`. Same `slug-uuid` form.
     NotionPage,
+    /// `change:added` and the like — `grid_rows.diff_status`, set only on
+    /// a diff group's rows. `-change:unchanged` is a diff's rows that
+    /// moved, and, nulls being kept, every real source's row too.
+    Change,
     Other(String),
 }
 
@@ -62,6 +66,7 @@ impl Field {
             "account" => Field::Account,
             "project" => Field::Project,
             "notion_page" => Field::NotionPage,
+            "change" => Field::Change,
             _ => Field::Other(s.to_string()),
         }
     }

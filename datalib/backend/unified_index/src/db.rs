@@ -98,6 +98,7 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
         Field::Account => Some("account"),
         Field::Project => Some("project"),
         Field::NotionPage => Some("notion_page_uuid"),
+        Field::Change => Some("diff_status"),
         Field::Before | Field::After | Field::Is | Field::Subj | Field::Other(_) => None,
     }
 }
@@ -315,6 +316,20 @@ mod tests {
     fn negated_filter_keeps_nulls() {
         let (sql, _) = build_where(&parse_query("-channel:announce"), "");
         assert!(sql.contains("(channel IS NULL OR channel != ?)"));
+    }
+
+    /// `change:` is `diff_status`; negated it keeps NULL, so
+    /// `-change:unchanged` is a diff's moved rows and every real row.
+    #[test]
+    fn change_filter_is_the_diff_status_column() {
+        let (sql, params) = build_where(&parse_query("change:added"), "");
+        assert!(sql.contains("diff_status = ?"), "{sql}");
+        assert_eq!(params, vec!["added".to_string()]);
+        let (sql, _) = build_where(&parse_query("-change:unchanged"), "");
+        assert!(
+            sql.contains("(diff_status IS NULL OR diff_status != ?)"),
+            "{sql}"
+        );
     }
 
     #[test]

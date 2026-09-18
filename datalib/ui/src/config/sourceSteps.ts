@@ -762,6 +762,49 @@ export function buildSource(opts: {
   };
 }
 
+/// The group `type` of a comparison between two commits of a source's
+/// raw store — `docs/dev/plans/diff_renderer.md`. Not a source type
+/// the catalog offers: one is made from a source, by "Compare…".
+export const DIFF_TYPE = "diff";
+
+/// Everything "Compare…" writes for one diff group: the group, with the
+/// source it compares, and its one render step, reading the source's
+/// ingest tree with the two commits under `params.diff`. The step is
+/// wired into the fan-ins like any render step (`renderId`).
+export function buildDiffSource(opts: {
+  id: string;
+  name: string;
+  source: string;
+  from: string;
+  to: string;
+  maxDocuments: number;
+}): { groupBody: string; stepsBody: string; renderId: string } {
+  const { id, source } = opts;
+  const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
+  const lines = [
+    `id = ${quote(id)}`,
+    nameLine(id, opts.name),
+    `type = ${quote(DIFF_TYPE)}`,
+    `source = ${quote(source)}`,
+  ].filter((l): l is string => l !== null);
+  const params = [
+    "[steps.params.diff]",
+    `from = ${quote(opts.from)}`,
+    `to = ${quote(opts.to)}`,
+    `max_documents = ${Math.max(1, Math.floor(opts.maxDocuments))}`,
+  ].join("\n");
+  return {
+    groupBody: `${divider}\n[[groups]]\n${lines.join("\n")}`,
+    stepsBody: stepToml({
+      group: id,
+      phase: "render",
+      inputs: [stepIdFor(source, "download")],
+      params,
+    }),
+    renderId: stepIdFor(id, "render"),
+  };
+}
+
 /// Set, replace or (with an empty name) remove the `name` of one
 /// `[[groups]]` entry, leaving everything else in the text alone.
 export function renameGroup(text: string, groupId: string, name: string): string {

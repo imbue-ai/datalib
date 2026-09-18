@@ -23,6 +23,7 @@ import {
   listGroups,
   listSteps,
   appendSource,
+  buildDiffSource,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -51,6 +52,7 @@ import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
+import CompareDialog from "@/components/CompareDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -286,7 +288,7 @@ function groupBrowse(g: ManageRow): string | null {
   const type = g.type?.id ?? null;
   if (!type) return "gridView()";
   const columns = browseColumns(type);
-  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
+  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
   return `gridView({ ${args.join(", ")} })`;
 }
@@ -302,6 +304,12 @@ function groupEditBlocked(groupId: string): string | null {
   const { ingest, render } = sourceStepsOf(g.id, sources.value);
   const entry = groupEntry(g, { ingest, render });
   if (!g.type) return "No guided form for this group — edit its entries in Advanced below.";
+  if (g.type === "diff") {
+    return (
+      "A diff group compares two commits of its source; change them under " +
+      "`params.diff` in Advanced below, or remove the group."
+    );
+  }
   if (!entry) return `No guided form: the catalog doesn't know the type "${g.type}".`;
   if (!entry.wizard) return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
   for (const step of [ingest, render]) {
@@ -600,6 +608,9 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
     }
     case "edit":
       if (first.editGroup) openEdit(first.editGroup);
+      return;
+    case "compare":
+      compareFor.value = { id: first.id, name: first.name.label };
       return;
     case "rename":
       gridApi?.startEditing(anchor, "name");
@@ -1019,6 +1030,30 @@ async function onWizardSubmit(payload: {
   const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
   closeWizard();
+}
+
+// ── "Compare two syncs…": a diff group written from a source and two
+// commits of its raw store (docs/dev/plans/diff_renderer.md), wired into
+// the fan-ins like any render step, then the source synced so the diff
+// renders — its step is downstream of the source's ingest.
+const compareFor = ref<{ id: string; name: string } | null>(null);
+
+async function onCompareSubmit(payload: {
+  id: string;
+  name: string;
+  source: string;
+  from: string;
+  to: string;
+  maxDocuments: number;
+}) {
+  const built = buildDiffSource(payload);
+  let next = appendSource(configText.value, `${built.groupBody}\n\n${built.stepsBody}`);
+  next = wireIntoFanIns(next, built.renderId);
+  const ok = await writeConfig(next, `Added ${payload.name}.`);
+  if (!ok) return;
+  compareFor.value = null;
+  const source = rows.value.find((r) => r.kind === "group" && r.id === payload.source);
+  if (source) await runRows([source]);
 }
 
 async function deleteSource(id: string) {
@@ -1560,6 +1595,14 @@ onUnmounted(() => {
       :editing="editing"
       @close="closeWizard"
       @submit="onWizardSubmit"
+    />
+    <CompareDialog
+      v-if="compareFor"
+      :key="compareFor.id"
+      :source="compareFor"
+      :taken-ids="takenIds"
+      @close="compareFor = null"
+      @submit="onCompareSubmit"
     />
     </Teleport>
   </section>
