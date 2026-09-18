@@ -349,10 +349,11 @@ fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
     let Some(level_word) = env.get("level").and_then(|l| l.as_str()) else {
         return plain();
     };
-    let level = match level_word {
-        l if l.eq_ignore_ascii_case("warn") || l.eq_ignore_ascii_case("warning") => LogLevel::Warn,
-        l if l.eq_ignore_ascii_case("error") => LogLevel::Error,
-        _ => LogLevel::Info,
+    // tracing-subscriber spells the level in capitals; `warning` is
+    // what a Python step's logging module writes.
+    let level = match level_word.to_ascii_lowercase().as_str() {
+        "warning" => LogLevel::Warn,
+        word => LogLevel::parse(word).unwrap_or(LogLevel::Info),
     };
     let string_at = |key: &str| env.get(key).and_then(|v| v.as_str()).map(str::to_string);
     let ts = string_at("timestamp");
@@ -757,6 +758,7 @@ mod tests {
                 echo plain text line
                 echo "downloading 3/10..." >&2
                 echo '{"timestamp":"2026-09-11T08:00:00.000Z","level":"ERROR","target":"slack::ingest","threadName":"main","threadId":"ThreadId(1)","filename":"x.rs","fields":{"message":"boom","channel":"C1"}}' >&2
+                echo '{"timestamp":"2026-09-11T08:00:01.000Z","level":"DEBUG","target":"datalib_etl::doltlite_raw","fields":{"message":"committed"}}' >&2
                 echo '{"event":"outcome","outputs":[{"path":"shell/raw","version":"v1"}]}'
             "#),
         );
@@ -835,6 +837,12 @@ mod tests {
             }
             _ => unreachable!(),
         }
+        // A `debug` line is kept as one, not rounded up to `info`: the
+        // step's default filter passes debug so the store can hold it.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Log { level: LogLevel::Debug, msg, .. } if msg == "committed"
+        )));
         // A plain line says which pipe it came from and nothing more.
         assert!(events.iter().any(|e| matches!(
             e,

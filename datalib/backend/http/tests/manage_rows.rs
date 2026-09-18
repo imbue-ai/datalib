@@ -302,6 +302,7 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
             tmp.path(),
             "r1",
             "r1",
+            None,
             datalib_runs::Retention::default(),
         )
         .unwrap();

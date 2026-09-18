@@ -15,6 +15,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+pub use datalib_log_filter::DEFAULT_LOG_FILTER;
+
 pub mod diagnostics;
 
 /// `--log-format` selector. `Auto` (the default) emits pretty on a TTY,
@@ -39,11 +41,7 @@ pub struct ObsArgs {
 
     /// `tracing-subscriber` env filter directive. Same grammar as
     /// `$RUST_LOG`, which is also honored if this flag isn't set.
-    #[arg(
-        long,
-        env = "RUST_LOG",
-        default_value = "info,sqlx=warn,hyper=warn,html5ever=error"
-    )]
+    #[arg(long, env = "RUST_LOG", default_value = DEFAULT_LOG_FILTER)]
     pub log_level: String,
 
     /// OTLP/gRPC endpoint (e.g. `http://localhost:4317`). When set,
@@ -57,7 +55,7 @@ impl Default for ObsArgs {
     fn default() -> Self {
         Self {
             log_format: LogFormat::default(),
-            log_level: "info,sqlx=warn,hyper=warn,html5ever=error".into(),
+            log_level: DEFAULT_LOG_FILTER.into(),
             otlp_endpoint: None,
         }
     }

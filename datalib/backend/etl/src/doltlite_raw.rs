@@ -1028,6 +1028,18 @@ pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<Stri
 /// (`docs/dev/step_protocol.md`), or `None` outside a run.
 pub const RUN_ID_ENV: &str = "DATALIB_DAG_RUN_ID";
 
+/// The data root, from the same environment.
+pub const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
+
+/// A store's path as a log line names it: under the data root when the
+/// runner said where that is, since every store's is the same prefix.
+fn store_label(pool: &SqlitePool) -> String {
+    let path = pool.connect_options().get_filename().to_path_buf();
+    let under_root = std::env::var_os(DATA_ROOT_ENV)
+        .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf));
+    under_root.unwrap_or(path).display().to_string()
+}
+
 /// A commit message with the run stamped on its end — `… run=<id>` —
 /// so the commit can be joined back to the run's log. The history
 /// reader parses exactly this suffix.
@@ -1046,17 +1058,38 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
+    let started = std::time::Instant::now();
+    let store = store_label(pool);
     // "nothing to commit" is a legitimate outcome: the rescue commit in
     // `open` may already have swept everything up.
-    match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
+    let hash = match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(stamp_run(msg))
         .fetch_optional(pool)
         .await
     {
-        Ok(opt) => Ok(opt.flatten()),
-        Err(e) if e.to_string().contains("nothing to commit") => Ok(None),
-        Err(e) => Err(anyhow::Error::new(e).context("dolt_commit")),
+        Ok(opt) => opt.flatten(),
+        Err(e) if e.to_string().contains("nothing to commit") => None,
+        Err(e) => return Err(anyhow::Error::new(e).context("dolt_commit")),
+    };
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    // `message` is the sentence's own field name in tracing, so the
+    // commit message goes under another.
+    match &hash {
+        Some(hash) => tracing::debug!(
+            store,
+            hash,
+            commit_message = msg,
+            elapsed_ms,
+            "dolt_commit: committed {hash} to {store} ({msg}) in {elapsed_ms}ms"
+        ),
+        None => tracing::debug!(
+            store,
+            commit_message = msg,
+            elapsed_ms,
+            "dolt_commit: nothing to commit to {store} ({msg})"
+        ),
     }
+    Ok(hash)
 }
 
 /// The store's current HEAD, which is its *content version*: doltlite

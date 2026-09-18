@@ -42,6 +42,12 @@ mkdir -p "$script_dir/binaries"
 install -m 0755 "$repo_root/scripts/latchkey-wrapper.sh" "$script_dir/binaries/latchkey"
 log "installed latchkey wrapper at binaries/latchkey"
 
+# The commit beside the binaries, read by `datalib_runs::git_hash` so
+# the log view can link a line to its source. A file rather than a
+# build stamp: nothing in the bazel graph depends on the git state.
+git -C "$repo_root" rev-parse HEAD > "$script_dir/binaries/git-hash"
+log "wrote binaries/git-hash"
+
 # ---------------------------------------------------------------------------
 # Codesigning (macOS release builds only).
 # ---------------------------------------------------------------------------

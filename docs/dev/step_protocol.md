@@ -328,6 +328,26 @@ columns — the line's own timestamp wins over the runner's arrival time
 remaining `fields`) rides along as `fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
+Every level is kept, `debug` included: a built-in step logs its own
+lines down to `debug` by default (`datalib_log_filter::DEFAULT_LOG_FILTER`,
+which `RUST_LOG` overrides) — a doltlite commit, a batch of rows
+upserted, a request being retried, each with its numbers in the
+sentence — and the runner stores a `DEBUG` envelope as a `debug` row
+rather than rounding it up to `info`.
+
+**Where a line came from.** `filename` is the repo-relative path rustc
+saw and `line_number` the line, so the log view can show `file:line`
+and link it to GitHub at the commit the binaries came from. That
+commit is recorded at run time, never compiled in (a build stamp costs
+a rebuild of everything downstream on every commit): `datalib_runs::git_hash`
+reads `DATALIB_GIT_HASH` from the environment — the dev launchers set
+it from the checkout — else a `git-hash` file beside the binaries,
+which the release tarball and the .app carry the way they carry
+`runtime.manifest`. The runner writes it on the run's row; the app
+server writes it on each of its own lines, because the server restarts
+between versions while the store keeps its lines. A binary that can
+say neither records nothing, and the view shows `file:line` as text.
+
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, or the UI's cancel) the runner sends your

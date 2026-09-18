@@ -496,14 +496,47 @@ where
         let wait = retry_after
             .map(|d| d.min(MAX_RETRY_AFTER))
             .unwrap_or(backoff);
+        let next_backoff = std::cmp::min(backoff * 2, guard.max_backoff());
+        // Only the retryable shapes reach here: a classified response, a
+        // timeout, or one of the transient curl exits.
+        let what = match &outcome {
+            Ok(resp) => format!("HTTP {}", resp.status),
+            Err(HttpError::Timeout { timeout_ms, .. }) => format!("timeout after {timeout_ms}ms"),
+            Err(HttpError::Curl { exit, .. }) => format!("curl exit {exit}"),
+            Err(e) => e.to_string(),
+        };
+        let wait_from = match retry_after {
+            Some(_) => "the server's Retry-After",
+            None => "our backoff",
+        };
+        let budget = guard.budget();
         tracing::warn!(
             service = %req.service,
             url = %req.url,
+            status = %what,
             wait_ms = wait.as_millis() as u64,
-            "rate-limited / transient; backing off then retrying",
+            retry_after_ms = retry_after.map(|d| d.as_millis() as u64),
+            backoff_ms = backoff.as_millis() as u64,
+            next_backoff_ms = next_backoff.as_millis() as u64,
+            max_backoff_ms = guard.max_backoff().as_millis() as u64,
+            sequential_failures = budget.sequential_failures,
+            max_sequential_failures = budget.max_sequential_failures,
+            time_without_progress_s = budget.time_without_progress.as_secs(),
+            max_time_without_progress_s = budget.max_time_without_progress.as_secs(),
+            "{what} from {}: waiting {:.1}s ({wait_from}; backoff {:.1}s, next {:.1}s, max {}s) \
+             before retrying; {} of {} sequential failures, {}s of {}s without progress",
+            req.service,
+            wait.as_secs_f64(),
+            backoff.as_secs_f64(),
+            next_backoff.as_secs_f64(),
+            guard.max_backoff().as_secs(),
+            budget.sequential_failures,
+            budget.max_sequential_failures,
+            budget.time_without_progress.as_secs(),
+            budget.max_time_without_progress.as_secs(),
         );
         tokio::time::sleep(wait).await;
-        backoff = std::cmp::min(backoff * 2, guard.max_backoff());
+        backoff = next_backoff;
     }
 }
 

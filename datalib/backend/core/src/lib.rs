@@ -7,7 +7,6 @@ pub mod deeplink;
 pub mod disk;
 pub mod repo;
 pub mod store;
-pub mod version;
 
 /// The data-root layout and the bundled-Node resolver moved down into
 /// `datalib_runtime`, a crate with no dependencies, so that

@@ -71,7 +71,8 @@ rust_binary(
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
     # dev builds keep the literal placeholder, which main.rs renders as
-    # "dev".
+    # "dev". The commit itself is read at run time (`datalib_runs::git_hash`),
+    # so nothing else in the tree is stamped.
     rustc_env_files = ["rustc_env.txt"],
     stamp = -1,
     visibility = ["//visibility:public"],

@@ -47,6 +47,7 @@ impl RunStoreSink {
         data_root: &std::path::Path,
         run_id: &str,
         started_at_utc: &str,
+        git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
         Some(Self {
@@ -54,6 +55,7 @@ impl RunStoreSink {
                 data_root,
                 run_id,
                 started_at_utc,
+                git_hash,
                 retention,
             )?),
             steps: Mutex::new(HashMap::new()),
@@ -186,15 +188,20 @@ impl EventSink for RunStoreSink {
                 };
                 self.metric(step, "checkpoints", &BTreeMap::new(), n as i64);
                 let (ts_utc, tz_offset) = now();
+                let since_last = match rows {
+                    Some(rows) => format!("{rows} rows since the last, "),
+                    None => String::new(),
+                };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
                     ts_utc,
                     tz_offset,
                     level: LogLevel::Info.as_str().into(),
-                    msg: "sealed a checkpoint".into(),
+                    msg: format!("sealed checkpoint #{n}: {since_last}now at {version}"),
                     fields: Some(
-                        serde_json::json!({ "version": version, "rows": rows }).to_string(),
+                        serde_json::json!({ "version": version, "rows": rows, "checkpoint": n })
+                            .to_string(),
                     ),
                     ..Default::default()
                 });
@@ -264,6 +271,7 @@ mod tests {
                 td.path(),
                 "run-1",
                 "2026-09-11T10:00:00+01:00",
+                Some("ae2d52f0".into()),
                 Retention::default(),
             )
             .expect("start the store");
@@ -291,6 +299,14 @@ mod tests {
 
     /// The sugar. The stream carries increments; the store must carry a
     /// position, or coalescing would drop work.
+    /// The commit the runner came from rides on the run row, for the log
+    /// view to link a line's file and line back to.
+    #[tokio::test]
+    async fn the_run_records_its_commit() {
+        let (_td, snap) = run(&[]).await;
+        assert_eq!(snap.git_hash.as_deref(), Some("ae2d52f0"));
+    }
+
     #[tokio::test]
     async fn increments_accumulate_into_done_and_queued() {
         let (_td, snap) = run(&[
@@ -482,7 +498,10 @@ mod tests {
         assert_eq!(log[0].target.as_deref(), Some("slack::http"));
         assert_eq!(log[0].fields.as_deref(), Some(r#"{"retry_in":30}"#));
         assert_eq!(log[1].fields.as_deref(), Some(r#"{"hint":true}"#));
-        assert_eq!(log[2].msg, "sealed a checkpoint");
+        assert_eq!(
+            log[2].msg,
+            "sealed checkpoint #1: 12 rows since the last, now at abc"
+        );
         assert!(
             log.iter().all(|l| l.attempt == 2),
             "every line names the pass it belongs to"
