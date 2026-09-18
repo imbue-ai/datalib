@@ -16,7 +16,8 @@ Generate a token, start the demo, open it — on macOS, in one go:
 
 ```sh
 export DATALIB_TOKEN=$(openssl rand -hex 16)
-docker run -d --rm --name datalib-demo -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
+docker run -d --rm --pull=always --name datalib-demo \
+  -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
   ghcr.io/imbue-ai/datalib datalib-http /opt/datalib/demo &&
   sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
 ```
@@ -24,7 +25,7 @@ docker run -d --rm --name datalib-demo -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
 `docker rm -f datalib-demo` when you're done. On Linux, swap `open` for
 `xdg-open`.
 
-Three details are worth carrying into anything you write yourself:
+Four details are worth carrying into anything you write yourself:
 
 - **`-e DATALIB_TOKEN` deliberately has no `=value`.** That is Docker's
   passthrough form — it takes the value from your environment. The
@@ -40,6 +41,10 @@ Three details are worth carrying into anything you write yourself:
   data; without it Docker publishes on every interface. And a bare
   `-p 8731` is different again — it picks a random host port, so the
   URL above would point at nothing.
+- **`--pull=always`.** Without it, `docker run` uses whatever
+  `ghcr.io/imbue-ai/datalib` you already have and never checks for a
+  newer one, so a second try weeks later silently runs an old release
+  against this page's newer instructions.
 
 Everything below is that same command unpacked, plus how to point
 datalib at data of your own. Every shell block from here on is run
