@@ -17,6 +17,8 @@ instead from `bazel run //:precommit` and as a plain step in
      target and one can stop compiling in silence.
   8. A provider that keeps a sync cursor must record the config the
      cursor was taken under, or widening that config is a silent no-op.
+  9. The README's source grid and docs/user/getting_your_data.md name
+     every source type, link to each other, and stay alphabetical.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -322,6 +324,7 @@ def main() -> int:
     rc |= _check_module_lock_committed(root)
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_cursor_records_its_scope(root)
+    rc |= _check_source_grid(root)
     return rc
 
 
@@ -414,6 +417,118 @@ def _check_cursor_records_its_scope(root: Path) -> int:
         "position, allowlist the provider in _CURSOR_WITHOUT_SCOPE_CONFIG with\n"
         'the reason. See docs/dev/data_architecture_ingestion.md, "When the\n'
         'cursor swallows a config change".',
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 9: the README's source grid matches the docs ---------------
+#
+# The README shows one cell per source, each linking to its section of
+# docs/user/getting_your_data.md; that doc has one `## ` section per
+# source, opening with its `type = "…"`. Both are hand-kept, and the
+# markdown table the grid replaced had quietly dropped three sources.
+# So: every type all_sources.toml or the wizard's catalog knows has a
+# section, every section has a cell, every cell's anchor and image
+# resolve, and both lists are alphabetical.
+_GRID_CELL = re.compile(
+    r'<a href="docs/user/getting_your_data\.md#([^"]+)">(.*?)<br><b>(.*?)</b></a>',
+    re.DOTALL,
+)
+_GRID_IMAGE = re.compile(r'(?:src|srcset)="([^"]+)"')
+_DOC_TYPE_LINE = re.compile(r'^`type = "([a-z_]+)"`', re.MULTILINE)
+_CATALOG_TYPE = re.compile(r'\btype: "([a-z_]+)"')
+
+
+def _github_slug(heading: str) -> str:
+    """GitHub's anchor for a heading: lowercase, punctuation dropped,
+    spaces to hyphens. Backticks count as punctuation."""
+    text = heading.strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text)
+    return re.sub(r"\s", "-", text)
+
+
+def _readme_grid(root: Path) -> str:
+    text = (root / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Supported data sources")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def _doc_sections(root: Path) -> list[tuple[str, str, list[str]]]:
+    """(heading, slug, types declared in that section), in file order."""
+    text = (root / "docs/user/getting_your_data.md").read_text(encoding="utf-8")
+    sections: list[tuple[str, str, list[str]]] = []
+    for chunk in re.split(r"^## ", text, flags=re.MULTILINE)[1:]:
+        heading, _, body = chunk.partition("\n")
+        sections.append((heading, _github_slug(heading), _DOC_TYPE_LINE.findall(body)))
+    return sections
+
+
+def _known_source_types(root: Path) -> set[str]:
+    with open(root / "docs/user/config_examples/all_sources.toml", "rb") as fh:
+        groups = tomllib.load(fh).get("groups", [])
+    types = {g["type"] for g in groups if "type" in g}
+    catalog = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
+    types.update(_CATALOG_TYPE.findall(catalog))
+    return types
+
+
+def _check_source_grid(root: Path) -> int:
+    bad: list[str] = []
+    grid = _readme_grid(root)
+    cells = _GRID_CELL.findall(grid)
+    sections = _doc_sections(root)
+    slugs = {slug for _, slug, _ in sections}
+
+    for anchor, _, label in cells:
+        if anchor not in slugs:
+            bad.append(
+                f'README cell "{label}" links to #{anchor}, which is not a heading'
+            )
+    for path in _GRID_IMAGE.findall(grid):
+        if not (root / path).is_file():
+            bad.append(f"README grid image {path} does not exist")
+
+    linked = {anchor for anchor, _, _ in cells}
+    declared: dict[str, str] = {}
+    for heading, slug, types in sections:
+        if not types:
+            bad.append(
+                f'getting_your_data.md "## {heading}" opens with no `type = "…"` line'
+            )
+        for t in types:
+            declared[t] = slug
+        if types and slug not in linked:
+            bad.append(
+                f'getting_your_data.md "## {heading}" has no cell in the README grid'
+            )
+    for t in sorted(_known_source_types(root) - set(declared)):
+        bad.append(f"source type `{t}` has no section in getting_your_data.md")
+
+    labels = [re.sub(r"&amp;", "&", label) for _, _, label in cells]
+    if labels != sorted(labels, key=str.casefold):
+        bad.append("README grid cells are not in alphabetical order")
+    headings = [h for h, _, _ in sections]
+    if headings != sorted(headings, key=str.casefold):
+        bad.append("getting_your_data.md sections are not in alphabetical order")
+
+    if not bad:
+        print(
+            f"OK: README grid has {len(cells)} sources, each with a section in "
+            "getting_your_data.md, and every known type is among them."
+        )
+        return 0
+    print(
+        "ERROR: the README's source grid and getting_your_data.md disagree:",
+        file=sys.stderr,
+    )
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        "\nA source is a cell in README.md § Supported data sources, linking to\n"
+        "`docs/user/getting_your_data.md#<slug>`, and a `## <Name>` section there\n"
+        'opening with a `type = "<type>"` line. Add both, in alphabetical order.',
         file=sys.stderr,
     )
     return 1
