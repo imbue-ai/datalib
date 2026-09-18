@@ -3,6 +3,7 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { initConfig, type ConfigResponse } from "@/api";
+import { MANAGE_STACK } from "@/router";
 
 const props = defineProps<{ config: ConfigResponse }>();
 const emit = defineEmits<{ (e: "initialized"): void }>();
@@ -25,7 +26,7 @@ async function initialize() {
     // screen was open (a second window, an agent). Nothing went wrong
     // — the library is initialized, which is all this screen wanted.
     emit("initialized");
-    void router.replace("/sources2");
+    void router.replace(MANAGE_STACK);
   } catch (e) {
     error.value = (e as Error).message;
   } finally {

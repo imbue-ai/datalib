@@ -295,7 +295,7 @@ function spawnBackend(
   return { name, child, urlFile, log };
 }
 
-// The announced URL is `<origin>/?token=<DATALIB_TOKEN>`; the specs want
+// The announced URL is `<origin>/sources2?token=<DATALIB_TOKEN>`; the specs want
 // the origin. Absent, empty and short of the whole token all read the
 // same way here — as "not yet", so a torn read is one more turn of the
 // poll rather than a truncated port number that parses.

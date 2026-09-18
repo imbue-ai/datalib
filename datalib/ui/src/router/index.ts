@@ -11,12 +11,11 @@ import { createRouter, createWebHistory } from "vue-router";
 // The catchall MUST come after the explicit routes (`/sources` and the
 // legacy redirects); Vue Router does prefer specific over param routes by
 // path-rank, but order is the simpler invariant.
-/// The card stack the Manage tab opens: the sources tree at 1.6× the
-/// default column width, the config editor beside it.
-export const MANAGE_STACK = encodeColumns([
-  { code: "sourcesView()", size: 1.6, state: "" },
-  { code: "configView()", size: null, state: "" },
-]);
+/// The card stack the Manager2 tab opens, and where a just-initialized
+/// library lands: the sources tree alone, at 1.6× the default column
+/// width. The config editor is a click away from that card, not open
+/// beside it — the first thing to do on the screen is add a source.
+export const MANAGE_STACK = encodeColumns([{ code: "sourcesView()", size: 1.6, state: "" }]);
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,9 +25,8 @@ const router = createRouter({
       name: "sources",
       component: () => import("@/views/SourcesView.vue"),
     },
-    // Manager2 is two cards on the card surface: the sources tree, wide,
-    // with the config editor beside it. The path stays so links and
-    // muscle memory keep working.
+    // Manager2 is the sources card on the card surface. The path stays
+    // so links, muscle memory and the launch URL keep working.
     { path: "/sources2", redirect: MANAGE_STACK },
     // The old Setup and Sync tabs merged into Sources; keep the paths
     // working for muscle memory and stale links.

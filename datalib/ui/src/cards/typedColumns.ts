@@ -6,7 +6,12 @@
 // no grid. `TableGrid.ce.vue` mounts one over these for the simple
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
-import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import type {
+  Column,
+  Formatter,
+  GridOption,
+  GroupingFormatterItem,
+} from "@slickgrid-universal/common";
 import { Editors, Filters } from "@slickgrid-universal/common";
 import type { Action, ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
@@ -46,6 +51,28 @@ export type SlickColumnOptions<T> = {
   /// Per-field refinements a type cannot know — a width, a hover, a
   /// formatter — merged over the typed definition.
   overrides?: Record<string, Partial<Column<T>>>;
+};
+
+/// Grid options a grid drawing `filterable` columns must carry. The
+/// compound number filter's operator dropdown pads each operator to
+/// three characters with `&nbsp;` entities and then, with
+/// `enableHtmlRendering` off, sets them as text — so its blank first
+/// option read `&nbsp;&nbsp;&nbsp;`. Naming every operator already
+/// padded, with no-break spaces, leaves it nothing to add.
+const NBSP = "\u00a0";
+const pad = (op: string) => ({ operatorAlt: op.padEnd(3, NBSP) });
+export const FILTER_GRID_OPTIONS: Pick<GridOption, "compoundOperatorAltTexts"> = {
+  compoundOperatorAltTexts: {
+    numeric: {
+      "": pad(NBSP),
+      "=": pad("="),
+      "<": pad("<"),
+      "<=": pad("<="),
+      ">": pad(">"),
+      ">=": pad(">="),
+      "<>": pad("<>"),
+    },
+  },
 };
 
 /// A group row's title: the column, the value and how many rows share
