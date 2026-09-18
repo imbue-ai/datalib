@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // Routed view for the card surface. Owns the chrome the layouts
-// share — the bottom status bar and the layout toggle — and keeps
+// share — the dev and layout toggles along the bottom — and keeps
 // each layout host alive across toggles (v-show, not v-if) so
-// switching back doesn't lose its cards.
-import { onMounted, ref } from "vue";
+// switching back doesn't lose its cards. The data root and its size
+// are the app-wide `RootStorageBar` below this; a grid card carries
+// its own row count.
+import { ref } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
-import { fetchHealth, fetchSearch, type Health } from "@/api";
 import { devMode } from "@/devMode";
 
 type Layout = "columns" | "tree" | "tiling";
@@ -20,24 +21,6 @@ function setLayout(next: Layout) {
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
 }
-
-// Backend status for the bottom status bar. Global (host-level) on
-// purpose: it describes the backend and its data root, not any one
-// card's query — with several grid cards it would otherwise repeat
-// per card.
-const health = ref<Health | null>(null);
-const indexedTotal = ref<number | null>(null);
-const healthError = ref<string | null>(null);
-onMounted(async () => {
-  try {
-    health.value = await fetchHealth();
-    // The backend's total_estimated is capped by the limit, so ask
-    // with a large limit to get the real index size.
-    indexedTotal.value = (await fetchSearch("", 100_000)).total_estimated;
-  } catch (e) {
-    healthError.value = (e as Error).message;
-  }
-});
 </script>
 
 <template>
@@ -46,18 +29,6 @@ onMounted(async () => {
     <TreeView v-if="treeMounted" v-show="layout === 'tree'" />
     <TilingView v-if="tilingMounted" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
-      <span v-if="healthError" class="cards-status-msg cards-health--warn">
-        backend unreachable: {{ healthError }}
-      </span>
-      <span v-else-if="health" class="cards-status-msg">
-        backend ok<template v-if="indexedTotal != null">
-          · {{ indexedTotal }} conversations indexed</template
-        >
-        under <code>{{ health.root }}</code>
-        <span v-if="!health.root_exists" class="cards-health--warn">
-          (root does not exist)</span
-        >
-      </span>
       <button
         class="cards-dev-toggle"
         :class="{ 'is-active': devMode }"
@@ -123,28 +94,8 @@ onMounted(async () => {
   opacity: 0.85;
   min-height: 1.5rem;
 }
-.cards-statusbar code {
-  font-family: ui-monospace, monospace;
-  background: rgba(0, 0, 0, 0.12);
-  padding: 0 0.25rem;
-  border-radius: 2px;
-}
-.cards-health--warn {
-  color: #e35d6a;
-}
-/* The status message takes whatever width is left and ellipsis-
-   truncates; min-width:0 lets it shrink below its content (flex items
-   default to min-width:auto, which would otherwise squeeze the picker
-   instead). */
-.cards-status-msg {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 /* The dev + layout toggles sit flush right as a cluster — the dev
-   button carries the auto margin, the message before them absorbs any
-   slack via min-width:0. */
+   button carries the auto margin. */
 .cards-dev-toggle {
   flex: 0 0 auto;
   margin-left: auto;
