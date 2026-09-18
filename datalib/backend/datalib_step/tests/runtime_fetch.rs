@@ -17,7 +17,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datalib_runtime::node_runtime::{AssetKind, Manifest, RuntimeAsset, MANIFEST_FILE};
+use datalib_runtime::node_runtime::{
+    AssetKind, Manifest, RuntimeAsset, LATCHKEY_ENTRY_REL, LATCHKEY_VERSION, MANIFEST_FILE,
+};
 use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 use sha2::{Digest, Sha256};
 
@@ -77,8 +79,8 @@ impl Install {
 }
 
 /// A `.tar.gz` of a runtime whose `node` echoes its arguments and whose
-/// qmd entry exists, so `qmd --version` through the resolver prints
-/// the path it resolved to.
+/// qmd and latchkey entries exist, so `--version` through the resolver
+/// prints the path each resolved to.
 fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
     let src = base.join("runtime-src");
     let node = src.join("node/bin/node");
@@ -90,6 +92,9 @@ fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
     ));
     fs::create_dir_all(entry.parent().unwrap()).unwrap();
     fs::write(&entry, "// qmd\n").unwrap();
+    let entry = src.join(format!("latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL}"));
+    fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    fs::write(&entry, "// latchkey\n").unwrap();
 
     let mut buf = Vec::new();
     {
@@ -189,11 +194,18 @@ fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
         stderr.contains(&format!("runtime: {}", expected_root.display())),
         "{stderr}"
     );
-    // The fake node echoed the entry it was given: qmd resolved from
-    // the fetched tree, at the pinned version.
+    // The fake node echoed the entry it was given: both tools resolved
+    // from the fetched tree, at their pinned versions.
     assert!(
         stderr.contains(&format!(
             "qmd --version: fake-node {}/qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js --version",
+            expected_root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "latchkey --version: fake-node {}/latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL} --version",
             expected_root.display()
         )),
         "{stderr}"
