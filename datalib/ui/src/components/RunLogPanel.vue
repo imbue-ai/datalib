@@ -52,6 +52,10 @@ const props = defineProps<{
   /// What the query bar starts with — `process:http` for the server's
   /// log. Editable like anything typed there.
   initialQuery?: string;
+  /// Open scrolled to the line that says how the step ended — the
+  /// runner writes its error as the step's last error-level line, a
+  /// stop as its last warning — and keep that line marked.
+  jumpToEnd?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -104,6 +108,8 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
+/// The `seq` of the line the panel opened on, which its cells mark.
+let jumpedTo: number | null = null;
 
 /// The filter as sent to the server: the step while narrowed, none once
 /// widened. Widening restarts from the beginning, because the lines the
@@ -136,6 +142,7 @@ async function load(fresh: boolean) {
       await nextTick();
       if (!bundle) {
         createGrid(got);
+        if (props.jumpToEnd) jumpToEnd(got);
       } else if (fresh) {
         bundle.dataset = got;
       } else {
@@ -164,6 +171,25 @@ async function load(fresh: boolean) {
     busy.value = false;
     inflight = false;
   }
+}
+
+/// The line that says how the step ended: the one the runner wrote at
+/// finish, else the last warning or error. Scrolled to on the first
+/// paint, with a few lines of what led up to it above.
+function jumpToEnd(lines: RunLogLine[]) {
+  const isFinish = (l: RunLogLine) => !!l.fields && /"finished"/.test(l.fields);
+  const isProblem = (l: RunLogLine) => l.level === "error" || l.level === "warn";
+  const target = [...lines].reverse().find(isFinish) ?? [...lines].reverse().find(isProblem);
+  if (!target || !bundle) return;
+  jumpedTo = target.seq;
+  const row = bundle.dataView.getRowById(target.seq);
+  if (row == null) return;
+  const grid = bundle.slickGrid;
+  const vp = grid.getViewportNode();
+  const visible = vp ? Math.floor(vp.clientHeight / ROW_HEIGHT) : 10;
+  grid.scrollRowToTop(Math.max(0, row - Math.floor(visible / 2)));
+  grid.invalidateRow(row);
+  grid.render();
 }
 
 let atBottom = true;
@@ -227,7 +253,8 @@ function runLabel(r: RunInfo): string {
 
 function levelClass(line: RunLogLine | undefined): string {
   const l = line?.level;
-  return l === "error" ? "rl-error" : l === "warn" ? "rl-warn" : "";
+  const level = l === "error" ? "rl-error" : l === "warn" ? "rl-warn" : "";
+  return line && line.seq === jumpedTo ? `${level} rl-jumped` : level;
 }
 
 const ROW_HEIGHT = 24;
@@ -701,6 +728,11 @@ onUnmounted(() => {
 }
 .rl-grid .slick-cell.rl-error {
   color: var(--datalib-log-error);
+}
+/* The line the panel opened on: the one that says how the step ended. */
+.rl-grid .slick-cell.rl-jumped {
+  background: color-mix(in srgb, var(--datalib-log-error) 14%, transparent);
+  font-weight: 600;
 }
 .rl-grid .rl-group-count {
   color: var(--datalib-muted);

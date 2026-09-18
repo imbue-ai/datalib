@@ -273,16 +273,21 @@ async fn a_finished_run_reaches_the_rows() {
     assert_eq!(ingest["last_run_id"], "r1");
     assert_eq!(ingest["live_run_id"], serde_json::Value::Null);
 
+    // The error itself is a log line, not the hover: the hover says
+    // where to read it.
     let render = &rows["slack/render_markdown"];
     assert_eq!(render["status"]["key"], "failed");
-    assert_eq!(render["status"]["detail"], "bad json at line 3");
+    assert_eq!(
+        render["status"]["detail"],
+        "double-click to open the log at the error"
+    );
 
     let slack = &rows["group:slack"];
     assert_eq!(slack["status"]["key"], "failed");
     assert_eq!(slack["status_from"], "slack/render_markdown");
     assert_eq!(
         slack["status"]["detail"],
-        "slack/render_markdown: bad json at line 3"
+        "slack/render_markdown: double-click to open the log at the error"
     );
     assert_eq!(slack["last_synced"], "2026-08-31T10:00:09+01:00");
     assert!(slack["status"].get("segments").is_none(), "{slack}");

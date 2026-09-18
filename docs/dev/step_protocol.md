@@ -308,10 +308,12 @@ stderr is yours for humans: every line is captured into the event
 stream as an `info` log. So is every stdout line that is not an
 event. If you exit non-zero, the last few lines a person could not
 find by reading "it failed" — plain lines, and the message of any
-structured `warn` or `error` line — become the error message the
-Manage row shows on hover; structured `info` lines stay in the log.
+structured `warn` or `error` line — become the step's error message;
+structured `info` lines stay in the log. The runner writes that
+message into the log too, as the step's last line at `error` level,
+and that line is where the Manage row's double-click opens the log.
 A step that exits after a cancel (`failure: cancelled`) is recorded
-as stopped, and its message says so.
+as stopped, its message says so, and its line is a `warn`.
 
 Each line records which pipe it came from (`stream`) and is
 timestamped as the runner reads it, and the two pipes are read

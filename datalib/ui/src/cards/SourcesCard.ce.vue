@@ -384,6 +384,10 @@ const logFor = ref<{
   runId: string;
   live: boolean;
   startedAt: string | null;
+  /// Open at the line that says how the step ended, for a row whose
+  /// status is the outcome of a run — the hover on Failed or Stopped
+  /// promises exactly that.
+  jumpToEnd?: boolean;
 } | null>(null);
 const logError = ref<string | null>(null);
 /// What `logFor.runId` holds while the panel shows every run at once.
@@ -442,7 +446,8 @@ async function openStepLog(row: Row, runId: string | null = null) {
       logFor.value = { row, runId: "", live: false, startedAt: null };
       return;
     }
-    logFor.value = { row, ...run };
+    const jumpToEnd = !run.live && !runId && ["failed", "stopped"].includes(row.status.key);
+    logFor.value = { row, ...run, jumpToEnd };
     logOpenedOn.value = run.runId;
   } catch (e) {
     logError.value = (e as Error).message;
@@ -1564,6 +1569,7 @@ onUnmounted(() => {
           :step="logFor.row?.id ?? null"
           :live="logFor.live"
           :initial-query="logFor.row ? undefined : 'process:http'"
+          :jump-to-end="logFor.jumpToEnd"
           @run-changed="onLogRunChanged"
         />
       </div>
