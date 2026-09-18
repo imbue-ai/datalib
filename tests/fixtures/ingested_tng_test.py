@@ -123,12 +123,18 @@ SCOPE_TAG_BY_PROVIDER = {
 # a silent pass.
 PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 
-# The one `problems` row the fixture is built to produce: conversation
-# `c0000006`'s reply carries `created_at = "stardate 47988.1"`, which the
-# claude renderer records as a nulled `created_at` on that message. The
-# id is `datalib_id::problem_id` over (source, stage, scope, item, field,
-# reason, rule) and nothing else, which is why it can be written down.
+# Every `problems` row the fixture produces, per source. The ids are
+# `datalib_id::problem_id` over (source, stage, scope, item, field,
+# reason, rule) and nothing else, which is why they can be written down.
 # The columns are `_problems()`'s, `|`-joined by the doltlite shell.
+#
+# Two are what the fixture's own gaps look like once a download records
+# what it could not fetch instead of only logging it: an attachment
+# whose bytes the claude fixture never had, and the facebook video that
+# is deliberately absent from the export. The third is the one record
+# built to fail: conversation `c0000006`'s reply carries
+# `created_at = "stardate 47988.1"`, which the claude renderer records as
+# a nulled `created_at` on that message.
 POISONED_PROBLEM = (
     "37f8fe60-9c94-5398-a0d9-4be95d77089b"  # problem_uuid
     "|warning|parse|markdown"
@@ -136,6 +142,24 @@ POISONED_PROBLEM = (
     "|dcce3451-eb4f-53dd-bce7-7e0b22d3af16"  # the reply's item uuid
     "|created_at|coercion_failed|stardate 47988.1"
 )
+CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
+    "7e0bd203-7160-5b88-9b5a-40f601984129"
+    "|warning|fetch|entity"
+    "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
+    "#f0000001-1701-4d00-8000-0000000f0001"
+    "|||fetch_failed|no bytes"
+)
+FACEBOOK_VIDEO_NOT_IN_EXPORT = (
+    "22997b9d-2f29-5ffc-a555-7ab9b876a337"
+    "|warning|fetch|entity"
+    "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
+    "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
+    "|||fetch_failed|media file not in the export"
+)
+EXPECTED_PROBLEMS = {
+    "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "facebook": [FACEBOOK_VIDEO_NOT_IN_EXPORT],
+}
 
 
 def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
@@ -1015,31 +1039,31 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Exactly one record in the TNG fixture may land in the problem
-        # sink: the one built to. Every renderer drops-and-records a row
+        # Exactly three records in the TNG fixture may land in the problem
+        # sink: the one built to, and the two its downloads cannot fetch
+        # (`EXPECTED_PROBLEMS`). Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
         # stops one bad record from poisoning `grid_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
-        # failure anywhere. Here it does: the fixture is known-good
-        # apart from `c0000006`'s reply, whose `created_at` is
-        # "stardate 47988.1", so any other row is a regression and the
-        # message names it. The poisoned row is what proves the sink
-        # works end to end — through the real render, into the source's
-        # store, and copied into the index — and its id is pinned so a
-        # later run mints the same one (asserted after run 2 and run 4).
+        # failure anywhere. Here it does: any row outside the expected
+        # three is a regression and the message names it. The poisoned
+        # row is what proves the sink works end to end — through the
+        # real render, into the source's store, and copied into the
+        # index — and every id is pinned so a later run mints the same
+        # one (asserted after run 2 and run 4).
         problems1 = self._problems()
         self.assertEqual(
             problems1,
-            {"claude-api": [POISONED_PROBLEM]},
-            "the TNG fixture renders clean apart from its poisoned reply; "
-            "any other row here means a projection started dropping or "
-            "nulling data",
+            EXPECTED_PROBLEMS,
+            "the TNG fixture renders clean apart from its poisoned reply "
+            "and the two things its downloads cannot fetch; any other row "
+            "here means a projection started dropping or nulling data",
         )
         self.assertEqual(
             self._index_problems(),
-            [POISONED_PROBLEM],
-            "grid_index copies the source's problems into the index",
+            sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
+            "grid_index copies every source's problems into the index",
         )
 
         # ── id-space guardrails ─────────────────────────────────

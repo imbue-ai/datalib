@@ -32,6 +32,7 @@ rust_library(
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/table:datalib_table",

@@ -847,7 +847,12 @@ async fn latest_sync_run(path: &Path) -> Value {
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison:
-const NON_CONTENT_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
+const NON_CONTENT_TABLES: &[&str] = &[
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "problems",
+];
 
 /// Dump only the entity *content* tables of a doltlite DB for the
 /// --reset-and-redownload stability assertion: drops every

@@ -106,6 +106,9 @@ closed_vocabulary! {
         /// error, a renderer that gave up on the document. → drop it
         /// this run; a page from an earlier run may still be on disk.
         RenderFailed,
+        /// The download could not fetch this record. → the record is
+        /// missing, or — when an earlier fetch left a payload — stale.
+        FetchFailed,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }

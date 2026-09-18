@@ -199,7 +199,30 @@ pub const SYNC_SCOPE_CONFIG_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_c
 )";
 
 /// DDL every provider gets for free, appended inside [`open`].
-pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, SYNC_SCOPE_CONFIG_DDL];
+/// The raw store's `problems`: what a download could not do with one
+/// record, keyed `<table>:<id>` under the entity scope. `source_id` is
+/// left empty here — a download does not know its group's id — and the
+/// render step, which does, mints the rows again with it as it carries
+/// them into its own store. This copy is staging; nothing reads it but
+/// render.
+pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
+
+pub const SHARED_DDL: &[&str] = &[
+    SYNC_RUNS_DDL,
+    SYNC_SCOPE_STATE_DDL,
+    SYNC_SCOPE_CONFIG_DDL,
+    PROBLEMS_DDL,
+];
+
+/// The tables every raw store has that are datalib's, not the
+/// source's: what a mirror must leave alone and a content diff must
+/// skip. Kept in step with [`SHARED_DDL`] by a test.
+pub const SHARED_TABLES: &[&str] = &[
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "problems",
+];
 
 // ── Path helper ─────────────────────────────────────────────────────
 
@@ -1020,6 +1043,40 @@ pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     head
 }
 
+/// The raw store's whole-store problem counts by severity, read-only,
+/// for the step's report. Empty for a store that is not there yet or
+/// predates the table.
+pub async fn problem_counts_at_path(
+    db_path: &Path,
+) -> Result<HashMap<datalib_problems::Severity, i64>> {
+    if !db_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let url = format!("sqlite://{}?mode=ro", db_path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .with_context(|| format!("open read-only {}", db_path.display()))?;
+    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
+        .fetch_all(&pool)
+        .await;
+    pool.close().await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) if crate::pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
+        Err(e) => return Err(e).context("count the raw store's problems"),
+    };
+    let mut out = HashMap::new();
+    for r in rows {
+        let word: String = r.try_get(0)?;
+        let severity = datalib_problems::Severity::parse(&word)
+            .with_context(|| format!("problems.severity: unknown spelling {word:?}"))?;
+        out.insert(severity, r.try_get::<i64, _>(1)?);
+    }
+    Ok(out)
+}
+
 // ── Reset ───────────────────────────────────────────────────────────
 
 /// Truncate every per-row table and its sidecar in one transaction, so the
@@ -1130,6 +1187,86 @@ pub async fn record_object_attempt(
     q.execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt {table}={id}"))?;
+    record_fetch_problem(tx, table, id, result).await
+}
+
+/// The `problems` row behind a failed attempt, or its absence behind a
+/// successful one. A failure on a record that has never fetched is a
+/// dropped record — an error; one on a record that fetched before
+/// leaves the earlier copy in place, and is a warning: what the reader
+/// sees is stale, not missing.
+async fn record_fetch_problem(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    result: Option<&str>,
+) -> Result<()> {
+    use crate::bulk::BulkUpsertable;
+    use datalib_problems::{
+        Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
+    };
+    let entity_id = format!("{table}:{id}");
+    let first_seen: Option<String> = sqlx::query_scalar(
+        "SELECT first_seen_at_utc FROM problems \
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&entity_id)
+    .bind(Stage::Fetch.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the fetch problem of {entity_id}"))?;
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
+        .bind(ScopeKind::Entity.as_str())
+        .bind(&entity_id)
+        .bind(Stage::Fetch.as_str())
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
+    let Some(err) = result else {
+        return Ok(());
+    };
+    // An earlier successful fetch — the sidecar's `fetched_at_utc`,
+    // which every table has, payload-bearing or CAS edge — means the
+    // reader still has something, just not the latest. The row above
+    // has already bumped the attempt, and a failure leaves that stamp
+    // alone.
+    let fetched_sql =
+        format!("SELECT fetched_at_utc IS NOT NULL FROM {table}_bookkeeping WHERE id = ?");
+    // Audited: `table` interpolated as an identifier; `id` is bound.
+    let fetched_before: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(fetched_sql))
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| format!("probe {entity_id} for an earlier fetch"))?
+        .unwrap_or(false);
+    let (outcome, severity) = if fetched_before {
+        (Outcome::Ok, Severity::Warning)
+    } else {
+        (Outcome::Dropped, Severity::Error)
+    };
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    let row = ProblemRow {
+        first_seen_at_utc: first_seen.unwrap_or_else(|| now.clone()),
+        last_seen_at_utc: now,
+        tz_offset: Some(tz_offset),
+        ..ProblemRow::new(
+            "",
+            Stage::Fetch,
+            Scope::Entity(&entity_id),
+            None,
+            outcome,
+            Problem::record(Reason::FetchFailed, err).severity(severity),
+            None,
+        )
+    };
+    let sql = crate::bulk::insert_sql::<ProblemRow>();
+    // Audited: `sql` is built from `ProblemRow`'s associated consts,
+    // never from row data; all values bound.
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record the fetch problem of {entity_id}"))?;
     Ok(())
 }
 
@@ -1665,6 +1802,18 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    /// `SHARED_TABLES` is what the mirror engine and a content diff
+    /// read; a table added to `SHARED_DDL` without it would be dropped
+    /// by the next mirror run and recreated by the next open, forever.
+    #[test]
+    fn shared_tables_names_every_shared_ddl_table() {
+        let from_ddl: Vec<String> = SHARED_DDL
+            .iter()
+            .filter_map(|d| parse_create_table_name(d))
+            .collect();
+        assert_eq!(from_ddl, SHARED_TABLES);
+    }
+
     /// The stamp is what `datalib_history` parses back out, so its
     /// shape is a contract: one trailing ` run=<id>`, and nothing when
     /// there is no run.
@@ -1972,6 +2121,97 @@ mod tests {
         assert!(base_v.get("updated").is_none());
         // ...but overlaying the sidecar reconstructs the wire payload.
         assert_eq!(overlay(&base_v, &vol_v), full);
+    }
+
+    /// A failed fetch is a `problems` row on the entity: an error
+    /// when the record has never fetched, a warning when an earlier
+    /// fetch left something behind; the same failure twice is one row
+    /// with its first-seen stamp kept; and a fetch that succeeds — by
+    /// the single or the bulk path — clears it.
+    #[tokio::test]
+    async fn a_failed_fetch_is_a_problem_until_the_record_fetches() {
+        use datalib_problems::Severity;
+        let d = tempdir().unwrap();
+        let p = d.path().join("f.doltlite_db");
+        let pool = open_test(&p).await;
+        let rows = |pool: &SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "SELECT severity, scope_key, sample, first_seen_at_utc FROM problems \
+                     ORDER BY scope_key",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<String, _>(0),
+                        r.get::<String, _>(1),
+                        r.get::<String, _>(2),
+                        r.get::<String, _>(3),
+                    )
+                })
+                .collect::<Vec<_>>()
+            }
+        };
+
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "w1", "HTTP 500")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let first = rows(&pool).await;
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first[0].0,
+            Severity::Error.as_str(),
+            "never fetched: the record is missing"
+        );
+        assert_eq!(first[0].1, "widgets:w1");
+        assert_eq!(first[0].2, "HTTP 500");
+
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "w1", "HTTP 503")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let again = rows(&pool).await;
+        assert_eq!(again.len(), 1, "one row per entity, not one per attempt");
+        assert_eq!(again[0].2, "HTTP 503", "the newest error");
+        assert_eq!(again[0].3, first[0].3, "first seen is kept");
+
+        let mut tx = pool.begin().await.unwrap();
+        record_object_attempt(&mut tx, "widgets", "w1", None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(rows(&pool).await.is_empty(), "a fetch clears it");
+
+        // Fetched once, then failing: what the reader has is stale, not
+        // missing.
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "w1", "HTTP 429")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let stale = rows(&pool).await;
+        assert_eq!(stale[0].0, Severity::Warning.as_str());
+
+        // The bulk success path clears it too.
+        let mut tx = pool.begin().await.unwrap();
+        crate::bulk::bulk_upsert_bookkeeping(
+            &mut tx,
+            "widgets",
+            ["w1"],
+            &datalib_time::IsoOffsetTimestamp::now_local(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert!(rows(&pool).await.is_empty());
+        pool.close().await;
     }
 
     // ── Schema self-healing (reconcile_table_schema) ──────────────
