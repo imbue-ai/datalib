@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
-use datalib_schema::problems::Severity;
+use datalib_schema::problems::{Severity, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -103,16 +103,8 @@ pub async fn run(
         .get(&Severity::Warning)
         .copied()
         .unwrap_or(0);
-    progress.metric(
-        PROBLEMS_METRIC,
-        &[("severity", Severity::Error.as_str())],
-        errors,
-    );
-    progress.metric(
-        PROBLEMS_METRIC,
-        &[("severity", Severity::Warning.as_str())],
-        warnings,
-    );
+    progress.metric(METRIC, &[Severity::Error.metric_label()], errors);
+    progress.metric(METRIC, &[Severity::Warning.metric_label()], warnings);
     if errors + warnings > 0 {
         tracing::warn!(
             source = %name,
@@ -163,10 +155,6 @@ pub struct RenderSource {
     pub raw_db: Option<PathBuf>,
     pub progress: Progress,
 }
-
-/// The metric series a step reports its whole-store problem counts
-/// on, labelled by severity. Read back by the Manage screen.
-pub const PROBLEMS_METRIC: &str = "problems";
 
 /// What a render left behind, for the shell to report.
 pub struct RenderReport {

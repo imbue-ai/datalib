@@ -157,25 +157,33 @@ impl Sources {
                 .or_else(|| Some(row.provider.clone()).filter(|p| !p.is_empty())),
             detail: None,
         });
-        // Datalib's own rows — each source's storage report — are filed
-        // under datalib rather than under the source they measure.
-        let label = if row.source_id == datalib_source_id() {
+        row.source_ref = Some(self.identity(&row.source_id));
+    }
+
+    /// The source as the grid shows it: the name the config gives the
+    /// group, or its id when the config does not name it. Datalib's own
+    /// rows — each source's storage report — are filed under datalib
+    /// rather than under the source they measure.
+    pub fn identity(&self, source_id: &str) -> Identity {
+        let datalib = source_id == datalib_source_id();
+        let label = if datalib {
             "Datalib".to_string()
         } else {
-            group
+            self.groups
+                .get(source_id)
                 .and_then(|g| g.name.clone())
-                .unwrap_or_else(|| row.source_id.clone())
+                .unwrap_or_else(|| source_id.to_string())
         };
-        row.source_ref = Some(Identity {
-            id: row.source_id.clone(),
+        Identity {
+            id: source_id.to_string(),
             label,
             icon: None,
-            detail: Some(if row.source_id == datalib_source_id() {
+            detail: Some(if datalib {
                 "Datalib's own row, not a source's data".to_string()
             } else {
-                format!("Stored in {}/", row.source_id)
+                format!("Stored in {source_id}/")
             }),
-        });
+        }
     }
 }
 

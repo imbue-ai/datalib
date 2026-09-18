@@ -112,6 +112,55 @@ async fn ticks_coalesce_but_log_lines_do_not() {
     );
 }
 
+/// `latest_metric` answers "what did each step last count?" across
+/// runs: the newest run that reported the series wins per step and
+/// label, an older run's value never shadows it, and a step that never
+/// reported is absent rather than zero.
+#[tokio::test]
+async fn latest_metric_is_the_newest_report_per_step_and_label() {
+    let td = tempfile::tempdir().unwrap();
+    let labelled = |step: &str, labels: &str, value: i64| MetricRow {
+        labels: labels.into(),
+        ..metric(step, "problems", value)
+    };
+    {
+        let w = start(td.path(), "run-1");
+        w.metric(labelled("slack/render_markdown", "severity=error", 4));
+        w.metric(labelled("slack/render_markdown", "severity=warning", 9));
+        w.metric(labelled("mail/render_markdown", "severity=error", 1));
+    }
+    // A later run: slack re-counted, mail did not run.
+    {
+        let w = start(td.path(), "run-2");
+        w.metric(labelled("slack/render_markdown", "severity=error", 0));
+        w.metric(labelled("slack/render_markdown", "severity=warning", 2));
+    }
+    let latest = datalib_runs::latest_metric(td.path(), "problems").await;
+    let find = |step: &str, labels: &str| {
+        latest
+            .iter()
+            .find(|m| m.step == step && m.labels == labels)
+            .map(|m| (m.value, m.run_id.clone()))
+    };
+    assert_eq!(
+        find("slack/render_markdown", "severity=error"),
+        Some((0, "run-2".into()))
+    );
+    assert_eq!(
+        find("slack/render_markdown", "severity=warning"),
+        Some((2, "run-2".into()))
+    );
+    assert_eq!(
+        find("mail/render_markdown", "severity=error"),
+        Some((1, "run-1".into())),
+        "a step the newer run skipped keeps its last count"
+    );
+    assert_eq!(find("mail/render_markdown", "severity=warning"), None);
+    assert!(datalib_runs::latest_metric(td.path(), "nothing")
+        .await
+        .is_empty());
+}
+
 /// The tail contract: a reader that remembers the last `seq` it saw
 /// gets only what came after.
 #[tokio::test]

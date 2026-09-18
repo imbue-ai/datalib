@@ -874,6 +874,32 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Every problem the store holds at the reader's pin — the whole
+    /// table, because a consumer copies it wholesale: the pinned store
+    /// is the complete truth about this source's problems at that
+    /// commit, so the copy is the sweep. A store written before the
+    /// table existed reads as empty, with a warning that says so.
+    pub fn problems_at_pin(&self) -> Result<Vec<ProblemRow>> {
+        assert!(self.pin.is_some(), "problems_at_pin is a reader's call");
+        blocking(async {
+            let rows = match sqlx::query("SELECT * FROM pinned_problems ORDER BY problem_uuid")
+                .fetch_all(&self.pool)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => {
+                    tracing::warn!(
+                        store = %self.path.display(),
+                        "this render store predates the problems table; reading it as clean"
+                    );
+                    return Ok(Vec::new());
+                }
+                Err(e) => return Err(e).context("read problems"),
+            };
+            rows.iter().map(ProblemRow::from_row).collect()
+        })
+    }
+
     /// Whole-store counts by severity: what the step reports at its
     /// end. A severity this build cannot name is an error — the store
     /// was written by a newer build and a silent zero would read as

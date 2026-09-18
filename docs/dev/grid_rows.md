@@ -8,6 +8,11 @@ unioned in code, with five distinct row builders — every ingest writes a
 denormalized projection into a single Dolt table, **`grid_rows`**, and
 the backend reads it with one query.
 
+The index holds one more table the grid does not read: `problems`,
+every source's render-store `problems` copied in whole by `grid_index`
+and served by the applet at `/problems` — see
+[`plans/problem_visibility.md`](plans/problem_visibility.md).
+
 ## Why a union table
 
 Three forces pushed us this direction:

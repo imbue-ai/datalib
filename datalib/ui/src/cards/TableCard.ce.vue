@@ -9,14 +9,14 @@ import { fetchTable, type ColumnSpec } from "@/api";
 import { subscribeLive } from "@/live";
 import type { CardCtx } from "./types";
 
-const props = defineProps<{ url: string; ctx: CardCtx }>();
+const props = defineProps<{ url: string; title?: string; ctx: CardCtx }>();
 
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<Record<string, unknown>[]>([]);
 const tree = ref(false);
 const error = ref<string | null>(null);
 
-props.ctx.setTitle(props.url.replace(/^\/api\//, ""));
+props.ctx.setTitle(props.title ?? props.url.replace(/^\/api\//, ""));
 
 async function load() {
   try {
@@ -24,7 +24,7 @@ async function load() {
     columns.value = t.columns ?? [];
     rows.value = t.rows ?? [];
     tree.value = !!t.tree;
-    error.value = t.error ?? null;
+    error.value = t.error ?? (t.errors?.length ? t.errors.join(" · ") : null);
   } catch (e) {
     error.value = (e as Error).message;
   }

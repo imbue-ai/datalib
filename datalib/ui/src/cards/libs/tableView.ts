@@ -6,6 +6,10 @@ import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-them
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
-export function tableView(opts: { url: string }): CardRender {
-  return vueCard(TableCard, { url: opts.url }, { styleSources: [slickCss, tableGridCss] });
+export function tableView(opts: { url: string; title?: string }): CardRender {
+  return vueCard(
+    TableCard,
+    { url: opts.url, title: opts.title },
+    { styleSources: [slickCss, tableGridCss] },
+  );
 }
