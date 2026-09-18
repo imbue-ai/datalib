@@ -39,7 +39,7 @@ only exists under `bazel run` and resolves to the source tree, so new
 before committing. The same wrapper regenerates a golden that is not an
 insta snapshot: a test that writes its file when `INSTA_UPDATE=always` is
 set and compares otherwise (`//datalib/backend/datalib_step:ingest_methods.update`
-is one). The live tests need `LATCHKEY_CURL` pointed at the dispatch curl,
+is one). The live tests need `LATCHKEY_CURL` pointed at the router curl,
 never the impersonator (`docs/dev/curl_impersonate.md`).
 
 When adding an insta-using test, declare a sibling `.update`:

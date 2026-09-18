@@ -1,5 +1,3 @@
-load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
@@ -8,22 +6,16 @@ exports_files(["Cargo.toml"])
 # sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
 rust_library(
     name = "datalib_etl",
-    srcs = glob(
-        ["src/**/*.rs"],
-        exclude = ["src/bin/**"],
-    ),
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "datalib_etl",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
-    # The dispatch curl + the impersonator it fronts travel with the
+    # The router curl + the impersonator it fronts travel with the
     # library so any binary that links `datalib_etl` gets both in
-    # runfiles (co-located, so the dispatch curl finds the impersonator as
-    # a sibling); `latchkey::ensure_curl_dispatch` resolves the dispatch curl
-    # via the bazel runfiles lookup in `resolve()`.
-    data = [
-        ":latchkey_curl_dispatch",
-        ":latchkey_curl_impersonate",
-    ],
+    # runfiles, side by side (the router finds the impersonator as a
+    # sibling); `latchkey::ensure_curl_router` resolves the router via
+    # the bazel runfiles lookup in `resolve()`.
+    data = ["//third-party/latchkey-curl-shims"],
     proc_macro_deps = [
         "//datalib/backend/etl/macros:datalib_etl_macros",
         "@datalib_crates//:async-trait",
@@ -55,54 +47,6 @@ rust_library(
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",    ],
 )
-
-# The Chrome-impersonating curl: upstream `curl-impersonate`, built from
-# source by our own workflow and fetched by MODULE.bazel (see
-# //third-party/curl-impersonate). Copied here, under this name, because
-# that is where everything looks for it: `latchkey_curl_dispatch` finds
-# it as a sibling of itself, every provider test gets it as a runfile of
-# `datalib_etl`, and release.yml stages `bazel-bin/datalib/backend/etl/
-# latchkey_curl_impersonate` as `latchkey-curl-impersonate`. It is not
-# `curl` on its own: without `--impersonate` it presents a stock curl
-# fingerprint, and the dispatch is what adds that flag.
-copy_file(
-    name = "latchkey_curl_impersonate",
-    src = "//third-party/curl-impersonate:curl_impersonate",
-    out = "latchkey_curl_impersonate",
-    is_executable = True,
-    visibility = ["//datalib:__subpackages__"],
-)
-
-# Drop-in `curl` that routes on the `X-Imbue-Impersonate` marker header:
-# marked requests go to the impersonating binary above (found as a
-# sibling of this one, and given the flags that make it impersonate),
-# all others pass through to `curl` on PATH. std-only — no deps.
-rust_binary(
-    name = "latchkey_curl_dispatch",
-    srcs = ["src/bin/latchkey_curl_dispatch.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-)
-
-rust_test(
-    name = "latchkey_curl_dispatch_test",
-    size = "small",
-    crate = ":latchkey_curl_dispatch",
-    edition = "2021",
-)
-
-# The exec half of the dispatch, which the unit tests above cannot
-# reach: copies the binary next to fake `latchkey-curl-impersonate` and
-# `curl` scripts and checks which one each kind of invocation lands on,
-# with what argv.
-sh_test(
-    name = "latchkey_curl_dispatch_exec_test",
-    size = "small",
-    srcs = ["tests/latchkey_curl_dispatch_exec_test.sh"],
-    args = ["$(rootpath :latchkey_curl_dispatch)"],
-    data = [":latchkey_curl_dispatch"],
-)
-
 
 rust_test(
     name = "etl_unittests",

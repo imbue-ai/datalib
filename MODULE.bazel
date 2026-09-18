@@ -115,35 +115,34 @@ http_archive(
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
-# `curl-impersonate`, the Chrome-impersonating curl that
-# `latchkey-curl-dispatch` execs for Cloudflare-fronted hosts. Built
-# from source by .github/workflows/curl-impersonate.yml (upstream commit
-# and release tag in third-party/curl-impersonate/pin.env) and published
-# as a release of this repo; these are that release's tarballs, one per
-# triple release.yml ships. //third-party/curl-impersonate selects the
-# one for the target platform. Why our own build rather than upstream's
-# prebuilts, and how to bump: docs/dev/curl_impersonate.md.
+# The two curl shims latchkey uses for Cloudflare-fronted hosts:
+# `latchkey-curl-router` (the `curl` that `LATCHKEY_CURL` points at) and
+# `curl-impersonate` (upstream, presenting Chrome's TLS fingerprint).
+# Both are built and released by github.com/imbue-ai/latchkey-curl-shims,
+# one tarball per triple release.yml ships; //third-party/latchkey-curl-shims
+# selects the pair for the target platform. What each binary does and
+# how to bump: docs/dev/curl_impersonate.md.
 #
-# The sha256s come from the SHA256SUMS the workflow publishes with the
-# release. `//third-party/curl-impersonate:pin_test` checks the tag
-# below against pin.env.
-CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
+# The sha256s come from the SHA256SUMS published with the release, and
+# each tarball's build provenance attestation was verified with
+# `gh attestation verify` before its sum was written here.
+LATCHKEY_CURL_SHIMS_RELEASE = "v0.2.1"
 
 [
     http_archive(
-        name = "curl_impersonate_%s" % triple.replace("-", "_"),
-        urls = ["https://github.com/imbue-ai/datalib/releases/download/%s/curl-impersonate-%s.tar.gz" % (
-            CURL_IMPERSONATE_RELEASE,
+        name = "latchkey_curl_shims_%s" % triple.replace("-", "_"),
+        urls = ["https://github.com/imbue-ai/latchkey-curl-shims/releases/download/%s/latchkey-curl-shims-%s.tar.gz" % (
+            LATCHKEY_CURL_SHIMS_RELEASE,
             triple,
         )],
         sha256 = sha,
-        strip_prefix = "curl-impersonate-%s" % triple,
-        # The binary, and the notices build.sh packs beside it (curl,
-        # BoringSSL, nghttp2/3, ngtcp2, brotli, zstd, zlib): the release
-        # tarball and the .app carry them under licenses/ (see
-        # //third-party:bundled_licenses).
+        strip_prefix = "latchkey-curl-shims-%s" % triple,
+        # The two binaries, and the notices the shims' release packs beside
+        # the impersonator (curl, BoringSSL, nghttp2/3, ngtcp2, brotli, zstd,
+        # zlib): the release tarball and the .app carry them under licenses/
+        # (see //third-party:bundled_licenses).
         build_file_content = """
-exports_files(["curl-impersonate"])
+exports_files(["latchkey-curl-router", "curl-impersonate"])
 filegroup(
     name = "licenses",
     srcs = glob(["LICENSE-*"]),
@@ -152,12 +151,12 @@ filegroup(
 """,
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
-        ("x86_64-apple-darwin", "8b4271c1b98efa7e9cbc8e093e5927ca5f88cd5663db7f5750becd8a7aaa8d95"),
-        ("x86_64-unknown-linux-gnu", "908b1e3c0cdcd645e29d157a43845b1df22ce482478d62d07df5c02c28ea1dfc"),
-        ("aarch64-unknown-linux-gnu", "9098cb004d74e028ea159abf1224a45696f9359dec16b999e5749e14ee674018"),
-        ("x86_64-unknown-linux-musl", "eef9c448b0f9e4d0d67924969ae9afe9d84b0e7f43275b5a132b1dba77116d71"),
-        ("aarch64-unknown-linux-musl", "c2bb9bd8caa1c5aafaa3a04f7be30bf166b7a98290aba83427323255b8bc582f"),
+        ("aarch64-apple-darwin", "d309479b0d96ebe192fbc9ed5cb685923462af6eb939c0f1aa0358b6a0e39db1"),
+        ("x86_64-apple-darwin", "9bd9eb94e9588ce4d093e3472e711c68f02af601d8875f85127d9301a9c82d2f"),
+        ("x86_64-unknown-linux-gnu", "0f50df271b06bab4dd6c7c2cfbd1259cc527150d5b0beebb3e0e9dec0d6a41dd"),
+        ("aarch64-unknown-linux-gnu", "54025b77c407a821f870eaad6f76ad4578e174a936ed6758b92148d9d38a315d"),
+        ("x86_64-unknown-linux-musl", "c7cd5e7710d3f1e79f4b7116175afead3eb61cf1c674605f64e9fe910701c0e4"),
+        ("aarch64-unknown-linux-musl", "260093c5b7df73a89690101c822924fb8337234f629277e241bcfb8f24d198e3"),
     ]
 ]
 

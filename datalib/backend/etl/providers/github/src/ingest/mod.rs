@@ -302,7 +302,7 @@ fn scope_config_blob(refresh_window_days: u32) -> Value {
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_dispatch();
+    let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     if opts.control.reset_and_redownload {
         tracing::info!(event = "github_reset_and_redownload");
