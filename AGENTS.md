@@ -343,6 +343,22 @@ dependency:
 local hashes and loses what actually happened; force-push is off the
 table on shared branches.
 
+**`MODULE.bazel.lock` is never resolved by hand.** It is generated, and
+two branches that both moved it conflict textually even though the
+right result is always "regenerate on the merged tree". `.gitattributes`
+marks it `merge=union` so the merge itself goes through; then any
+`bazelisk build` rewrites it and `//:lint_repo` refuses a stale one.
+So the resolution is: merge, build, commit. GitHub's merge button knows
+nothing of `.gitattributes` and still reports a conflict when two open
+PRs both touched it — the second one merges main and pushes.
+
+**A new first-party crate is Bazel-only unless it needs a
+`Cargo.toml`.** The lockfile records the Cargo workspace's resolution,
+so a crate with a `Cargo.toml` rewrites it on every branch that adds
+one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
+crates and `datalib_problems` are the pattern). A `Cargo.toml` is
+needed only when something outside bazel has to see the crate.
+
 ## Push early, open the PR early, and watch CI
 
 Push the branch and open a PR as soon as there is something to test —
@@ -399,6 +415,30 @@ its cache and sandbox and can disagree with CI. Anything that reads
 through bazel so the fixture is rebuilt first. Insta snapshots are
 updated through sibling `.update` targets (`docs/dev/testing.md`).
 Coverage: `docs/dev/coverage.md`. Why a run was slow: `docs/dev/ci.md`.
+
+## Tests wait on the observable, never on the clock
+
+**A test never `sleep`s to order two writers, or to give something
+time to happen; it waits for the thing it is about to assert.** A
+sleep that is long enough on a warm mac is short on a loaded CI runner
+(the one on `2cbcc398` was), and a sleep that is long enough on CI
+makes every local run slower than it needs to be. Poll the row, the
+file, the endpoint — with a deadline, so a hang is a failure that
+names what never arrived rather than a timeout with no message.
+
+Two neighbours of the same mistake:
+
+- **A fixed timestamp in a test is a bomb** wherever anything is
+  measured from `now` — a retention window, a "recent" filter. Either
+  derive the stamp from `now`, or set the window in the test so wide
+  that the calendar cannot reach it (`process_log_days: 36500`, #567),
+  and say which in a comment.
+- **A test that takes more than a third of its timeout on CI is a
+  flake waiting to happen** once the runner is busy. Tag it `cpu:N`
+  or `exclusive` so bazel schedules it alone, or raise the timeout and
+  say why. `scripts/flaky_tests.py` names the ones that have already
+  flaked; a target it lists twice needs one of those two fixes, not a
+  re-run.
 
 ## Common commands
 

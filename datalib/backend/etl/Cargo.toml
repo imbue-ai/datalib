@@ -26,7 +26,6 @@ quick-xml = { version = "0.41", features = ["escape-html"] }
 datalib-runtime = { path = "../runtime" }
 datalib-obs = { path = "../obs" }
 datalib-time = { path = "../time" }
-datalib-problems = { path = "../problems" }
 datalib-table = { path = "../table" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }

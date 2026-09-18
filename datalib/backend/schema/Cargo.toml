@@ -10,7 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 datalib-etl-macros = { path = "../etl/macros" }
-datalib-problems = { path = "../problems" }
 datalib-table = { path = "../table" }
 datalib-time = { path = "../time" }
 serde = { workspace = true }

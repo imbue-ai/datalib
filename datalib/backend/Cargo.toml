@@ -15,7 +15,6 @@ members = [
     "obs",
     "time",
     "id",
-    "problems",
     "etl",
     "etl/render",
     "etl/timeseries_render",

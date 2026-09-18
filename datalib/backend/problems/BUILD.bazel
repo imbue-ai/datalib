@@ -1,12 +1,13 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
-
 # The `problems` table: one row per thing a step could not fully do to
 # one record, in whichever store that step owns. A leaf crate so that
 # both sides of the ingest/render split can write it — `datalib_etl`
 # for a fetch that failed, the render crates for a payload that would
-# not parse or a row that would not build. See src/lib.rs and
+# not parse or a row that would not build. Bazel-only, no `Cargo.toml`:
+# nothing outside bazel needs to see it, and a crate in the Cargo
+# workspace rewrites `MODULE.bazel.lock` on every branch that adds one
+# (AGENTS.md, "Git: prefer merges"). See src/lib.rs and
 # docs/dev/plans/problem_visibility.md.
 rust_library(
     name = "datalib_problems",
