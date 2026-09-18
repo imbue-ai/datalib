@@ -87,6 +87,15 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
+  // The table repaints itself on a clock ("12 seconds ago" goes stale),
+  // and a repaint that rebuilt this row would close the editor under
+  // the typist. Force one and expect the same input to survive it.
+  await page.locator(".tg-grid").first().evaluate((el) => {
+    (el as HTMLElement & { __api: { refreshCells(): void } }).__api.refreshCells();
+  });
+  await page.waitForTimeout(200);
+  await expect(input).toBeVisible();
+  await expect(input).toBeFocused();
   await input.fill("Everything, indexed");
   await input.press("Enter");
 

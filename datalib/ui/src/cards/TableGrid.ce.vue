@@ -124,11 +124,16 @@ function syncRows(rows: T[]) {
     bundle.dataset = annotate(rows);
     return;
   }
+  // A row whose cell is being edited is left as it is: the grid drops
+  // the editor when it rebuilds that row. The change stays unpainted,
+  // so the next sync after the edit closes applies it.
+  const busy = editingRow();
   dataView.beginUpdate();
   for (const r of rows) {
     const key = keyOf(r);
     const json = JSON.stringify(r);
     if (painted.get(key) === json) continue;
+    if (busy != null && dataView.getRowById(key) === busy) continue;
     painted.set(key, json);
     // The grid's own bookkeeping on the row — its level, its parent,
     // whether it is folded — rides along.
@@ -137,14 +142,30 @@ function syncRows(rows: T[]) {
   dataView.endUpdate();
 }
 
+/// The row with an open cell editor, if any.
+function editingRow(): number | null {
+  const grid = bundle?.slickGrid;
+  if (!grid?.getCellEditor()) return null;
+  return grid.getActiveCell()?.row ?? null;
+}
+
 /// Repaint the visible rows: every typed cell draws from the row, but
 /// a `timestamp` cell also draws from the clock, and a host may hold
-/// state outside the rows that a cell reads.
+/// state outside the rows that a cell reads. The row being edited is
+/// skipped — the grid closes the editor when it rebuilds that row, and
+/// the clock ticks every second.
 function refreshCells(fields?: string[]) {
   if (!bundle) return;
   const grid = bundle.slickGrid;
   void fields;
-  grid.invalidateAllRows();
+  const busy = editingRow();
+  if (busy == null) {
+    grid.invalidateAllRows();
+  } else {
+    const others = [];
+    for (let i = 0; i < bundle.dataView.getLength(); i++) if (i !== busy) others.push(i);
+    grid.invalidateRows(others);
+  }
   grid.render();
 }
 
@@ -329,7 +350,8 @@ function createGrid() {
   bundle = b;
   // The grid, reachable from its element for anyone debugging in the
   // inspector.
-  (boxEl.value as HTMLDivElement & { __grid?: unknown }).__grid = b;
+  (boxEl.value as HTMLDivElement & { __grid?: unknown; __api?: unknown }).__grid = b;
+  (boxEl.value as HTMLDivElement & { __api?: unknown }).__api = api;
   if (!props.virtualizeRows) {
     // The grid renders the rows in view plus a viewport's worth beyond,
     // whatever its buffer options say; a table asked to show every row
