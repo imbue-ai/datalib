@@ -330,10 +330,11 @@ for the two to disagree.
 ### The grid, and how to swap it
 
 Every grid is SlickGrid, through `@slickgrid-universal/vanilla-bundle`
-(MIT) — the bundle rather than a framework wrapper because a card is a
-custom element, and the wrapper looks its container up on `document`,
-which cannot see into a shadow root. The run log panel, outside any
-shadow root, uses the `slickgrid-vue` wrapper. AG Grid was here until
+(MIT) — the bundle rather than the `slickgrid-vue` wrapper because a
+card is a custom element, and the wrapper looks its container up on
+`document`, which cannot see into a shadow root; the run log panel
+could use the wrapper (it is teleported to `body`) and uses the bundle
+anyway, so there is one grid API in the tree. AG Grid was here until
 2026-09-17; its Enterprise modules (row grouping, tree data, the side
 bar, the context menu) needed a licence, and this repo is public.
 

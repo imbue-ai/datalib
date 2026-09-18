@@ -289,13 +289,19 @@
 .slick-cell .datalib-clamp-2 { line-height: 1.25; }
 
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
+/* The line is the separator element's own: the slot is a disabled
+   item, and the theme forces a disabled item's border transparent. */
 .slick-menu-item:has(.menu-slot-separator) {
   padding: 0;
   margin: 4px 0;
-  border-top: 1px solid var(--datalib-border);
   min-height: 0;
   height: 0;
+  overflow: visible;
   pointer-events: none;
 }
-.menu-slot-separator { display: none; }
+.menu-slot-separator {
+  display: block;
+  width: 100%;
+  border-top: 1px solid var(--datalib-border);
+}
 .slick-menu-content.menu-danger { color: var(--datalib-log-error); }

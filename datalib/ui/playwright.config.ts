@@ -498,6 +498,8 @@ export default defineConfig({
         // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,
         /manager2-history\.spec\.ts/,
+        // The run-log panel's grid, menu and drag-to-group bar.
+        /run-log\.spec\.ts/,
       ],
     },
   ],
