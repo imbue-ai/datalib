@@ -18,7 +18,7 @@ and served by the applet at `/problems` — see
 Three forces pushed us this direction:
 
 1. **One source of truth for column semantics.** When the grid grows a
-   new column (`channel`, `slack_link`, …), exactly one schema needs to
+   new column (`channel`, `source_url`, …), exactly one schema needs to
    move. Codegen propagates the change to Rust (both writer and reader
    sides) and TypeScript (consumer side). Drift has historically been
    a recurring bug source.
@@ -396,7 +396,7 @@ document counts pages, a conversation counts messages.
 ### `diff_status`, `diff_changed_columns`
 
 **NULL on every row a real source renders.** Set only by a diff group
-(`docs/dev/plans/diff_renderer.md`), whose rows are two renders of the
+(`docs/dev/plans/completed/diff_renderer.md`), whose rows are two renders of the
 same source subtracted: `diff_status` is `added`, `removed`, `modified`
 or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
 modified row `diff_changed_columns` names the columns that differ,

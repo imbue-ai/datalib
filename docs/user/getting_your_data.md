@@ -36,7 +36,8 @@ storing any.
 VOC as time series, rendered as one page of interactive plots.
 
 An AirVisual Pro (IQAir's indoor air-quality monitor) keeps its history
-on the unit and serves it over a Samba share: `smb://<ip>/airvisual`,
+on the unit — no cloud account is involved — and serves it over a Samba
+share: `smb://<ip>/airvisual`,
 user `airvisual`, with the password shown on the device under
 **Settings › Network › Access Pro data**. Mount the share (in the
 Finder, **Go › Connect to Server…**) and point one `devices` entry at

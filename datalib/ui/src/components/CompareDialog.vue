@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // "Compare two syncs…" on a source: pick two commits of its raw store
 // and a name, and a diff group is written between them —
-// docs/dev/plans/diff_renderer.md. The commits come from the source's
+// docs/dev/plans/completed/diff_renderer.md. The commits come from the source's
 // ingest tree's history; the newest is the default `to` and the one
 // before it the default `from`, which is "what the last sync changed".
 import { computed, onMounted, ref } from "vue";

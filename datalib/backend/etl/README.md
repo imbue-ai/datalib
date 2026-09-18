@@ -343,7 +343,7 @@ silently reshape the page.
 is built from `unwrap_or_default()` over a few field lookups, so a record
 whose fields don't match yields `""`. Tolerating that loses data twice — every
 unkeyable record collapses onto one entry, and callers then skip the empty
-key, so a whole entity stream reads as "no records". `tests/fixtures/gitlab_api`
+key, so a whole entity stream reads as "no records". `datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api`
 spelled the project path `project_path` while every consumer had moved to
 `project_full_path`; gitlab contributed zero rows for three months with no
 failing test.

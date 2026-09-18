@@ -40,8 +40,9 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
-- [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md), [`multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposals; the second measures bytes at rest (§4) before you touch how text is stored.
-- [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — proposal, with an audit of what the `render_problems` sink does and does not cover: per-instance ids, severity, the copy into the index, the Manage counts and the document banner.
+- [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposal; measures bytes at rest (§4) before you touch how text is stored.
+- [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — the design record of the `problems` table: per-instance ids, severity, the copy downstream into the index, the Manage counts and the document banner. Built through its PR 5; still in `plans/` because the per-provider fetch tail is open.
+- [`docs/dev/plans/completed/diff_renderer.md`](docs/dev/plans/completed/diff_renderer.md) — built: a diff group renders what changed in a source between two commits of its raw store; `config_model.md` is the reference.
 
 **UI**
 
@@ -160,10 +161,11 @@ datalib/
                    `datalib_schema` sits here or above.
     etl/timeseries_render/ what the time-series render crates share.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Five scan local trees
-                   through etl/src/fswalk.rs; four mirror a SQLite file
-                   through etl/sqlite_mirror/; two are sensor time
-                   series. fsindex, media, lightroom and apple_photos
+                   (config schema) per provider. Ten of the file-backed
+                   ones scan a local tree through etl/src/fsscan.rs
+                   (fsindex has its own walker over etl/src/fswalk.rs);
+                   four mirror a SQLite file through etl/sqlite_mirror/;
+                   two are sensor time series. fsindex, media, lightroom and apple_photos
                    have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
@@ -258,7 +260,7 @@ The measurement that checks it:
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
-79 as of the split. If that number climbs, something took a dependency
+77 at the last count. If that number climbs, something took a dependency
 it should not have.
 
 ## The grid_rows union table
@@ -527,7 +529,9 @@ upstream (block types, MIME types), free-form display text
 | a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
-| what render could not do | `Outcome`, `Reason`, `ScopeKind`, `Stage` | `schema/src/render_problems.rs` |
+| what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
+| a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
+| how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 
@@ -546,6 +550,19 @@ library. A dep needed but never named is kept with `use <crate> as _;`.
 **Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
 reached the slow or lossy way raises no error. If you add one anyway,
 log when it fires.
+
+**An error or a warning about a record goes through `problems`, never
+only to the log.** A record a download could not fetch goes through
+`record_object_attempt` / `record_object_error`; a configured entry
+upstream does not have goes through `download_problems::report`, and
+a listing or phase the run could not do as a whole through
+`download_problems::report_run`; a record render could not fully
+project goes on its document's `RenderedMarkdown::problems`, or
+through `RenderCtx::report_*` when there is no document yet. The rows
+travel with the data to the index, and that is where a person sees
+them: the Manage row's count (the `problems{severity=…}` metrics each
+step reports) and the banner above the document. A `warn!` alone
+reaches nobody.
 
 ## Dynamic SQL needs `AssertSqlSafe` and a reason
 

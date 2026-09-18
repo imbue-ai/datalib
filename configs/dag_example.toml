@@ -124,7 +124,7 @@ inputs = ["claude/ingest"]
 # commits under `params.diff` — both required, a diff is asked for and
 # never keeps itself up to date. Named in the fan-ins like any source.
 # The Manage screen's "Compare…" writes one; see
-# docs/dev/plans/diff_renderer.md.
+# docs/dev/plans/completed/diff_renderer.md.
 [[groups]]
 id = "slack-diff"
 name = "Work Slack, this week's changes"

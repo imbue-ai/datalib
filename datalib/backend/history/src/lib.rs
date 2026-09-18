@@ -1,19 +1,20 @@
 //! A doltlite store's commit history: `dolt_log` walked back from HEAD
 //! along first parents, with what each commit did to each table.
 //!
-//! Read-only. The row counts come from one `COUNT(*)` per table at HEAD
-//! and are walked backwards through each commit's `dolt_diff_stat`, so a
-//! commit costs time proportional to what it changed rather than to the
-//! size of the store.
+//! Read-only, and pinned: HEAD is resolved once and every count reads
+//! `dolt_at_<table>` at that hash, never the working set a sync may be
+//! writing into. The row counts come from one `COUNT(*)` per table at
+//! that commit and are walked backwards through each commit's
+//! `dolt_diff_stat`, so a commit costs time proportional to what it
+//! changed rather than to the size of the store.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use datalib_pin::{head, is_missing_table, open_reader, Pin};
 use serde::Serialize;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,18 +56,16 @@ pub struct TableState {
 }
 
 pub async fn read(db_path: &Path, limit: usize) -> Result<StoreHistory> {
-    let pool = open_reader(db_path).await?;
+    let pool = open_reader(db_path)
+        .await
+        .with_context(|| format!("open {} read-only", db_path.display()))?;
     let result = read_from(&pool, limit).await;
     pool.close().await;
     result
 }
 
 async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
-    let head: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-        .fetch_optional(pool)
-        .await
-        .context("dolt_hashof('HEAD')")?;
-    let Some(head) = head else {
+    let Some(pin) = head(pool).await? else {
         return Ok(StoreHistory {
             commits: Vec::new(),
             truncated: false,
@@ -98,9 +97,9 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
         }
     }
 
-    let mut sizes = table_sizes(pool).await?;
+    let mut sizes = table_sizes(pool, &pin).await?;
     let mut commits = Vec::new();
-    let mut cursor = Some(head);
+    let mut cursor = Some(pin.commit().to_string());
     while let Some(hash) = cursor {
         if commits.len() == limit {
             return Ok(StoreHistory {
@@ -153,8 +152,10 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
     })
 }
 
-/// Row count of every user table at HEAD.
-async fn table_sizes(pool: &SqlitePool) -> Result<BTreeMap<String, i64>> {
+/// Row count of every user table at the pinned commit. A table in
+/// `sqlite_master` with no `dolt_at_` module has never been committed,
+/// so at any commit it holds nothing.
+async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i64>> {
     let names: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' ORDER BY name",
     )
@@ -163,16 +164,36 @@ async fn table_sizes(pool: &SqlitePool) -> Result<BTreeMap<String, i64>> {
     .context("sqlite_master")?;
     let mut sizes = BTreeMap::new();
     for name in names {
-        // The identifier is quoted, and it came from sqlite_master rather
-        // than from a request.
-        let sql = format!("SELECT COUNT(*) FROM \"{}\"", name.replace('"', "\"\""));
-        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        if !is_table_name(&name) {
+            bail!("table name {name:?} cannot be read through dolt_at_");
+        }
+        // `name` passed `is_table_name` and `Pin::at` checked the hash, so
+        // both splice safely; there is nothing to bind in a table-valued
+        // function's name.
+        let sql = format!("SELECT COUNT(*) FROM {}", pin.table(&name));
+        let rows: i64 = match sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .fetch_one(pool)
             .await
-            .with_context(|| format!("count {name}"))?;
+        {
+            Ok(n) => n,
+            Err(e) if is_missing_table(&e, &name) => 0,
+            Err(e) => return Err(e).with_context(|| format!("count {name} at {}", pin.commit())),
+        };
         sizes.insert(name, rows);
     }
     Ok(sizes)
+}
+
+/// What `dolt_at_<name>` accepts: the identifier character set our DDL
+/// uses. Anything else is refused rather than quoted, since a module
+/// name cannot be quoted.
+fn is_table_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_')
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// `(added, deleted, modified)` per table with a data change between the
@@ -242,27 +263,11 @@ fn iso_utc(dolt_date: &str) -> String {
     }
 }
 
-/// Connect read-only, and never create: an absent store is the caller's
-/// error, not a first run. Cold opens of multi-GB stores take seconds,
-/// hence the long acquire timeout.
-async fn open_reader(db_path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .with_context(|| format!("sqlite uri for {}", db_path.display()))?
-        .create_if_missing(false)
-        .read_only(true);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .acquire_timeout(Duration::from_secs(300))
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open {} read-only", db_path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
 
     async fn writer(path: &Path) -> SqlitePool {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
@@ -397,6 +402,55 @@ mod tests {
         // Before any rows existed, nothing is worth listing.
         assert!(h.commits[2].tables.is_empty(), "{:?}", h.commits[2].tables);
         assert!(h.commits[3].tables.is_empty());
+    }
+
+    /// Doltlite's working set lives in the file, so a plain `SELECT`
+    /// from the history reader sees rows a sync has written and not yet
+    /// committed. HEAD's counts must be HEAD's: what a sync is
+    /// mid-writing is not history yet, and a count that included it
+    /// would put the same rows into every older commit's total too.
+    #[tokio::test]
+    async fn counts_read_the_commit_not_the_working_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.doltlite_db");
+        let pool = writer(&path).await;
+        if !is_doltlite(&pool).await {
+            return;
+        }
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t (id) VALUES (1), (2)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        commit(&pool, "two rows").await;
+        // A sync in flight: three more rows and a new table, SQL-committed
+        // but not doltlite-committed, with the writer still open.
+        sqlx::query("INSERT INTO t (id) VALUES (3), (4), (5)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE fresh (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO fresh (id) VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let h = read(&path, 100).await.unwrap();
+        let top = &h.commits[0];
+        assert_eq!(top.message, "two rows");
+        assert_eq!(table(top, "t").rows, 2, "{:?}", top.tables);
+        assert!(
+            top.tables.iter().all(|t| t.table != "fresh"),
+            "a table no commit holds is not in the history: {:?}",
+            top.tables
+        );
+        pool.close().await;
     }
 
     #[tokio::test]

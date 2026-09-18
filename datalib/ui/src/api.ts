@@ -58,9 +58,6 @@ export type SearchRow = {
   kind: string;
   author: string;
   channel: string;
-  // Legacy Slack deep-link column; new rows carry their public URL in
-  // source_url. The "Open source" action prefers source_url, falls back here.
-  slack_link: string;
   // Public URL for the row's source artifact (Slack permalink, LinkedIn
   // post, …); empty when none.
   source_url: string;
@@ -152,6 +149,10 @@ export type ProblemReason =
   | "coercion_failed"
   | "uncovered_type"
   | "deliberate_loss"
+  | "render_failed"
+  | "fetch_failed"
+  | "not_found"
+  | "forbidden"
   | "noted";
 
 /// One problem on a document, as the document view lists it above the

@@ -335,16 +335,13 @@ def main() -> int:
 # device list -- is never consulted again. Widen it and the next run
 # resumes from the cursor as if nothing happened: the mail that already
 # sat outside the old filter never *changed*, so no change feed will ever
-# name it. Slack was the first to hit this (#103), then every provider
-# with a cursor was swept -- and Gmail, added afterwards, missed the sweep
-# and mirrored nothing after its filter was removed (2026-09-15).
-#
-# The fix each time is `datalib_etl::scope_config`: record the
-# scope-affecting config beside the cursor, diff it next run, backfill
-# what widened. This keeps a new cursor from arriving without it. The
-# signal is the one primitive every cursor write bottoms out in; the
-# recorder is either `store` or `store_if_satisfied`. Per provider crate,
-# because a wrapper in `db.rs` is called from `mod.rs`.
+# name it. The rule: a provider that keeps a cursor records the
+# scope-affecting config beside it through `datalib_etl::scope_config`
+# (`store` or `store_if_satisfied`), diffs it next run, and backfills
+# what widened. This check keeps a new cursor from arriving without the
+# record. The signal is the one primitive every cursor write bottoms out
+# in. Per provider crate, because a wrapper in `db.rs` is called from
+# `mod.rs`.
 #
 # docs/dev/data_architecture_ingestion.md, "When the cursor swallows a
 # config change", is the rule and the table of who records what.

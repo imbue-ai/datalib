@@ -397,7 +397,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         group whose rows have one author each.
 
         The contacts diff is one add, one delete and one edit, which is
-        every row of the table in docs/dev/plans/diff_renderer.md; the
+        every row of the table in docs/dev/plans/completed/diff_renderer.md; the
         edit names the columns that moved. A real source's rows carry
         NULL, and the diff's rows carry their own ids — the source's
         Picard and the diff's Picard are two rows, or the index would

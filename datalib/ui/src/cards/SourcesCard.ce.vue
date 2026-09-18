@@ -118,10 +118,8 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-  /// The job a banner is *about*, when it is about one. Holding the id lets
-  /// the banner retire itself the moment that job stops running; it used to
-  /// clear only on the next action, so a finished sync left the page insisting
-  /// one was still queued.
+// The job a banner is about, when it is about one. A job-scoped banner
+// retires the moment that job stops running, not on the next action.
 const bannerJob = ref<string | null>(null);
 
 /// Put up a banner, optionally tying it to a job's lifetime.
@@ -1055,7 +1053,7 @@ async function onWizardSubmit(payload: {
 }
 
 // ── "Compare two syncs…": a diff group written from a source and two
-// commits of its raw store (docs/dev/plans/diff_renderer.md), wired into
+// commits of its raw store (docs/dev/plans/completed/diff_renderer.md), wired into
 // the fan-ins like any render step, then the source synced so the diff
 // renders — its step is downstream of the source's ingest.
 const compareFor = ref<{ id: string; name: string } | null>(null);

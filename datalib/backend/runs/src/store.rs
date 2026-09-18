@@ -196,7 +196,6 @@ pub struct Snapshot {
     pub recent_samples: Vec<MetricSampleRow>,
 }
 
-/// The newest run.
 pub async fn snapshot(data_root: &Path) -> Snapshot {
     snapshot_of(data_root, None).await
 }
@@ -759,7 +758,6 @@ pub fn split_stamp(iso: &str) -> (String, Option<String>) {
     }
 }
 
-/// Now, as the store keeps it.
 pub fn now_split() -> (String, Option<String>) {
     let (utc, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     (utc, Some(offset))

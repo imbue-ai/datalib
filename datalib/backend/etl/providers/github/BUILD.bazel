@@ -4,6 +4,14 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
+# The checked-in TNG playback fixture, an input of the Python
+# fixture-build pipeline at //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/github_api/**/*.jsonl"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_github",
     srcs = glob(

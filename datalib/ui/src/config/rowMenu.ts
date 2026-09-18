@@ -76,7 +76,7 @@ const ONE_AT_A_TIME = "One row at a time";
 
 /// A tree that keeps no doltlite store, or null when it keeps one.
 /// Why "Compare…" does not apply: a comparison is of a source — a group
-/// with a type — that is not itself one (`docs/dev/plans/diff_renderer.md`).
+/// with a type — that is not itself one (`docs/dev/plans/completed/diff_renderer.md`).
 export function notComparableReason(t: MenuTarget): string | null {
   if (t.kind !== "group") return "Compare a source, not a step under it";
   if (!t.type) return "The index mirrors nothing to compare";

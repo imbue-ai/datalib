@@ -58,10 +58,11 @@ async fn the_tng_fixture_ingests_and_renders() {
     let pool = db.pool();
     assert_eq!(count(pool, "SELECT COUNT(*) FROM transcripts").await, 3);
     // Every content record is a row; the bookkeeping records are not.
+    // The record's type is read off the payload: nothing promotes it.
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE record_type = 'system'"
+            "SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'system'"
         )
         .await,
         1
@@ -69,7 +70,8 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE record_type NOT IN ('user','assistant','system')"
+            "SELECT COUNT(*) FROM records \
+             WHERE payload->>'$.type' NOT IN ('user','assistant','system')"
         )
         .await,
         0
