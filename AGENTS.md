@@ -67,6 +67,7 @@ how the system works; when a completed plan stops being worth keeping,
 **Audits**
 
 - [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
+- [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
 
 **User-facing**
 
