@@ -74,22 +74,15 @@ pub fn render_all(
             key: contact.contact_uuid.clone(),
             inputs: contact.inputs.clone(),
         });
-        match render_one(profile, contact, out_dir, source_id, on_doc_complete) {
-            Ok(photo_written) => {
-                summary.contacts_rendered += 1;
-                if photo_written {
-                    summary.photos_materialized += 1;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    event = "contact_render_failed",
-                    provider = %profile.provider,
-                    contact_uuid = %contact.contact_uuid,
-                    group = %contact.group_label,
-                    error = %e,
-                );
-            }
+        // Nothing here fails on the card's account — a row that will not
+        // validate is recorded as a problem and a photo that will not
+        // write is skipped — so what is left is the disk and the sink,
+        // and either failing is the run's to report, not one card's.
+        let photo_written = render_one(profile, contact, out_dir, source_id, on_doc_complete)
+            .with_context(|| format!("render contact {}", contact.contact_uuid))?;
+        summary.contacts_rendered += 1;
+        if photo_written {
+            summary.photos_materialized += 1;
         }
         progress.inc(1);
     }
@@ -414,5 +407,25 @@ mod tests {
         // The profile's account, not the source name: a source name is
         // not a login and polluted every `account:` filter.
         assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
+    }
+
+    /// The sink's answer is the run's answer: a document it refuses fails
+    /// the render rather than being logged and left out.
+    #[test]
+    fn a_sink_that_refuses_fails_the_render() {
+        let dir = std::env::temp_dir().join(format!("contact-common-sink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
+        let err = render_all(
+            &mk_profile(),
+            &[mk_contact()],
+            &dir,
+            "linkedin",
+            &Progress::default(),
+            &mut refuse,
+        )
+        .expect_err("a refused document fails the render");
+        assert!(format!("{err:#}").contains("no room"), "{err:#}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
