@@ -457,6 +457,7 @@ document. How it is wired at each stage:
 | --- | --- | --- |
 | fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
 | fetch, a configured entry upstream does not have | `download_problems::report`, in the raw store, keyed `config:<setting>:<value>` | the next run's report, which replaces the last one's whole |
+| fetch, a listing or phase the run could not do | `download_problems::report_run`, in the raw store, keyed `listing:<name>` / `phase:<name>` | likewise, every run |
 | fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id (`render.rs`, `replace_stage_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |

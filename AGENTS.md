@@ -529,7 +529,7 @@ upstream (block types, MIME types), free-form display text
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
-| a configured entry upstream does not have | `ProblemReason` | `etl/src/download_problems.rs` |
+| a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
@@ -553,13 +553,15 @@ log when it fires.
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
 `record_object_attempt` / `record_object_error`; a configured entry
-upstream does not have goes through `download_problems::report`; a
-record render could not fully project goes on its document's
-`RenderedMarkdown::problems`, or through `RenderCtx::report_*` when
-there is no document yet. The rows travel with the data to the index, and
-that is where a person sees them: the Manage row's count (the
-`problems{severity=…}` metrics each step reports) and the banner above
-the document. A `warn!` alone reaches nobody.
+upstream does not have goes through `download_problems::report`, and
+a listing or phase the run could not do as a whole through
+`download_problems::report_run`; a record render could not fully
+project goes on its document's `RenderedMarkdown::problems`, or
+through `RenderCtx::report_*` when there is no document yet. The rows
+travel with the data to the index, and that is where a person sees
+them: the Manage row's count (the `problems{severity=…}` metrics each
+step reports) and the banner above the document. A `warn!` alone
+reaches nobody.
 
 ## Dynamic SQL needs `AssertSqlSafe` and a reason
 
