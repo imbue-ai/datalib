@@ -16,12 +16,12 @@ test("the grid populates with rows from the fixture", async ({
   // Grid surfaces them.
   await page.goto("/");
   const firstRow = page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first();
   await expect(firstRow).toBeVisible({ timeout: 10_000 });
 
   const rowCount = await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .count();
   expect(rowCount).toBeGreaterThan(0);
 
@@ -33,5 +33,5 @@ test("the grid populates with rows from the fixture", async ({
   // `.card-app-root` above it makes the percentage resolvable — so this
   // is a forward guard on the surface, not a reproduction of the bug.
   // manager2-grid.spec.ts is the spec that fails without its fix.
-  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
+  await expectGridPainted(page.locator(".grid-box .slickgrid-container").first(), "Explore grid");
 });

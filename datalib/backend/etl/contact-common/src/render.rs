@@ -10,6 +10,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::section::{join, Section};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::render_problems::RenderProblemRow;
@@ -73,22 +74,15 @@ pub fn render_all(
             key: contact.contact_uuid.clone(),
             inputs: contact.inputs.clone(),
         });
-        match render_one(profile, contact, out_dir, source_id, on_doc_complete) {
-            Ok(photo_written) => {
-                summary.contacts_rendered += 1;
-                if photo_written {
-                    summary.photos_materialized += 1;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    event = "contact_render_failed",
-                    provider = %profile.provider,
-                    contact_uuid = %contact.contact_uuid,
-                    group = %contact.group_label,
-                    error = %e,
-                );
-            }
+        // Nothing here fails on the card's account — a row that will not
+        // validate is recorded as a problem and a photo that will not
+        // write is skipped — so what is left is the disk and the sink,
+        // and either failing is the run's to report, not one card's.
+        let photo_written = render_one(profile, contact, out_dir, source_id, on_doc_complete)
+            .with_context(|| format!("render contact {}", contact.contact_uuid))?;
+        summary.contacts_rendered += 1;
+        if photo_written {
+            summary.photos_materialized += 1;
         }
         progress.inc(1);
     }
@@ -115,8 +109,8 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    let md = render_markdown(profile, contact, source_id, photo_rel.as_deref());
-    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
+    let sections = render_markdown(profile, contact, source_id, photo_rel.as_deref());
+    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
         .strip_prefix(out_dir)
@@ -140,6 +134,7 @@ fn render_one(
         md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
+        sections,
         edges: Vec::new(),
         problems,
     })
@@ -176,9 +171,9 @@ fn render_markdown(
     contact: &NormalizedContact,
     source_id: &str,
     photo_rel: Option<&str>,
-) -> String {
+) -> Vec<Section> {
     let m_uuid = &contact.contact_uuid;
-    let mut out = String::with_capacity(2048);
+    let mut out = String::with_capacity(512);
 
     out.push_str("---\n");
     out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
@@ -200,7 +195,11 @@ fn render_markdown(
         out.push_str(&format!("modified_at: {}\n", yaml_safe(ts)));
     }
     out.push_str("---\n\n");
+    let frontmatter = Section::unkeyed(out);
 
+    // The page body — title, photo, field table — is the one section
+    // the contact's grid row names.
+    let mut out = String::with_capacity(1024);
     let title = display_or_id(contact).to_string();
     // Shared `Title` helper so contact pages carry the same
     // `data-page-title-uuid` hook the Vue side uses for the
@@ -238,7 +237,7 @@ fn render_markdown(
         out.push('\n');
     }
 
-    out
+    vec![frontmatter, Section::keyed(m_uuid, out)]
 }
 
 /// `None`, with the reason recorded on `problems`, when the row will
@@ -365,7 +364,14 @@ mod tests {
 
     #[test]
     fn markdown_has_title_url_and_field_table() {
-        let md = render_markdown(&mk_profile(), &mk_contact(), "linkedin", None);
+        let sections = render_markdown(&mk_profile(), &mk_contact(), "linkedin", None);
+        assert_eq!(sections[0].uuid, None, "frontmatter belongs to no row");
+        assert_eq!(
+            sections[1].uuid.as_deref(),
+            Some(mk_contact().contact_uuid.as_str()),
+            "the body is the contact's section"
+        );
+        let md = join(&sections);
         assert!(md.contains("Jean-Luc Picard"));
         assert!(md.contains("https://www.linkedin.com/in/jlp"));
         assert!(md.contains("| Company | Starfleet |"));
@@ -401,5 +407,25 @@ mod tests {
         // The profile's account, not the source name: a source name is
         // not a login and polluted every `account:` filter.
         assert_eq!(row.account.as_deref(), Some("jlp@enterprise.test"));
+    }
+
+    /// The sink's answer is the run's answer: a document it refuses fails
+    /// the render rather than being logged and left out.
+    #[test]
+    fn a_sink_that_refuses_fails_the_render() {
+        let dir = std::env::temp_dir().join(format!("contact-common-sink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
+        let err = render_all(
+            &mk_profile(),
+            &[mk_contact()],
+            &dir,
+            "linkedin",
+            &Progress::default(),
+            &mut refuse,
+        )
+        .expect_err("a refused document fails the render");
+        assert!(format!("{err:#}").contains("no room"), "{err:#}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -193,7 +193,8 @@ datalib/
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
     app_schema/    feedback/sync_jobs/runs; both derive DDL via
                    `#[derive(PortableTable)]`.
-  ui/          Vue + AG Grid frontend.
+  ui/          Vue frontend; every grid is SlickGrid, kept behind a few
+               files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
 tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides; dev/plans/.

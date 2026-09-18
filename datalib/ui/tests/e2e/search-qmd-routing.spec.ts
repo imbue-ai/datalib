@@ -11,7 +11,7 @@ import { searchAndSettle } from "./grid-helpers";
 async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
@@ -20,9 +20,9 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   // query that silently stopped routing now fails immediately instead
   // of after a 90s wait indistinguishable from a slow daemon.
   await searchAndSettle(page, q);
-  await expect(page.locator('.ag-header-cell[col-id="score"]')).toBeVisible();
+  await expect(page.locator('.grid-box .slick-header-column[col-id="score"]')).toBeVisible();
   await expect(
-    page.locator('.ag-grid-scrolling-rows [role="row"]').first(),
+    page.locator(".grid-box .slick-row").first(),
   ).toBeVisible();
 }
 

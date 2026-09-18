@@ -8,21 +8,21 @@ importers:
 
   .:
     dependencies:
+      '@slickgrid-universal/common':
+        specifier: 10.11.0
+        version: 10.11.0
+      '@slickgrid-universal/event-pub-sub':
+        specifier: 10.10.0
+        version: 10.10.0
+      '@slickgrid-universal/vanilla-bundle':
+        specifier: 10.11.0
+        version: 10.11.0
       '@tauri-apps/plugin-dialog':
         specifier: ^2.7.3
         version: 2.7.3
       '@tauri-apps/plugin-opener':
         specifier: ^2.5.5
         version: 2.5.5
-      ag-grid-community:
-        specifier: 36.1.0
-        version: 36.1.0
-      ag-grid-enterprise:
-        specifier: 36.1.0
-        version: 36.1.0
-      ag-grid-vue3:
-        specifier: 36.1.0
-        version: 36.1.0(vue@3.5.34(typescript@6.0.3))
       dompurify:
         specifier: 3.4.15
         version: 3.4.15
@@ -293,6 +293,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@excel-builder-vanilla/types@5.2.3':
+    resolution: {integrity: sha512-MY4u5e+d+80/z9LS4tZafayVs2XccwF/QNIelb4VGgjekhEsEv+n3fh916JgRuhQhYm2C3YnR1Oy+nsP7ozMkw==}
+
   '@exodus/bytes@1.15.0':
     resolution: {integrity: sha512-UY0nlA+feH81UGSHv92sLEPLCeZFjXOuHhrIo0HQydScuQc8s0A7kL/UdgwgDq8g8ilksmuoF35YVTNphV2aBQ==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
@@ -310,6 +313,9 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@formkit/tempo@1.1.0':
+    resolution: {integrity: sha512-LF36zxNFvNO+U2uS2RX5h0SJZuL4z/JpDHbMOgumhv+re6k/Jpt9S9mZuEMLaLUtpDZlRZZE3UkIiwSS+Forig==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -578,6 +584,31 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@slickgrid-universal/binding@10.1.0':
+    resolution: {integrity: sha512-qJNRkiX3Z4jCTJkfX1bkMTJAFWbUhfunPd7c9/jf5Hijcb59oQlCpdoQGIOyuUbz3ooZd0N/cPKcET9x6RkKFQ==}
+
+  '@slickgrid-universal/common@10.11.0':
+    resolution: {integrity: sha512-7GgLe5uXknLE2FNKecvk866S/0ckBjrVIs1Y28G3+ELdYODqUsnDhVKZLvZU3sP4fXvdHQai2jPz/ZT1q/gYow==}
+    engines: {node: ^20.0.0 || >=22.0.0}
+
+  '@slickgrid-universal/custom-footer-component@10.11.0':
+    resolution: {integrity: sha512-04YKv+uKZ4RXjRds8piJ6dic0uAL4RO5ErVAN7q99umfR9tJsE/ER54QxgJCw967b1M5+dnsiaQwwxZM/g944g==}
+
+  '@slickgrid-universal/empty-warning-component@10.11.0':
+    resolution: {integrity: sha512-wdjGvlAnQ19dpjOqjnyIOoyHStj7dkZo42jOPde64/g0sAoZSA1qcVv3hiaR+g0Ec67kXMH4tqznG510vCFQfw==}
+
+  '@slickgrid-universal/event-pub-sub@10.10.0':
+    resolution: {integrity: sha512-FKCTlV272lUNolIYeYYPggE3ducmmUeD+pxvHd+pCb1885080drQIr+k5wd+Q1eZj2P7BrlPKFEVF79ZL0QUmA==}
+
+  '@slickgrid-universal/pagination-component@10.11.0':
+    resolution: {integrity: sha512-UXPqkC/BrPPR/9R7kcPjZu+SSF+f5/ntp3RamhSi2+Rj1Eko5lEzQqgWYLJkfF1f24wf46Vt3yI0WNFAKUuE4Q==}
+
+  '@slickgrid-universal/utils@10.10.0':
+    resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
+
+  '@slickgrid-universal/vanilla-bundle@10.11.0':
+    resolution: {integrity: sha512-QpieyvlFBgNrDeggg5FJBcFNJVc5rueCL7xAIHaJbDRDdifqS+y7cqLI7cQ16A11AQBjPrDxfFGvoc83G2eW7Q==}
+
   '@tauri-apps/api@2.11.1':
     resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
 
@@ -598,6 +629,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/sortablejs@1.15.9':
+    resolution: {integrity: sha512-7HP+rZGE2p886PKV9c9OJzLBI6BBJu1O7lJGYnPyG3fS4/duUCcngkNCjsLwIMV+WMqANe3tt4irrXHSIe68OQ==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
@@ -706,35 +740,6 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  ag-charts-community@14.1.0:
-    resolution: {integrity: sha512-J5S2Gag/nEJy7WzX/esAguqkuNHBYB3nly4vItMM/DggnnOYCopjLBEtkXXZZt1If1IQstnU4sKaUTmteAoj1Q==}
-
-  ag-charts-core@14.1.0:
-    resolution: {integrity: sha512-lkjDoudYOiUncHQ0FaDv8CaQ+TsOK16vUZnkJNPIaC92opRP95pryDbWQ6VDWzCLCqsJbAGPx2xlsTor+WgA2A==}
-
-  ag-charts-enterprise@14.1.0:
-    resolution: {integrity: sha512-1bLN22vv07tdJH/UrmSrIWSJu0fkpr//jfrcwaeAatXSwUspcjLzHmcQNNoeQ0TX6xTFaoZ558mJ96P3pmRhWw==}
-
-  ag-charts-locale@14.1.0:
-    resolution: {integrity: sha512-5UFnL7JoOj491LtqZmlCdbxDvXqE12qz664CZFBK4Tzlh8n48pN9yWfVqhlmkJWEC/wugG3Yf6/i3WGxL5qljw==}
-
-  ag-charts-types@14.1.0:
-    resolution: {integrity: sha512-mmzkng88c0l+Z9PvCMowMilhVeNgDU/iMuMemcOQD4BG/qO4vbkxWvyQO0iqju8Dx7YOY81PNzC/RmElQNiVkA==}
-
-  ag-grid-community@36.1.0:
-    resolution: {integrity: sha512-WnvSQ4csRs8gv/b1B0lPHykQXvUJVgi2u5mpY0Aa6dv3pvhDVVqCT8dwUyOeCog4JNPptaXGrOrZ8qP2XoJzVA==}
-
-  ag-grid-enterprise@36.1.0:
-    resolution: {integrity: sha512-bZmctvyMYNp089VAWlnuHH+C0xf1rUlon02uyUMglDjIZ6kiEH9ihWnkQPeiwaHlfrNWpAJSO7cXZBgkgBfUCQ==}
-
-  ag-grid-vue3@36.1.0:
-    resolution: {integrity: sha512-lktl90iQG4xfa9EbLxdNlSARPuQvs8lDSQADRmWt4OB2ZGTnTr18xMh+ApUNS6qVCBoMGAdkKI/5nVTy/3owDA==}
-    peerDependencies:
-      vue: ^3.5.32
-
-  ag-stack@36.1.0:
-    resolution: {integrity: sha512-Kmkf5iRZmyduNx2KtW450j6GbCdJ4ejacSpb1AWl0yrdquRmScLRc1SlLolx6lyCbTBSJGo4tRraKbBzre+GlQ==}
-
   alien-signals@3.2.1:
     resolution: {integrity: sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g==}
 
@@ -752,6 +757,9 @@ packages:
   ast-walker-scope@0.9.0:
     resolution: {integrity: sha512-IJdzo2vLiElBxKzwS36VsCue/62d6IdWjnPB2v3nuPKeWGynp6FF/CYoLa5i/3jXH/z97ZDdsXz6abpgM6w07A==}
     engines: {node: '>=20.19.0'}
+
+  autocompleter@10.0.0:
+    resolution: {integrity: sha512-ZKUvEIU8XpqqkMrZoy+QmAh7Ga8YE3qB8EFJzC05K69S8+dQ3xrN066vJImiIjkwYVG1Oc8eRP4YVDQOquUF9A==}
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -801,6 +809,10 @@ packages:
 
   decimal.js@10.6.0:
     resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
+
+  dequal@2.0.3:
+    resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
+    engines: {node: '>=6'}
 
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
@@ -1027,6 +1039,9 @@ packages:
   muggle-string@0.4.1:
     resolution: {integrity: sha512-VNTrAak/KhO2i8dqqnqnAHOa3cYBwXEZe9h+D5h/1ZqFSTEFHdM65lR7RoIqq3tBBYavsOXV84NoHXZ0AkPyqQ==}
 
+  multiple-select-vanilla@5.2.2:
+    resolution: {integrity: sha512-iAlY8yy94T/yvacnRuEJmpaYtjDN/7aQH7D/hgc0X208BFAPSZJk/GeyGmKf5cHViPJqv7Nf/V/V6VhoiVOBgg==}
+
   nanoid@3.3.18:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -1148,6 +1163,9 @@ packages:
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
+  sortablejs@1.15.7:
+    resolution: {integrity: sha512-Kk8wLQPlS+yi1ZEf48a4+fzHa4yxjC30M/Sr2AnQu+f/MPwvvX9XjZ6OWejiz8crBsLwSq8GHqaxaET7u6ux0A==}
+
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
@@ -1243,6 +1261,9 @@ packages:
         optional: true
       webpack:
         optional: true
+
+  vanilla-calendar-pro@3.3.2:
+    resolution: {integrity: sha512-RaLpDtvQFeKi0ajOpGBedLNrr0YoiYAF+0sppk4XZV/U57AuihJIhw8h2whUvIG1ZSR3LrdSXk3lHLkCPGlHvg==}
 
   vite@8.2.2:
     resolution: {integrity: sha512-cFKLV/PRgAUlIRm5WjMjJ86jrftzpqcgH+Us+DS8mI3CDNiH30Whrz8uHL3+MOLPAgqbMBAqWdAHAphOAM+z/Q==}
@@ -1537,9 +1558,13 @@ snapshots:
   '@esbuild/win32-x64@0.27.7':
     optional: true
 
+  '@excel-builder-vanilla/types@5.2.3': {}
+
   '@exodus/bytes@1.15.0': {}
 
   '@exodus/bytes@1.15.1': {}
+
+  '@formkit/tempo@1.1.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -1692,6 +1717,55 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.4':
     optional: true
 
+  '@slickgrid-universal/binding@10.1.0': {}
+
+  '@slickgrid-universal/common@10.11.0':
+    dependencies:
+      '@excel-builder-vanilla/types': 5.2.3
+      '@formkit/tempo': 1.1.0
+      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/event-pub-sub': 10.10.0
+      '@slickgrid-universal/utils': 10.10.0
+      '@types/sortablejs': 1.15.9
+      '@types/trusted-types': 2.0.7
+      autocompleter: 10.0.0
+      dequal: 2.0.3
+      multiple-select-vanilla: 5.2.2
+      sortablejs: 1.15.7
+      vanilla-calendar-pro: 3.3.2
+
+  '@slickgrid-universal/custom-footer-component@10.11.0':
+    dependencies:
+      '@formkit/tempo': 1.1.0
+      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/common': 10.11.0
+
+  '@slickgrid-universal/empty-warning-component@10.11.0':
+    dependencies:
+      '@slickgrid-universal/common': 10.11.0
+
+  '@slickgrid-universal/event-pub-sub@10.10.0':
+    dependencies:
+      '@slickgrid-universal/utils': 10.10.0
+
+  '@slickgrid-universal/pagination-component@10.11.0':
+    dependencies:
+      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/common': 10.11.0
+
+  '@slickgrid-universal/utils@10.10.0': {}
+
+  '@slickgrid-universal/vanilla-bundle@10.11.0':
+    dependencies:
+      '@slickgrid-universal/binding': 10.1.0
+      '@slickgrid-universal/common': 10.11.0
+      '@slickgrid-universal/custom-footer-component': 10.11.0
+      '@slickgrid-universal/empty-warning-component': 10.11.0
+      '@slickgrid-universal/event-pub-sub': 10.10.0
+      '@slickgrid-universal/pagination-component': 10.11.0
+      '@slickgrid-universal/utils': 10.10.0
+      dequal: 2.0.3
+
   '@tauri-apps/api@2.11.1': {}
 
   '@tauri-apps/plugin-dialog@2.7.3':
@@ -1714,8 +1788,9 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/trusted-types@2.0.7':
-    optional: true
+  '@types/sortablejs@1.15.9': {}
+
+  '@types/trusted-types@2.0.7': {}
 
   '@vitejs/plugin-vue@6.0.8(vite@8.2.2(esbuild@0.27.7))(vue@3.5.34(typescript@6.0.3))':
     dependencies:
@@ -1848,49 +1923,6 @@ snapshots:
 
   acorn@8.18.0: {}
 
-  ag-charts-community@14.1.0:
-    dependencies:
-      ag-charts-core: 14.1.0
-      ag-charts-locale: 14.1.0
-      ag-charts-types: 14.1.0
-    optional: true
-
-  ag-charts-core@14.1.0:
-    dependencies:
-      ag-charts-types: 14.1.0
-    optional: true
-
-  ag-charts-enterprise@14.1.0:
-    dependencies:
-      ag-charts-community: 14.1.0
-      ag-charts-core: 14.1.0
-    optional: true
-
-  ag-charts-locale@14.1.0:
-    optional: true
-
-  ag-charts-types@14.1.0: {}
-
-  ag-grid-community@36.1.0:
-    dependencies:
-      ag-charts-types: 14.1.0
-      ag-stack: 36.1.0
-
-  ag-grid-enterprise@36.1.0:
-    dependencies:
-      ag-grid-community: 36.1.0
-      ag-stack: 36.1.0
-    optionalDependencies:
-      ag-charts-community: 14.1.0
-      ag-charts-enterprise: 14.1.0
-
-  ag-grid-vue3@36.1.0(vue@3.5.34(typescript@6.0.3)):
-    dependencies:
-      ag-grid-community: 36.1.0
-      vue: 3.5.34(typescript@6.0.3)
-
-  ag-stack@36.1.0: {}
-
   alien-signals@3.2.1: {}
 
   argparse@3.0.1: {}
@@ -1907,6 +1939,8 @@ snapshots:
       '@babel/parser': 7.29.3
       '@babel/types': 7.29.0
       ast-kit: 2.2.0
+
+  autocompleter@10.0.0: {}
 
   balanced-match@4.0.4: {}
 
@@ -1952,6 +1986,8 @@ snapshots:
       - '@noble/hashes'
 
   decimal.js@10.6.0: {}
+
+  dequal@2.0.3: {}
 
   detect-libc@2.1.2: {}
 
@@ -2149,7 +2185,7 @@ snapshots:
 
   magic-string@0.30.21:
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   magic-string@1.4.1:
     dependencies:
@@ -2182,6 +2218,10 @@ snapshots:
       ufo: 1.6.4
 
   muggle-string@0.4.1: {}
+
+  multiple-select-vanilla@5.2.2:
+    dependencies:
+      '@types/trusted-types': 2.0.7
 
   nanoid@3.3.18: {}
 
@@ -2323,6 +2363,8 @@ snapshots:
 
   siginfo@2.0.0: {}
 
+  sortablejs@1.15.7: {}
+
   source-map-js@1.2.1: {}
 
   stackback@0.0.2: {}
@@ -2381,6 +2423,8 @@ snapshots:
       rolldown: 1.2.6
       rollup: 4.60.4
       vite: 8.2.2(esbuild@0.27.7)
+
+  vanilla-calendar-pro@3.3.2: {}
 
   vite@8.2.2(esbuild@0.27.7):
     dependencies:

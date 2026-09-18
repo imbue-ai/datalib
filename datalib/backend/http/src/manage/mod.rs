@@ -917,7 +917,14 @@ impl RowCtx<'_> {
             }),
         };
 
-        let seeds = group::group_seeds(&ordered, |c| row_of(c.id()).dropped.is_some());
+        let is_dropped = |c: &Entry<'_>| row_of(c.id()).dropped.is_some();
+        // A diff group has no source step of its own: a sync of it is a
+        // sync of what its step reads, which is its source's ingest.
+        let seeds = if g.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
+            group::diff_group_seeds(&ordered, is_dropped)
+        } else {
+            group::group_seeds(&ordered, is_dropped)
+        };
         let run_blocked = dropped_why.clone().or_else(|| {
             if !seeds.is_empty() {
                 None

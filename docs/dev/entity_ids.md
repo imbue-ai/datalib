@@ -128,6 +128,21 @@ evidence that upstream was always the intent: contacts'
 `contact_uuid(account_id, …)` is *called* with the source name — the
 parameter has been named for the right thing all along.
 
+### Rows datalib itself mints
+
+Two kinds of row are about a source's data without being it, and both
+take `IdNamespace::Datalib` with `Scope::SourceInstance(<group id>)`,
+so they can never collide with the rows they are about:
+
+- a source's **storage report** (`datalib_step::introspect`);
+- a **diff group's** rows (`datalib_step::render_diff::rekeyed`): every
+  uuid a diff document carries is minted again as
+  `entity_id_str(Datalib, SourceInstance(<diff group>), "diff", <the
+  source's uuid>)`. The source's own row keeps the original, and the
+  unified index's `IdClaims` would refuse the diff's rows if they did
+  not move. `upstream_id` is left as the source's: it points at the
+  real thing.
+
 ### Why not opaque random ids
 
 A v4 per row makes collisions impossible and is the obvious answer. It

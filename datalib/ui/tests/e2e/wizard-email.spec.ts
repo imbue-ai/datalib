@@ -13,17 +13,18 @@ const field = (page: Page, caption: string) =>
   wizard(page)
     .locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`)
     .first();
-/// The probe-filled picker for one field: an AG Grid, one row per
-/// thing the account has, `row-id` being the exact string the filter
+/// The probe-filled picker for one field: a grid, one row per thing
+/// the account has, `data-key` being the exact string the filter
 /// writes.
 const picker = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .pick-grid`);
-const rows = (page: Page, caption: string) => picker(page, caption).locator(".ag-row");
-/// Tick one row's checkbox. Scoped to the selection column's own cell
+const rows = (page: Page, caption: string) => picker(page, caption).locator(".slick-row");
+/// Tick one row's checkbox — its label, which is what is drawn; the
+/// input itself is hidden. Scoped to the selection column's own cell
 /// so it cannot land on a cell that merely contains the text.
 const tick = (page: Page, caption: string, id: string) =>
   picker(page, caption)
-    .locator(`.ag-row[row-id="${id}"] .ag-selection-checkbox input`)
+    .locator(`.slick-row[data-key="${id}"] .slick-cell-checkboxsel label`)
     .first()
     .click();
 
@@ -250,7 +251,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
-  await expect(page.locator('.ag-row[row-id="bridge-mail/render_markdown"]')).toBeVisible();
+  await expect(page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]')).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
   await expect(page.locator(".m2-editor")).toHaveValue(/outlink_format = "gmail"/);
@@ -349,7 +350,7 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await expandGroup(page, "personal-mail");
   await pickRowMenu(
     page,
-    page.locator('.ag-row[row-id="personal-mail/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="personal-mail/render_markdown"]'),
     "Edit settings…",
     wizard(page),
   );

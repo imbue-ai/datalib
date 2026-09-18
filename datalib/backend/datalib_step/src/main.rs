@@ -18,6 +18,7 @@ mod methods;
 mod probe;
 mod qmd_index;
 mod render;
+mod render_diff;
 #[cfg(test)]
 mod render_model_test;
 mod source;
@@ -401,6 +402,18 @@ async fn run_function(
             let res = ingest::run(&planned, &env.step, now, control, emitter).await;
             hints::emit_auth_hint_on_failure(emitter, planned.source_type, &res);
             res
+        }
+        Function::RenderMarkdown if env.is_diff_group() => {
+            let raw_rel = env.raw_store_rel();
+            let (pair, params) = render_diff::split_params(params)?;
+            let planned = dispatch::plan(
+                env.diff_source_type()?,
+                dispatch::Phase::Render,
+                &env.group,
+                data_root.join(&raw_rel),
+                params,
+            )?;
+            render_diff::run(planned, &env, data_root, now, emitter, control, &pair).await
         }
         Function::RenderMarkdown => {
             let raw_rel = env.raw_store_rel();

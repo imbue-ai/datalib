@@ -3,6 +3,9 @@
 import type { FeedbackContext } from "./feedback/context";
 import { pushToast } from "./toasts";
 
+// `DiffStatus` in datalib_schema, hand-kept in step.
+export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
+
 export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
@@ -15,7 +18,7 @@ export type SearchRow = {
   sender: string;
   // When the thing came into being, as the source wrote it. Null when
   // the row has no source-side timestamp (a contact, or any row whose
-  // underlying entity isn't event-shaped). AG Grid renders null as an
+  // underlying entity isn't event-shaped). The grid renders null as an
   // empty cell.
   created_at: string | null;
   // When it last changed, as the source wrote it: the last message of a
@@ -80,6 +83,12 @@ export type SearchRow = {
   // How many things this row counts (rows in a measured table, pages in
   // a PDF). Null for rows that are a single thing.
   item_count: number | null;
+  // How the row differs between the two commits its diff group compares
+  // (`DiffStatus` in datalib_schema). Null on every real source's rows —
+  // non-null is what says a row came from a diff tree.
+  diff_status: DiffStatus | null;
+  // For a modified row, the columns whose value differs, `|`-joined.
+  diff_changed_columns: string | null;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;

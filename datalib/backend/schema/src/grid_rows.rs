@@ -229,4 +229,15 @@ pub struct GridRow {
     /// say, not this column's.
     #[col(sql = "BIGINT")]
     pub item_count: Option<i64>,
+    /// How this row differs between the two commits its diff group
+    /// compares — a `DiffStatus` spelling, bound as text. **NULL on
+    /// every real source's row**; non-NULL is what marks a row as
+    /// coming from a diff tree. See `docs/dev/plans/diff_renderer.md`.
+    #[col(sql = "VARCHAR(16)")]
+    pub diff_status: Option<String>,
+    /// For a `modified` row: the names of the columns whose value
+    /// differs between the two sides, sorted, joined with
+    /// `diff_status::CHANGED_COLUMNS_SEPARATOR`. NULL otherwise.
+    #[col(sql = "TEXT")]
+    pub diff_changed_columns: Option<String>,
 }

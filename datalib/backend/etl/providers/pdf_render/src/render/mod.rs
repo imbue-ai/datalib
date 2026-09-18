@@ -261,6 +261,7 @@ fn render_one(
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges: Vec::new(),
         problems: Vec::new(),
     })

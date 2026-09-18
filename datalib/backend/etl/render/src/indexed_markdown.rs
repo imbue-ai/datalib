@@ -873,6 +873,7 @@ impl IndexedMarkdownStore {
                     },
                     render_version,
                     rows,
+                    sections: Vec::new(),
                     edges,
                     problems: Vec::new(),
                 });
@@ -983,6 +984,7 @@ mod tests {
             md_path: dir.join(format!("{markdown_uuid}.md")),
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems,
         }

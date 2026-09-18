@@ -43,6 +43,7 @@ export type MenuAction =
   | "sync"
   | "stop"
   | "edit"
+  | "compare"
   | "rename"
   | "copy_id"
   | "copy_path"
@@ -74,6 +75,15 @@ export type MenuOptions = {
 const ONE_AT_A_TIME = "One row at a time";
 
 /// A tree that keeps no doltlite store, or null when it keeps one.
+/// Why "Compare…" does not apply: a comparison is of a source — a group
+/// with a type — that is not itself one (`docs/dev/plans/diff_renderer.md`).
+export function notComparableReason(t: MenuTarget): string | null {
+  if (t.kind !== "group") return "Compare a source, not a step under it";
+  if (!t.type) return "The index mirrors nothing to compare";
+  if (t.type === "diff") return "Already a comparison — make another from its source";
+  return null;
+}
+
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
@@ -146,6 +156,11 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     action: "edit",
     name: "Edit settings…",
     disabled: !one ? ONE_AT_A_TIME : only.editBlocked,
+  });
+  entries.push({
+    action: "compare",
+    name: "Compare two syncs…",
+    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
   });
   entries.push({ separator: true });
   entries.push({
