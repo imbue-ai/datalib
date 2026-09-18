@@ -52,10 +52,14 @@ fn build_export(root: &Path) -> Result<()> {
     // quote is `\"`, not `""`, and the message spans lines. Read as
     // RFC-4180 it splits into fragment rows, one with message text in
     // `Date`.
+    // The fifth is a second comment on the first row's post. A comment
+    // has no id of its own in the export, and keying the table on `Link`
+    // alone kept only the last comment per post.
     fs::write(
         root.join("Comments_17529409.csv"),
         "Date,Link,Message\n\
          2026-05-08 09:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Replying to my own post thread.\n\
+         2026-05-08 09:30:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,And a second reply on the same post.\n\
          2026-04-30 15:32:07,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681,\"Great point, Jean-Luc!\"\n\
          ,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999,The export left this comment's Date blank.\n\
          2026-06-10 18:53:49,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226568123,\"Back when I led the \\\"tea, Earl Grey\\\" replicator team,\n\nit was hot.\"\n",
@@ -152,8 +156,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let comments = rows(&db, "comments").await;
         assert_eq!(
             comments.len(),
-            4,
-            "comments rows: one per record, no fragments"
+            5,
+            "comments rows: one per record, no fragments, two on one post"
         );
         assert!(
             rows(&db, "comments_17529409").await.is_empty(),
@@ -280,6 +284,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(
             md_a.contains("Replying to my own post thread."),
             "comment merged into the post's thread: {md_a}"
+        );
+        assert!(
+            md_a.contains("And a second reply on the same post."),
+            "both comments on one post survive ingest and land in its thread: {md_a}"
         );
         // Message-level grid rows carry the linkout back to the post.
         assert!(
