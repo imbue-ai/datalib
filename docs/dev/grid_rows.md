@@ -428,7 +428,7 @@ measurement is one row, keyed on `(source, kind, measured path)` and
 nothing else, so a re-render overwrites it and `dolt_diff` over the
 store reads as "these numbers moved". The series behind it accumulates
 in `source_measurements`, a table in the same per-source
-`indexed_markdown.doltlite_db` that `render_problems` lives in, keyed
+`indexed_markdown.doltlite_db` that `problems` lives in, keyed
 `(subject, measured_at_utc)`.
 
 Putting the series in `grid_rows` instead was considered and rejected

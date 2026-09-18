@@ -2294,6 +2294,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-problems"
+version = "0.34.1"
+dependencies = [
+ "anyhow",
+ "datalib-etl-macros",
+ "datalib-id",
+ "datalib-table",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "strum",
+]
+
+[[package]]
 name = "datalib-qmd-indexer"
 version = "0.34.1"
 dependencies = [
@@ -2326,6 +2340,7 @@ name = "datalib-schema"
 version = "0.34.1"
 dependencies = [
  "datalib-etl-macros",
+ "datalib-problems",
  "datalib-table",
  "datalib-time",
  "serde",

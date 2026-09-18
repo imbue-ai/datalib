@@ -128,6 +128,11 @@ as the single source of truth the same way `schema_raw.rs` is.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
+- `#[col(sql = "VARCHAR(16)", enum)]` — the field is a `Copy` enum (or
+  `Option` of one) with `as_str(self) -> &'static str`, the strum shape
+  AGENTS.md prescribes for a closed set of strings. It is bound as that
+  text; a reader parses it back with the enum's `parse` and never
+  compares the column to a literal.
 - `#[derived(name = "created_at_utc", sql = "VARCHAR(40)")]` — repeatable, on
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.

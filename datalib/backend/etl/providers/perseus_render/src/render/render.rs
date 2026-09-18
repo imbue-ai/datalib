@@ -14,8 +14,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::align::{split, PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, Edition, ParsedPerseus, Section};
@@ -128,7 +128,7 @@ fn render_book(
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
         .into_iter()
         .collect();
@@ -174,7 +174,7 @@ fn render_chapter(
     let md = render_chapter_md(chapter, edition, alignments);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
     rows.extend(chapter_grid_row(
         book,
@@ -411,7 +411,7 @@ fn book_grid_row(
     stanza: &str,
     book: &Book,
     bk_uuid: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
@@ -450,7 +450,7 @@ fn chapter_grid_row(
     ch_uuid: &str,
     md_rel: &str,
     stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let ci: i64 = chapter.n.parse().unwrap_or(0);
     let bi: u32 = book.n.parse().unwrap_or(0);
@@ -493,7 +493,7 @@ fn section_grid_row(
     text: &str,
     idx: i64,
     stanza: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci: u32 = chapter.n.parse().unwrap_or(0);

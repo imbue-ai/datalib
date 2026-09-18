@@ -11,8 +11,8 @@ use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use crate::types::{ContactPhoto, NormalizedContact};
 
@@ -124,7 +124,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let row = build_grid_row(profile, contact, source_id, &md_rel, &mut problems);
 
     // `row` reaches the index through `on_doc_complete` below; the
@@ -248,7 +248,7 @@ fn build_grid_row(
     contact: &NormalizedContact,
     source_id: &str,
     md_rel: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let title = display_or_id(contact).to_string();
     // Body the UI displays / qmd indexes — compact, single string:

@@ -578,11 +578,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     missing.append(f"{md.name} -> blobs/{target}")
         return linked, missing, placeholders
 
-    def _render_problems(self) -> dict[str, list[str]]:
-        """Per-source `render_problems` rows, as `source -> [summary…]`.
+    def _problems(self) -> dict[str, list[str]]:
+        """Per-source `problems` rows, as `source -> [summary…]`.
 
-        Each entry is `<outcome>|<uuid>|<problems-json>` so a failure
-        message names what was dropped rather than only how many.
+        Each entry names the severity, the scope, the field and the
+        reason, so a failure message says what was dropped rather than
+        only how many.
         """
         out: dict[str, list[str]] = {}
         for store in sorted(
@@ -590,7 +591,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         ):
             rows = self._query(
                 store,
-                "SELECT outcome, uuid, problems FROM render_problems ORDER BY uuid;",
+                "SELECT severity, scope_key, item_uuid, field, reason, sample "
+                "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
                 out[store.parent.parent.name] = rows
@@ -851,10 +853,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # source — but the same change means a projection that quietly
         # started dropping rows would no longer show up as a failure
         # anywhere. Here it does: the fixture is known-good, so any
-        # `render_problems` row is a regression, and the message names
+        # `problems` row is a regression, and the message names
         # the row and the reason rather than just a count.
         self.assertEqual(
-            self._render_problems(),
+            self._problems(),
             {},
             "the TNG fixture must render clean; a row here means a "
             "projection started dropping or nulling data",

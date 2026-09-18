@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
+use datalib_schema::problems::Severity;
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -92,21 +93,36 @@ pub async fn run(
     // everything is fine — and the more dangerous of those two reads as
     // success. These are whole-store counts, not this-run counts: a
     // problem on a document this run skipped is still current, which is
-    // the point of the per-document sweep.
-    if !report.problems.is_empty() {
-        let total: i64 = report.problems.values().sum();
-        let dropped = report.problems.get("dropped").copied().unwrap_or(0);
-        let nulled = report.problems.get("nulled").copied().unwrap_or(0);
+    // the point of the per-document sweep. The metrics are what the
+    // Manage row's errors/warnings cell reads, so they are reported
+    // every run, zero included: a missing series means "never counted",
+    // not "clean".
+    let errors = report.problems.get(&Severity::Error).copied().unwrap_or(0);
+    let warnings = report
+        .problems
+        .get(&Severity::Warning)
+        .copied()
+        .unwrap_or(0);
+    progress.metric(
+        PROBLEMS_METRIC,
+        &[("severity", Severity::Error.as_str())],
+        errors,
+    );
+    progress.metric(
+        PROBLEMS_METRIC,
+        &[("severity", Severity::Warning.as_str())],
+        warnings,
+    );
+    if errors + warnings > 0 {
         tracing::warn!(
             source = %name,
-            total,
-            dropped,
-            nulled,
+            errors,
+            warnings,
             "render: rows this source could not fully project \
-             (see render_problems in its indexed_markdown.doltlite_db)"
+             (see `problems` in its indexed_markdown.doltlite_db)"
         );
         progress.set_message(&format!(
-            "{total} row(s) with render problems ({dropped} dropped, {nulled} degraded)"
+            "{errors} error(s) and {warnings} warning(s) rendering this source"
         ));
     }
     // The whole tree re-renders from the raw store, so cache-aware
@@ -148,13 +164,17 @@ pub struct RenderSource {
     pub progress: Progress,
 }
 
+/// The metric series a step reports its whole-store problem counts
+/// on, labelled by severity. Read back by the Manage screen.
+pub const PROBLEMS_METRIC: &str = "problems";
+
 /// What a render left behind, for the shell to report.
 pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
     pub removed: usize,
-    /// Whole-store problem counts by outcome.
-    pub problems: HashMap<String, i64>,
+    /// Whole-store problem counts by severity.
+    pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
     pub head: Option<String>,
     /// Rows the final commit sealed beyond the last checkpoint — the

@@ -445,7 +445,7 @@ fn space_of_dir(dir: &str) -> String {
 /// `None` is the right *value* for `created_at`, but nothing anywhere
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). The
-/// problem sink is `render_problems` (`datalib_schema::render_problems`);
+/// problem sink is `problems` (`datalib_schema::problems`);
 /// report `{field, reason: CoercionFailed, sample}` there as well as
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`

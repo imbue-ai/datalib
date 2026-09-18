@@ -184,12 +184,13 @@ AGENTS.md's "Name a closed set of strings": `Severity`, `Stage`,
 `Outcome`, `Reason` and `ScopeKind` are `strum` enums with `as_str` /
 `parse -> Option`, the strum-serde agreement test, and the stored
 `VARCHAR` bound from `as_str` — a writer never formats one into SQL
-and a reader never compares one against a literal. The row type
-carries the enums; the string is minted at the bind and parsed at the
-read. The TypeScript mirror in `ui/src/api.ts` is the matching
-string-literal union, changed in the same commit. `Severity` lives in
-`datalib_etl::problems` and is never glob-imported beside
-`datalib_dag::Severity`.
+and a reader never compares one against a literal. The row struct's
+fields *are* the enums — `#[col(sql = "…", enum)]` on `PortableTable`
+binds `as_str()` and `ProblemRow::from_row` parses back — so the
+string exists only in the store. The TypeScript mirror in
+`ui/src/api.ts` is the matching string-literal union, changed in the
+same commit. `Severity` lives in `datalib_problems` and is never
+glob-imported beside `datalib_dag::Severity`.
 
 ### D2. The id is minted from what produced the problem, nothing else
 
@@ -243,7 +244,8 @@ Manage poll — is ruled out by the pool rules in
 
 Every step that owns a `problems` table ends by emitting
 `problems{severity=error}` and `problems{severity=warning}` as
-metrics — whole-store current counts, the same numbers the render step
+metrics (`datalib_step::render::PROBLEMS_METRIC`) — whole-store
+current counts, zero included, the same numbers the render step
 already logs. The Manage join reads them from the step's `last_run_id`
 (one query on `metrics`, which the join does not do today —
 `DagStepRun` carries no metrics — but the table and the id are both

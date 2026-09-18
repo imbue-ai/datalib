@@ -2,31 +2,26 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# The `problems` table: one row per thing a step could not fully do to
+# one record, in whichever store that step owns. A leaf crate so that
+# both sides of the ingest/render split can write it — `datalib_etl`
+# for a fetch that failed, the render crates for a payload that would
+# not parse or a row that would not build. See src/lib.rs and
+# docs/dev/plans/problem_visibility.md.
 rust_library(
-    name = "datalib_schema",
-    srcs = [
-        "src/lib.rs",
-        "src/grid_rows.rs",
-        "src/grid_rows_builder.rs",
-        "src/edges.rs",
-        "src/markdowns.rs",
-        "src/providers.rs",
-        "src/source_cursors.rs",
-        "src/render_cursor.rs",
-        "src/render_inputs.rs",
-        "src/measurements.rs",
-    ],
-    crate_name = "datalib_schema",
+    name = "datalib_problems",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_problems",
     edition = "2021",
     proc_macro_deps = [
         "//datalib/backend/etl/macros:datalib_etl_macros",
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/id:datalib_id",
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
-        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/table:datalib_table",
-        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
@@ -34,9 +29,9 @@ rust_library(
 )
 
 rust_test(
-    name = "schema_unittests",
+    name = "problems_unittests",
     size = "small",
-    crate = ":datalib_schema",
+    crate = ":datalib_problems",
     edition = "2021",
     deps = [
         "@datalib_crates//:serde_json",

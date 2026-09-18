@@ -14,8 +14,8 @@ use datalib_etl_timeseries_render::text::{
 };
 use datalib_id::{entity_id_str, IdNamespace, Scope};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use super::parse::{ParsedAirvisual, Series};
 use super::units::{self, series_label, spec_for, Quantity, QUANTITIES};
@@ -95,7 +95,7 @@ pub fn render_all(
         .unwrap_or(&md_path)
         .to_string_lossy()
         .into_owned();
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows = build_grid_rows(parsed, source_id, &m_uuid, &md_rel, &mut problems);
 
     on_doc_complete(RenderedMarkdown {
@@ -424,7 +424,7 @@ fn build_grid_rows(
     source_id: &str,
     m_uuid: &str,
     md_rel: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let title = page_title(source_id);
     let by_device = parsed.series_by_device();

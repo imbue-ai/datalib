@@ -50,8 +50,8 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
 use datalib_etl_render::section::msg_div_open;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
 use datalib_etl_render::html::escape_text;
@@ -194,7 +194,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let mut problems: Vec<RenderProblemRow> = Vec::new();
+    let mut problems: Vec<ProblemRow> = Vec::new();
     let rows = build_grid_rows(
         profile,
         chat,
@@ -567,7 +567,7 @@ fn build_grid_rows(
     chat_title: &str,
     md_rel: &str,
     source_id: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
@@ -731,7 +731,7 @@ fn reaction_row(
     entire_chat: &str,
     md_rel: &str,
     source_id: &str,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
         .uuid(r.reaction_uuid.clone())
@@ -817,7 +817,7 @@ fn human_bytes(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_schema::render_problems::{Problem, Reason};
+    use datalib_schema::problems::{Outcome, Reason, ScopeKind, Severity, Stage};
 
     fn rows_of(profile: &RenderProfile, chat: &NormalizedChat) -> Vec<GridRow> {
         let mut problems = Vec::new();
@@ -917,29 +917,29 @@ mod tests {
 
         assert_eq!(problems.len(), 1, "exactly one problem: {problems:?}");
         let p = &problems[0];
-        assert_eq!(p.outcome, "dropped");
-        assert_eq!(p.stage, "grid_row");
+        assert_eq!(p.outcome, Outcome::Dropped);
+        assert_eq!(p.severity, Severity::Error);
+        assert_eq!(p.stage, Stage::GridRow);
         assert_eq!(p.source_id, "test_source");
         assert_eq!(
             p.scope_key, chat.buckets[0].markdown_uuid,
             "swept with the document it belongs to"
         );
-        assert_eq!(p.scope_kind, "markdown");
-        assert_eq!(p.render_version, i64::from(profile.render_version));
-        // A row with no uuid gets the content-derived surrogate, so the
-        // same bad record does not accumulate a new row every run.
-        assert!(p.uuid.starts_with("noid:"), "{}", p.uuid);
+        assert_eq!(p.scope_kind, ScopeKind::Markdown);
+        assert_eq!(p.render_version, Some(i64::from(profile.render_version)));
+        // A row with no uuid names no item; its id comes from the scope
+        // and the field, so the same bad record does not accumulate a
+        // new row every run.
+        assert!(p.item_uuid.is_none());
         // Never a count without a reason.
-        let parsed: Vec<Problem> = serde_json::from_str(&p.problems).expect("problems json");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].reason, Reason::NoIdentity);
-        assert_eq!(parsed[0].field.as_deref(), Some("uuid"));
+        assert_eq!(p.reason, Reason::NoIdentity);
+        assert_eq!(p.field.as_deref(), Some("uuid"));
         // Stamping is the store's job, not the renderer's.
         assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
     }
 
-    /// The surrogate is content-derived, so a record that stays broken
-    /// keeps one row across runs rather than growing one per run.
+    /// The id is minted from the scope and the field, so a record that
+    /// stays broken keeps one row across runs rather than growing one per run.
     #[test]
     fn the_same_bad_record_keys_to_the_same_surrogate_twice() {
         let profile = test_profile();
@@ -966,7 +966,7 @@ mod tests {
             args.2,
             &mut b,
         );
-        assert_eq!(a[0].uuid, b[0].uuid);
+        assert_eq!(a[0].problem_uuid, b[0].problem_uuid);
     }
 
     /// A message weighs its body in bytes, the document weighs the sum

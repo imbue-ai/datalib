@@ -261,7 +261,7 @@ fn nonempty(s: &str) -> Option<&str> {
 /// `None` is the right *value* for `created_at`, but nothing anywhere
 /// records that we discarded something upstream actually sent — that is
 /// only half of R1 ("drop, count, log; never abort, never hide"). The
-/// problem sink is `render_problems` (`datalib_schema::render_problems`);
+/// problem sink is `problems` (`datalib_schema::problems`);
 /// report `{field, reason: CoercionFailed, sample}` there as well as
 /// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse LinkedIn's `2026-06-16 22:11:33 UTC` timestamp to unix millis,

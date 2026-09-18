@@ -849,7 +849,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     for f in &fields {
         let ident = f.ident.as_ref().expect("named field");
         let name = ident.to_string();
-        let sql = parse_col_attr(f)?;
+        let ColAttr { sql, is_enum } = parse_col_attr(f)?;
         if name == primary_key.trim() {
             pk_is_text = matches!(classify(&f.ty), Some(PromotedKind::TextNotNull));
         }
@@ -864,19 +864,30 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         // and a copy for scalars. Anything else is rejected rather than
         // guessed at — a silently mis-bound column is exactly the class
         // of bug generating this is meant to remove.
-        let bind = match classify(&f.ty) {
-            Some(PromotedKind::TextNotNull) => quote! { &self.#ident },
-            Some(PromotedKind::TextNullable) => quote! { self.#ident.as_deref() },
-            Some(
-                PromotedKind::IntegerNotNull
-                | PromotedKind::IntegerNullable
-                | PromotedKind::RealNotNull
-                | PromotedKind::RealNullable
-                | PromotedKind::BoolNotNull,
+        let bind = match (is_enum, classify(&f.ty)) {
+            // A closed vocabulary: the field is a `Copy` enum with
+            // `as_str(self) -> &'static str` (strum's `IntoStaticStr`),
+            // stored as the text `as_str` spells. Readers parse it back
+            // with the enum's `parse`, never compare the column to a
+            // literal.
+            (true, _) if is_option(&f.ty) => quote! { self.#ident.map(|v| v.as_str()) },
+            (true, _) => quote! { self.#ident.as_str() },
+            (false, Some(PromotedKind::TextNotNull)) => quote! { &self.#ident },
+            (false, Some(PromotedKind::TextNullable)) => quote! { self.#ident.as_deref() },
+            (
+                false,
+                Some(
+                    PromotedKind::IntegerNotNull
+                    | PromotedKind::IntegerNullable
+                    | PromotedKind::RealNotNull
+                    | PromotedKind::RealNullable
+                    | PromotedKind::BoolNotNull,
+                ),
             ) => quote! { self.#ident },
-            None => return Err(syn::Error::new_spanned(
+            (false, None) => return Err(syn::Error::new_spanned(
                 &f.ty,
-                "PortableTable can only bind String, i64, f64, bool or Option of the first three; \
+                "PortableTable can only bind String, i64, f64, bool or Option of the first three, \
+                     or an enum marked #[col(sql = \"…\", enum)]; \
                      add support to `classify` rather than binding this column by hand",
             )),
         };
@@ -1014,22 +1025,34 @@ fn parse_portable_table_attr(
     ))
 }
 
-fn parse_col_attr(field: &Field) -> syn::Result<String> {
+struct ColAttr {
+    sql: String,
+    /// `#[col(sql = "…", enum)]`: the field is a `Copy` enum with
+    /// `as_str(self) -> &'static str`, bound as that text.
+    is_enum: bool,
+}
+
+fn parse_col_attr(field: &Field) -> syn::Result<ColAttr> {
     for attr in &field.attrs {
         if !attr.path().is_ident("col") {
             continue;
         }
         let mut sql: Option<String> = None;
+        let mut is_enum = false;
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("sql") {
                 sql = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
+            } else if meta.path.is_ident("enum") {
+                is_enum = true;
+                Ok(())
             } else {
-                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`"))
+                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`, `enum`"))
             }
         })?;
-        return sql
-            .ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"));
+        let sql =
+            sql.ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"))?;
+        return Ok(ColAttr { sql, is_enum });
     }
     Err(syn::Error::new_spanned(
         field,

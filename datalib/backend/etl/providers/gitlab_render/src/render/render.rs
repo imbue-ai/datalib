@@ -9,7 +9,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, Input};
-use datalib_schema::render_problems::RenderProblemRow;
+use datalib_schema::problems::ProblemRow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -290,7 +290,7 @@ pub fn render_gitlab(
         let md_path = root.join(&md_rel);
 
         render_one_mr(mr, &notes, root, stanza)?;
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut problems: Vec<ProblemRow> = Vec::new();
         let rows = rows_for_mr(stanza, mr, &notes, &mut problems);
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
