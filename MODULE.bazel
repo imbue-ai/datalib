@@ -138,7 +138,18 @@ CURL_IMPERSONATE_RELEASE = "curl-impersonate-v2.2.2-1"
         )],
         sha256 = sha,
         strip_prefix = "curl-impersonate-%s" % triple,
-        build_file_content = 'exports_files(["curl-impersonate"])',
+        # The binary, and the notices build.sh packs beside it (curl,
+        # BoringSSL, nghttp2/3, ngtcp2, brotli, zstd, zlib): the release
+        # tarball and the .app carry them under licenses/ (see
+        # //third-party:bundled_licenses).
+        build_file_content = """
+exports_files(["curl-impersonate"])
+filegroup(
+    name = "licenses",
+    srcs = glob(["LICENSE-*"]),
+    visibility = ["//visibility:public"],
+)
+""",
     )
     for triple, sha in [
         ("aarch64-apple-darwin", "3df522dcdcbc922bf730ab4044ee9e4589c0d5082f05dea0ed2e6594e5505e2d"),
@@ -244,7 +255,7 @@ use_repo(pip, "py_pip")
 bazel_dep(name = "rules_rust", version = "0.73.0")
 
 # Proto / prost — first introduced for `datalib-signal-backup`, which
-# parses Signal-Android's `Backup.proto`. We use the Bazel-native prost
+# parses Signal-Android's backup format. We use the Bazel-native prost
 # codegen path (rules_rust_prost) instead of a `prost-build` build.rs:
 # codegen runs as a Bazel action driven by `rust_prost_library`, so the
 # crate stays build.rs-free and the generated code is reproducible /
