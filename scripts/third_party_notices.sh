@@ -83,7 +83,7 @@ directory is those notices.
 |---|---|
 | `rust-crates.md` | every Rust crate linked into the `datalib-*` binaries |
 | `ui-bundle.md` | every npm package bundled into the web UI that `datalib-http` serves |
-| `curl-impersonate/` | `latchkey-curl-impersonate`: curl-impersonate, curl, BoringSSL, nghttp2, nghttp3, ngtcp2, brotli, zstd, zlib |
+| `curl-impersonate/` | `curl-impersonate`: curl-impersonate, curl, BoringSSL, nghttp2, nghttp3, ngtcp2, brotli, zstd, zlib |
 | `doltlite/` | DoltLite (Apache-2.0), the SQLite fork linked into every binary; SQLite itself is public domain |
 | `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 

@@ -45,14 +45,14 @@ injects the cookies registered under the `claude-ai` service.
 
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
 clear the challenge, requests go out through a Chrome-impersonating
-curl — the bundled `curl-impersonate`, reached via the dispatch curl
+curl — the bundled `curl-impersonate`, reached via the router curl
 (`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
-downloader finds the dispatch itself; to set it by hand, point it at
-the **dispatch**, which brings the impersonator along as a sibling:
+downloader finds the router itself; to set it by hand, point it at
+the **router**, which brings the impersonator along as a sibling:
 
 ```sh
-bazelisk build //datalib/backend/etl:latchkey_curl_dispatch //datalib/backend/etl:latchkey_curl_impersonate
-export LATCHKEY_CURL="$(pwd)/bazel-bin/datalib/backend/etl/latchkey_curl_dispatch"
+bazelisk build //third-party/latchkey-curl-shims
+export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
 claude-ingest --out ~/backups/claude_api
 ```
 
@@ -347,7 +347,6 @@ result is merged into the existing `conversations.json`, so prior
 cache entries are preserved.
 
 ```sh
-export LATCHKEY_CURL=/path/to/curl_impersonate-chrome
 claude-ingest --out ~/backups/claude_api \
     --conv-uuid 12345678-90ab-cdef-1234-567890abcdef
 ```

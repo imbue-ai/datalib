@@ -9,16 +9,6 @@ license.workspace = true
 name = "datalib_etl"
 path = "src/lib.rs"
 
-# Drop-in `curl` that dispatches on a private marker header: requests
-# carrying `-H "X-Imbue-Impersonate:"` go to `curl-impersonate` (shipped
-# as a sibling of this binary, `latchkey-curl-impersonate`; see
-# //third-party/curl-impersonate), everything else passes through to
-# `curl` on PATH. Lets a single `LATCHKEY_CURL` binary serve both kinds
-# of caller. std-only, so it links none of this crate's HTTP stack.
-[[bin]]
-name = "latchkey-curl-dispatch"
-path = "src/bin/latchkey_curl_dispatch.rs"
-
 [dependencies]
 # `escape-html`: Google Voice's takeout is XHTML, whose `&nbsp;` and
 # friends are not XML entities. See src/xml.rs.
@@ -39,9 +29,9 @@ sqlx = { workspace = true }
 sha2 = { workspace = true }
 blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }
 tempfile = "3"
-# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_dispatch`
-# resolver can find our Chrome-impersonating curl shim under
-# `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
+# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_router`
+# resolver can find the fetched curl shims under `bazel run` /
+# `bazel test`. Falls through cleanly outside Bazel.
 runfiles = "0.2"
 # Gitignore-shaped matcher for `fswalk::walk_files`. Same crate ripgrep
 # uses; correct gitignore semantics out of the box.

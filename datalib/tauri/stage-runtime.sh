@@ -30,8 +30,9 @@ log() { printf '>>> stage-runtime: %s\n' "$*" >&2; }
 "$repo_root/scripts/third_party_notices.sh" "$script_dir/licenses"
 
 # User-facing `latchkey` launcher: bundled node + staged tree +
-# LATCHKEY_CURL pointed at the bundled shim. Lands next to the sidecar
-# binaries (same dir the shim is staged into by beforeBuildCommand) so
+# LATCHKEY_CURL pointed at the bundled router curl. Lands next to the
+# sidecar binaries (same dir the shims are staged into by
+# beforeBuildCommand) so
 # `.../Resources/binaries/latchkey services register …` just works.
 mkdir -p "$script_dir/binaries"
 install -m 0755 "$repo_root/scripts/latchkey-wrapper.sh" "$script_dir/binaries/latchkey"

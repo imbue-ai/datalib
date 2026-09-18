@@ -18,7 +18,7 @@ CURL_IMPERSONATE_NOTICES = [
 genrule(
     name = "bundled_licenses",
     srcs = [
-        "//third-party/curl-impersonate:licenses",
+        "//third-party/latchkey-curl-shims:licenses",
         "//third-party/doltlite:licenses",
         # The whole Node distribution: its BUILD exports the binaries and
         # nothing else, so LICENSE is only reachable through this
@@ -33,7 +33,7 @@ genrule(
     cmd = """
         out=$(RULEDIR)/bundled_licenses
         mkdir -p $$out/curl-impersonate $$out/doltlite $$out/node
-        for f in $(locations //third-party/curl-impersonate:licenses); do
+        for f in $(locations //third-party/latchkey-curl-shims:licenses); do
             cp $$f $$out/curl-impersonate/$$(basename $$f)
         done
         for f in $(locations //third-party/doltlite:licenses); do
