@@ -198,7 +198,8 @@ datalib/
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
 tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
-docs/          dev/ architecture notes; user/ guides; dev/plans/.
+docs/          dev/ architecture notes; user/ guides; dev/plans/; assets/ images
+               only the docs use (the README grid shares the UI's marks).
 third-party/   vendored upstream code.
 ```
 

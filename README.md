@@ -69,45 +69,58 @@ place — and most of it was written by other people. Three things follow:
 
 ## Supported data sources
 
-A source's `type` names the thing being mirrored. *Where the data
-comes from* is one table on the source's ingest step, and its name is
-read under the type: `api` is the product's own API, `export` an
-unpacked export, `backup` a phone backup, `fswalk` a folder to scan. A
-type that is not one product spells its sources out — email's are
-`jmap`, `gmail` and `mbox`. A table that reads files carries its own
-`path`. Every shape is in
-[`all_sources.toml`](docs/user/config_examples/all_sources.toml).
+Every source links to its section of [**Getting your data**](docs/user/getting_your_data.md):
+what it mirrors, and how to get at yours — a login kept by latchkey, an
+export, or a backup pulled off a phone.
 
-| Source | `type` | Input mode | What it mirrors |
-|--------|--------|------------|-----------------|
-| Claude | `claude` | Web API (latchkey) **or** an unpacked Claude data export | Conversations across every org, and projects |
-| ChatGPT | `chatgpt` | Web API (latchkey) | Conversations |
-| Slack | `slack` | Web API (latchkey) | Channels, DMs + file attachments |
-| GitHub | `github` | Web API (latchkey) | Pull requests |
-| GitLab | `gitlab` | Web API (latchkey) | Merge requests |
-| Notion | `notion` | Web API (latchkey) | Pages (inbox + page subtrees) |
-| Email | `email` | Gmail API (latchkey), **or** a JMAP server such as Fastmail (latchkey), **or** a Google Takeout `.mbox` on disk | Mail messages + attachments |
-| Google Takeout | `google_takeout` | Export tree on disk | Google Chat + Voice messages (rendered to markdown); Maps reviews / saved places / photos, YouTube watch history + subscriptions, and Gemini Apps activity (extracted to the raw store, not yet rendered) |
-| Contacts | `contacts` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
-| Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. (lightly used; expect rough edges) |
-| Signal | `signal` | Android backup file | Messages + media |
-| WhatsApp | `whatsapp` | Android `crypt15` backup | Messages + media |
-| Apple Messages | `apple_messages` | The Messages app's own `chat.db` on a Mac (or a copy) | iMessage / SMS chats with tapbacks; attachments by name |
-| SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
-| LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
-| Facebook | `facebook` | "Download your information" export (JSON) | Posts, photo albums, comments, reactions; friends as contacts; every other file of the export mirrored to the raw store |
-| YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
-| Garmin | `garmin` | Web API (its own login, not latchkey) | Per-day health metrics (sleep, heart rate, stress, body battery, HRV, SpO2, …), weigh-ins, activities + original FIT files, devices, records, gear, badges, workouts, goals; the weigh-ins rendered as one page with an interactive plot |
-| Perseus | `perseus` | Public download | TEI editions of Greek and Latin texts from PerseusDL |
-| PDFs | `pdf` | Local directory tree | Every PDF under it, converted to markdown and keyed on content hash (no OCR yet) |
-| Music / photos / video | `media` | Local directory tree | Every audio, image and video file with its metadata, plus `.m3u` playlists; download-only, no rendered markdown |
-| Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3); download-only, no rendered markdown |
-| Photos | `lightroom` | Adobe Lightroom Classic catalog (`.lrcat`) | A deduplicated, versioned mirror of every table — an incremental backup with full history; download-only, no rendered markdown |
+<table>
+  <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#airvisual"><img src="datalib/ui/src/assets/airvisual.svg" width="40" height="40" alt=""><br><b>AirVisual</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-messages"><img src="datalib/ui/src/assets/apple_messages.svg" width="40" height="40" alt=""><br><b>Apple Messages</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-photos"><img src="datalib/ui/src/assets/apple_photos.svg" width="40" height="40" alt=""><br><b>Apple Photos</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#beeper"><img src="datalib/ui/src/assets/beeper.png" width="40" height="40" alt=""><br><b>Beeper</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#chatgpt"><img src="datalib/ui/src/assets/chatgpt.svg" width="40" height="40" alt=""><br><b>ChatGPT</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#claude"><img src="datalib/ui/src/assets/claude.svg" width="40" height="40" alt=""><br><b>Claude</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#claude-code"><img src="datalib/ui/src/assets/claude_code.svg" width="40" height="40" alt=""><br><b>Claude Code</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#contacts"><img src="datalib/ui/src/assets/contacts.svg" width="40" height="40" alt=""><br><b>Contacts</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#email"><img src="datalib/ui/src/assets/email.svg" width="40" height="40" alt=""><br><b>Email</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#facebook"><img src="datalib/ui/src/assets/facebook.svg" width="40" height="40" alt=""><br><b>Facebook</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/garmin_dark.svg"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""></picture><br><b>Garmin</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/github_dark.svg"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""></picture><br><b>GitHub</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gitlab"><img src="datalib/ui/src/assets/gitlab.svg" width="40" height="40" alt=""><br><b>GitLab</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linkedin"><img src="datalib/ui/src/assets/linkedin.svg" width="40" height="40" alt=""><br><b>LinkedIn</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-files"><img src="datalib/ui/src/assets/fsindex.svg" width="40" height="40" alt=""><br><b>Local files</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Media</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#notion"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/notion_dark.svg"><img src="datalib/ui/src/assets/notion.svg" width="40" height="40" alt=""></picture><br><b>Notion</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>PDFs</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#slack"><img src="datalib/ui/src/assets/slack.svg" width="40" height="40" alt=""><br><b>Slack</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
+    <td align="center" width="16%"><a href="docs/dev/step_protocol.md"><img src="docs/assets/your_own_source.svg" width="40" height="40" alt=""><br><b>Your own source →</b></a></td>
+    <td width="16%"></td>
+    <td width="16%"></td>
+    <td width="16%"></td>
+  </tr>
+</table>
 
-See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
-for one fully-commented config entry per source, and
-[`docs/user/getting_your_data.md`](docs/user/getting_your_data.md) for
-how to get each one's credentials or export.
+A source's `type` names the thing being mirrored. *Where the data comes
+from* is one table on the source's ingest step, named under the type:
+`api` is the product's own API, `export` an unpacked export, `backup` a
+phone backup, `fswalk` a folder to scan. Every shape, fully commented,
+is in [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
 
 ## How it works
 
