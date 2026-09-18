@@ -141,6 +141,36 @@ export type EdgeOut = {
   dst_title: string | null;
 };
 
+/// The words a problem's closed vocabularies take. Mirrors
+/// `datalib_problems`; change both halves together.
+export type ProblemSeverity = "error" | "warning" | "info";
+export type ProblemStage = "fetch" | "parse" | "render" | "grid_row";
+export type ProblemOutcome = "dropped" | "nulled" | "ok";
+export type ProblemReason =
+  | "undeserializable"
+  | "no_identity"
+  | "coercion_failed"
+  | "uncovered_type"
+  | "deliberate_loss"
+  | "noted";
+
+/// One problem on a document, as the document view lists it above the
+/// body. Mirrors the applet's `DocProblem`.
+export type DocProblem = {
+  problem_uuid: string;
+  severity: ProblemSeverity;
+  stage: ProblemStage;
+  outcome: ProblemOutcome;
+  reason: ProblemReason;
+  field: string | null;
+  rule: string | null;
+  sample: string;
+  /// The section this is about, when the record survived as a row; a
+  /// dropped record has no section to jump to.
+  item_uuid: string | null;
+  first_seen_at_utc: string;
+};
+
 export type ChatResponse = {
   markdown_uuid: string;
   name: string | null;
@@ -152,6 +182,10 @@ export type ChatResponse = {
   source_url: string | null;
   body: string;
   outgoing_edges: EdgeOut[];
+  /// What render could not fully do to this document, errors first.
+  problems: DocProblem[];
+  /// Anything the applet could not read while answering.
+  errors?: string[];
 };
 
 // One rendered document (a `markdowns` row), as listed by the applet

@@ -87,6 +87,53 @@ impl ProblemView {
     }
 }
 
+/// One problem as the document view shows it above the body: enough
+/// to say what went wrong and to jump to the section, no more.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocProblem {
+    pub problem_uuid: String,
+    pub severity: &'static str,
+    pub stage: &'static str,
+    pub outcome: &'static str,
+    pub reason: &'static str,
+    pub field: Option<String>,
+    pub rule: Option<String>,
+    pub sample: String,
+    /// The section in the body this is about, when the record survived
+    /// as a row; a dropped record has no section to jump to.
+    pub item_uuid: Option<String>,
+    pub first_seen_at_utc: String,
+}
+
+impl DocProblem {
+    pub fn of(row: ProblemRow) -> Self {
+        DocProblem {
+            problem_uuid: row.problem_uuid,
+            severity: row.severity.as_str(),
+            stage: row.stage.as_str(),
+            outcome: row.outcome.as_str(),
+            reason: row.reason.as_str(),
+            field: row.field,
+            rule: row.rule,
+            sample: row.sample,
+            item_uuid: (row.outcome != Outcome::Dropped)
+                .then_some(row.item_uuid)
+                .flatten(),
+            first_seen_at_utc: row.first_seen_at_utc,
+        }
+    }
+}
+
+/// Errors first, then warnings, then findings; within a severity the
+/// order the store returned.
+pub fn sort_for_banner(rows: &mut [ProblemRow]) {
+    rows.sort_by_key(|r| match r.severity {
+        Severity::Error => 0,
+        Severity::Warning => 1,
+        Severity::Info => 2,
+    });
+}
+
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("severity", "Severity", ColumnType::Chips).describe(
@@ -174,6 +221,32 @@ mod tests {
     /// Every spec names a key the row serializes, and every serialized
     /// key has a spec: a renamed field would otherwise draw an empty
     /// column and nothing would complain.
+    /// A dropped record has no section in the body, so its banner line
+    /// must not offer a jump that lands nowhere.
+    #[test]
+    fn a_dropped_record_offers_no_section_to_jump_to() {
+        let dropped = ProblemRow::new(
+            "slack",
+            Stage::GridRow,
+            Scope::Markdown("md-1"),
+            Some("u-1"),
+            Outcome::Dropped,
+            Problem::field("uuid", Reason::NoIdentity, ""),
+            Some(3),
+        );
+        assert_eq!(DocProblem::of(dropped).item_uuid, None);
+        let nulled = ProblemRow::new(
+            "slack",
+            Stage::GridRow,
+            Scope::Markdown("md-1"),
+            Some("u-1"),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "x"),
+            Some(3),
+        );
+        assert_eq!(DocProblem::of(nulled).item_uuid.as_deref(), Some("u-1"));
+    }
+
     #[test]
     fn every_column_is_a_row_key_and_back() {
         let row = ProblemRow::new(

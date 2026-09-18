@@ -323,7 +323,9 @@ requirements 1–3 met for everything the grid-row stage records today.
 The `poison` fixture (PR 4) is what will first put a non-zero count on
 the screen in a test.
 
-**PR 3 — the document.** §D6. Requirement 4.
+**PR 3 — the document.** Done. §D6: `ChatResponse.problems`, the
+banner above the body, a line about a surviving record jumps to its
+section in place. Requirement 4.
 
 **PR 4 — the parse stage.** `RenderCtx::problem`, the five silent
 `continue`s converted, `poison` extended with an undeserializable

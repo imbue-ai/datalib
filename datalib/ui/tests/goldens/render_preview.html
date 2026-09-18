@@ -271,6 +271,47 @@ code.hljs {
 .error {
   color: #e35d6a;
 }
+.problems {
+  /* Above the body and the edges: what render could not do to this
+     document is the first thing a reader should see. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.problem {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.25rem 0;
+}
+.problem-severity {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  padding: 0 0.4rem;
+  border-radius: 0.5rem;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.problem-error .problem-severity { color: var(--datalib-log-error); }
+.problem-warning .problem-severity { color: var(--datalib-log-warn); }
+.problem-info .problem-severity { color: var(--datalib-muted); }
+.problem-text { flex: 1 1 auto; min-width: 0; }
+.problem-jump { color: inherit; text-decoration: underline dotted; }
+.problem-sample {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
      and below the meta line. List markers off so the leading arrow
