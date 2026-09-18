@@ -121,7 +121,31 @@ closed_vocabulary! {
     }
 }
 
+/// The metric series a step reports its whole-store problem counts on,
+/// one sample per severity under the [`METRIC_LABEL`] label, every run
+/// and zero included: the Manage screen reads a missing series as
+/// "never counted", not as clean.
+pub const METRIC: &str = "problems";
+pub const METRIC_LABEL: &str = "severity";
+
 impl Severity {
+    /// The `severity=<word>` label a [`METRIC`] sample carries.
+    pub fn metric_label(self) -> (&'static str, &'static str) {
+        (METRIC_LABEL, self.as_str())
+    }
+
+    /// The severity a run-store label string names, `severity=error`
+    /// as the store canonicalizes it.
+    pub fn from_metric_labels(labels: &str) -> Option<Severity> {
+        labels
+            .split(',')
+            .find_map(|kv| {
+                kv.strip_prefix(METRIC_LABEL)
+                    .and_then(|v| v.strip_prefix('='))
+            })
+            .and_then(Severity::parse)
+    }
+
     /// The severity a writer gets when it says nothing more: a record
     /// that was lost is an error, one that was degraded a warning, one
     /// that survived intact a finding.
@@ -482,6 +506,21 @@ mod tests {
             Severity::Warning,
             "a writer that says a severity keeps it"
         );
+    }
+
+    #[test]
+    fn metric_labels_round_trip_through_the_run_stores_spelling() {
+        let (k, v) = Severity::Warning.metric_label();
+        assert_eq!(
+            Severity::from_metric_labels(&format!("{k}={v}")),
+            Some(Severity::Warning)
+        );
+        assert_eq!(
+            Severity::from_metric_labels("table=x,severity=error"),
+            Some(Severity::Error)
+        );
+        assert_eq!(Severity::from_metric_labels("severity=loud"), None);
+        assert_eq!(Severity::from_metric_labels(""), None);
     }
 
     #[test]
