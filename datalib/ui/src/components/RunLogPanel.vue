@@ -17,22 +17,18 @@
 // runner, or the server itself) asks for the lines after the last one
 // seen. A run that has finished is read once.
 //
-// The one grid on the `slickgrid-vue` wrapper rather than the vanilla
-// bundle: this panel is not inside a shadow root, so the wrapper's
-// document-level container lookup works here.
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
-import {
-  SlickgridVue,
-  type Column,
-  type Formatter,
-  type GridOption,
-  type GroupingFormatterItem,
-  type MenuCommandItem,
-  type MenuFromCellCallbackArgs,
-  type SlickGrid,
-  type SlickgridVueInstance,
-} from "slickgrid-vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
+import type {
+  Column,
+  Formatter,
+  GridOption,
+  GroupingFormatterItem,
+  MenuFromCellCallbackArgs,
+  SlickGrid,
+} from "@slickgrid-universal/common";
 import { filterToken, withToken } from "@/grid/query";
+import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
@@ -87,20 +83,24 @@ const stepOnly = ref(true);
 /// the start, since the lines it drops are exactly the ones wanted back.
 const query = ref(props.initialQuery ?? "");
 let queryTimer: ReturnType<typeof setTimeout> | null = null;
-/// The lines handed to the grid as its dataset. A fresh load replaces
-/// it; a tail appends through the grid instead (see `load`), so this
-/// holds the first page and `lineCount` the true total.
-const lines = shallowRef<RunLogLine[]>([]);
+/// How many lines the grid holds: the dataset lives in the grid, and a
+/// tail appends there rather than replacing it (see `load`).
 const lineCount = ref(0);
-/// The grid is created on the first line and kept from then on, hidden
-/// while a reload leaves nothing to show: a grid created inside a
-/// hidden box measures no width and fits its columns to that.
-const gridWanted = ref(false);
 const busy = ref(false);
 const error = ref<string | null>(null);
 /// The newest `seq` in the grid, which the next fetch resumes after.
 let lastSeq = 0;
-let vueGrid: SlickgridVueInstance | null = null;
+const boxEl = ref<HTMLDivElement | null>(null);
+// The bundle types its grid and view as optional because they can be
+// asked for before `init`; here neither is handed out before both exist.
+type Grid = SlickVanillaGridBundle<RunLogLine> & {
+  dataView: NonNullable<SlickVanillaGridBundle<RunLogLine>["dataView"]>;
+  slickGrid: NonNullable<SlickVanillaGridBundle<RunLogLine>["slickGrid"]>;
+};
+/// Created on the first line and kept from then on, hidden while a
+/// reload leaves nothing to show: a grid created inside a hidden box
+/// measures no width and fits its columns to that.
+let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
 
@@ -116,7 +116,6 @@ async function load(fresh: boolean) {
   inflight = true;
   if (fresh) {
     lastSeq = 0;
-    lines.value = [];
     lineCount.value = 0;
     busy.value = true;
   }
@@ -131,13 +130,17 @@ async function load(fresh: boolean) {
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lineCount.value += got.length;
-      gridWanted.value = true;
-      if (fresh || !vueGrid) {
-        lines.value = fresh ? got : [...lines.value, ...got];
+      // The box is shown once there is a count; the grid must be built
+      // or resized after that paint, not before it.
+      await nextTick();
+      if (!bundle) {
+        createGrid(got);
+      } else if (fresh) {
+        bundle.dataset = got;
       } else {
-        // Appended through the grid rather than by replacing `lines`:
-        // a new dataset would re-render every row and lose the scroll.
-        vueGrid.gridService.addItems(got, {
+        // Appended through the grid rather than as a new dataset, which
+        // would re-render every row and lose the scroll.
+        bundle.gridService.addItems(got, {
           position: "bottom",
           highlightRow: false,
           scrollRowIntoView: false,
@@ -147,10 +150,12 @@ async function load(fresh: boolean) {
         // Follow the tail only while the reader is already at it: a
         // scroll up to read something must not be yanked back down.
         if (atBottom) {
-          const grid = vueGrid.slickGrid;
+          const grid = bundle.slickGrid;
           grid.scrollRowIntoView(grid.getDataLength() - 1);
         }
       }
+    } else if (fresh && bundle) {
+      bundle.dataset = [];
     }
   } catch (e) {
     error.value = (e as Error).message;
@@ -226,10 +231,6 @@ function levelClass(line: RunLogLine | undefined): string {
 
 const ROW_HEIGHT = 24;
 
-/// The grid's own id in the page: the resizer finds its container by
-/// selector, and the panel can be opened more than once per session.
-const gridId = `rl-grid-${Math.random().toString(36).slice(2, 8)}`;
-
 /// A cell's text, with the row's level colour and the whole value on
 /// hover. Text, never HTML: `enableHtmlRendering` is off below, so a
 /// log line that contains markup is shown as the characters it is.
@@ -280,12 +281,20 @@ function groupable(name: string, field: keyof RunLogLine) {
   return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
 }
 
-/// The grid owns this list too (a plugin can push a column into it),
-/// so it is a ref the column set below is written into, not a computed.
-const columns = shallowRef<Column<RunLogLine>[]>([]);
-watch([allRuns, stepOnly], () => (columns.value = buildColumns()), { immediate: true });
+watch([allRuns, stepOnly], () => {
+  if (bundle) bundle.columnDefinitions = buildColumns();
+});
 
 function buildColumns(): Column<RunLogLine>[] {
+  // `col-id` on every header and cell, for a test to find a column by.
+  return columnSet().map((c) => ({
+    ...c,
+    cellAttrs: { "col-id": String(c.id) },
+    headerCellAttrs: { "col-id": String(c.id) },
+  }));
+}
+
+function columnSet(): Column<RunLogLine>[] {
   return [
   {
     id: "ts_utc",
@@ -433,108 +442,98 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   return { header: String(column.name ?? key), key, value, shown };
 }
 
-/// A menu entry drawn like the built-in ones (icon slot, then text),
-/// with a title that names the cell's value. The grid copies the
-/// options it is given, so the title cannot be set on the item from
-/// outside once the menu exists; a renderer is handed the cell instead.
-function titled(label: (cell: NonNullable<ReturnType<typeof cellUnderMenu>>) => string) {
-  return (_item: unknown, args: unknown): HTMLElement => {
-    const cell = cellUnderMenu(args as MenuFromCellCallbackArgs);
-    // The menu item lays its icon and text out itself; the wrapper only
-    // exists because a renderer returns one element, so it takes no box.
-    const li = document.createElement("div");
-    li.style.display = "contents";
-    const icon = document.createElement("div");
-    icon.className = "slick-menu-icon";
-    icon.textContent = "◦";
-    const text = document.createElement("span");
-    text.className = "slick-menu-content";
-    text.textContent = cell ? label(cell) : "";
-    li.append(icon, text);
-    return li;
-  };
+/// The menu for the cell under the right-click. Read on each opening,
+/// since the entries name the cell's value.
+function menuEntries(args: MenuFromCellCallbackArgs): MenuEntry[] {
+  const cell = cellUnderMenu(args);
+  const entries: MenuEntry[] = [];
+  if (cell) {
+    entries.push(
+      {
+        name: `Keep only ${cell.header}=${cell.shown}`,
+        action: () => setQuery(withToken(query.value, filterToken(cell.key, cell.value, false))),
+      },
+      {
+        name: `Exclude all ${cell.header}=${cell.shown}`,
+        action: () => setQuery(withToken(query.value, filterToken(cell.key, cell.value, true))),
+      },
+    );
+  }
+  if (query.value.trim()) {
+    if (entries.length) entries.push({ name: "", separator: true });
+    entries.push({ name: "Clear the query", action: () => setQuery("") });
+  }
+  return entries;
 }
-
-const keepItem: MenuCommandItem = {
-  command: "keep",
-  slotRenderer: titled((c) => `Keep only ${c.header}=${c.shown}`),
-  itemVisibilityOverride: (args) => cellUnderMenu(args as MenuFromCellCallbackArgs) !== null,
-  action: (_e, args) => {
-    const cell = cellUnderMenu(args as MenuFromCellCallbackArgs);
-    if (cell) setQuery(withToken(query.value, filterToken(cell.key, cell.value, false)));
-  },
-};
-const excludeItem: MenuCommandItem = {
-  command: "exclude",
-  slotRenderer: titled((c) => `Exclude all ${c.header}=${c.shown}`),
-  itemVisibilityOverride: (args) => cellUnderMenu(args as MenuFromCellCallbackArgs) !== null,
-  action: (_e, args) => {
-    const cell = cellUnderMenu(args as MenuFromCellCallbackArgs);
-    if (cell) setQuery(withToken(query.value, filterToken(cell.key, cell.value, true)));
-  },
-};
-const clearItem: MenuCommandItem = {
-  command: "clear-query",
-  title: "Clear the query",
-  itemVisibilityOverride: () => !!query.value.trim(),
-  action: () => setQuery(""),
-};
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === "dark";
 }
 
-const gridOptions = shallowRef<GridOption>({
-  datasetIdPropertyName: "seq",
-  // Cells and group rows are text (see `plain`), never markup.
-  enableHtmlRendering: false,
-  enableCellNavigation: false,
-  enableTextSelectionOnCells: true,
-  enableAutoTooltip: false,
-  enableEmptyDataWarningMessage: false,
-  multiColumnSort: false,
-  rowHeight: ROW_HEIGHT,
-  headerRowHeight: 30,
-  darkMode: isDark(),
-  // The grid fills its container, whatever the panel's size, rather
-  // than measuring the window: the panel is a dialog over the page.
-  enableAutoResize: true,
-  autoResize: {
-    container: `#${gridId}-box`,
-    calculateAvailableSizeBy: "container",
-    resizeDetection: "container",
-    autoHeight: false,
-    bottomPadding: 0,
-    minHeight: 200,
-  },
-  // Grouping by run, by process, by level, by target — the questions a
-  // log answers once it holds more than one run. Groups open expanded:
-  // the point is to organise the lines, not to hide them, and the counts
-  // on the group rows read the same either way.
-  enableGrouping: true,
-  enableDraggableGrouping: true,
-  createPreHeaderPanel: true,
-  showPreHeaderPanel: true,
-  preHeaderPanelHeight: 30,
-  draggableGrouping: {
-    dropPlaceHolderText:
-      "Drag a column here to group the lines by it — Run, Process, Level, Target",
-    hideToggleAllButton: false,
-    toggleAllButtonText: "Expand / collapse all",
-    // The theme ships these icons but draws nothing for the plugin's
-    // default classes; the chip's controls are invisible without them.
-    deleteIconCssClass: "mdi mdi-close",
-    sortAscIconCssClass: "mdi mdi-arrow-up",
-    sortDescIconCssClass: "mdi mdi-arrow-down",
-  },
-  enableContextMenu: true,
-  contextMenu: {
-    commandItems: [keepItem, excludeItem, clearItem, "divider"],
-  },
-});
+function gridOptions(): GridOption {
+  return {
+    datasetIdPropertyName: "seq",
+    // Cells and group rows are text (see `plain`), never markup.
+    enableHtmlRendering: false,
+    enableCellNavigation: false,
+    enableTextSelectionOnCells: true,
+    enableAutoTooltip: false,
+    enableEmptyDataWarningMessage: false,
+    multiColumnSort: false,
+    rowHeight: ROW_HEIGHT,
+    headerRowHeight: 30,
+    darkMode: isDark(),
+    // The grid fills its container, whatever the panel's size, rather
+    // than measuring the window: the panel is a dialog over the page.
+    enableAutoResize: true,
+    autoResize: {
+      // The frame around the box, not the box: the resizer sizes the box
+      // to what it measures, and a box it also measured would then stop
+      // following the panel.
+      container: boxEl.value!.parentElement!,
+      calculateAvailableSizeBy: "container",
+      resizeDetection: "container",
+      autoHeight: false,
+      bottomPadding: 0,
+      minHeight: 200,
+    },
+    // Grouping by run, by process, by level, by target — the questions a
+    // log answers once it holds more than one run. Groups open expanded:
+    // the point is to organise the lines, not to hide them, and the counts
+    // on the group rows read the same either way.
+    enableGrouping: true,
+    enableDraggableGrouping: true,
+    createPreHeaderPanel: true,
+    showPreHeaderPanel: true,
+    preHeaderPanelHeight: 30,
+    draggableGrouping: {
+      dropPlaceHolderText:
+        "Drag a column here to group the lines by it — Run, Process, Level, Target",
+      hideToggleAllButton: false,
+      toggleAllButtonText: "Expand / collapse all",
+      // The theme ships these icons but draws nothing for the plugin's
+      // default classes; the chip's controls are invisible without them.
+      deleteIconCssClass: "mdi mdi-close",
+      sortAscIconCssClass: "mdi mdi-arrow-up",
+      sortDescIconCssClass: "mdi mdi-arrow-down",
+    },
+    enableContextMenu: true,
+    contextMenu: {
+      commandItems: menuSlots(4, menuEntries),
+    },
+  };
+}
 
-function onGridCreated(instance: SlickgridVueInstance) {
-  vueGrid = instance;
+function createGrid(first: RunLogLine[]) {
+  if (bundle || !boxEl.value) return;
+  const b = new SlickVanillaGridBundle<RunLogLine>(
+    boxEl.value,
+    buildColumns(),
+    gridOptions(),
+    first,
+  ) as Grid;
+  bundle = b;
+  b.slickGrid.onScroll.subscribe(onScroll);
 }
 
 /// The app's theme is an attribute on `<html>`; the grid's is an option.
@@ -552,9 +551,7 @@ onMounted(() => {
       if (live.value) void load(false);
     },
   });
-  themeWatch = new MutationObserver(() => {
-    vueGrid?.slickGrid.setOptions({ darkMode: isDark() });
-  });
+  themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
   themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 });
 
@@ -563,6 +560,8 @@ onUnmounted(() => {
   unsubscribe = null;
   themeWatch?.disconnect();
   themeWatch = null;
+  bundle?.dispose();
+  bundle = null;
 });
 </script>
 
@@ -606,16 +605,8 @@ onUnmounted(() => {
         ><span v-if="stepOnly && props.step"> by this step</span>.
       </template>
     </p>
-    <div v-show="lineCount > 0" :id="gridId + '-box'" class="rl-grid">
-      <SlickgridVue
-        v-if="gridWanted"
-        :grid-id="gridId"
-        v-model:columns="columns"
-        v-model:options="gridOptions"
-        v-model:dataset="lines"
-        @onVueGridCreated="onGridCreated($event.detail)"
-        @onScroll="onScroll($event.detail.eventData, $event.detail.args)"
-      />
+    <div v-show="lineCount > 0" class="rl-grid">
+      <div ref="boxEl" class="rl-box" />
     </div>
   </div>
 </template>
@@ -673,6 +664,11 @@ onUnmounted(() => {
   flex: 1 1 auto;
   min-height: 320px;
   min-width: 0;
+  position: relative;
+}
+.rl-box {
+  position: absolute;
+  inset: 0;
 }
 </style>
 
