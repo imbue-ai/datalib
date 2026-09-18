@@ -229,6 +229,17 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
     map.contains_key("full_name") && map.contains_key("default_branch")
 }
 
+/// A `grid_rows` row of the storage page whose `byte_size` is a store's
+/// size on disk — the same number `source_measurements.bytes` and the
+/// page's `Size` cell carry, redacted for the same reason. A row of any
+/// other kind keeps its `byte_size`: there it measures the content.
+fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        map.get("kind").and_then(Value::as_str),
+        Some("Source Size") | Some("Store")
+    )
+}
+
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
@@ -1442,9 +1453,11 @@ fn strip_volatile(v: &mut Value) {
     match v {
         Value::Object(map) => {
             let repo = is_github_repo_object(map);
+            let storage = is_storage_row(map);
             for (k, child) in map.iter_mut() {
                 if VOLATILE_KEYS.contains(&k.as_str())
                     || (repo && REPO_VOLATILE_KEYS.contains(&k.as_str()))
+                    || (storage && k == "byte_size")
                 {
                     *child = Value::String(REDACTED.into());
                     continue;
