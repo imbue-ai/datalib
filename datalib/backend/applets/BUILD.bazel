@@ -19,6 +19,7 @@ rust_binary(
     deps = [
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/render:datalib_etl_render",

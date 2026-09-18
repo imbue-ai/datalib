@@ -14,11 +14,14 @@ security model the walkthrough's bind-mount rules rest on.
   `/usr/local/bin`: every binary (`datalib-dag`, `datalib-step`,
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
-  `doltlite` — and the two `latchkey-curl-*` binaries), the `latchkey`
-  launcher, and `runtime/` — the Node runtime plus the lockfile-pinned
-  `qmd` and `latchkey` package trees the binaries resolve beside
-  themselves. There is no Node, npm or npx in the image; nothing is
-  fetched from a registry at build or run time;
+  `doltlite` — and the two `latchkey-curl-*` binaries) and the
+  `latchkey` launcher, plus the release's `runtime-<triple>.tar.gz`
+  asset unpacked beside them as `runtime/` — the Node runtime plus the
+  lockfile-pinned `qmd` and `latchkey` package trees the binaries
+  resolve beside themselves, checked against its published sha256 at
+  build time. There is no Node, npm or npx in the image; nothing is
+  fetched from a registry at build or run time, and the first-use fetch
+  a tarball install does (`runtime_fetch.md`) never fires here;
 - qmd's three models pre-fetched into `/root/.cache/qmd/models` by
   `datalib-step pull-models`, each from its pinned HuggingFace revision
   and sha256-verified, so a first sync never stalls on a multi-gigabyte
