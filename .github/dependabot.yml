@@ -19,28 +19,41 @@
 # PRs need a hand. tools/lint's pyright is pinned beside the pip one
 # for the same reason.
 #
-# Monthly, a few PRs at a time: every PR is a full CI run on the shared
-# BuildBuddy executors, and the day this was enabled fourteen cold runs
-# started at once and made every merge-gating run that hour slow.
+# One batch a week, every entry on the same Monday-morning slot, a few
+# PRs at a time: every PR is a full CI run on the shared BuildBuddy
+# executors, and the day this was enabled fourteen cold runs started at
+# once and made every merge-gating run that hour slow. The batch lands
+# before the weekly routine that triages it (Monday 07:00 Zurich,
+# claude.ai/code/routines). Security advisories still arrive as soon as
+# Dependabot sees them; the schedule only governs version bumps.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 3
 
   - package-ecosystem: cargo
     directory: /datalib/tauri
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 2
     versioning-strategy: lockfile-only
 
   - package-ecosystem: npm
     directory: /datalib/ui
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 3
     groups:
       npm-minor-and-patch:
@@ -54,31 +67,49 @@ updates:
   - package-ecosystem: npm
     directory: /datalib/tauri
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 2
   - package-ecosystem: npm
     directory: /tools/lint
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 2
   - package-ecosystem: npm
     directory: /third-party/qmd/runtime
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 1
   - package-ecosystem: npm
     directory: /third-party/latchkey/runtime
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 1
 
   - package-ecosystem: docker
     directory: /datalib/docker
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 1
   - package-ecosystem: docker
     directory: /.devcontainer
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Zurich
     open-pull-requests-limit: 1
