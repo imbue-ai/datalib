@@ -106,7 +106,6 @@ pub struct GridRowBuilder {
     message_index: Option<i64>,
     entire_chat: String,
     text: String,
-    slack_link: Option<String>,
     qmd_path: Option<String>,
     source_url: Option<String>,
     git_sha: Option<String>,
@@ -169,7 +168,6 @@ impl GridRowBuilder {
     opt_setter!(org_name);
     opt_setter!(channel);
     opt_setter!(conversation_name);
-    opt_setter!(slack_link);
     opt_setter!(qmd_path);
     opt_setter!(source_url);
     opt_setter!(git_sha);
@@ -311,7 +309,6 @@ impl GridRowBuilder {
             message_index: self.message_index,
             entire_chat: self.entire_chat,
             text: self.text,
-            slack_link: self.slack_link,
             qmd_path: self.qmd_path,
             source_url: self.source_url,
             git_sha: self.git_sha,

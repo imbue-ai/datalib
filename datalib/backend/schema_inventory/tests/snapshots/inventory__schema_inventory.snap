@@ -1415,7 +1415,6 @@ grid_rows
     message_index
     entire_chat
     text
-    slack_link
     qmd_path
     source_url
     git_sha

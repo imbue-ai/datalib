@@ -28,8 +28,7 @@ pub struct ChatMeta {
     pub created_at: Option<String>,
     pub source_label: Option<String>,
     /// Canonical web URL back to the provider, used for the page-level
-    /// "Open in …" button. For Slack rows `source_url` is null and we
-    /// fall back to `slack_link` (a slack:// deep link) at SELECT time.
+    /// "Open in …" button.
     pub source_url: Option<String>,
 }
 

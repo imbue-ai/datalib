@@ -49,7 +49,7 @@ struct At {
 const SEARCH_ROW_COLUMNS: &str =
     "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-     message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
+     message_index, entire_chat, text, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path, byte_size, item_count, diff_status, diff_changed_columns";
 
 fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
@@ -93,7 +93,6 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         kind,
         author,
         channel: r.try_get("channel").unwrap_or_default(),
-        slack_link: r.try_get("slack_link").unwrap_or_default(),
         source_url: r.try_get("source_url").unwrap_or_default(),
         notion_page_uuid: r.try_get("notion_page_uuid").unwrap_or_default(),
         upstream_id: r.try_get("upstream_id").unwrap_or_default(),
@@ -300,13 +299,15 @@ impl IndexRepo for DoltRepo {
         };
         let sql = format!(
             "SELECT conversation_name, account, project, channel, created_at, source_label, \
-                    COALESCE(source_url, slack_link) AS source_url_or_link \
+                    source_url \
              FROM {} \
              WHERE markdown_uuid = ? \
              ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
              LIMIT 1",
             at.grid_rows
         );
+        // Audited: `at.grid_rows` is a `Pin::table` expression (see
+        // `search`); the uuid is bound.
         let row = match sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(markdown_uuid)
             .fetch_optional(&at.pool)
@@ -328,7 +329,7 @@ impl IndexRepo for DoltRepo {
             channel: text("channel"),
             created_at: text("created_at"),
             source_label: text("source_label"),
-            source_url: text("source_url_or_link"),
+            source_url: text("source_url"),
         }))
     }
 
@@ -380,6 +381,8 @@ impl IndexRepo for DoltRepo {
              LIMIT ?",
             at.markdowns
         );
+        // Audited: `at.markdowns` is a `Pin::table` expression; the
+        // limit is bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(limit as i64)
             .fetch_all(&at.pool)
@@ -405,6 +408,7 @@ impl IndexRepo for DoltRepo {
         let Some(at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
+        // Audited: `at.grid_rows` is a `Pin::table` expression; no values.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider, is_document \
              FROM {}",
@@ -500,6 +504,8 @@ impl IndexRepo for DoltRepo {
              WHERE e.src_markdown_uuid = ?",
             at.edges, at.markdowns
         );
+        // Audited: `at.edges` and `at.markdowns` are `Pin::table`
+        // expressions; the uuid is bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(markdown_uuid)
             .fetch_all(&at.pool)
@@ -590,6 +596,8 @@ impl IndexRepo for DoltRepo {
         let Some(at) = self.pinned().await? else {
             return Ok(None);
         };
+        // Audited: `at.markdowns` is a `Pin::table` expression; the uuid
+        // is bound.
         let row = match sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT md_path FROM {} WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
             at.markdowns
