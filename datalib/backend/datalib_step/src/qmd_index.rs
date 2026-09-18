@@ -121,8 +121,22 @@ pub async fn run(
             &datalib_runtime::qmd::qmd_state_dir(&opts.root),
             &opts.models_dir,
         );
-        datalib_qmd_models::ensure_models(&effective, datalib_qmd_models::PINNED_MODELS)
-            .with_context(|| format!("provision qmd models in {}", effective.display()))?;
+        let models = datalib_qmd_models::PINNED_MODELS;
+        let outcomes = datalib_qmd_models::ensure_models(
+            &effective,
+            models,
+            datalib_qmd_models::Fetch::from_env(),
+        )
+        .with_context(|| format!("provision qmd models in {}", effective.display()))?;
+        let missing = datalib_qmd_models::missing(models, &outcomes);
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "qmd models missing from {} and not fetched ({} is set): {}",
+                effective.display(),
+                datalib_qmd_models::NO_FETCH_ENV,
+                missing.join(", ")
+            );
+        }
         datalib_qmd_indexer::run_index(&opts)
     })
     .await

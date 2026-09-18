@@ -204,21 +204,28 @@ async fn main() {
         let ensure = {
             let dir = dir.clone();
             tokio::task::spawn_blocking(move || {
-                datalib_qmd_models::ensure_models(&dir, datalib_qmd_models::PINNED_MODELS)
+                datalib_qmd_models::ensure_models(
+                    &dir,
+                    datalib_qmd_models::PINNED_MODELS,
+                    datalib_qmd_models::Fetch::from_env(),
+                )
             })
             .await
             .expect("pull-models task panicked")
         };
         match ensure {
             Ok(outcomes) => {
-                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(outcomes) {
+                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(&outcomes) {
                     datalib_obs::status_line!(
                         "{:?}: {}",
                         outcome,
                         dir.join(model.cache_name()).display()
                     );
                 }
-                std::process::exit(0);
+                let all_present = outcomes
+                    .iter()
+                    .all(|o| *o != datalib_qmd_models::Outcome::Missing);
+                std::process::exit(if all_present { 0 } else { 1 });
             }
             Err(e) => {
                 datalib_obs::status_line!("error: {e:#}");

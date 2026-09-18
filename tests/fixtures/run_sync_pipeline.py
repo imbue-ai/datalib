@@ -198,12 +198,13 @@ def main() -> int:
     carddav_work = workspace / "carddav_work"
     reset = os.environ.get("INGESTED_TNG_RESET") == "1"
     if reset:
-        # The raw stores are about to be thrown away, and the two commits
-        # the diff group named with them: start the contacts story over
-        # from the first address books.
+        # The raw stores are about to be thrown away, and the commits the
+        # diff groups named with them: start both stories over from the
+        # first address books and the first Slack capture.
         shutil.rmtree(carddav_work, ignore_errors=True)
-        shutil.rmtree(workspace / CONTACTS_DIFF_GROUP, ignore_errors=True)
-        _diff_pair_file(workspace).unlink(missing_ok=True)
+        for group in DIFF_GROUPS.values():
+            shutil.rmtree(workspace / group, ignore_errors=True)
+        _diff_pairs_file(workspace).unlink(missing_ok=True)
     if not carddav_work.exists():
         shutil.copytree(carddav_fx, carddav_work)
 
@@ -345,6 +346,30 @@ def main() -> int:
             env=step_env,
         )
 
+    # Slack's second sync replays a second capture — the workspace one
+    # sync later, with one channel changed — from a playback tree of its
+    # own, because a tape is keyed by its request and the incremental
+    # request the resume scan makes can have only one answer per tree.
+    playback_v2 = workspace / "playback_v2"
+    playback_v2.mkdir(exist_ok=True)
+    slack_v2 = slack_fx.parent / "slack_api_v2"
+    params_file = playback_v2 / "synthesize-slack.params.json"
+    params_file.write_text(json.dumps({"fixture_path": str(slack_v2)}))
+    _run(
+        [
+            str(step_bin),
+            "synthesize",
+            "slack",
+            "--name",
+            "slack",
+            "--params-file",
+            str(params_file),
+            "--out",
+            str(playback_v2),
+        ],
+        env=step_env,
+    )
+
     # ── DAG config: a download+render pair per source, plus the index
     # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
     # `:ingested_tng_qmd` builds the search index separately.
@@ -403,31 +428,31 @@ params = {params}
         root_entries.append(group_block + render_block + render_params_line)
     dag_config = workspace / "dag.toml"
 
-    def write_config(diff: tuple[str, str] | None) -> None:
-        """The config, with the contacts diff group once its two commits
-        are known. A diff group is `type = "diff"` + `source`; its one
-        step is `render_markdown` reading the source's ingest tree, and
-        the fan-in names it like any render step. Written twice: the
-        DAG's own, and the body of a materialized root's, where the diff
-        step — like every render step there — declares no inputs."""
+    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
+        """The config, with a diff group per source whose two commits are
+        known. A diff group is `type = "diff"` + `source`; its one step
+        is `render_markdown` reading the source's ingest tree, and the
+        fan-in names it like any render step. Written twice: the DAG's
+        own, and the body of a materialized root's, where the diff step
+        — like every render step there — declares no inputs."""
         blocks = list(steps)
         root_blocks = list(root_entries)
         rendered = [f'"{n}/render_markdown"' for n in sources]
-        if diff is not None:
-            from_commit, to_commit = diff
+        for source_id, (from_commit, to_commit) in diffs.items():
+            group = DIFF_GROUPS[source_id]
             group_block = (
-                f'[[groups]]\nid = "{CONTACTS_DIFF_GROUP}"\ntype = "diff"\n'
-                'source = "tng_contacts"\n\n'
-                f'[[steps]]\ngroup = "{CONTACTS_DIFF_GROUP}"\nfunction = "render_markdown"'
+                f'[[groups]]\nid = "{group}"\ntype = "diff"\n'
+                f'source = "{source_id}"\n\n'
+                f'[[steps]]\ngroup = "{group}"\nfunction = "render_markdown"'
             )
             params_line = (
                 f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
             )
             blocks.append(
-                f'{group_block}\ninputs = ["tng_contacts/ingest"]\n{params_line}'
+                f'{group_block}\ninputs = ["{source_id}/ingest"]\n{params_line}'
             )
             root_blocks.append(f"{group_block}\n{params_line}")
-            rendered.append(f'"{CONTACTS_DIFF_GROUP}/render_markdown"')
+            rendered.append(f'"{group}/render_markdown"')
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
         rendered_list = ", ".join(rendered)
@@ -467,9 +492,9 @@ inputs = [{rendered_list}]"""
         )
         (workspace / "config_body.toml").write_text("\n\n".join(root_blocks) + "\n")
 
-    # A workspace shared across pipeline runs already has its diff group;
-    # the config has to keep naming it, or the index drops its rows.
-    write_config(_load_diff_pair(workspace))
+    # A workspace shared across pipeline runs already has its diff groups;
+    # the config has to keep naming them, or the index drops their rows.
+    write_config(_load_diff_pairs(workspace))
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -531,86 +556,103 @@ inputs = [{rendered_list}]"""
     _run(pipeline_argv, env=pipeline_env)
 
     _run_pipeline_twice_and_diff(
-        workspace, carddav_work, carddav_v2, pipeline_argv, pipeline_env, write_config
+        workspace,
+        carddav_work,
+        carddav_v2,
+        playback_v2,
+        pipeline_argv,
+        pipeline_env,
+        write_config,
     )
     return 0
 
 
-CONTACTS_DIFF_GROUP = "tng_contacts-diff"
+# The diff group each source gets, by the source's id — the delta
+# between its first ingest and its second (`docs/dev/plans/diff_renderer.md`).
+DIFF_GROUPS = {"tng_contacts": "tng_contacts-diff", "slack": "slack-diff"}
 
 
 def _run_pipeline_twice_and_diff(
     workspace: Path,
     carddav_work: Path,
     carddav_v2: Path,
+    playback_v2: Path,
     pipeline_argv: list[str],
     pipeline_env: dict[str, str],
     write_config,
 ) -> None:
-    """Give the contacts raw store a second commit, then a diff group
-    between the two.
+    """Give two raw stores a second commit, then a diff group for each.
 
-    The first pipeline run has ingested `carddav_tng`. Lay `carddav_tng_v2`
-    over the working copy and sync the contacts chain again: the ingest
-    re-reads the changed file, so the store gains one commit with one card
-    added, one removed and one edited. Then write the diff group with the
-    two commits and sync its chain, so its render tree is there for the
-    index and the goldens. Both are `--sync` runs of one chain — what
-    "Compare…" on a source would do — so nothing else in the workspace
+    The first pipeline run has ingested `carddav_tng` and replayed
+    `slack_api`. Lay `carddav_tng_v2` over the contacts working copy,
+    point playback at the tree synthesized from `slack_api_v2`, and sync
+    both chains again: the contacts ingest re-reads the changed file (one
+    card added, one removed, one edited) and the Slack ingest replays the
+    second capture (a message added, one edited with a reaction, a thread
+    grown by a reply). Then write a diff group per source with its two
+    commits and sync the chains once more, so the render trees are there
+    for the index and the goldens. Every run is a `--sync` of named chains
+    — what "Compare…" on a source does — so nothing else in the workspace
     re-runs, and a test reading one full run's events sees exactly one.
 
-    Skipped when the pair is already recorded — the workspace is shared
-    across `ingested_tng_test`'s runs, and the diff group was then in the
-    config from the start.
+    Skipped when the pairs are already recorded — the workspace is shared
+    across `ingested_tng_test`'s runs, and the diff groups were then in
+    the config from the start.
     """
-    if _load_diff_pair(workspace) is not None:
-        print("[run_sync_pipeline] contacts diff group already rendered", flush=True)
+    if _load_diff_pairs(workspace):
+        print("[run_sync_pipeline] diff groups already rendered", flush=True)
         return
-    before = _contacts_ingest_commit(workspace)
+    before = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
     for f in carddav_v2.glob("*.vcf"):
         shutil.copy(f, carddav_work / f.name)
     argv = [a for a in pipeline_argv if a != "--reset-and-redownload"]
-    print("[run_sync_pipeline] second contacts ingest → v2", flush=True)
-    _run([*argv, "--sync", "tng_contacts/ingest"], env=pipeline_env)
-    after = _contacts_ingest_commit(workspace)
-    if before == after:
-        raise SystemExit(
-            f"the second contacts ingest left the raw store at {after}: carddav_tng_v2 "
-            "changed nothing, so there is no delta to diff"
-        )
-    write_config((before, after))
-    _diff_pair_file(workspace).write_text(json.dumps({"from": before, "to": after}))
-    print(
-        f"[run_sync_pipeline] contacts diff {before[:12]}..{after[:12]}",
-        flush=True,
+    chains = ",".join(f"{s}/ingest" for s in DIFF_GROUPS)
+    env_v2 = {**pipeline_env, "DATALIB_HTTP_PLAYBACK": str(playback_v2)}
+    print("[run_sync_pipeline] second ingest → v2", flush=True)
+    _run([*argv, "--sync", chains], env=env_v2)
+    after = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
+    for s in DIFF_GROUPS:
+        if before[s] == after[s]:
+            raise SystemExit(
+                f"the second {s} ingest left the raw store at {after[s]}: its v2 fixture "
+                "changed nothing, so there is no delta to diff"
+            )
+    pairs = {s: (before[s], after[s]) for s in DIFF_GROUPS}
+    write_config(pairs)
+    _diff_pairs_file(workspace).write_text(
+        json.dumps({s: {"from": a, "to": b} for s, (a, b) in pairs.items()})
     )
-    # `--sync` names a source step; the diff step is downstream of the
-    # contacts ingest and runs as part of its chain.
-    _run([*argv, "--sync", "tng_contacts/ingest"], env=pipeline_env)
+    for s, (a, b) in pairs.items():
+        print(f"[run_sync_pipeline] {s} diff {a[:12]}..{b[:12]}", flush=True)
+    # `--sync` names source steps; each diff step is downstream of its
+    # source's ingest and runs as part of that chain. The Slack ingest's
+    # incremental request has no tape in either tree now, which it
+    # reports and skips, and the store does not move.
+    _run([*argv, "--sync", chains], env=env_v2)
 
 
-def _diff_pair_file(workspace: Path) -> Path:
-    return workspace / "contacts_diff.json"
+def _diff_pairs_file(workspace: Path) -> Path:
+    return workspace / "diff_pairs.json"
 
 
-def _load_diff_pair(workspace: Path) -> tuple[str, str] | None:
-    f = _diff_pair_file(workspace)
+def _load_diff_pairs(workspace: Path) -> dict[str, tuple[str, str]]:
+    f = _diff_pairs_file(workspace)
     if not f.exists():
-        return None
-    pair = json.loads(f.read_text())
-    return (pair["from"], pair["to"])
+        return {}
+    pairs = json.loads(f.read_text())
+    return {s: (p["from"], p["to"]) for s, p in pairs.items()}
 
 
-def _contacts_ingest_commit(workspace: Path) -> str:
-    """The contacts raw store's HEAD, as the runner recorded it after the
+def _ingest_commit(workspace: Path, source_id: str) -> str:
+    """A source's raw store's HEAD, as the runner recorded it after the
     ingest step: the `entities:<hash>` in the step's output version in
     `system/dag_state.json` (`datalib_step::ingest::raw_store_version`)."""
+    step = f"{source_id}/ingest"
     state = json.loads((workspace / "system" / "dag_state.json").read_text())
-    versions = state["steps"]["tng_contacts/ingest"]["output_versions"]
-    version = versions["tng_contacts/ingest"]
+    version = state["steps"][step]["output_versions"][step]
     m = re.search(r"entities:([0-9a-f]+)", version)
     if m is None:
-        raise SystemExit(f"no entities commit in {version!r} for tng_contacts/ingest")
+        raise SystemExit(f"no entities commit in {version!r} for {step}")
     return m.group(1)
 
 

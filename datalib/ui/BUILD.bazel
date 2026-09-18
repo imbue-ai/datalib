@@ -122,7 +122,7 @@ _E2E_DATA = [
     # fixture config names its binary by absolute path — so it has to be
     # in the runfiles or every grid spec sees an empty page.
     "//datalib/backend/applets:datalib_applet",
-    "//tests/fixtures:materialize_tng_root",
+    "//tests/fixtures:materialize_tng_root_embed_only",
     # The step host, for the spec that drives a real sync. The fixture
     # root is a temp dir with nothing on PATH and no `binary_dir`, so a
     # step's `command:` has to name an absolute path — which means the
@@ -203,7 +203,11 @@ _E2E_ENV = {
     "DATALIB_TEST_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
     "DATALIB_TEST_E2E_DAG_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_dag_bin)",
     "DATALIB_TEST_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
-    "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root)",
+    "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root_embed_only)",
+    # The fixture root carries the embedding model alone (see that
+    # target); this keeps the applet from fetching the other two into
+    # it at start. Inherited by everything run_e2e.sh spawns.
+    "DATALIB_QMD_MODELS_NO_FETCH": "1",
     "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
     "DATALIB_TEST_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "DATALIB_TEST_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",

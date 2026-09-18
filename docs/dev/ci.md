@@ -243,6 +243,7 @@ job, from that job's log. Each row's PR has the run ids.
 | 2026-09-16 | `--remote_download_minimal`, no disk cache in CI (#497) | 142.7 s | 84.8 s |
 | 2026-09-16 | qmd models as build actions (#499) | 84.8 s | 80.8 s, and 1.8 GB less transfer per run |
 | 2026-09-17 | the image its own, with the pre-fetched output base (#500, #503) | 75.9 s; `Analyzed` at +72 s | 45 s; `Analyzed` at +16 s |
+| 2026-09-18 | e2e runfiles carry the embedding model alone (#550) | runs that execute the e2e suite: 349–463 s, with a 1.8 GB download of two models the suite never loads on the serial tail (~20 s quiet, ~60 s under load) | 376 s; no model download. A transfer cut inside the noise on a quiet day — the runs where the tail was 60 s were the ones where BuildBuddy was busy |
 | | test job wall clock, warm | ~250 s | ~144 s |
 
 The container pull (`Initialize containers`) is 55–75 s and is the

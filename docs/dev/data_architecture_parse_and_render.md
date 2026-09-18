@@ -81,7 +81,7 @@ database per source, at
     an identical row.
   - `grid_rows` — the document's projected rows.
   - `edges` — its outgoing links.
-  - `render_problems` — what render could not do getting there (§4).
+  - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).
   - `source_measurements` — the storage report's samples
@@ -441,11 +441,14 @@ Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
-**Status: not implemented.** These are adopted-in-principle and
-unimplemented in fact; see
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
-for the audit that measures how far off we are and the plan to close
-it.
+**Status: R1's sink is built for the grid-row stage and unwired for
+the parse stage; R2–R7 are adopted in principle and not built.** The
+sink is the `problems` table (`datalib_problems`), one row per problem
+per record, in the source's render store; what it covers, what it does
+not, and the plan to put it on screen are
+[`plans/problem_visibility.md`](plans/problem_visibility.md). The
+audit that produced it is
+[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
 They come from reading the `data-pipeline-builder` skill in
 [`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534),
@@ -456,7 +459,8 @@ they said it better than our first attempt did.
 ### R1 — Drop, count, log; never abort, never hide
 
 The headline, and their phrasing. Every problem goes through one sink,
-and the sink has a taxonomy rather than a severity:
+and the sink has a taxonomy first — what was lost — and a severity
+second, derived from it unless the writer says otherwise:
 
 | what happened | what we do |
 | --- | --- |
@@ -467,7 +471,8 @@ and the sink has a taxonomy rather than a severity:
 
 `GridRowBuilder::build_or_record` is this sink for the grid-row stage:
 a `created_at` that will not parse is nulled and the row kept, a row with
-no identity is dropped, and each lands as a `render_problems` row.
+no identity is dropped, and each lands as a `problems` row with a
+deterministic id, swept when its document is next rendered.
 
 Every one emits `{source, stage, key_or_path, field, reason, sample}`,
 where `sample` is the first 80 characters. Never a count without a
@@ -762,6 +767,32 @@ removes.
 7. **No doltlite extension.** A build without `dolt_hashof` reads the
    same as a store with no commit to pin (case 3): nothing to read,
    cursor untouched.
+
+### Rendering the delta itself
+
+If you can render a collection of things, consider rendering the
+difference between two versions of it. A **diff group** does that with
+no second renderer: the source's render processors run at two raw
+commits into a collecting sink — each pass the incremental render the
+sync step already does, so the cost tracks the buckets that moved, not
+the store — and the two sides are subtracted per document
+(`datalib_etl_render::diff`): rows keyed by `uuid` become `added`,
+`removed`, `modified` (naming the columns that moved) or `unchanged`;
+sections keyed by their `data-section-uuid` are wrapped in
+`diff-added` / `diff-removed` / `diff-modified` bands, with a
+line-then-word diff inside a modified one. The result is written as an
+ordinary render tree, every uuid re-minted under the diff group so it
+never claims a source row's id.
+
+What this asks of a renderer is nothing beyond the contract above: a
+render must be a pure function of the raw rows at a pin (no per-run
+stamp in a row), every row and section must carry a stable uuid, and
+the renderer must say what its sections are (`RenderedMarkdown.sections`,
+concatenated they are the `.md`) rather than leaving the driver to
+parse them back — the one thing a renderer written before diff groups
+may lack, and the degradation is documented: its documents diff as one
+block. [`plans/diff_renderer.md`](plans/diff_renderer.md) is the
+design record.
 
 ### Render-side partial-progress visibility
 
