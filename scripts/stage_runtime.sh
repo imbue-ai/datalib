@@ -73,6 +73,12 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
 
+# Both destinations absolute: the smoke test below runs from inside
+# the qmd package, where a relative <dest> names nothing.
+absolute_dir() { mkdir -p "$1" && (cd -- "$1" && pwd -P); }
+runtime_dir="$(absolute_dir "$runtime_dir")"
+[[ -z "$cuda_dir" ]] || cuda_dir="$(absolute_dir "$cuda_dir")"
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
 backend_dir="$repo_root/datalib/backend"
