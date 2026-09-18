@@ -306,23 +306,26 @@ the change. The store schema changes in PR 1, which invalidates every
 render store (a re-render, never a re-fetch) — the commit message says
 so.
 
-**PR 1 — the table.** `datalib_etl::problems` per §D1/§D2; `render_problems`
-deleted; `build_or_record` and `sweep_problems` moved onto it; the
-two-bad-stamps case tested; the render step emits the two metrics; the
-fixture gains a `poison` source whose records exercise each reason
-(the TNG-clean assertion stays for the real sources and a second
-assertion pins the poison rows and their ids across two runs). The
+**PR 1 — the table.** Done (#553), except the `poison` fixture, which
+moves to PR 4 where the parse stage gives it something to poison.
+`datalib_problems` per §D1/§D2; `render_problems` deleted;
+`build_or_record` and `sweep_problems` moved onto it; the
+two-bad-stamps case tested; the render step emits the two metrics. The
 `data_architecture_parse_and_render.md` §4 banner corrected. Nothing
 visible yet.
 
-**PR 2 — the grid and the counts.** `grid_index` copies per §D3;
+**PR 2 — the grid and the counts.** Done. `grid_index` copies per §D3;
 `/applet/unified_index/problems` serving `columns` + `rows` with `q=`
 over `source_id`, `severity`, `stage`, `reason`, `field`, `outcome`,
-`rule`; the Manage `problems` column and its double-click per §D4;
-`ChipKind::Ok`. **This is the milestone**: requirements 1–3 met for
-everything the grid-row stage records today.
+`rule`, `scope`, `doc`, `item`; the Manage `problems` column and its
+double-click per §D4; `ChipKind::Ok`. **This is the milestone**:
+requirements 1–3 met for everything the grid-row stage records today.
+The `poison` fixture (PR 4) is what will first put a non-zero count on
+the screen in a test.
 
-**PR 3 — the document.** §D6. Requirement 4.
+**PR 3 — the document.** Done. §D6: `ChatResponse.problems`, the
+banner above the body, a line about a surviving record jumps to its
+section in place. Requirement 4.
 
 **PR 4 — the parse stage.** `RenderCtx::problem`, the five silent
 `continue`s converted, `poison` extended with an undeserializable

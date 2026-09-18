@@ -456,6 +456,10 @@ async function openStepLog(row: Row, runId: string | null = null) {
 
 /// The root's series, scaled to its own range rather than to zero.
 function onCellDoubleClicked(data: Row, field: string) {
+  if (field === "problems") {
+    openProblems(data);
+    return;
+  }
   if (field !== "status") return;
   // A group's status is one child's, and that child's log is the answer.
   const row =
@@ -463,6 +467,24 @@ function onCellDoubleClicked(data: Row, field: string) {
       ? rows.value.find((r) => r.kind !== "group" && r.id === data.status_from)
       : data;
   if (row) void openStepLog(row);
+}
+
+/// The problems behind a row's count, as a grid over the index's
+/// `problems` table filtered to the row's source. A step's problems are
+/// its group's — the render store is where a source's live — so a step
+/// row opens the same grid as its group. The index group shows every
+/// source's.
+function openProblems(row: Row) {
+  const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
+  const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
+  const url = `/applet/unified_index/problems?q=${encodeURIComponent(q)}`;
+  const source =
+    row.kind === "group" ? row : rows.value.find((r) => r.kind === "group" && r.id === sourceId);
+  const title =
+    sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
+  props.ctx.host.openCards(
+    `tableView({ url: ${JSON.stringify(url)}, title: ${JSON.stringify(title)} })`,
+  );
 }
 
 /// An in-place edit of the Name cell: a group's rename.

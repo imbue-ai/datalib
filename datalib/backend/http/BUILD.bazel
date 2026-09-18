@@ -37,6 +37,7 @@ rust_library(
         "src/manage/activity.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",
+        "src/manage/problems.rs",
         "src/manage/status.rs",
         "src/usage.rs",
         "src/watch.rs",
@@ -72,6 +73,7 @@ rust_library(
     deps = [
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
@@ -211,6 +213,8 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runs:datalib_runs",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

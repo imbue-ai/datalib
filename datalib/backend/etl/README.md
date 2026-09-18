@@ -48,6 +48,21 @@ only, not re-fetch churn — which is what makes the `--reset-and-redownload`
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
 
+## Problems flow downstream with the data
+
+Every store a step owns can hold a `problems` table (`datalib_problems`):
+one row per thing the step could not fully do to one record, with a
+severity, a deterministic id and a sweep key. The owner sweeps it —
+per document in a render store, per entity in a raw store — and each
+consumer that reads a store pinned copies that store's rows for the
+source **wholesale** into its own, then adds its own: render copies the
+raw store's, `grid_index` copies every render store's into the index.
+The pinned store is the complete truth about its source's problems at
+that commit, so the copy is the sweep and there is nothing to diff.
+Stamps travel with the row. The step then reports whole-store counts as
+`problems{severity=…}` metrics, which the Manage screen reads. Design
+and surfaces: `docs/dev/plans/problem_visibility.md`.
+
 ## Volatile fields: split them out, don't diff them
 
 Some payloads carry per-fetch fields that describe the fetch rather than the

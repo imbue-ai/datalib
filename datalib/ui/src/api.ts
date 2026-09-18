@@ -141,6 +141,36 @@ export type EdgeOut = {
   dst_title: string | null;
 };
 
+/// The words a problem's closed vocabularies take. Mirrors
+/// `datalib_problems`; change both halves together.
+export type ProblemSeverity = "error" | "warning" | "info";
+export type ProblemStage = "fetch" | "parse" | "render" | "grid_row";
+export type ProblemOutcome = "dropped" | "nulled" | "ok";
+export type ProblemReason =
+  | "undeserializable"
+  | "no_identity"
+  | "coercion_failed"
+  | "uncovered_type"
+  | "deliberate_loss"
+  | "noted";
+
+/// One problem on a document, as the document view lists it above the
+/// body. Mirrors the applet's `DocProblem`.
+export type DocProblem = {
+  problem_uuid: string;
+  severity: ProblemSeverity;
+  stage: ProblemStage;
+  outcome: ProblemOutcome;
+  reason: ProblemReason;
+  field: string | null;
+  rule: string | null;
+  sample: string;
+  /// The section this is about, when the record survived as a row; a
+  /// dropped record has no section to jump to.
+  item_uuid: string | null;
+  first_seen_at_utc: string;
+};
+
 export type ChatResponse = {
   markdown_uuid: string;
   name: string | null;
@@ -152,6 +182,10 @@ export type ChatResponse = {
   source_url: string | null;
   body: string;
   outgoing_edges: EdgeOut[];
+  /// What render could not fully do to this document, errors first.
+  problems: DocProblem[];
+  /// Anything the applet could not read while answering.
+  errors?: string[];
 };
 
 // One rendered document (a `markdowns` row), as listed by the applet
@@ -744,7 +778,7 @@ export type StatusView = {
   segments?: Segment[] | null;
 };
 
-export type ChipKind = "info" | "idle" | "metric" | "warning" | "error";
+export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
 export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
@@ -777,6 +811,10 @@ export type ManageRow = {
   status: StatusView;
   status_from: string | null;
   activity: Chip[];
+  /// Errors and warnings the step's store holds, as of its last run:
+  /// red and yellow chips, a green zero, or nothing when it has never
+  /// counted. A group shows its last counting step's.
+  problems: Chip[];
   last_synced: string | null;
   disk: Timeseries;
   actions: Action[];
@@ -819,8 +857,13 @@ export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<
 export type TableResponse = {
   columns: ColumnSpec[];
   rows: Record<string, unknown>[];
+  /// The field that identifies a row; `key` when the endpoint does not say.
+  row_key?: string;
   tree?: boolean;
   error?: string | null;
+  /// Things the endpoint could not do and still answered — a filter
+  /// the grammar refused, say. The rows are what the rest matched.
+  errors?: string[];
 };
 
 export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResponse> {
