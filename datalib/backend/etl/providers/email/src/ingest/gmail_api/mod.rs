@@ -252,7 +252,7 @@ async fn run_sync(
     let resolved = index.ids_for_names(&opts.only_labels)?;
     let filter_label_ids = resolved.resolved;
     summary.problems = resolved.problems;
-    download_problems::report(&summary.problems);
+    download_problems::report(db.pool(), &summary.problems).await;
     if !opts.only_labels.is_empty() {
         info!(
             event = "gmail_label_filter",

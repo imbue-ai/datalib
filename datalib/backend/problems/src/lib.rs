@@ -109,6 +109,13 @@ closed_vocabulary! {
         /// The download could not fetch this record. → the record is
         /// missing, or — when an earlier fetch left a payload — stale.
         FetchFailed,
+        /// A configured entry — a label, a channel, a conversation id —
+        /// that upstream does not have. → that entry is not mirrored;
+        /// reported every run until the config is corrected.
+        NotFound,
+        /// A configured entry that exists but this credential cannot
+        /// read. → the same.
+        Forbidden,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }

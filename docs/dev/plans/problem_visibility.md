@@ -360,6 +360,12 @@ only log lines before — a Claude attachment with no bytes and the
 facebook video deliberately absent from the export — and
 `ingested_tng_test` pins both beside the poisoned reply.
 
+Also on it: `download_problems::report` — a configured label,
+channel or conversation id upstream does not have or will not show —
+which was one `warn!` per entry and is now also a row keyed
+`config:<setting>:<value>`, replaced whole each run so a corrected
+config clears it (claude, slack, email, gmail).
+
 **The provider tail, still open.** A provider that `warn!`s and
 `continue`s past a per-record fetch failure records nothing until it
 calls `record_object_error`. The mechanism is proven by the four that

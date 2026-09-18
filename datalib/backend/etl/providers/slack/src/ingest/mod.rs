@@ -1224,7 +1224,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                  not mirrored",
             ));
         }
-        download_problems::report(&grand.problems);
+        download_problems::report(db.pool(), &grand.problems).await;
         info!(
             event = "slack_export_planned",
             channels = plan.targets.len() - plan.dm_targets,
