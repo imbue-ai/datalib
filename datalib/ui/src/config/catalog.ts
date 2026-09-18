@@ -557,7 +557,7 @@ export const CATALOG: CatalogEntry[] = [
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
   { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", nameHint: "Old mail archive", wizard: false },
-  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: null, defaultName: "contacts", nameHint: "Phone contacts", wizard: false },
+  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: "contacts", defaultName: "contacts", nameHint: "Phone contacts", wizard: false },
   {
     type: "garmin",
     method: "api",
@@ -645,7 +645,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Mirror your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
     keywords: ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"],
     kind: "local",
-    icon: "claude",
+    icon: "claude_code",
     defaultName: "claude-code",
     nameHint: "Claude Code on this Mac",
     wizard: true,
@@ -665,7 +665,7 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: null, defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
+  { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: "google_takeout", defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
   {
     type: "facebook",
     label: "Facebook",
@@ -776,7 +776,7 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", nameHint: "Texts and calls", wizard: false },
-  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: null, defaultName: "beeper", nameHint: "Beeper on this Mac", wizard: false },
+  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: "beeper", defaultName: "beeper", nameHint: "Beeper on this Mac", wizard: false },
 
   {
     type: "pdf",
@@ -784,7 +784,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Convert a directory tree of PDFs into searchable markdown.",
     keywords: ["pdf", "documents", "papers", "files"],
     kind: "local",
-    icon: null,
+    icon: "pdf",
     defaultName: "pdfs",
     nameHint: "Papers and manuals",
     wizard: true,
@@ -827,7 +827,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Index a directory tree — paths, sizes, content hashes.",
     keywords: ["files", "filesystem", "index", "directory", "disk"],
     kind: "local",
-    icon: null,
+    icon: "fsindex",
     defaultName: "fsindex",
     nameHint: "My home folder",
     wizard: true,
@@ -865,7 +865,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
     keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
     kind: "local",
-    icon: null,
+    icon: "media",
     defaultName: "media",
     nameHint: "Photos and music",
     wizard: true,
@@ -916,7 +916,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "IQAir AirVisual Pros' own history, read off each unit's network share.",
     keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
     kind: "local",
-    icon: null,
+    icon: "airvisual",
     defaultName: "airvisual",
     nameHint: "Air quality",
     // One `devices` entry per Pro, each with its own share path; the
@@ -930,7 +930,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Mirror a Lightroom Classic catalog, with full history.",
     keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images"],
     kind: "local",
-    icon: null,
+    icon: "lightroom",
     defaultName: "lightroom",
     nameHint: "Lightroom catalog",
     wizard: true,
@@ -1047,7 +1047,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Mirror an Apple Photos library's database, with full history.",
     keywords: ["apple", "photos", "photoslibrary", "iphone", "icloud", "sqlite", "images"],
     kind: "local",
-    icon: null,
+    icon: "apple_photos",
     defaultName: "apple_photos",
     nameHint: "Photos library",
     wizard: true,
@@ -1101,7 +1101,7 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: null, defaultName: "perseus", nameHint: "Greek and Latin texts", wizard: false },
+  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: "perseus", defaultName: "perseus", nameHint: "Greek and Latin texts", wizard: false },
 ];
 
 export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {

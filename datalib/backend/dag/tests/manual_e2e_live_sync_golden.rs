@@ -105,10 +105,6 @@ fn scrub_commit(s: &str) -> String {
     out
 }
 
-/// Keys whose value is an array we want sorted before snapshotting.
-/// Use only for arrays known to be set-like (order is not meaningful).
-const SORTED_ARRAY_KEYS: &[&str] = &["safe_urls"];
-
 const VOLATILE_KEYS: &[&str] = &[
     "_recorded_at",
     "duration_ms",
@@ -1454,11 +1450,6 @@ fn strip_volatile(v: &mut Value) {
                     continue;
                 }
                 strip_volatile(child);
-                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
-                    if let Value::Array(items) = child {
-                        items.sort_by_key(|a| a.to_string());
-                    }
-                }
             }
         }
         Value::Array(items) => {
@@ -1540,11 +1531,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
                     continue;
                 }
                 strip_volatile_for_incrementality(child);
-                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
-                    if let Value::Array(items) = child {
-                        items.sort_by_key(|a| a.to_string());
-                    }
-                }
             }
         }
         Value::Array(items) => {

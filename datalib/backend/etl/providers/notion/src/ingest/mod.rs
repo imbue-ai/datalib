@@ -967,7 +967,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
              latchkey service must inject BOTH the bearer token and the \
              `Notion-Version` header, e.g.\n  \
              latchkey auth set notion -H \"Authorization: Bearer <token>\" \
-             -H \"Notion-Version: 2022-06-28\"\n\
+             -H \"Notion-Version: 2026-03-11\"\n\
              See the per-page `page fetch failed` warnings above for the \
              underlying error.",
             summary.failed_pages

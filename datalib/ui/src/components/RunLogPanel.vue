@@ -25,6 +25,7 @@ import type {
   GridOption,
   GroupingFormatterItem,
   MenuFromCellCallbackArgs,
+  SlickDraggableGrouping,
   SlickGrid,
 } from "@slickgrid-universal/common";
 import { filterToken, withToken } from "@/grid/query";
@@ -516,6 +517,9 @@ function gridOptions(): GridOption {
       deleteIconCssClass: "mdi mdi-close",
       sortAscIconCssClass: "mdi mdi-arrow-up",
       sortDescIconCssClass: "mdi mdi-arrow-down",
+      onExtensionRegistered: (plugin) => {
+        groupingPlugin = plugin;
+      },
     },
     enableContextMenu: true,
     contextMenu: {
@@ -523,6 +527,8 @@ function gridOptions(): GridOption {
     },
   };
 }
+
+let groupingPlugin: SlickDraggableGrouping | null = null;
 
 function createGrid(first: RunLogLine[]) {
   if (bundle || !boxEl.value) return;
@@ -534,6 +540,12 @@ function createGrid(first: RunLogLine[]) {
   ) as Grid;
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
+  // What the bar's drop does, without the mouse, for the e2e tests:
+  // a drag dispatched by hand dies inside SortableJS under load, and
+  // the grid card exposes the same thing as `__fwGridApi.groupBy`.
+  (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
+    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
+  };
 }
 
 /// The app's theme is an attribute on `<html>`; the grid's is an option.
@@ -562,6 +574,8 @@ onUnmounted(() => {
   themeWatch = null;
   bundle?.dispose();
   bundle = null;
+  groupingPlugin = null;
+  delete (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi;
 });
 </script>
 

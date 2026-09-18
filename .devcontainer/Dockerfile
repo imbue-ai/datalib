@@ -61,7 +61,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && node --version && npm --version
-ARG LATCHKEY_VERSION=3.12.0
+ARG LATCHKEY_VERSION=3.14.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
@@ -87,7 +87,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 # The cache lands at /root/.cache/ms-playwright. GitHub forces
 # HOME=/github/home for container steps, so `test.yml` points the suite
 # at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
-ARG PLAYWRIGHT_VERSION=1.62.1
+ARG PLAYWRIGHT_VERSION=1.63.0
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
