@@ -87,31 +87,31 @@ export, or a backup pulled off a phone.
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#contacts"><img src="datalib/ui/src/assets/contacts.svg" width="40" height="40" alt=""><br><b>Contacts</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#email"><img src="datalib/ui/src/assets/email.svg" width="40" height="40" alt=""><br><b>Email</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#facebook"><img src="datalib/ui/src/assets/facebook.svg" width="40" height="40" alt=""><br><b>Facebook</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/garmin_dark.svg"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""></picture><br><b>Garmin</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/github_dark.svg"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""></picture><br><b>GitHub</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/github_dark.svg"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""></picture><br><b>GitHub</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gitlab"><img src="datalib/ui/src/assets/gitlab.svg" width="40" height="40" alt=""><br><b>GitLab</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linkedin"><img src="datalib/ui/src/assets/linkedin.svg" width="40" height="40" alt=""><br><b>LinkedIn</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-files"><img src="datalib/ui/src/assets/fsindex.svg" width="40" height="40" alt=""><br><b>Local files</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Media</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-files"><img src="datalib/ui/src/assets/fsindex.svg" width="40" height="40" alt=""><br><b>Local files</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Media</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#notion"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/notion_dark.svg"><img src="datalib/ui/src/assets/notion.svg" width="40" height="40" alt=""></picture><br><b>Notion</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>PDFs</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#slack"><img src="datalib/ui/src/assets/slack.svg" width="40" height="40" alt=""><br><b>Slack</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#slack"><img src="datalib/ui/src/assets/slack.svg" width="40" height="40" alt=""><br><b>Slack</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
     <td align="center" width="16%"><a href="docs/dev/step_protocol.md"><img src="docs/assets/your_own_source.svg" width="40" height="40" alt=""><br><b>Your own source →</b></a></td>
-    <td width="16%"></td>
-    <td width="16%"></td>
     <td width="16%"></td>
   </tr>
 </table>

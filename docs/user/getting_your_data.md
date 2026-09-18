@@ -236,54 +236,20 @@ deletes stays in the mirror.
 
 ## Email
 
-`type = "email"` — the Gmail API through latchkey (`gmail`), **or** a
-JMAP server such as Fastmail through latchkey (`jmap`), **or** a Google
-Takeout `.mbox` on disk (`mbox`). Mirrors mail messages and their
-attachments.
+`type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
+JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
+messages and their attachments. [Gmail](#gmail) and
+[Fastmail](#fastmail) have sections of their own; this one is the
+other two routes into the same source.
 
-### Gmail, live over the API
+**A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
+`.mbox` file; see [Google Takeout](#google-takeout) for requesting and
+unpacking one. Point an `mbox` table's `path` at it. No credentials.
 
-The least setup of any web source. Gmail is built into latchkey; one
-command opens a browser, you sign in and approve every scope it asks
-for, and latchkey keeps the OAuth token:
-
-```sh
-latchkey auth browser google-gmail
-```
-
-Use a `gmail` table on the ingest step. Incremental sync is driven by
-Gmail's own change history, so deletions and label changes show up as
-events. Throughput is capped by Google's quota at roughly 300 messages
-a minute, so a large mailbox backfills over several runs.
-
-### Fastmail, and other JMAP servers
-
-Fastmail is built into latchkey, including the region-prefixed API
-hosts (`phl.api.fastmail.com` and the like) that an account homed in a
-regional datacenter gets. The browser flow stores an OAuth token:
-
-```sh
-latchkey auth browser fastmail
-```
-
-If you would rather use an API token, create one at
-[app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
-under **Integrations** → **API tokens** → **New API token**, give it
-read access to your mail, copy it, and store it instead:
-
-```sh
-latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
-```
-
-Use a `jmap` table with `hostname = "api.fastmail.com"`. The same works
-for any other JMAP server if you register its host with latchkey;
+**Another JMAP server.** Any RFC 8620/8621 server works the way
+Fastmail does: register its host as a latchkey service, store the
+credential it takes, and use a `jmap` table with its `hostname`.
 Fastmail is the one that is built in.
-
-### A Takeout `.mbox` on disk
-
-Google Takeout's **Mail** product is a single `.mbox` file; see
-[Google Takeout](#google-takeout) for requesting and unpacking one.
-Point an `mbox` table's `path` at it. No credentials.
 
 ## Facebook
 
@@ -310,6 +276,31 @@ every photo or video a record points at is copied into the store, and
 the posts, albums, comments, reactions and friends are rendered. Each
 export is complete, so re-ingesting a newer one drops what Facebook
 stopped including.
+
+## Fastmail
+
+`type = "email"` — Fastmail's JMAP API through latchkey (`jmap`).
+Mirrors mail messages and their attachments.
+
+Fastmail is built into latchkey, including the region-prefixed API
+hosts (`phl.api.fastmail.com` and the like) that an account homed in a
+regional datacenter gets. The browser flow stores an OAuth token:
+
+```sh
+latchkey auth browser fastmail
+```
+
+If you would rather use an API token, create one at
+[app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
+under **Integrations** → **API tokens** → **New API token**, give it
+read access to your mail, copy it, and store it instead:
+
+```sh
+latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
+```
+
+Use a `jmap` table with `hostname = "api.fastmail.com"`. Fastmail's
+contacts are a separate route — see [Contacts](#contacts).
 
 ## Garmin
 
@@ -353,6 +344,27 @@ access):
 ```sh
 latchkey auth set gitlab -H "PRIVATE-TOKEN: $(pbpaste)"
 ```
+
+## Gmail
+
+`type = "email"` — the Gmail API through latchkey (`gmail`). Mirrors
+mail messages and their attachments, with deletions and label changes
+as events.
+
+The least setup of any web source. Gmail is built into latchkey; one
+command opens a browser, you sign in and approve every scope it asks
+for, and latchkey keeps the OAuth token:
+
+```sh
+latchkey auth browser google-gmail
+```
+
+Use a `gmail` table on the ingest step. Incremental sync is driven by
+Gmail's own change history, so deletions and label changes show up as
+events. Throughput is capped by Google's quota at roughly 300 messages
+a minute, so a large mailbox backfills over several runs. A Takeout
+`.mbox` of the same mailbox is the no-credentials route — see
+[Email](#email).
 
 ## Google Takeout
 
