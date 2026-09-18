@@ -13,7 +13,6 @@ path = "src/main.rs"
 # Cargo.toml). BUILD.bazel is the dep truth.
 [dependencies]
 datalib-schema = { path = "../schema" }
-datalib-problems = { path = "../problems" }
 datalib-core = { path = "../core" }
 datalib-fetch = { path = "../fetch" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
