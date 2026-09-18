@@ -9,8 +9,8 @@ exports_files(["Cargo.toml"])
 filegroup(
     name = "tng_fixture",
     srcs = glob([
-        "tests/fixtures/slack_api/**/*.jsonl",
-        "tests/fixtures/slack_api/media/**/*",
+        "tests/fixtures/slack_api*/**/*.jsonl",
+        "tests/fixtures/slack_api*/media/**/*",
     ]),
     visibility = ["//visibility:public"],
 )

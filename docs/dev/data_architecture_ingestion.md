@@ -415,7 +415,34 @@ records no commit hashes (`run_id`, `started_at`, `finished_at`,
 `config`, `status`, `summary`), so recovering the exact commit range for
 a past run means reading `dolt_log` by hand.
 
-Detection is available, not delivered: #513.
+Detection is available; delivery is partial. The part that is
+delivered is the delta itself, as a thing a person can read — see the
+next section. The rest — `summary.deltas` read back, a run's commit
+range recorded in `sync_runs` — is #513.
+
+### The delta as a source: diff groups
+
+The commits answer "what changed?" at the level of rows; a person asks
+it at the level of the things the rows make up. A **diff group**
+(`type = "diff"`, `source = <group>`, two raw commits under
+`params.diff`) is the source's own render step run at both commits and
+subtracted, written as an ordinary render tree — documents with the
+changes marked, `grid_rows` with `diff_status` set — so everything that
+serves a source serves the difference. "Compare two syncs…" on the
+Manage screen writes one; [`config_model.md`](config_model.md) has the
+shape and [`plans/diff_renderer.md`](plans/diff_renderer.md) the design
+and what it cost to build.
+
+What a diff can show is bounded by what the ingest carried into the
+store. A provider that syncs forward from a cursor — an API
+`conversations.history` bounded by `oldest` — brings in what is newer
+and never sees a deletion, so a diff over such a source shows adds and
+edits but not removals until something re-walks the range. A provider
+that reads a whole export or file each time (the `.vcf` address books,
+a Takeout tree) sees deletions on every sync. When you build a
+provider, this is one more reason to prefer the full re-read where it
+is cheap, and to record in `scope_config` what a cursor was taken
+under when it is not.
 
 ## Timestamps: one clock, no fabrication
 
