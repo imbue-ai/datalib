@@ -510,13 +510,14 @@ fn reverse_lookup(
     if tables.is_empty() {
         return Ok((None, None));
     }
-    let pool = blocking(datalib_etl::doltlite_raw::open_reader(raw_db))
-        .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?;
+    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, None))
+        .with_context(|| format!("open {} for the reverse lookup", raw_db.display()))?
+    else {
+        return Ok((None, None));
+    };
+    let pool = reader.pool().clone();
     let result = (|| -> Result<_> {
-        let Some(pin) = blocking(datalib_etl::pin::head(&pool))? else {
-            return Ok((None, None));
-        };
-        let to = pin.commit().to_string();
+        let to = reader.pin().commit().to_string();
         let mut changed: Vec<Input> = Vec::new();
         for table in &tables {
             match blocking(datalib_etl::doltlite_raw::changed_keys(

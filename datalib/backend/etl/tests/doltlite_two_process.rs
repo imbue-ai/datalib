@@ -295,20 +295,77 @@ fn a_history_reader_never_makes_the_writers_commit_fail() {
     assert_committed_throughout(&writer, &reader);
 }
 
-/// The shape `AGENTS.md`'s "One open per doltlite file" rule warns about, and
-/// the one neither scenario above reaches: two read-write pools on one file
-/// inside a single process. The rule is worth keeping — a second pool shares
-/// the first's working set, so their `-Am` commits sweep up each other's rows
-/// — but the reason once given for it, that the second open waits on a file
-/// lock, is what this measures. Bounded, so a platform where it really does
-/// wait says so instead of hanging until the 300s acquire timeout.
-///
-/// Commits here take turns. Issue them *simultaneously* and one fails with
-/// `commit conflict`, which is the other half of the rule; that half is
-/// covered by `two_live_pools_on_one_store_break_each_others_commits` in
-/// `doltlite_raw.rs`.
+/// One writer per file, by construction: a second read-write open on a
+/// store another process is writing is refused, at once and naming the
+/// holder, instead of sharing its working set and failing one of the two
+/// commits later. The first writer goes on committing as if nothing
+/// happened. The kernel releases the lock when the holder dies, so a
+/// SIGKILLed writer (the `hang` scenarios below) leaves no stale claim.
 #[test]
-fn a_second_read_write_pool_does_not_block_on_the_first() {
+fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() {
+    let t = Scratch::new();
+    let mut holder = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--until",
+        &t.path("release"),
+        "--max-commits",
+        "200",
+        "--interval-ms",
+        "50",
+        "--out",
+        &t.path("holder.json"),
+    ]);
+    t.await_file("pin", &mut holder);
+    let holder_pid = holder.id();
+
+    let mut second = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--max-commits",
+        "5",
+        "--out",
+        &t.path("second.json"),
+    ]);
+    t.wait("second writer", &mut second);
+    let second = t.report("second.json");
+    let refusal = second["open_error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the second writer was not refused: {second:?}"));
+    assert!(refusal.contains("already has a writer"), "{refusal}");
+    assert!(
+        refusal.contains(&format!("pid {holder_pid}")),
+        "the refusal names the holder ({holder_pid}): {refusal}"
+    );
+
+    // Long enough for the holder to commit past the refusal.
+    std::thread::sleep(Duration::from_millis(300));
+    t.release(&mut holder);
+    let holder = t.report("holder.json");
+    if holder["dolt"] == Value::Bool(false) {
+        return;
+    }
+    assert_eq!(errors(&holder), Vec::<String>::new(), "holder errors");
+    assert!(
+        holder["commits"].as_array().map_or(0, Vec::len) >= 2,
+        "the holder kept committing through the refused open: {holder:?}"
+    );
+    // And the store is free once the holder is gone.
+    let probe = t.probe();
+    assert!(probe["committed_rows"].as_i64().unwrap() > SEED_ROWS);
+}
+
+/// The same inside one process: the second pool is refused rather than
+/// opened onto the first's working set. What a second pool did to the
+/// first's commits — `commit conflict` on whichever committed second —
+/// is the reason, and no longer reachable.
+#[test]
+fn a_second_read_write_pool_in_one_process_is_refused() {
     let t = Scratch::new();
     let mut child = t.spawn(&[
         "double-open",
@@ -322,20 +379,26 @@ fn a_second_read_write_pool_does_not_block_on_the_first() {
     t.wait("double-open", &mut child);
     let r = t.report("double.json");
 
-    assert_eq!(r["second_open_error"], Value::Null, "second open: {r:?}");
+    let refusal = r["second_open_error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("second open was not refused: {r:?}"));
+    assert!(refusal.contains("already has a writer"), "{refusal}");
     let open_ms = r["second_open_ms"].as_u64().expect("second_open_ms");
     assert!(
         open_ms < OPEN_MUST_NOT_BLOCK,
-        "the second read-write open took {open_ms}ms — it waited on the first"
+        "the refusal took {open_ms}ms — it waited instead of refusing"
     );
-    for commit in r["commits"].as_array().expect("commits") {
-        assert_eq!(
-            commit["error"],
-            Value::Null,
-            "committing through the {} pool: {r:?}",
-            commit["pool"]
-        );
-    }
+    let commits = r["commits"].as_array().expect("commits");
+    assert_eq!(
+        commits.len(),
+        1,
+        "only the first pool exists to commit: {r:?}"
+    );
+    assert_eq!(
+        commits[0]["error"],
+        Value::Null,
+        "the first still commits: {r:?}"
+    );
 }
 
 /// The atomicity boundary `docs/dev/plans/one_mode.md` rests on: a SQL

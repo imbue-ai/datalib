@@ -90,7 +90,7 @@ jobs:
             bazel-config: "--config=musl-aarch64"
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
@@ -317,6 +317,18 @@ jobs:
               fi
           }
 
+          # Every copy out of bazel-bin happens before the runtime is
+          # staged: `scripts/stage_runtime.sh` runs a `bazel build` of
+          # its own, in the default configuration, and `bazel-bin` is a
+          # convenience symlink to the *last* build's output tree. The
+          # curl tarball's copies used to come after it and found nothing
+          # (v0.34.0's glibc and macOS-arm legs).
+          curl_stage="curl-${version}-${TRIPLE}"
+          mkdir -p "${curl_stage}"
+          cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
+          cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
+          chmod +x "${curl_stage}"/*
+
           # The full tarball is skipped on curl-only legs — nothing
           # installs the full toolchain there (scripts/install.sh has no
           # mapping for those hosts), and //datalib/backend:dist
@@ -380,18 +392,13 @@ jobs:
           fi
 
           # The curl-only tarball: just the dispatch curl + the impersonator it
-          # fronts (see //datalib/backend:curl_dist). Its own inner
-          # dir + stable, un-versioned filename, parallel to the main
-          # tarball above. Consumers like the minds latchkey gateway pull
-          # this instead of the full toolchain. The two public names here
+          # fronts (see //datalib/backend:curl_dist), staged above. Its own
+          # inner dir + stable, un-versioned filename, parallel to the main
+          # tarball. Consumers like the minds latchkey gateway pull this
+          # instead of the full toolchain. The two public names
           # (`latchkey-curl-{dispatch,impersonate}`) are what those
           # consumers resolve by; keep the impersonator name in sync with
           # `SIBLING_NAMES` in datalib/backend/etl/src/latchkey.rs.
-          curl_stage="curl-${version}-${TRIPLE}"
-          mkdir -p "${curl_stage}"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
-          cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${curl_stage}/latchkey-curl-impersonate"
-          chmod +x "${curl_stage}"/*
           curl_tarball="curl-${TRIPLE}.tar.gz"
           tar -czf "${curl_tarball}" "${curl_stage}"
           checksum "${curl_tarball}"
@@ -425,7 +432,14 @@ jobs:
           if [[ -n "${TARBALL:-}" ]]; then
               files=("$TARBALL" "$SHA256" "${files[@]}")
           fi
-          gh release upload "$REF_NAME" --clobber "${files[@]}"
+          # Once more on failure — see the macos-app job's publish step.
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber "${files[@]}"; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
 
   # Build, sign, and notarize the Datalib desktop app (Tauri) and
   # attach the dmg to the GitHub Release. Deliberately NOT gated on the
@@ -473,7 +487,7 @@ jobs:
     env:
       VAULT_AUTH_ROLE: datalib_release_gh
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The tauri beforeBuildCommand bazel-builds the bundled
       # datalib-http / datalib-dag / datalib-step binaries; same cache layering
@@ -526,7 +540,7 @@ jobs:
       # is being removed from newer Node distributions — install the
       # pinned pnpm (packageManager in datalib/ui/package.json)
       # directly so the runner image's Node choices can't break us.
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: datalib/ui/package.json
 
@@ -619,9 +633,20 @@ jobs:
           if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
               gh release create "$REF_NAME" --verify-tag --notes "" || true
           fi
-          gh release upload "$REF_NAME" --clobber \
-              Datalib-aarch64-apple-darwin.dmg \
-              Datalib-aarch64-apple-darwin.dmg.sha256
+          # Once more on failure. The dmg is 175 MB, and a slow upload
+          # that succeeded server-side can still come back as a client
+          # error; the retry's `--clobber` replaces what landed
+          # (v0.34.0: HTTP 422 "ReleaseAsset.name already exists", with
+          # the asset sitting on the release).
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber \
+                  Datalib-aarch64-apple-darwin.dmg \
+                  Datalib-aarch64-apple-darwin.dmg.sha256; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
 
   # Build and push the multi-arch runtime image to ghcr.io. Runs after
   # the matrix `build` job has uploaded both Linux tarballs to the
@@ -639,7 +664,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
       # fit a buildx run of our ~2.7 GB image × two architectures plus
@@ -712,7 +737,7 @@ jobs:
       # ≥ 0.18 speaks the v2 API; `moby/buildkit:latest` keeps us on
       # whatever's current.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         with:
           driver-opts: image=moby/buildkit:latest
 

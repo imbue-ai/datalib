@@ -77,11 +77,11 @@ async fn main() -> Result<()> {
 
     // Resolve each ref inside its own file — the only database where a
     // ref name means anything — then read only through those pins.
-    let left_pool = store::open(&args.left.db).await?;
+    let left_pool = store::open_reader(&args.left.db).await?;
     let left_commit = store::resolve_ref(&left_pool, &args.left.reference).await?;
     left_pool.close().await;
 
-    let right_pool = store::open(&args.right.db).await?;
+    let right_pool = store::open_reader(&args.right.db).await?;
     let right_commit = store::resolve_ref(&right_pool, &args.right.reference).await?;
     right_pool.close().await;
 
@@ -90,13 +90,13 @@ async fn main() -> Result<()> {
 
     let pool = if same_file {
         // Both refs already share a chunk store; nothing to unify.
-        store::open(&args.left.db).await?
+        store::open_reader(&args.left.db).await?
     } else {
         let unified = scratch.path().join("unified.doltlite_db");
         store::unify(&unified, &args.left.db, &args.right.db).await?;
         // A fresh connection, deliberately: the one that did the
         // fetching cannot see the tables it fetched. See `store::unify`.
-        store::open(&unified).await?
+        store::open_scratch(&unified).await?
     };
 
     // Directories first. A directory's tree-hash covers its subtree,

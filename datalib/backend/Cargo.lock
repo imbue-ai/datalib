@@ -126,7 +126,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-schema"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "datalib-etl-macros",
  "datalib-table",
@@ -926,7 +926,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "datalib-applet"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-core"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-dag"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-dirtree-diff"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-airvisual"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-airvisual-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-apple-messages"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-apple-messages-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-apple-photos"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-beeper"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-beeper-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-chat-common"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-chatgpt"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-chatgpt-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-claude"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1268,7 +1268,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-claude-code"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-claude-code-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-claude-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1332,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-contact-common"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-contacts"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-contacts-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-email"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-email-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1445,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-facebook"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -1460,7 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-facebook-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-fsindex"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-garmin"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-garmin-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-github"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1571,7 +1571,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-github-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-gitlab"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-gitlab-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-google-takeout"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-google-takeout-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1702,7 +1702,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-lightroom"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-linkedin"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-linkedin-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1760,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-macros"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-media"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-notion"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-notion-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-pdf"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1865,7 +1865,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-pdf-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-perseus"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1914,7 +1914,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-perseus-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-signal"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-signal-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2014,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-slack"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-slack-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-sms-backup-restore"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-sms-backup-restore-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-sqlite-mirror"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-timeseries-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-time",
@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-whatsapp"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-whatsapp-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-etl",
@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-yolink"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-etl-yolink-render"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-http"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-id"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "strum",
  "uuid",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-obs"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-qmd-indexer"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-obs",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-qmd-models"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "datalib-obs",
@@ -2316,14 +2316,14 @@ dependencies = [
 
 [[package]]
 name = "datalib-runtime"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "datalib-schema"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "datalib-etl-macros",
  "datalib-table",
@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-signal-backup"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
@@ -2361,14 +2361,14 @@ dependencies = [
 
 [[package]]
 name = "datalib-table"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "sqlx",
 ]
 
 [[package]]
 name = "datalib-time"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-unified-index"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "datalib-whatsapp-backup"
-version = "0.33.0"
+version = "0.34.1"
 dependencies = [
  "aes 0.9.3",
  "anyhow",

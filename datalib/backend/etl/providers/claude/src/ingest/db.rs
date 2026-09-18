@@ -435,11 +435,18 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            Ok::<_, anyhow::Error>(LoadedRaw {
-                users: db.load_users().await?,
-                first_user_uuid: db.first_user_uuid().await?,
-                conversations: db.load_conversations().await?,
-            })
+            let loaded = async {
+                Ok::<_, anyhow::Error>(LoadedRaw {
+                    users: db.load_users().await?,
+                    first_user_uuid: db.first_user_uuid().await?,
+                    conversations: db.load_conversations().await?,
+                })
+            }
+            .await;
+            // Closed, not dropped: the caller opens this store again next,
+            // and a connection still closing is a writer still holding it.
+            db.close().await;
+            loaded
         })
     })
 }

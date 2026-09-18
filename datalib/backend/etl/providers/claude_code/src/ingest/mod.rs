@@ -36,26 +36,38 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// The commit a reader is pinned at; `None` for the writer.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
     /// Open this store to *read* it, for the render pass: no DDL, no
     /// commits. See `datalib_etl::doltlite_raw::open_reader`.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
-        Ok(Self {
-            pool: dr::open_reader(db_path).await?,
-        })
+    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
+    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
+        let Some(reader) = dr::open_reader(db_path, commit).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            pool: reader.pool().clone(),
+            pin: Some(reader.pin().clone()),
+        }))
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        Ok(Self { pool, pin: None })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The commit this reader reads at. `None` on the writer's handle.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     pub async fn close(self) {

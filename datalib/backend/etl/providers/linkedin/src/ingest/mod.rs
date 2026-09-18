@@ -41,6 +41,8 @@ pub struct RawDb {
     /// opening a missing file read-only is an error and creating it
     /// would be a write render does not own.
     cas: Option<BlobCas>,
+    /// The commit a reader is pinned at; `None` for the writer.
+    pin: Option<datalib_etl::pin::Pin>,
 }
 
 impl RawDb {
@@ -59,17 +61,23 @@ impl RawDb {
     /// No DDL, so a store the current downloader has not touched keeps
     /// whatever columns it has; probe with `column_exists` and fall back
     /// where that matters.
-    pub async fn open_reader(db_path: &Path) -> Result<Self> {
+    ///
+    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
+    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
+        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
+            return Ok(None);
+        };
         let cas_path = cas_path_for(db_path);
         let cas = if cas_path.is_file() {
             Some(BlobCas::open_reader(&cas_path).await?)
         } else {
             None
         };
-        Ok(Self {
-            pool: datalib_etl::doltlite_raw::open_reader(db_path).await?,
+        Ok(Some(Self {
+            pool: reader.pool().clone(),
             cas,
-        })
+            pin: Some(reader.pin().clone()),
+        }))
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
@@ -78,6 +86,7 @@ impl RawDb {
         Ok(Self {
             pool,
             cas: Some(cas),
+            pin: None,
         })
     }
 
@@ -88,6 +97,11 @@ impl RawDb {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// The commit this reader reads at. `None` on the writer's handle.
+    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
+        self.pin.as_ref()
     }
 
     /// Release every store this handle opened, and wait for the

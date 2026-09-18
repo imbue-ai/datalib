@@ -122,7 +122,7 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     // The atomic-write temp files are the same change reported twice;
     // the rename that follows is the one worth reporting.
     let name = path.file_name()?.to_str()?;
-    if name.ends_with(".tmp") {
+    if name.ends_with(".tmp") || datalib_core::disk::is_store_lock(name) {
         return None;
     }
     if path == root.join("config.toml") {
@@ -391,6 +391,14 @@ mod tests {
             Some(Moved::Frontend)
         );
         assert_eq!(classify(root, &root.join("system/frontend")), None);
+        // A writer taking or releasing its lock is not the index moving.
+        assert_eq!(
+            classify(
+                root,
+                &root.join("unified_index/grid_index/db.doltlite_db.lock")
+            ),
+            None
+        );
         assert_eq!(
             classify(root, &root.join("unified_index/grid_index/db.doltlite_db")),
             Some(Moved::GridIndex)
