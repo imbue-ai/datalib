@@ -3,6 +3,7 @@ name = "datalib-core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 build = "build.rs"
 
 [lib]

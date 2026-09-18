@@ -10,5 +10,6 @@ diff — the files are dependency-free browser scripts with no build step.
 
 ## License
 
-DACTAL is Imbue's, so this is a provenance record rather than a licensing
-question. See `docs/dev/dactal.md`.
+DACTAL is Imbue's own work. The files carry no header and dactal.org
+states no license; Imbue licenses these copies under this repository's
+MIT license (`LICENSE` at the root), the same as everything else here.

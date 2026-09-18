@@ -186,9 +186,10 @@ fallback, which serves the main app instead.
    what this policy guards; a bypass gets the frame, not the app.
 
 6. **Licensing.** Single-author project, static JS from dactal.org; no
-   license is stated in the files or on the site. Settled for our
-   purposes — DACTAL is Imbue's — so this is a provenance-tracking
-   question, not a trust-the-author one. See `vendor/PROVENANCE.md`.
+   license is stated in the files or on the site. DACTAL is Imbue's, and
+   the vendored copies are licensed under the repo's MIT license, which
+   `vendor/PROVENANCE.md` says explicitly. What remains is provenance
+   tracking, not a trust-the-author question.
 
 ### What it adds
 Grouping, annotators (count/total/average/median…), heatmaps, and tag-clouds over

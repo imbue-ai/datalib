@@ -3,6 +3,7 @@ name = "datalib-etl-sms-backup-restore"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_etl_sms_backup_restore"

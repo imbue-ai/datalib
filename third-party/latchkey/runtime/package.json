@@ -2,6 +2,7 @@
   "name": "datalib-latchkey-runtime",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "//": "Bazel-managed replacement for the `npm install latchkey@<v>` that datalib/tauri/stage-runtime.sh used to run against the live registry. One dependency, pinned to LATCHKEY_VERSION in datalib/backend/core/src/node_runtime.rs; //tools:version_pins_test keeps the two in step. Sibling of //third-party/qmd/runtime — same reasoning, see that package.json.",
   "dependencies": {
     "latchkey": "3.11.0"

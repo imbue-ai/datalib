@@ -195,3 +195,9 @@ Details, and what a snapshot does and doesn't carry, in
 - [**Contributor runbook**](AGENTS.md) — for humans and AI agents
   working *on* datalib: the doc map, repo layout, testing rules, and
   conventions.
+
+## License
+
+[MIT](LICENSE). A release carries the notices of the third-party
+software it bundles under `licenses/` (in the `.app`,
+`Contents/Resources/licenses/`).
