@@ -46,4 +46,5 @@ copy_file(
     src = "@nodejs_host//:node_bin",
     out = "bundled_node_bin",
     is_executable = True,
+    visibility = ["//tools:__pkg__"],
 )

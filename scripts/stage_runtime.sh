@@ -73,6 +73,12 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
 
+# Both destinations absolute: the smoke test below runs from inside
+# the qmd package, where a relative <dest> names nothing.
+absolute_dir() { mkdir -p "$1" && (cd -- "$1" && pwd -P); }
+runtime_dir="$(absolute_dir "$runtime_dir")"
+[[ -z "$cuda_dir" ]] || cuda_dir="$(absolute_dir "$cuda_dir")"
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
 backend_dir="$repo_root/datalib/backend"
@@ -80,13 +86,6 @@ backend_dir="$repo_root/datalib/backend"
 log() { printf '>>> stage_runtime: %s\n' "$*" >&2; }
 fail() { printf 'stage_runtime: error: %s\n' "$*" >&2; exit 1; }
 
-if command -v bazelisk >/dev/null 2>&1; then
-    bazel=bazelisk
-elif command -v bazel >/dev/null 2>&1; then
-    bazel=bazel
-else
-    fail "neither bazelisk nor bazel found on PATH"
-fi
 command -v rsync >/dev/null 2>&1 || fail "rsync not found on PATH"
 
 # ---------------------------------------------------------------------------
@@ -111,14 +110,26 @@ log "pins: latchkey=$latchkey_version qmd=$qmd_version"
 # Build the three Bazel targets and locate their outputs.
 # ---------------------------------------------------------------------------
 
-log "building runtime targets"
-(cd "$repo_root" && "$bazel" build \
-    //datalib/tauri:bundled_node \
-    //third-party:bundled_licenses \
-    //third-party/qmd/runtime:qmd_tree \
-    //third-party/latchkey/runtime:latchkey_tree >&2)
-
-bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+if [[ -n "${STAGE_RUNTIME_BAZEL_BIN:-}" ]]; then
+    # //tools:stage_runtime_test hands the four targets over as
+    # runfiles, laid out the way bazel-bin lays them out.
+    bin="$STAGE_RUNTIME_BAZEL_BIN"
+else
+    if command -v bazelisk >/dev/null 2>&1; then
+        bazel=bazelisk
+    elif command -v bazel >/dev/null 2>&1; then
+        bazel=bazel
+    else
+        fail "neither bazelisk nor bazel found on PATH"
+    fi
+    log "building runtime targets"
+    (cd "$repo_root" && "$bazel" build \
+        //datalib/tauri:bundled_node \
+        //third-party:bundled_licenses \
+        //third-party/qmd/runtime:qmd_tree \
+        //third-party/latchkey/runtime:latchkey_tree >&2)
+    bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+fi
 
 # ---------------------------------------------------------------------------
 # Stage.
