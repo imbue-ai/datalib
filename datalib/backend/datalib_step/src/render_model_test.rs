@@ -371,6 +371,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
         md_path,
         render_version: version,
         rows,
+        sections: Vec::new(),
         edges,
         problems: Vec::new(),
     }

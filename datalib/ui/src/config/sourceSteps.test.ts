@@ -5,8 +5,13 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFor, type CatalogEntry, type Field } from "./catalog";
 import {
+  appendSource,
+  buildDiffSource,
   buildStep,
+  listGroups,
+  listSteps,
   seedFieldValues,
+  wireIntoFanIns,
   type ConfiguredStep,
   type FieldValues,
 } from "./sourceSteps";
@@ -167,5 +172,50 @@ describe("a path field left empty", () => {
     expect(out).toContain("[steps.params.sessions]");
     expect(out).toContain('path = "/backups/claude-projects"');
     expect(out).not.toContain("sessions = {}");
+  });
+});
+
+describe("buildDiffSource", () => {
+  /// What "Compare…" writes reads back as a diff group with its one
+  /// render step reading the source's ingest tree, and the fan-ins name
+  /// the step like any render step's.
+  it("writes a diff group the loader's rules accept", () => {
+    const base = `[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+params.api = {}
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "unified_index"
+function = "grid_index"
+inputs = ["slack/render_markdown"]
+`;
+    const built = buildDiffSource({
+      id: "slack-diff",
+      name: "Slack, this week",
+      source: "slack",
+      from: "aaa",
+      to: "bbb",
+      maxDocuments: 50,
+    });
+    expect(built.renderId).toBe("slack-diff/render_markdown");
+    let next = appendSource(base, `${built.groupBody}\n\n${built.stepsBody}`);
+    next = wireIntoFanIns(next, built.renderId);
+    const group = listGroups(next).find((g) => g.id === "slack-diff")!;
+    expect(group.type).toBe("diff");
+    expect(group.name).toBe("Slack, this week");
+    const step = listSteps(next).find((s) => s.id === "slack-diff/render_markdown")!;
+    expect(step.inputs).toEqual(["slack/ingest"]);
+    expect(step.params).toEqual({ diff: { from: "aaa", to: "bbb", max_documents: 50 } });
+    const fanIn = listSteps(next).find((s) => s.id === "unified_index/grid_index")!;
+    expect(fanIn.inputs).toContain("slack-diff/render_markdown");
+    expect(next).toContain('source = "slack"');
   });
 });

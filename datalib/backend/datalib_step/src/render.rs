@@ -398,27 +398,31 @@ pub fn render_source(
 
 /// What closes a run: the sweep (`Some(keep)` deletes every document not
 /// in it), the storage report, and the cursor to record.
-struct RunEnd<'a> {
+pub(crate) struct RunEnd<'a> {
     /// Whether the run walked everything, so a document not in `keep` is
     /// one the source no longer produces.
-    sweep: bool,
+    pub(crate) sweep: bool,
     /// Every document this run emitted or owns.
-    keep: &'a BTreeSet<String>,
+    pub(crate) keep: &'a BTreeSet<String>,
     /// Buckets the run rendered: what the store holds under them beyond
     /// `keep` is gone.
-    declared: &'a BTreeSet<String>,
-    storage: Option<crate::introspect::Measured>,
-    cursor: Option<RenderCursorRow>,
+    pub(crate) declared: &'a BTreeSet<String>,
+    pub(crate) storage: Option<crate::introspect::Measured>,
+    pub(crate) cursor: Option<RenderCursorRow>,
 }
 
-struct Sealed {
-    stored: usize,
-    removed: usize,
+pub(crate) struct Sealed {
+    pub(crate) stored: usize,
+    pub(crate) removed: usize,
 }
 
 /// The sweep, the storage report and the cursor land as one transaction,
 /// so the cursor can never claim a range the store's rows do not reflect.
-fn seal_run(store: &IndexedMarkdownStore, data_root: &Path, end: RunEnd<'_>) -> Result<Sealed> {
+pub(crate) fn seal_run(
+    store: &IndexedMarkdownStore,
+    data_root: &Path,
+    end: RunEnd<'_>,
+) -> Result<Sealed> {
     store.transaction(|| {
         let mut sealed = Sealed {
             stored: 0,
@@ -587,7 +591,7 @@ impl RenderPlan {
 
 /// Every processor's params under its id, so one source's cursor carries
 /// all of them and a change to any one re-renders the source.
-fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
+pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))
@@ -615,7 +619,7 @@ fn one_consumed_commit(source: &str, consumed: &[Option<String>]) -> Option<Stri
     Some(first)
 }
 
-fn tree_is_from_an_older_renderer(
+pub(crate) fn tree_is_from_an_older_renderer(
     on_disk: &BTreeSet<u32>,
     current: Option<&BTreeSet<u32>>,
 ) -> bool {
@@ -634,7 +638,7 @@ fn tree_is_from_an_older_renderer(
     true
 }
 
-fn every_stored_version_must_be_declared(
+pub(crate) fn every_stored_version_must_be_declared(
     source: &str,
     rendered_root: &Path,
     on_disk: &BTreeSet<u32>,
@@ -676,7 +680,9 @@ fn every_stored_version_must_be_declared(
     Ok(())
 }
 
-fn declared_render_versions(processors: &[Box<dyn RenderProcessor>]) -> Option<BTreeSet<u32>> {
+pub(crate) fn declared_render_versions(
+    processors: &[Box<dyn RenderProcessor>],
+) -> Option<BTreeSet<u32>> {
     let versions: BTreeSet<u32> = processors
         .iter()
         .map(|p| p.render_version())
@@ -770,6 +776,7 @@ mod plan_tests {
                     md_path: root.join(uuid).join("all.md"),
                     render_version: 5,
                     rows: vec![row],
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },
@@ -899,6 +906,7 @@ mod stale_tree_tests {
                     md_path: root.join(chat_uuid).join("all.md"),
                     render_version: version,
                     rows: vec![row],
+                    sections: Vec::new(),
                     edges: Vec::new(),
                     problems: Vec::new(),
                 },

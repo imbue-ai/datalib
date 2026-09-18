@@ -24,6 +24,12 @@ pub const ENV_ATTEMPT: &str = "DATALIB_DAG_ATTEMPT";
 /// the group declares a type.
 pub const ENV_GROUP: &str = "DATALIB_DAG_GROUP";
 pub const ENV_GROUP_TYPE: &str = "DATALIB_DAG_GROUP_TYPE";
+/// Under a diff group only: the group named by its `source` and that
+/// group's `type` — whose raw store the step reads, and which renderer
+/// it runs. Set by the loader in the step's `env` rather than by the
+/// runner, so they are fingerprinted like any other env entry.
+pub const ENV_SOURCE_GROUP: &str = "DATALIB_DAG_SOURCE_GROUP";
+pub const ENV_SOURCE_GROUP_TYPE: &str = "DATALIB_DAG_SOURCE_GROUP_TYPE";
 pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";

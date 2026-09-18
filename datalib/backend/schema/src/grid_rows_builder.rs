@@ -336,6 +336,9 @@ impl GridRowBuilder {
             markdown_uuid: self.markdown_uuid,
             byte_size: self.byte_size,
             item_count: self.item_count,
+            // A renderer never sets these: a diff marks a finished row.
+            diff_status: None,
+            diff_changed_columns: None,
         })
     }
 }

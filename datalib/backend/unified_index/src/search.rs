@@ -93,6 +93,13 @@ pub struct SearchRow {
     /// How many things this row counts — rows in a measured table,
     /// pages in a PDF. `None` for a row that is a single thing.
     pub item_count: Option<i64>,
+    /// How the row differs between the two commits its diff group
+    /// compares (`datalib_schema::diff_status::DiffStatus`). `None` on
+    /// every real source's rows — the one thing that says a row is
+    /// from a diff tree.
+    pub diff_status: Option<String>,
+    /// For a modified row, the columns that differ, `|`-joined.
+    pub diff_changed_columns: Option<String>,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

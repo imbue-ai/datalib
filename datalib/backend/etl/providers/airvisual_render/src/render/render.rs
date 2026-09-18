@@ -107,6 +107,7 @@ pub fn render_all(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges: Vec::new(),
         problems,
         bucket_key: Some(m_uuid.clone()),
