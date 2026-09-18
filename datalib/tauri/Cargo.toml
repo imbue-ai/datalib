@@ -4,6 +4,7 @@ version = "0.10.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
+license = "MIT"
 
 # Standalone workspace, deliberately NOT a member of datalib/backend's
 # workspace: Bazel's crate_universe (`crate.from_cargo` in MODULE.bazel)

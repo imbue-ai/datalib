@@ -8,6 +8,19 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+# Upstream's license files at the pinned version: DoltLite is
+# Apache-2.0 and is linked into every binary, so the release tarball and
+# the .app carry these (see //third-party:bundled_licenses). Refresh them
+# with the version bump; README.md § "Upgrading doltlite" lists it.
+filegroup(
+    name = "licenses",
+    srcs = [
+        "APACHE_LICENSE",
+        "LICENSE.md",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # The pinned doltlite version, defined once. Both the library and the
 # CLI compile it in via -DDOLTLITE_VERSION, and `shell.c` prints it for
 # `--version`. Keeping it in one place means a version bump can't
