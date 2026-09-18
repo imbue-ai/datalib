@@ -7,8 +7,8 @@ use std::time::Instant;
 use anyhow::Result;
 use datalib_etl_render::inputs::{Inputs, Lookup};
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::render_problems::RenderProblemRow;
 use serde_json::Value;
 
 use super::parse::{parent_block_of, ParsedNotion};
@@ -110,7 +110,7 @@ fn page_row(
     title: &str,
     stanza: &str,
     users: Lookup<'_, HashMap<String, String>>,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let pid = page
         .get("id")
@@ -155,7 +155,7 @@ fn thread_rows(
     stanza: &str,
     parent_block_id: Option<&str>,
     anchor: Option<&str>,
-    problems: &mut Vec<RenderProblemRow>,
+    problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     if members_sorted.is_empty() {
         return Vec::new();
@@ -266,7 +266,7 @@ pub struct PageDocument {
     pub rows: Vec<GridRow>,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
-    pub problems: Vec<RenderProblemRow>,
+    pub problems: Vec<ProblemRow>,
 }
 
 pub struct ThreadDocument {
@@ -280,7 +280,7 @@ pub struct ThreadDocument {
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// See [`PageDocument::problems`].
-    pub problems: Vec<RenderProblemRow>,
+    pub problems: Vec<ProblemRow>,
 }
 
 pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentRows> {
@@ -324,7 +324,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         let title = page_titles.get(&pid).cloned().unwrap_or_default();
         let inputs = Inputs::default();
         inputs.read("pages", &pid);
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut problems: Vec<ProblemRow> = Vec::new();
         let mut rows: Vec<GridRow> = Vec::new();
         let users = inputs.lookup("users", &parsed.user_names);
         if let Some(r) = page_row(page, &title, stanza, users, &mut problems) {
@@ -370,7 +370,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
                 .iter()
                 .filter_map(|c| c.get("id").and_then(Value::as_str)),
         );
-        let mut problems: Vec<RenderProblemRow> = Vec::new();
+        let mut problems: Vec<ProblemRow> = Vec::new();
         let anchors = inputs.lookup("comment_anchors", &parsed.anchor_text);
         let anchor = parent_block_id
             .as_deref()

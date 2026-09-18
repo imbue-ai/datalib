@@ -130,8 +130,13 @@ where
 }
 
 /// One `warn!` per problem, in a shape every provider shares so a reader
-/// grepping `download_problem` finds all of them.
-pub fn report(problems: &[DownloadProblem]) {
+/// grepping `download_problem` finds all of them — and one `problems`
+/// row each in the raw store, keyed `config:<setting>:<value>`, which is
+/// what reaches the screen. The rows are the whole truth every run: a
+/// run's list replaces the last one's, so an entry the config no longer
+/// names, or that upstream now has, is gone. Recording never fails the
+/// run; a store that cannot take the rows is said and passed over.
+pub async fn report(pool: &sqlx::SqlitePool, problems: &[DownloadProblem]) {
     for p in problems {
         tracing::warn!(
             event = "download_problem",
@@ -142,11 +147,113 @@ pub fn report(problems: &[DownloadProblem]) {
             "a configured entry does not exist upstream; continuing without it",
         );
     }
+    if let Err(e) = record(pool, problems).await {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            "download_problem: could not record the configured entries that did not resolve; \
+             the Manage row will not show them"
+        );
+    }
+}
+
+/// The sweep key's prefix: every row this module writes, and only
+/// those, so a run's report can replace the last one's whole.
+const SCOPE_PREFIX: &str = "config:";
+
+async fn record(pool: &sqlx::SqlitePool, problems: &[DownloadProblem]) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use datalib_problems::{
+        Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
+    };
+    use datalib_table::BulkUpsertable as _;
+    let mut tx = pool.begin().await.context("begin")?;
+    // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a value is a wildcard
+    // to LIKE.
+    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
+        .bind(ScopeKind::Entity.as_str())
+        .bind(SCOPE_PREFIX)
+        .execute(&mut *tx)
+        .await
+        .context("clear the last run's configured-entry problems")?;
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    for p in problems {
+        let key = format!("{SCOPE_PREFIX}{}:{}", p.setting, p.value);
+        let reason = match p.reason {
+            ProblemReason::NotFound => Reason::NotFound,
+            ProblemReason::Forbidden => Reason::Forbidden,
+        };
+        let row = ProblemRow {
+            first_seen_at_utc: now.clone(),
+            last_seen_at_utc: now.clone(),
+            tz_offset: Some(tz_offset.clone()),
+            ..ProblemRow::new(
+                "",
+                Stage::Fetch,
+                Scope::Entity(&key),
+                None,
+                Outcome::Dropped,
+                Problem::field(&p.setting, reason, &p.detail).severity(Severity::Warning),
+                None,
+            )
+        };
+        let sql = crate::bulk::insert_sql::<ProblemRow>();
+        // Audited: `sql` is built from `ProblemRow`'s associated consts,
+        // never from row data; all values bound.
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("record {key}"))?;
+    }
+    tx.commit().await.context("commit")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run's report replaces the last one's: an entry the config no
+    /// longer names, or that upstream now has, is gone the next run.
+    #[tokio::test]
+    async fn a_reports_rows_are_the_whole_truth_for_that_run() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(&d.path().join("p.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let keys = |pool: &sqlx::SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems ORDER BY scope_key")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        report(
+            &pool,
+            &[
+                DownloadProblem::not_found("only_labels", "Recieved", "no such label"),
+                DownloadProblem::forbidden("channels", "C9", "private"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            keys(&pool).await,
+            ["config:channels:C9", "config:only_labels:Recieved"]
+        );
+        report(
+            &pool,
+            &[DownloadProblem::not_found(
+                "only_labels",
+                "Recieved",
+                "no such label",
+            )],
+        )
+        .await;
+        assert_eq!(keys(&pool).await, ["config:only_labels:Recieved"]);
+        report(&pool, &[]).await;
+        assert!(keys(&pool).await.is_empty());
+        pool.close().await;
+    }
 
     /// strum and serde are independent derives producing independent
     /// strings; the agreement is a real check, not a tautology.

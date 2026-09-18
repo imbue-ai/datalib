@@ -57,6 +57,14 @@ describe("sanitizeRenderedHtml", () => {
     }
   });
 
+  it("keeps a diff document's wrappers and markers", () => {
+    const md =
+      `<div class="diff-modified"><div id="m-a" data-section-uuid="a" class="msg msg--contacts">` +
+      `<p>Make it <del>so.</del><ins>so, Number One.</ins></p></div></div>` +
+      `<div class="diff-removed"><p>gone</p></div><div class="diff-added"><p>new</p></div>`;
+    expect(sanitizeRenderedHtml(md)).toBe(md);
+  });
+
   it("keeps an iframe only when its src is one of our own paths", () => {
     const own = sanitizeRenderedHtml(
       `<iframe src="/applet/unified_index/asset/u/plots/t.html" title="t" width="100%" height="520" style="border:1px solid gray"></iframe>`,

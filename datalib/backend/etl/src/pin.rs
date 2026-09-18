@@ -25,7 +25,7 @@ use anyhow::Result;
 /// The commit a store is read at. The type lives in `datalib_pin`, with
 /// its reasons, so the search applet and the app server pin the same way
 /// without linking this crate.
-pub use datalib_pin::Pin;
+pub use datalib_pin::{is_missing_table, Pin};
 
 /// Prefix for the per-connection pinned views: `users` is read as
 /// `pinned_users`.

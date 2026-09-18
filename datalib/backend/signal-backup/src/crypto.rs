@@ -1,6 +1,7 @@
-//! Crypto primitives for the Signal backup container. All key strings
-//! and modes come from `dump.py` in the Python reference — kept as
-//! `&[u8]` constants so the byte-for-byte match is easy to verify.
+//! Crypto primitives for the Signal backup container. The HKDF info
+//! strings are Signal's published protocol constants (libsignal's
+//! `rust/account-keys/src/backup.rs` names the same ones); they are
+//! kept as `&[u8]` so a byte-for-byte check against the spec is easy.
 
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, StreamCipher};
 use aes::Aes256;
@@ -20,7 +21,7 @@ pub const BACKUP_KEY_INFO: &[u8] = b"20240801_SIGNAL_BACKUP_KEY";
 /// info passed to HKDF is `MESSAGE_BACKUP_INFO || backup_id`.
 pub const MESSAGE_BACKUP_INFO: &[u8] = b"20241007_SIGNAL_BACKUP_ENCRYPT_MESSAGE_BACKUP:";
 /// HKDF info-prefix for media IDs (consumed by `datalib-etl-signal`,
-/// not by this crate; exposed for symmetry with the Python reference).
+/// not by this crate).
 pub const MEDIA_ID_INFO: &[u8] = b"20241007_SIGNAL_BACKUP_MEDIA_ID:";
 
 const IV_LENGTH: usize = 16;

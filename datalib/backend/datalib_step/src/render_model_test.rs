@@ -20,7 +20,7 @@ use datalib_etl::pin::Reads;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{build_grid_index, init_schema, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
-use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, Unparsed};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
@@ -171,6 +171,11 @@ struct SynthRender {
     version: AtomicU32,
     params: Mutex<Params>,
     fail_after: AtomicUsize,
+    /// Raw rows this renderer will say it could not read, every run:
+    /// what a real parse reports for a payload that will not
+    /// deserialize. The store must carry them while they are reported
+    /// and drop them the run they stop.
+    unparsed: Mutex<Vec<Unparsed>>,
 }
 
 const NEVER: usize = usize::MAX;
@@ -182,6 +187,7 @@ impl SynthRender {
             version: AtomicU32::new(1),
             params: Mutex::new(Params { upper: false }),
             fail_after: AtomicUsize::new(NEVER),
+            unparsed: Mutex::new(Vec::new()),
         }
     }
     fn params(&self) -> Params {
@@ -235,6 +241,12 @@ impl RenderProcessor for SynthRender {
         ))?;
         let model = blocking(load_model(&pool, Reads::At(&pin)))?;
         blocking(pool.close());
+        let unparsed = self.unparsed.lock().unwrap().clone();
+        ctx.report_unparsed(
+            &ReadScope::Whole(vec!["parents"]),
+            &unparsed,
+            self.render_version(),
+        )?;
 
         // What to render: everything when either side says so, else the
         // union of the driver's stale set and the forward projection.
@@ -371,6 +383,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
         md_path,
         render_version: version,
         rows,
+        sections: Vec::new(),
         edges,
         problems: Vec::new(),
     }
@@ -795,6 +808,7 @@ impl SynthRender {
             version: AtomicU32::new(other.version.load(Ordering::SeqCst)),
             params: Mutex::new(other.params()),
             fail_after: AtomicUsize::new(other.fail_after.load(Ordering::SeqCst)),
+            unparsed: Mutex::new(other.unparsed.lock().unwrap().clone()),
         }
     }
 }
@@ -1028,6 +1042,51 @@ async fn a_changed_input_re_renders_only_the_buckets_that_declared_it() {
         &expected(&world.model, Params { upper: false }),
         "after delete",
     );
+    world.index.close().await;
+}
+
+/// A raw row the renderer cannot read is a problem on that entity in
+/// the render store and an error in the step's report, through the
+/// real driver; the run in which the row reads cleanly clears it —
+/// and the row is not in a document, so it cleared through the
+/// entity sweep, not the document one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_raw_row_is_a_problem_until_it_reads() {
+    use datalib_schema::problems::Severity;
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    world
+        .commit(&[Mutation::InsertParent(
+            "p1".into(),
+            Parent {
+                title: "title".into(),
+                author_id: "a0".into(),
+            },
+        )])
+        .await;
+    synth
+        .unparsed
+        .lock()
+        .unwrap()
+        .push(Unparsed::new("parents", "p9", "{\"title\": 42"));
+    let first = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(
+        first.problems.get(&Severity::Error),
+        Some(&1),
+        "{:?}",
+        first.problems
+    );
+    assert_eq!(first.problems.get(&Severity::Warning), None);
+    // Reported again on a second run: still one row, not two.
+    let again = world.render_report(&synth, false).await.unwrap();
+    assert_eq!(again.problems.get(&Severity::Error), Some(&1));
+    synth.unparsed.lock().unwrap().clear();
+    let fixed = world.render_report(&synth, false).await.unwrap();
+    assert!(fixed.problems.is_empty(), "{:?}", fixed.problems);
     world.index.close().await;
 }
 

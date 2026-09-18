@@ -109,15 +109,20 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
         .get::<i64, _>(0)
 }
 
+/// The mirrored tables: everything but SQLite's own and datalib's
+/// shared ones (`doltlite_raw::SHARED_TABLES`).
 async fn table_names(pool: &SqlitePool) -> Vec<String> {
     let rows = sqlx::query(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-         AND name NOT IN ('sync_runs', 'sync_scope_state', 'sync_scope_config') ORDER BY name",
+         ORDER BY name",
     )
     .fetch_all(pool)
     .await
     .expect("list mirror tables");
-    rows.iter().map(|r| r.get::<String, _>("name")).collect()
+    rows.iter()
+        .map(|r| r.get::<String, _>("name"))
+        .filter(|n| !datalib_etl::doltlite_raw::SHARED_TABLES.contains(&n.as_str()))
+        .collect()
 }
 
 async fn columns(pool: &SqlitePool, table: &str) -> Vec<String> {

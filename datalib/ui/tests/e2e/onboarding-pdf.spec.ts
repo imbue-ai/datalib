@@ -17,6 +17,10 @@ import {
   stampOf,
   stampsBefore,
   statusOf,
+  SEARCH_ROWS,
+  TABLE_ROWS,
+  searchGrid,
+  type GridApi,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -60,40 +64,24 @@ async function gridRows(
 ): Promise<
   { sender: string; conversation_name: string; source: string; source_id: string }[]
 > {
-  return await page.evaluate(() => {
-    type Node = {
-      data?: {
+  return await page.evaluate(
+    () =>
+      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows() as {
         sender: string;
         conversation_name: string;
         source: string;
         source_id: string;
-      };
-    };
-    const api = (
-      window as unknown as {
-        __fwGridApi?: { forEachNode: (cb: (n: Node) => void) => void };
-      }
-    ).__fwGridApi!;
-    const out: {
-      sender: string;
-      conversation_name: string;
-      source: string;
-      source_id: string;
-    }[] = [];
-    api.forEachNode((n) => {
-      if (n.data) out.push(n.data);
-    });
-    return out;
-  });
+      }[],
+  );
 }
 
 /// Open Explore and wait for it to have painted rows from the applet.
 async function openExplore(page: Page) {
   await page.goto(`${BASE}/`);
-  await expect(page.locator('.ag-grid-scrolling-rows [role="row"]').first()).toBeVisible({
+  await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({
     timeout: 20_000,
   });
-  await expectGridPainted(page.locator(".ag-root-wrapper").first(), "Explore grid");
+  await expectGridPainted(searchGrid(page).first(), "Explore grid");
 }
 
 // Record this file, always — video and trace, passing or failing.
@@ -141,7 +129,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The scaffold's one group is the table's whole content, and its
     // three entries are under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
-    await expect(page.locator(".ag-row")).toHaveCount(1);
+    await expect(page.locator(TABLE_ROWS)).toHaveCount(1);
     await expandGroup(page, "unified_index");
     for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);

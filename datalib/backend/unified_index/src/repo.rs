@@ -12,6 +12,7 @@ use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
+use datalib_schema::problems::ProblemRow;
 
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
 #[async_trait]
@@ -74,6 +75,23 @@ pub trait IndexRepo: Send + Sync {
     /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),
     /// a bare data root just means there's nothing to pick yet.
     async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
+    /// The index's `problems` matching a parsed query, newest last-seen
+    /// first. Empty for a root with no index, or an index built before
+    /// the table existed.
+    async fn problems(
+        &self,
+        _query: &crate::problems::ProblemsQuery,
+        _limit: usize,
+    ) -> Result<Vec<ProblemRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
+    /// The problems on one document: the markdown-scoped rows keyed on
+    /// it, plus any entity-scoped row about one of its items.
+    async fn document_problems(&self, _markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {
         Ok(Vec::new())
     }
 }

@@ -354,6 +354,7 @@ async fn load(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
+            problems: Vec::new(),
         });
     }
 

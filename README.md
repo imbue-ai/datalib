@@ -137,6 +137,26 @@ commit. That is what makes the pipeline incremental — each stage asks
 and it is what keeps the record of what a source changed or deleted
 between syncs.
 
+**Deltas are things too.** If you can render a collection of things,
+consider rendering the *difference* between two versions of that
+collection — what was added, what was removed, what changed and how.
+Code has had this for fifty years; almost nothing else does, and most of
+the questions people bring to their own data are questions about change.
+Two mechanisms carry it here:
+
+- **Every store keeps its history.** A raw store's commits are the
+  syncs; a render store's commits are the renders. `datalib-doltlite`
+  reads either at any commit or diffs any two (`dolt_log`, `dolt_diff`),
+  and the Manage screen shows a source's commit history with what each
+  commit did to each table.
+- **A comparison is a source of its own.** "Compare two syncs…" on a
+  source makes a *diff group*: the source's own renderer run at both
+  commits and subtracted, written as an ordinary source. Its documents
+  carry the changes marked — added and removed sections on green and
+  red, edited words inside a modified one — and its grid rows say
+  `added`, `removed` or `modified` and which columns moved, so
+  everything that works on a source works on the difference.
+
 ## What we are aiming for
 
 Near term, ingest and understand:
@@ -148,8 +168,9 @@ Near term, ingest and understand:
 - **Incremental** — cheap to keep up to date.
 - **Stable identity** — a message keeps its id through content edits, so
   links to it survive.
-- **Versioned** — notice when the upstream loses or edits data. (The
-  history is in the stores today; showing it in the UI is not built yet.)
+- **Versioned** — notice when the upstream loses or edits data. The
+  history is in the stores, and a diff group renders what changed
+  between two syncs as a source of its own.
 - **Legible** — render raw data from many schemas into markdown.
 - **Findable** — search by metadata, keywords, and vectors.
 - **Read-only, for now** — ingest-only views of every source.
@@ -195,3 +216,9 @@ Details, and what a snapshot does and doesn't carry, in
 - [**Contributor runbook**](AGENTS.md) — for humans and AI agents
   working *on* datalib: the doc map, repo layout, testing rules, and
   conventions.
+
+## License
+
+[MIT](LICENSE). A release carries the notices of the third-party
+software it bundles under `licenses/` (in the `.app`,
+`Contents/Resources/licenses/`).

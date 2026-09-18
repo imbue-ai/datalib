@@ -19,10 +19,10 @@ use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpe
 const SRC_SCHEMA: &str = "datalib_mirror_src";
 
 /// Tables the mirror must never touch: `datalib_etl`'s shared
-/// bookkeeping, created by `doltlite_raw::open`. A source table with one
-/// of these names is a hard error rather than a silent clobber of the
-/// store's own metadata.
-const RESERVED_TABLES: &[&str] = &["sync_runs", "sync_scope_state", "sync_scope_config"];
+/// bookkeeping and its problem sink, created by `doltlite_raw::open`. A
+/// source table with one of these names is a hard error rather than a
+/// silent clobber of the store's own metadata.
+const RESERVED_TABLES: &[&str] = datalib_etl::doltlite_raw::SHARED_TABLES;
 
 /// Everything the engine needs. Built from a provider's config by its
 /// processor, or from flags by a standalone CLI.

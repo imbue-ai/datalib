@@ -1,221 +1,425 @@
-# Diff renderer: showing how a document changed between two commits
+# Diff groups: a source's changes as a first-class thing in the app
 
-**Status: proposal (2026-09-16). Nothing here is built.** The claims
-about what the render store holds are checked against the tree; the
-claims about what doltlite can answer, and at what cost, are measured
-against doltlite 0.50.3 (the version `MODULE.bazel` pins) on a
-synthetic store and on real render stores. Each number below says which.
+**Status: built (2026-09-18) — every step of "Order of work".** Kept as
+the record of what was decided and why; the reference for how a diff
+group works is [`config_model.md`](../config_model.md) and the code it
+names. The contacts diff
+group in the TNG fixture is the working example
+(`tests/fixtures/run_sync_pipeline.py`, `ingested_tng_test`'s
+`_diff_shape`). This replaces an earlier proposal of the same name
+that diffed the render store's rows between two of its commits; that
+design could list which documents changed but could not show *how*,
+because the render store never held the old markdown.
 
 ## What we want
 
-A person looking at a rendered document — a Slack thread, a Claude
-conversation, an email — should be able to ask "what changed here since
-last week?" and get an answer at the level they think in: this message
-was added, that one was edited, this reaction is gone. A step further
-back, the same person should be able to ask a source "what changed in
-you since I last looked?" and get the documents, not the row counts.
+Understanding a delta is as important as understanding a state, and
+almost nothing outside version control renders one. A person should be
+able to look at any source in the app and see what changed in it between
+two points in time, at the level they think in — this contact gained a
+phone number, that Slack message was edited, this reaction is gone — in
+both of the forms the app already shows data in:
 
-Both questions are diffs between two commits of one render store. The
-first thing to settle is which commits are worth diffing between and how
-to find them cheaply; the second is what a diff of one document is made
-of, given what the store actually holds.
+- **the document**, as markdown, with the changes highlighted the way a
+  code diff is: added sections on green, removed ones on red, an edited
+  section with the changed words marked inside it;
+- **the grid**, as `grid_rows`, with added rows on green, removed rows
+  on red, and the altered cells of an edited row on yellow.
 
-## What the store holds
+Adds, deletes and edits, for every source, without a second renderer
+that could drift from the first.
 
-A source's render store, `<group>/render_markdown/indexed_markdown.doltlite_db`,
-holds one row per rendered document in `markdowns` (title, dates,
-`renderer_version`, `bucket_key`, `md_path`), one row per message in
-`grid_rows` (author, timestamp, the full `text`, and the
-`markdown_uuid` it belongs to), the document's outgoing `edges`, and
-`render_inputs` — what raw rows the document was rendered from
-([`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)). It does **not** hold the
-`.md` file's bytes, nor a hash of them; the file is on disk beside the
-store and is the only copy.
+## The idea
 
-Two more facts matter here:
+**A diff is a group in the config, and its step is the render step with
+a different sink.**
 
-- **Nothing per run is written into a row whose content did not
-  change.** That rule (`markdowns_carries_no_per_run_stamp` in
-  `datalib_schema`) is what makes doltlite's content-addressed tables
-  carry a diff for exactly the documents that moved. A render commit
-  that changed nothing is an empty diff, and a document whose rows are
-  identical across ten commits appears in none of their diffs.
-- **`render_cursor.raw_commit` records which raw-store commit each
-  render consumed.** It is one row, overwritten at every checkpoint,
-  so its history (`dolt_history_render_cursor`) is the full mapping
-  from render commit to raw commit. Verified on a real store
-  (`z10/work-gmail`, 2026-09-16): every render commit has one.
+```toml
+[[groups]]
+id = "work-slack-diff"
+type = "diff"
+source = "work-slack"          # the group whose raw store is diffed
 
-So the store already knows, per commit, which documents changed and
-what they were rendered from. What it does not know is what the
-document *looked like* — only what its rows were.
-
-## Which commits changed this document?
-
-### The primitive that answers it
-
-`dolt_diff_<table>` queried **without** a `from_ref` / `to_ref` filter
-walks every adjacent commit pair on the branch and emits one row per
-row that changed between them, with `to_commit`, `from_commit` and
-`diff_type`. That is the upstream Dolt semantics for the same table,
-and doltlite's `doltlite_diff_table.c::buildDiffPairs` does the same
-walk. Each pair costs a prolly-tree diff, which is proportional to what
-changed in that pair, not to the table's size; any column filter — the
-primary key or any other — is applied on top by SQLite.
-
-The per-document question is therefore one statement, the
-`changed_since` bucket query in
-[`indexed_markdown.rs`](../../../datalib/backend/etl/render/src/indexed_markdown.rs)
-with the ref filter dropped and a uuid filter added:
-
-```sql
-SELECT to_commit, to_commit_date, 'markdowns' AS tbl, diff_type
-  FROM dolt_diff_markdowns
- WHERE coalesce(to_markdown_uuid, from_markdown_uuid) = ?
-UNION ALL
-SELECT to_commit, to_commit_date, 'grid_rows', diff_type
-  FROM dolt_diff_grid_rows
- WHERE coalesce(to_markdown_uuid, from_markdown_uuid) = ?
-UNION ALL
-SELECT to_commit, to_commit_date, 'edges', diff_type
-  FROM dolt_diff_edges
- WHERE coalesce(to_src_markdown_uuid, from_src_markdown_uuid) = ?
+[[steps]]
+group = "work-slack-diff"
+function = "render_markdown"
+inputs = ["work-slack/ingest"]
+[steps.params.diff]
+from = "<raw commit>"          # both required: a diff is asked for,
+to = "<raw commit>"            # never standing
 ```
 
-Run verbatim against a real render store it answered in 7ms. Joining
-its `to_commit` to `dolt_history_render_cursor.commit_hash` gives the
-raw commit each of those renders consumed — the "rendered from
-upstream commit" column, without storing one per document.
+The pair sits under `params.diff` so the rest of `params` is the
+source type's own render config, parsed as strictly as on the source's
+step (`render_diff::split_params`). `params.diff.max_documents`
+(default 1000) is the most documents either side may render: a pair a
+person expected to be small and is not fails the step on the document
+past the cap — costing that many renders and no more. The refusal is
+the driver's, not the provider's: a renderer may log a document's
+failure and carry on (contact-common does), so the side remembers it
+refused and fails after the processors return. The failure names the
+fix — pick closer commits, or raise the cap — as the step's error
+(the Manage row's status detail) and as a `Hint` event, the run log's
+fix-it channel.
 
-### Why not `dolt_history_<table>` or `dolt_blame_<table>`
+The step renders the source's raw store at two commits, subtracts one
+render from the other, and writes the result as an ordinary render tree
+under `work-slack-diff/render_markdown/` — the standard
+`indexed_markdown.doltlite_db` schema plus two nullable `grid_rows`
+columns, and one highlighted `.md` per changed document beside it.
+Because the tree has the standard shape, everything already built for a
+source takes over: `grid_index` and `qmd_index` index it when the
+fan-ins name it, the applet serves it, the grid shows it under its own
+`source_id`, `source_id:work-slack-diff` filters to it, the preview
+pane opens its documents, and the Manage screen lists it with its run
+history. The UI's additions are a row/cell colouring rule and an icon.
 
-They look like the obvious tools and our own
-[`doltlite.md`](../doltlite.md) used to recommend them for exactly this.
-Measured on a synthetic store of 200,000 `grid_rows`-shaped rows
-(text primary key, a 400-byte `text` column) across 63 commits:
+Three properties follow from making it a group rather than a view:
 
-| statement | walks | measured |
-|---|---|---|
-| `dolt_history_gr WHERE uuid = ?` | every row of every commit | **20s** |
-| `dolt_blame_gr WHERE uuid = ?` | every row of every commit | **20s** |
-| `dolt_diff_gr WHERE to_uuid = ?` (no ref filter) | rows changed, summed over history | **~1s** for 311k changed rows |
-| `dolt_diff` (commit → tables touched) | the commit log | 10ms |
+- **It cannot drift from the real render.** There is one renderer per
+  provider; the diff step runs it twice and subtracts. A layout change
+  changes both.
+- **Its cost is the sync step's cost, not the store's.** Pass one is
+  exactly the incremental render the sync already does (the raw
+  `dolt_diff` from `from` to `to` names the buckets that moved; only
+  those render). Pass two renders the same buckets at `from`. A store
+  with a million rows and ten changed threads renders twenty threads.
+- **"Ephemeral" is a lifecycle, not a format.** A diff group is added
+  from a source's Manage row and removed like any source; its directory
+  goes with it. Nothing new to clean up, no scratch dirs, no JSON.
 
-The reason is in `doltlite_history.c` and `doltlite_blame.c`: the
-primary-key pushdown (`doltliteBestIndexIntPkRange`,
-`prollyCursorSeekInt`) exists only for **integer** primary keys. Every
-store in this tree keys on a `VARCHAR`, so the filter is applied after
-each commit's whole table has been materialized. `dolt_history_<t>`
-also lists a row at every commit it *existed* in, changed or not, so
-even where it is fast it still needs a self-compare to find the
-changes.
+## A diff is asked for, never standing
 
-### What the diff walk costs, and when to bound it
+`from` and `to` are both required raw commits of the source's store.
+They sit in the step's params and so in its fingerprint: the DAG runs
+the step once, and again only if someone changes the pair. A re-run
+that produces the same rows commits nothing (doltlite's
+content-addressed tables), so a diff group at rest costs a directory
+and nothing else. There is no default pair and no diff that maintains
+itself as the source syncs — a person names the two points, and what
+they get is exactly that comparison until they ask for another.
 
-Its cost is the store's **total churn**: the initial render's rows plus
-every row any later commit changed. A `renderer_version` bump
-re-renders everything, so each one adds a table's worth of rows to that
-sum for the life of the store. The synthetic store above carried one
-initial render, sixty small edits and one 55% rewrite; a real store
-with several layout bumps behind it will cost a few seconds per lookup
-on a large source. `from_ref = '<old>..HEAD'` (the range-spec form,
-`DT_IDX_RANGE_SPEC`) bounds the walk to a window when that matters,
-and the commit-level `dolt_diff` says for free which commits touched
-`markdowns` / `grid_rows` / `edges` at all — the coarse list of points
-worth diffing between.
+A person creates one from **"Compare two syncs…" on a source's row in
+Manage** (`CompareDialog.vue`): the source's ingest tree's commit
+history (`GET /api/pipeline/history`) fills two pickers, the newest
+sync and the one before it by default, with a name and the document
+cap beside them. Submitting writes the group and its step
+(`buildDiffSource` in `ui/src/config/sourceSteps.ts`), names the step
+in both fan-ins' `inputs` (`wireIntoFanIns`), and syncs the source —
+the diff step is downstream of the source's ingest and runs in its
+chain (`datalib-dag --sync <source>/ingest`), and "Sync now" on the
+diff group does the same (`diff_group_seeds`). Removing the group
+removes the tree. A diff group has no guided edit form; its commits are
+changed in Advanced, or by comparing again.
 
-### Should `markdowns` carry a hash of the `.md`?
+A *rolling* diff — `from` advancing to the last consumed commit on every
+sync, so the group is a live "what changed in the last sync" view — is
+one flag away, because `from` would simply be `RenderCtx.raw_cursor`,
+the render step's own mechanism. It is deliberately not built and would
+never be a default: a diff that appears without being asked for is
+noise in the sources list, and a first run with no cursor has nothing
+to compare against.
 
-Yes, but not for this. The rows changing is *almost* the same event as
-the file changing, and the gap is real in both directions: an author
-rename from a `users` row shows up in `grid_rows.author`, but a change
-to how attachments are materialized, or a layout change under the same
-`renderer_version`, changes the file and no row. A blake3 of the file
-in `markdowns` makes "did this document change?" exact, lets a tool
-verify the file on disk still matches the store, and does not conflict
-with the no-per-run-stamp rule: it is derived from content, so an
-unchanged document writes the same value. The "no fingerprint" decision
-behind `render_inputs` was about using a hash to *skip writes*; this
-uses one to *name what was written*.
+## How the step computes it
 
-## What a diff of one document is
+The render driver ([`render.rs`](../../../datalib/backend/datalib_step/src/render.rs),
+`render_source`) already does everything but the subtraction. For a
+`diff` group it runs the source type's render processors — the same
+`plan_render` the source's own render step uses — with a sink that
+collects instead of stores:
 
-The `.md` bytes at an old commit are unrecoverable — the file is
-overwritten in place and the store never held it. So a diff renderer
-cannot diff markdown text between commits, and it should not want to:
-the rows are the better material. For one `markdown_uuid` and two
-commits `a` and `b`:
+1. **One pass per side, each scanning from the other.** `RawRange {
+   cursor: from, pin: to, stale: Some(∅) }` renders, at `to`, the
+   buckets the provider's forward scan names — the rows the raw
+   `dolt_diff` says moved, mapped to their buckets through the rows
+   loaded at `to`. Then `RawRange { cursor: to, pin: from, stale:
+   Some(∅) }` does the same at `from`. The passes are symmetric because
+   a *deleted* row has no bucket at `to` — nothing there to load it
+   into — and is named only by the pass at `from`; an added one only by
+   the pass at `to`. The stale set is empty rather than absent so the
+   scan decides alone (`None` means "render everything"), and the
+   driver's `render_inputs` reverse lookup is not used: a diff store
+   has none on its first run, and the pair is fixed, so every run is a
+   full walk of the same delta. Two sequential read-only pinned opens
+   of the raw store per pass, each closed before the next.
+2. **Collect rather than store.** The renderer still writes its `.md`
+   and blobs to their real paths; the sink keeps each emitted
+   `RenderedMarkdown` and its sections in memory (reading the file back
+   as one block for a renderer that declares no sections, and saying
+   so once per source at `warn`), and the subtraction's result
+   overwrites the file.
+3. **Subtract.** For each `markdown_uuid` in the union of the two
+   sides: rows keyed by `uuid` — only in `to` is *added*, only in
+   `from` is *removed*, in both with any cell different is *modified*
+   with the list of columns that differ, otherwise *unchanged*.
+   Sections keyed by section uuid (see "Sections" below) the same way;
+   a modified section's body gets a word-level inline diff. A document
+   only on the `to` side is one whose every section and row is added;
+   only on the `from` side, all removed.
+4. **Re-key, then write** through the ordinary store path
+   (`put_document`, `put_inputs`, seal, one commit), one document per
+   `markdown_uuid` in the union: rows are the union with `diff_status`
+   set, the `.md` is the highlighted document, the bucket's
+   `render_inputs` are the `to` side's declarations. A document the
+   scan named whose rows and sections came out identical is not a
+   document of the diff. Every run is a full walk, so the sweep at the
+   end removes whatever a previous pair produced that this pair did not.
 
-```sql
-SELECT diff_type, to_uuid, from_uuid, to_author, to_when_ts, from_text, to_text
-  FROM dolt_diff_grid_rows
- WHERE from_ref = ? AND to_ref = ?
-   AND coalesce(to_markdown_uuid, from_markdown_uuid) = ?
+**A diff row has its own id.** It is about the source's entity but is
+not it, and the unified index refuses two sources claiming one uuid
+(`IdClaims`). So every uuid a diff document carries — its rows', its
+`markdown_uuid`, its `conversation_uuid` — is minted again by the one
+recipe: `entity_id_str(IdNamespace::Datalib, Scope::SourceInstance(<diff
+group>), "diff", <the source's uuid>)`, the same shape as the storage
+rows. The anchors in the markdown (`id="m-…"`, `data-section-uuid`,
+`data-page-title-uuid`) and the frontmatter's `markdown_uuid:` /
+`chat_uuid:` follow, so a row still scrolls to its section; a path
+never does, since the file and its blobs are where the renderer put
+them; `upstream_id` stays the source's, since it is the backpointer to
+the real thing. `render_diff::rekeyed`.
+
+**What the scan cannot see.** A provider's forward scan diffs its
+content tables — Slack's messages and attachments, contacts' cards and
+address books. A change only in a lookup table (a user renamed in
+`users`, with no message touched) names no bucket, and the diff shows
+nothing for it; the normal render catches that case through the
+reverse lookup in `render_inputs`, which the diff does not use. The
+three providers whose render decides by `RawRange::is_stale` alone
+(airvisual, garmin, yolink — one page of plots each) render nothing
+under a diff group. A source that renders nothing (`ingest_only!`) is
+refused by `datalib-step`.
+
+The prerequisites for "render twice, subtract" to mean anything are
+already rules of the tree, checked here against it: a render is a pure
+function of the raw rows at the pin (`markdowns_carries_no_per_run_stamp`
+in `datalib_schema`; the run's `now` reaches only `render_problems`,
+`indexed_markdown.rs::insert_problems`); the raw diff names content
+changes only, because bookkeeping and volatile fields live in sidecar
+tables (`datalib/backend/etl/README.md` §"Volatile fields") so
+`changed_keys` (`doltlite_raw.rs`) never names a row that was merely
+re-fetched.
+
+## What the diff tree holds
+
+**`grid_rows` gains two nullable columns**, following the checklist in
+[`grid_rows.md`](../grid_rows.md) §"Adding a column":
+
+| column | values |
+|---|---|
+| `diff_status` | `added` / `removed` / `modified` / `unchanged`; **NULL on every real source's rows** |
+| `diff_changed_columns` | for `modified`: the differing column names, sorted, `|`-joined; else NULL |
+
+`diff_status` non-null is what says "this row is from a diff tree". A
+removed row is the `from`-side row, verbatim, so the grid can still show
+what left. `provider` stays the underlying provider, so per-provider
+CSS and icons apply; `source_id` is the diff group's id. Both are
+`strum` enums on the Rust side and string unions in `api.ts`, per
+AGENTS.md §"Name a closed set of strings".
+
+**The `.md`** is the `to`-side document with the highlight vocabulary
+added, and nothing else new:
+
+```html
+<div class="diff-added">    …a whole section that is new…      </div>
+<div class="diff-removed">  …a whole section that is gone…     </div>
+<div class="diff-modified"> …a section on both sides, with
+                             <del>old words</del><ins>new words</ins> inside… </div>
 ```
 
-gives message-level `added` / `removed` / `modified` with both texts,
-which is what a person means by "what changed in this thread". The
-`markdowns` row's diff says whether the title or dates moved, and the
-`edges` diff whether a link came or went. A modified message can be
-shown as a word-level diff of `from_text` against `to_text`; an added
-or removed one as the message itself, marked. Nothing here parses
-markdown, which keeps the "QMDs are write-only" rule intact.
+Inside a modified section the diff is lines first, then the words of a
+line that changed (`diff::inline_diff`): a whole inserted or deleted
+line has its content marked, a changed line only the words that moved.
+A marker never crosses a table cell boundary or a line end, never
+contains an HTML tag, and leaves a line's markdown prefix and a table's
+delimiter row alone — so a diffed heading is still a heading and a
+diffed table is still a table. Unkeyed sections (frontmatter, a
+`<details>` wrapper) come through from the `to` side unmarked; a
+document with no `to` side keeps `from`'s.
 
-For the source-level question — "what changed since last week?" — the
-same statement without the uuid filter, grouped by `markdown_uuid`,
-lists the documents, and each is one click from its own diff.
+The `<div id="m-{uuid}" data-section-uuid="{uuid}">` wrappers stay
+intact inside the diff wrappers, so row-click-to-section still works.
+`ins`, `del` and `class` are in DOMPurify's default allowlist; a test
+in `ui/tests/sanitize.test.ts` pins that they survive, the way the
+rest of the vocabulary is pinned.
 
-## Where it lives
+**Attachments** are diffed by what the rows and sections say about them
+(path, name, size), not by their bytes — the same limit the earlier
+proposal noted. A blob swapped under the same path is invisible here.
 
-`GET /api/pipeline/history` (`http/src/history.rs`) already opens
-render stores read-only and walks their commits through
-`datalib_history`. Two routes beside it:
+## Sections: the one renderer change
 
-- `GET /api/pipeline/document_history?tree=<group>&markdown_uuid=<u>`
-  — the per-document commit list above, each commit with its raw
-  commit from `render_cursor` and its `run=` id from the message.
-- `GET /api/pipeline/document_diff?tree=<group>&markdown_uuid=<u>&from=<a>&to=<b>`
-  — the row-level diff above, shaped for the preview pane.
+Subtracting documents needs both sides as sections keyed by uuid.
+Splitting the finished `.md` on the wrapper contract would work, but it
+makes the diff a markdown parser, which the tree forbids for good
+reason (AGENTS.md §"QMDs are write-only"). Instead the renderer says
+what its sections are:
 
-Neither touches the unified index; both read one source's render store
-at two commits, which is what `history.rs` is for. The Manage screen's
-commit-history panel is the natural place for the source-level list,
-and the preview pane's page header for the document-level one.
+```rust
+pub struct Section { pub uuid: Option<String>, pub md: String }
+// RenderedMarkdown gains:
+pub sections: Vec<Section>,   // concatenated, they are the .md
+```
 
-## What has to be true before this ships
+In `chat-common` this is `render_markdown` collecting the per-item
+strings it already builds one at a time
+([`render.rs`](../../../datalib/backend/etl/chat-common/src/render.rs),
+`render_item`) into a `Vec` and joining at the end; `contact-common`
+the same. The frontmatter and title are one uuid-less section, diffed
+as text. Those two crates cover most providers in one edit each. A
+renderer that has not been taught sections yet emits one section for
+the whole body; its documents diff as one block with inline `<ins>`/
+`<del>` and no green/red section bands. That degradation is logged
+once per source when a diff step meets it, so nobody mistakes it for
+the finished behaviour.
 
-**A reader can break the writer.** AGENTS.md's one-open rule has a
-clause that applies here word for word: a statement issued from a
-read-only connection while a render step is sealing is presumed to fail
-that step's commit until `a_history_reader_never_makes_the_writers_commit_fail`
-has run with it. The unfiltered `dolt_diff_<t>` walk and the
-commit-level `dolt_diff` are both new to that test. Add them before
-either route exists; the history route's statements were added the
-same way.
+This is also the first step toward generating the `.md` on read rather
+than storing it — the sections are the natural unit — but that is a
+separate decision and nothing here depends on it.
 
-**Bound the walk.** A route that runs the unfiltered diff on a store
-with years of churn is a route that times out. The per-document route
-should take an optional `since=<commit>` and default it to something
-the history panel already knows — the oldest commit it is showing.
+## The UI
 
-**Measure a real store.** The numbers above are a synthetic store and
-two small real ones. Before choosing the default window, run the
-per-document statement against the largest render store on a real data
-root (the one `multimodal_retrieval.md` §4 measured) and write the
-number here.
+- **Sources list / Manage.** A `diff` group shows with its own icon and
+  the label "Diff" (`source_catalog.rs`, `icons.ts`); the wizard never
+  opens on one (`groupEditBlocked` says where its commits are edited),
+  so its step-repair rule cannot add an `ingest` step to it. "Compare
+  two syncs…" is on every source's row menu (`rowMenu.ts`), and says
+  why not on a step, the index, or a diff group itself.
+- **Grid.** `rowClassRules` on `diff_status` (added → green band,
+  removed → red band, struck through) and `cellClassRules` on
+  `diff_changed_columns` (yellow, with `text` mapped to the `snippet`
+  column), in `GridCard`. Real sources have NULL and are unaffected.
+- **Changed only.** `change:` is a search filter on `diff_status`
+  (`Field::Change`), and a diff group's Browse opens on
+  `source_id:<group> -change:unchanged` with the two diff columns
+  leading (`browsePresets.ts`) — every row that moved, not one per
+  document. Negation keeps NULL, so the same filter over the whole grid
+  keeps every real row.
+- **Preview.** The highlighted `.md` renders through the same
+  `ChatBody`; `.diff-added` / `.diff-removed` / `.diff-modified` are
+  tinted bands with a coloured left border, `ins` / `del` tinted
+  inline, all over the card background so they read in either colour
+  scheme. The whole document is shown with context, like a code diff at
+  full context — the opposite default from the grid.
+
+## Loader, runner, `datalib-step`
+
+- **Loader** (`dag/src/config.rs`, `DIFF_GROUP_TYPE`,
+  `diff_source_problem`): a `diff` group must carry `source`, and
+  `source` must name a declared group with a `type` that is not `diff`;
+  a group of any other type must not carry `source`. A `diff` group's
+  only step is `render_markdown`, and its first input, when it has any,
+  must be `<source>/ingest` — a root with no ingest steps at all (the
+  materialized fixture root) declares it with none, and the step reads
+  `<source>/ingest`. Violations drop the entry with a diagnostic naming
+  the rule, like any other bad entry.
+- **The source's id and type reach the step as `DATALIB_DAG_SOURCE_GROUP`
+  and `DATALIB_DAG_SOURCE_GROUP_TYPE`**, which the loader puts in the
+  step's own `env` — so they are forwarded like any env entry and
+  fingerprinted with it, and changing the source re-runs the diff. The
+  runner itself knows nothing about diff groups.
+- **`datalib-step`** (`source.rs`, `main.rs`, `render_diff.rs`): under
+  `type = diff` the render function splits `params.diff` off, plans the
+  source type's render wave with the rest, and runs the two-pass
+  driver. The `SourceType` list stays closed; `diff` is a word the
+  loader knows, not a provider.
+- **The raw store** comes from the step's first input, exactly as a
+  render step's does — `source` on the group is for the loader's
+  validation, the Manage screen's label and the wizard, not for
+  locating data.
+
+Rejected alternative: a `diff` group typed like its source
+(`type = "slack"`) with `params.diff = { from, to }` on its render step.
+It reuses one line more but lies about what the group is — a source is
+a group with a `type`, and every rule written for sources (the wizard's
+step repair, the Manage row's "Download" label, the connection section)
+would then need a `diff`-shaped exception. A group that mirrors nothing
+should not say it mirrors Slack.
+
+## Fixture and tests
+
+The TNG fixture ingests once, so no raw store in it has a second
+commit. Extend `tests/fixtures/run_sync_pipeline.py`:
+
+- **Contacts** (built): a `carddav_tng_v2/` sibling of `carddav_tng/`
+  with one card added, one removed, and one edited (a phone number and
+  the `ORG`). The pipeline copies `carddav_tng` into the workspace,
+  runs the DAG, lays v2 over the copy and syncs the contacts chain, then
+  writes a `tng_contacts-diff` group with the two commits (read off
+  `system/dag_state.json`) and syncs the chain once more. The `.vcf`
+  ingest had to learn to delete a card gone from a re-read file for the
+  removal to exist at all — it was upsert-only. Contacts first because
+  one document is one contact, so a field edit is one yellow cell and
+  the shape of every rule is visible in a screen of output.
+- **Slack** (built; HTTP playback): `slack_api_v2/` is the captured
+  API as the second sync sees it — the incremental
+  `conversations.history` at the `oldest` the resume scan computes,
+  carrying a new message, an edited one with a reaction, and the
+  "status report" thread root with `reply_count` advanced so the thread
+  is re-walked through a `conversations.replies` tape with one more
+  reply. A tape is keyed by its request, so the second capture is
+  synthesized into its own playback tree (`playback_v2/`) and the
+  second sync run with `DATALIB_HTTP_PLAYBACK` pointed there. What a
+  re-sync cannot carry is a deletion — an incremental history returns
+  only what is newer than `oldest` — so that fate is the contacts
+  fixture's. Through Slack, `chat-common` under a diff: a grown thread
+  keeps its sections verbatim with the new reply in an added band, an
+  edited message gets the word diff inside its band, and a reaction
+  added to it is a marked line.
+
+Goldens: both diff trees' `.md` files are in the render-preview golden
+and their rows in the fixture-DB snapshot and the grid's Playwright
+golden, so the highlighting and the status columns are pinned;
+`ingested_tng_test` asserts the contacts diff's three fates and changed
+columns (`_diff_shape`), the Slack diff's counts by fate
+(`_diff_fates`), and the markup of the grown thread and the edited
+message. The id round-trip check there skips diff rows: their uuid is
+minted under the diff group, their `upstream_id` is the source's. A unit test on the subtraction
+covers the table above (added / removed / modified with the right
+column list / unchanged, and a document present on one side only).
+`schema_inventory` regenerates for the two columns. The step opens the
+raw store read-only twice in sequence; no new statement runs from a
+read-only connection while a writer is open, so
+`doltlite_two_process_test` is unaffected — say so in the PR, and run
+it anyway.
+
+## Order of work
+
+1. *(built)* `Section` on `RenderedMarkdown`; `chat-common` and
+   `contact-common` emit sections; the `.md` bytes are unchanged.
+2. *(built)* The two `grid_rows` columns, end to end through the
+   checklist, NULL everywhere.
+3. *(built)* The subtraction (`datalib_etl_render::diff`): rows,
+   sections, line-then-word inline diff (the `similar` crate).
+4. *(built)* Loader + `datalib-step`: the `diff` group, `source`,
+   `DATALIB_DAG_SOURCE_GROUP_TYPE`, the two-pass driver, the re-keying.
+   The contacts fixture's second commit and diff group; goldens.
+5. *(built)* UI: colouring rules, the `change:` filter and the diff
+   Browse preset, diff CSS, the icon and label, "Compare two syncs…",
+   the sanitizer test.
+6. *(built)* Slack's second capture and diff group. `chat-common`
+   needed nothing that contacts did not show.
+
+Each is a PR that leaves the tree green on its own.
 
 ## Open questions
 
-- **Attachments.** `grid_rows` names an attachment's path, not its
-  bytes; a swapped blob under the same path is invisible to this diff.
-  The `blobs.doltlite_db` CAS knows, but the join is across stores.
-  Probably out of scope for a first version.
-- **Whether to keep old `.md` bytes at all.** A CAS of rendered files
-  keyed by the blake3 above would make the file diff possible and
-  double the bytes at rest `multimodal_retrieval.md` §4 already counts
-  as too many. The row diff is the case against it; this document
-  assumes we do not.
-- **The applet or the server.** The routes above sit in `datalib-http`
-  because that is where render stores are already read. If the preview
-  pane's diff view ends up as an applet card, the endpoint moves with
-  it; nothing in the queries cares.
+- **Full document or changed sections only in the `.md`?** Full, with
+  highlights, is proposed — it reads like a code diff at full context
+  and keeps every anchor. For a very long document a "collapse
+  unchanged" control belongs in the frontend, beside the existing
+  "Show more" clamp, not in the markdown.
+- **Changing the pair in place, or a new group per pair?** Editing
+  `from`/`to` re-runs the step and the sweep replaces the old delta;
+  the diff store's own commit log then holds every pair ever asked for,
+  readable through the existing pinned-reader path. Whether "Compare…"
+  edits an existing diff group or always makes a new one is a wizard
+  question, not a pipeline one.
+- **Cost of pass two on a lookup-heavy provider.** Slack loads `users`
+  and `channels` whole before it renders anything; pass two loads them
+  again at `from`. Measure on a real store before deciding whether the
+  two passes should share one open with two pins.
+- **Type-level or vocabulary-level edits.** The word diff treats a
+  section body as text. A renamed author, a changed timestamp and an
+  edited body all look alike inside `<ins>`/`<del>`; the row's
+  `diff_changed_columns` is where the kind of change is legible. Good
+  enough to start; revisit once people have used it.

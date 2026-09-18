@@ -62,6 +62,17 @@ pub fn columns() -> Vec<ColumnSpec> {
                  for a Source Size, pages for a PDF.",
             )
             .hidden(),
+        // Set only on a diff group's rows; a real source's rows carry
+        // null in both, and the grid colours a row off the first.
+        ColumnSpec::new("diff_status", "Change", ColumnType::Text)
+            .describe(
+                "How this row differs between the two commits its diff group compares: \
+                 added, removed, modified or unchanged. Empty on every real source's rows.",
+            )
+            .hidden(),
+        ColumnSpec::new("diff_changed_columns", "Changed columns", ColumnType::Text)
+            .describe("For a modified row, the columns whose value differs.")
+            .hidden(),
     ]
 }
 
@@ -146,25 +157,33 @@ impl Sources {
                 .or_else(|| Some(row.provider.clone()).filter(|p| !p.is_empty())),
             detail: None,
         });
-        // Datalib's own rows — each source's storage report — are filed
-        // under datalib rather than under the source they measure.
-        let label = if row.source_id == datalib_source_id() {
+        row.source_ref = Some(self.identity(&row.source_id));
+    }
+
+    /// The source as the grid shows it: the name the config gives the
+    /// group, or its id when the config does not name it. Datalib's own
+    /// rows — each source's storage report — are filed under datalib
+    /// rather than under the source they measure.
+    pub fn identity(&self, source_id: &str) -> Identity {
+        let datalib = source_id == datalib_source_id();
+        let label = if datalib {
             "Datalib".to_string()
         } else {
-            group
+            self.groups
+                .get(source_id)
                 .and_then(|g| g.name.clone())
-                .unwrap_or_else(|| row.source_id.clone())
+                .unwrap_or_else(|| source_id.to_string())
         };
-        row.source_ref = Some(Identity {
-            id: row.source_id.clone(),
+        Identity {
+            id: source_id.to_string(),
             label,
             icon: None,
-            detail: Some(if row.source_id == datalib_source_id() {
+            detail: Some(if datalib {
                 "Datalib's own row, not a source's data".to_string()
             } else {
-                format!("Stored in {}/", row.source_id)
+                format!("Stored in {source_id}/")
             }),
-        });
+        }
     }
 }
 
@@ -220,6 +239,8 @@ mod tests {
             upstream_entity_kind: "message".into(),
             byte_size: Some(1),
             item_count: Some(1),
+            diff_status: Some("modified".into()),
+            diff_changed_columns: Some("text".into()),
             score: Some(0.5),
         };
         Sources::read(Path::new("/nonexistent")).resolve(&mut row);

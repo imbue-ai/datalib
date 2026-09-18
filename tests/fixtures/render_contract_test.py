@@ -68,7 +68,7 @@ KNOWN_GAPS: dict[str, str] = {
 # Columns of the render store whose value is a stamp of *when* rather
 # than *what*: identical content renders them differently on every run.
 _VOLATILE = {
-    "render_problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
+    "problems": ("first_seen_at_utc", "last_seen_at_utc", "tz_offset"),
     "render_cursor": ("rendered_at_utc", "tz_offset", "raw_commit"),
 }
 
@@ -453,7 +453,7 @@ class RenderContractTest(unittest.TestCase):
         "markdowns",
         "grid_rows",
         "edges",
-        "render_problems",
+        "problems",
         "render_cursor",
     )
 

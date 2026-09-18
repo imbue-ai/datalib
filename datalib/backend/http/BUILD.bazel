@@ -37,6 +37,7 @@ rust_library(
         "src/manage/activity.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",
+        "src/manage/problems.rs",
         "src/manage/status.rs",
         "src/usage.rs",
         "src/watch.rs",
@@ -50,7 +51,7 @@ rust_library(
     # desktop app's version. Must match [workspace.package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.34.0",
+    version = "0.34.1",
     # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
@@ -72,6 +73,7 @@ rust_library(
     deps = [
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
@@ -211,6 +213,8 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runs:datalib_runs",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
@@ -393,6 +397,7 @@ rust_binary(
     ],
     deps = [
         ":datalib_http",
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",

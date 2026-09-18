@@ -1,28 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { AgGridVue } from "ag-grid-vue3";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
-import {
-  ModuleRegistry,
-  AllCommunityModule,
-  themeQuartz,
-  colorSchemeVariable,
-  type ColDef,
-  type DefaultMenuItem,
-  type GetContextMenuItemsParams,
-  type GridApi,
-  type GridReadyEvent,
-  type IRowNode,
-  type ICellRendererParams,
-  type IsGroupOpenByDefaultParams,
-  type MenuItemDef,
-  type RowGroupOpenedEvent,
-} from "ag-grid-community";
-// Tree data — one row per group with its steps under a chevron — and
-// the right-click menu are enterprise modules. GridCard already links
-// the whole enterprise bundle, so this costs nothing new; only the two
-// modules are registered here.
-import { ContextMenuModule, TreeDataModule } from "ag-grid-enterprise";
+import type { Column } from "@slickgrid-universal/common";
 import {
   fetchConfig,
   fetchConfigScaffold,
@@ -38,11 +17,13 @@ import {
   type ManageRow,
   type SyncJob,
   type JobProgressEvent,
+  type ColumnSpec,
 } from "@/api";
 import {
   listGroups,
   listSteps,
   appendSource,
+  buildDiffSource,
   removeSteps,
   describeGroup,
   renameGroup,
@@ -59,6 +40,8 @@ import {
   type StepPhase,
 } from "@/config/sourceSteps";
 import TableGrid from "./TableGrid.ce.vue";
+import type { TableGridApi } from "./tableGridApi";
+import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
@@ -69,12 +52,10 @@ import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
+import CompareDialog from "@/components/CompareDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
-
-ModuleRegistry.registerModules([AllCommunityModule, TreeDataModule, ContextMenuModule]);
-const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(`
@@ -307,7 +288,7 @@ function groupBrowse(g: ManageRow): string | null {
   const type = g.type?.id ?? null;
   if (!type) return "gridView()";
   const columns = browseColumns(type);
-  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id))}`];
+  const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
   return `gridView({ ${args.join(", ")} })`;
 }
@@ -323,6 +304,12 @@ function groupEditBlocked(groupId: string): string | null {
   const { ingest, render } = sourceStepsOf(g.id, sources.value);
   const entry = groupEntry(g, { ingest, render });
   if (!g.type) return "No guided form for this group — edit its entries in Advanced below.";
+  if (g.type === "diff") {
+    return (
+      "A diff group compares two commits of its source; change them under " +
+      "`params.diff` in Advanced below, or remove the group."
+    );
+  }
   if (!entry) return `No guided form: the catalog doesn't know the type "${g.type}".`;
   if (!entry.wizard) return `No guided form for ${entry.label} yet — edit it in Advanced below.`;
   for (const step of [ingest, render]) {
@@ -359,8 +346,8 @@ const rowActions: Record<string, (row: Row) => void> = {
 
 const tableGrid = ref<{ refreshCells: (fields?: string[]) => void } | null>(null);
 
-let gridApi: GridApi<Row> | null = null;
-function onGridReady(api: GridApi<Row>) {
+let gridApi: TableGridApi<Row> | null = null;
+function onGridReady(api: TableGridApi<Row>) {
   gridApi = api;
 }
 
@@ -469,6 +456,10 @@ async function openStepLog(row: Row, runId: string | null = null) {
 
 /// The root's series, scaled to its own range rather than to zero.
 function onCellDoubleClicked(data: Row, field: string) {
+  if (field === "problems") {
+    openProblems(data);
+    return;
+  }
   if (field !== "status") return;
   // A group's status is one child's, and that child's log is the answer.
   const row =
@@ -476,6 +467,24 @@ function onCellDoubleClicked(data: Row, field: string) {
       ? rows.value.find((r) => r.kind !== "group" && r.id === data.status_from)
       : data;
   if (row) void openStepLog(row);
+}
+
+/// The problems behind a row's count, as a grid over the index's
+/// `problems` table filtered to the row's source. A step's problems are
+/// its group's — the render store is where a source's live — so a step
+/// row opens the same grid as its group. The index group shows every
+/// source's.
+function openProblems(row: Row) {
+  const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
+  const q = sourceId === "unified_index" ? "" : `source_id:${sourceId}`;
+  const url = `/applet/unified_index/problems?q=${encodeURIComponent(q)}`;
+  const source =
+    row.kind === "group" ? row : rows.value.find((r) => r.kind === "group" && r.id === sourceId);
+  const title =
+    sourceId === "unified_index" ? "Problems" : `Problems: ${source?.name.label ?? sourceId}`;
+  props.ctx.host.openCards(
+    `tableView({ url: ${JSON.stringify(url)}, title: ${JSON.stringify(title)} })`,
+  );
 }
 
 /// An in-place edit of the Name cell: a group's rename.
@@ -537,23 +546,6 @@ function refreshHistory() {
 /// What the panel is titled: one row's name, or the names joined.
 const historyTitle = computed(() => historyFor.value.map((r) => r.name.label).join(", "));
 
-let historyGridApi: GridApi<HistoryRow> | null = null;
-let lastHistoryPaint = "";
-function onHistoryGridReady(e: GridReadyEvent<HistoryRow>) {
-  historyGridApi = e.api;
-}
-/// The same clock as the main grid's "Last synced": a commit made while
-/// the panel is open reads "seconds ago", and must go on aging.
-function tickHistoryRelative(now: number) {
-  if (historyFor.value.length === 0) return;
-  const next = historyLines.value
-    .map((r) => (r.date ? formatRelative(r.date, now) : ""))
-    .join("\u0000");
-  if (next === lastHistoryPaint) return;
-  lastHistoryPaint = next;
-  historyGridApi?.refreshCells({ columns: ["date"], force: true });
-}
-
 /// Where the open rows' history is kept, for the panel's subtitle.
 const historyStoreNote = computed(() => {
   const rows = historyFor.value;
@@ -585,15 +577,6 @@ function openRunLog(row: HistoryRow) {
 /// the row under the pointer is in it, that row alone when it is not.
 /// The selection itself is never touched — as in Lightroom, a
 /// right-click aims the action, it does not re-select.
-function menuTargets(api: GridApi<Row>, anchor: IRowNode<Row> | null | undefined): Row[] {
-  if (!anchor?.data) return [];
-  const selected = (api.getSelectedNodes() as IRowNode<Row>[])
-    .filter((n): n is IRowNode<Row> & { data: Row } => n.data != null)
-    .sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0));
-  if (anchor.isSelected() && selected.length > 0) return selected.map((n) => n.data);
-  return [anchor.data];
-}
-
 function menuTarget(row: Row): MenuTarget {
   return {
     id: row.id,
@@ -611,28 +594,21 @@ function menuTarget(row: Row): MenuTarget {
   };
 }
 
-function contextMenuItems(
-  params: GetContextMenuItemsParams<Row>,
-): (MenuItemDef<Row> | DefaultMenuItem)[] {
-  if (!gridApi) return [];
-  const anchor = params.node as IRowNode<Row> | null;
-  const targets = menuTargets(gridApi, anchor);
+function contextMenuItems(anchor: Row, targets: Row[], column: string): MenuEntry[] {
   if (targets.length === 0) return [];
-  const column = params.column?.getColId() ?? "";
-  const entries = rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel });
-  return entries.map((entry) => {
-    if (entry.separator) return "separator";
-    return {
-      name: entry.name,
-      disabled: entry.disabled !== null,
-      tooltip: entry.disabled ?? undefined,
-      cssClasses: entry.action === "remove" ? ["m2-menu-danger"] : undefined,
-      action: () => void runMenuAction(entry.action, targets, anchor),
-    };
-  });
+  return rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel }).map((entry) =>
+    entry.separator
+      ? { name: "", separator: true }
+      : {
+          name: entry.name,
+          disabled: entry.disabled,
+          danger: entry.action === "remove",
+          action: () => void runMenuAction(entry.action, targets, anchor),
+        },
+  );
 }
 
-async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNode<Row> | null) {
+async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
   const [first] = targets;
   switch (action) {
     case "browse":
@@ -655,10 +631,11 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: IRowNod
     case "edit":
       if (first.editGroup) openEdit(first.editGroup);
       return;
+    case "compare":
+      compareFor.value = { id: first.id, name: first.name.label };
+      return;
     case "rename":
-      if (anchor && anchor.rowIndex != null) {
-        gridApi?.startEditingCell({ rowIndex: anchor.rowIndex, colKey: "name" });
-      }
+      gridApi?.startEditing(anchor, "name");
       return;
     case "copy_id":
       await copyToClipboard(targets.map((t) => t.id).join("\n"));
@@ -697,21 +674,40 @@ async function renameRow(row: Row, name: string) {
   await writeConfig(next, name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`);
 }
 
-const historyColumnDefs: ColDef<HistoryRow>[] = [
+/// The history panel's columns: what each is, by type, and how the
+/// ones a type cannot draw alone are drawn.
+const historyColumns: ColumnSpec[] = [
+  // The tree column: a store, the commits under it, the tables under
+  // each commit. The label is the store's file name, the commit's
+  // message, or the table's name; the level says which it is.
+  { field: "label", header: "Commit", type: "text", default_visible: true, editable: false },
+  // Relative on top, exact underneath — stacked like the size cell,
+  // because a sync commits several times inside one minute and ten
+  // "18 hours ago"s in a row say nothing about their order.
+  { field: "date", header: "When", type: "timestamp", default_visible: true, editable: false },
   {
-    // The tree column: a store, the commits under it, the tables under
-    // each commit. The label is the store's file name, the commit's
-    // message, or the table's name; the level says which it is.
-    headerName: "Commit",
-    field: "label",
-    flex: 3,
+    field: "rows",
+    header: "Rows",
+    type: "count",
+    description: "Rows after this commit — across the data tables, or in the one table",
+    default_visible: true,
+    editable: false,
+  },
+  { field: "added", header: "Added", type: "count", default_visible: true, editable: false },
+  { field: "deleted", header: "Deleted", type: "count", default_visible: true, editable: false },
+  { field: "modified", header: "Modified", type: "count", default_visible: true, editable: false },
+  // The run that made the commit, when the message names one, as the
+  // way to its log: the commit is what the run did, the log is how.
+  { field: "run", header: "Run", type: "text", default_visible: true, editable: false },
+  { field: "hash", header: "Hash", type: "text", default_visible: true, editable: false },
+];
+
+const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
+  label: {
+    width: 360,
     minWidth: 320,
-    showRowGroup: true,
-    cellRenderer: "agGroupCellRenderer",
-    cellRendererParams: {
-      suppressCount: true,
-      innerRenderer: (p: ICellRendererParams<HistoryRow>) => {
-        const row = p.data;
+    params: {
+      innerFormatter: (_r: number, _c: number, _v: unknown, _col: unknown, row: HistoryRow) => {
         const wrap = document.createElement("span");
         wrap.className = `m2-history-label m2-history-${row?.level ?? "commit"}`;
         wrap.textContent = row?.label ?? "";
@@ -724,66 +720,32 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
         return wrap;
       },
     },
-    tooltipField: "label",
   },
-  {
-    // Relative on top, exact underneath — stacked like the size cell,
-    // because a sync commits several times inside one minute and ten
-    // "18 hours ago"s in a row say nothing about their order.
-    headerName: "When",
-    field: "date",
+  date: {
     width: 170,
-    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+    minWidth: 170,
+    formatter: (_r, _c, value) => {
       const wrap = document.createElement("span");
-      if (!p.value) return wrap;
+      if (!value) return wrap;
       wrap.className = "m2-history-when";
       const rel = document.createElement("span");
-      rel.textContent = formatRelative(p.value, Date.now());
+      rel.textContent = formatRelative(String(value), Date.now());
       const abs = document.createElement("span");
       abs.className = "m2-cell-dir";
-      abs.textContent = formatStamp(p.value);
+      abs.textContent = formatStamp(String(value));
       wrap.append(rel, abs);
       return wrap;
     },
   },
-  {
-    headerName: "Rows",
-    field: "rows",
-    width: 100,
-    type: "numericColumn",
-    valueFormatter: (p) => formatCount(p.value),
-    headerTooltip: "Rows after this commit — across the data tables, or in the one table",
-  },
-  {
-    headerName: "Added",
-    field: "added",
-    width: 90,
-    type: "numericColumn",
-    valueFormatter: (p) => formatDelta(p.value, "+"),
-  },
-  {
-    headerName: "Deleted",
-    field: "deleted",
-    width: 90,
-    type: "numericColumn",
-    valueFormatter: (p) => formatDelta(p.value, "−"),
-  },
-  {
-    headerName: "Modified",
-    field: "modified",
-    width: 96,
-    type: "numericColumn",
-    valueFormatter: (p) => formatDelta(p.value, "~"),
-  },
-  {
-    // The run that made the commit, when the message names one, as the
-    // way to its log: the commit is what the run did, the log is how.
-    headerName: "Run",
-    field: "run",
+  rows: { width: 100, minWidth: 100, formatter: (_r, _c, value) => formatCount(value as number | null) },
+  added: { width: 90, minWidth: 90, formatter: (_r, _c, value) => formatDelta(value as number | null, "+") },
+  deleted: { width: 90, minWidth: 90, formatter: (_r, _c, value) => formatDelta(value as number | null, "−") },
+  modified: { width: 96, minWidth: 96, formatter: (_r, _c, value) => formatDelta(value as number | null, "~") },
+  run: {
     width: 120,
-    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+    minWidth: 120,
+    formatter: (_r, _c, _v, _col, row) => {
       const wrap = document.createElement("span");
-      const row = p.data;
       if (!row?.run) return wrap;
       const btn = document.createElement("button");
       btn.type = "button";
@@ -795,22 +757,20 @@ const historyColumnDefs: ColDef<HistoryRow>[] = [
       return wrap;
     },
   },
-  {
-    headerName: "Hash",
-    field: "hash",
+  hash: {
     width: 130,
-    tooltipField: "hash",
-    cellRenderer: (p: ICellRendererParams<HistoryRow>) => {
+    minWidth: 130,
+    formatter: (_r, _c, value, _col, row) => {
       const wrap = document.createElement("span");
-      if (p.data?.level !== "commit" || !p.value) return wrap;
-      const hash = String(p.value);
+      if (row?.level !== "commit" || !value) return { html: wrap, toolTip: "" };
+      const hash = String(value);
       wrap.className = "m2-history-hash";
       wrap.textContent = hash.slice(0, 10);
       wrap.appendChild(copyIdButton(hash, "Copy the commit hash"));
-      return wrap;
+      return { html: wrap, toolTip: hash };
     },
   },
-];
+};
 
 /// The 🆔 button the chat views put beside every uuid, for a commit
 /// hash: the full 40 characters, where the cell shows ten.
@@ -865,14 +825,14 @@ function readExpanded(): Set<string> {
 }
 const expandedGroups = readExpanded();
 
-function isGroupOpenByDefault(p: IsGroupOpenByDefaultParams<Row>): boolean {
-  return expandedGroups.has(p.rowNode.data?.key ?? "");
+function isGroupOpenByDefault(row: Row): boolean {
+  return expandedGroups.has(row.key);
 }
 
-function onRowGroupOpened(e: RowGroupOpenedEvent<Row>) {
-  const key = e.data?.key;
+function onRowGroupOpened(row: Row, expanded: boolean) {
+  const key = row.key;
   if (!key) return;
-  if (e.expanded) expandedGroups.add(key);
+  if (expanded) expandedGroups.add(key);
   else expandedGroups.delete(key);
   try {
     localStorage.setItem(EXPANDED_STORE, JSON.stringify([...expandedGroups]));
@@ -899,10 +859,8 @@ function reparse() {
   } catch (e) {
     parseError.value = (e as Error).message;
   }
-  // AG Grid reuses a cell whose row id is unchanged, so a button's
-  // disabled state is baked in at first render and does not follow the
-  // row: a hand-edit that makes a source editable again has to reach
-  // its Edit button, and that row id didn't change.
+  // A hand-edit that makes a source editable again has to reach its
+  // Edit button, whose face is decided outside the row.
   tableGrid.value?.refreshCells(["actions"]);
 }
 
@@ -1094,6 +1052,30 @@ async function onWizardSubmit(payload: {
   const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
   if (!ok) return;
   closeWizard();
+}
+
+// ── "Compare two syncs…": a diff group written from a source and two
+// commits of its raw store (docs/dev/plans/diff_renderer.md), wired into
+// the fan-ins like any render step, then the source synced so the diff
+// renders — its step is downstream of the source's ingest.
+const compareFor = ref<{ id: string; name: string } | null>(null);
+
+async function onCompareSubmit(payload: {
+  id: string;
+  name: string;
+  source: string;
+  from: string;
+  to: string;
+  maxDocuments: number;
+}) {
+  const built = buildDiffSource(payload);
+  let next = appendSource(configText.value, `${built.groupBody}\n\n${built.stepsBody}`);
+  next = wireIntoFanIns(next, built.renderId);
+  const ok = await writeConfig(next, `Added ${payload.name}.`);
+  if (!ok) return;
+  compareFor.value = null;
+  const source = rows.value.find((r) => r.kind === "group" && r.id === payload.source);
+  if (source) await runRows([source]);
 }
 
 async function deleteSource(id: string) {
@@ -1398,10 +1380,6 @@ async function reloadAll(freshStorage = false) {
   await Promise.all([loadConfig(), loadJobs(), loadRows(freshStorage)]);
 }
 
-/// The history panel's "seconds ago" needs a clock; the main grid's
-/// Last synced column has its own inside `TableGrid`.
-let historyPoll: ReturnType<typeof setInterval> | null = null;
-
 onMounted(async () => {
   // Fresh sizes on the first paint. The backend only walks the disk
   // while a run is in flight, so on an idle root — the usual state —
@@ -1431,14 +1409,12 @@ onMounted(async () => {
     // sampler's own last walk with it. Ask for a fresh one.
     resync: () => void reloadAll(true),
   });
-  historyPoll = setInterval(() => tickHistoryRelative(Date.now()), 1000);
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
   unsubscribe?.();
   unsubscribe = null;
-  if (historyPoll) clearInterval(historyPoll);
   gridApi = null;
 });
 </script>
@@ -1525,9 +1501,9 @@ onUnmounted(() => {
         :virtualizeRows="false"
         :windowSecs="storage?.window_secs ?? 300"
         :actions="rowActions"
-        :contextMenu="contextMenuItems"
+        :menu="contextMenuItems"
         :selectable="true"
-        :isGroupOpenByDefault="isGroupOpenByDefault"
+        :openByDefault="isGroupOpenByDefault"
         @ready="onGridReady"
         @cellDoubleClick="onCellDoubleClicked"
         @edit="onCellEdit"
@@ -1621,20 +1597,14 @@ onUnmounted(() => {
           run has written nothing, and the QMD index keeps no store of its own.
         </p>
         <div v-else class="m2-history-grid">
-          <AgGridVue
-            class="m2-ag"
-            :theme="gridTheme"
-            :columnDefs="historyColumnDefs"
-            :rowData="historyLines"
-            :getRowId="(p: { data: HistoryRow }) => p.data.key"
-            :treeData="true"
-            treeDataDisplayType="custom"
-            :getDataPath="(r: HistoryRow) => r.path"
-            :groupDefaultExpanded="1"
-            :tooltipShowDelay="200"
-            :enableCellTextSelection="true"
-            :suppressColumnVirtualisation="true"
-            @grid-ready="onHistoryGridReady"
+          <!-- The stores' commit log as a tree: stores open, commits
+               closed until asked. -->
+          <TableGrid
+            :columns="historyColumns"
+            :rows="historyLines"
+            :tree="true"
+            :openByDefault="(r: HistoryRow) => r.level === 'store'"
+            :columnOverrides="historyOverrides"
           />
         </div>
       </div>
@@ -1647,6 +1617,14 @@ onUnmounted(() => {
       :editing="editing"
       @close="closeWizard"
       @submit="onWizardSubmit"
+    />
+    <CompareDialog
+      v-if="compareFor"
+      :key="compareFor.id"
+      :source="compareFor"
+      :taken-ids="takenIds"
+      @close="compareFor = null"
+      @submit="onCompareSubmit"
     />
     </Teleport>
   </section>

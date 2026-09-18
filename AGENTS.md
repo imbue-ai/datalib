@@ -41,6 +41,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
 - [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
 - [`docs/dev/plans/diff_renderer.md`](docs/dev/plans/diff_renderer.md), [`multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposals; the second measures bytes at rest (§4) before you touch how text is stored.
+- [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — proposal, with an audit of what the `render_problems` sink does and does not cover: per-instance ids, severity, the copy into the index, the Manage counts and the document banner.
 
 **UI**
 
@@ -58,6 +59,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl and the router in front of it, fetched from `latchkey-curl-shims`; read before touching `latchkey.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
+- [`docs/dev/runtime_fetch.md`](docs/dev/runtime_fetch.md) — where the Node runtime `qmd` and `latchkey` run from comes from: staged beside the binaries, or fetched sha256-pinned on first use. Read before touching `node_runtime.rs`, `stage_runtime.sh` or the release's runtime job.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
 
@@ -192,7 +194,8 @@ datalib/
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
     app_schema/    feedback/sync_jobs/runs; both derive DDL via
                    `#[derive(PortableTable)]`.
-  ui/          Vue + AG Grid frontend.
+  ui/          Vue frontend; every grid is SlickGrid, kept behind a few
+               files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
 tests/fixtures/  TNG-themed source data + the cached `ingested/` artifact.
 docs/          dev/ architecture notes; user/ guides; dev/plans/.
@@ -318,11 +321,43 @@ by timing and filesystem locking, and a mac laptop and a Linux container
 disagree readily. If a doltlite-touching change is green locally and red
 or slow in CI, count the opens first.
 
+## License: MIT, and what may come in
+
+The repo is MIT (`LICENSE`). Every dependency is gated by
+`datalib/backend/deny.toml`'s allow list (permissive licenses only), and
+a release ships the notices of everything it bundles — Rust crates, the
+UI bundle, DoltLite, curl-impersonate, Node — assembled by
+`scripts/third_party_notices.sh`. Two rules for code that is not a
+dependency:
+
+- **Nothing copyleft gets vendored or ported**, however small. A GPL or
+  AGPL project may be a test oracle or a source of facts about a wire
+  format (`whatsapp-backup/src/key.rs`, `signal-backup/proto/`), never
+  a source of code.
+- **Say where it came from.** Ported MIT/BSD code names the project and
+  its copyright line in the file header (`garmin/src/login.rs`).
+
 ## Git: prefer merges over rebases
 
 `git pull` (default merge), not `git pull --rebase`. Rebasing rewrites
 local hashes and loses what actually happened; force-push is off the
 table on shared branches.
+
+**`MODULE.bazel.lock` is never resolved by hand.** It is generated, and
+two branches that both moved it conflict textually even though the
+right result is always "regenerate on the merged tree". `.gitattributes`
+marks it `merge=union` so the merge itself goes through; then any
+`bazelisk build` rewrites it and `//:lint_repo` refuses a stale one.
+So the resolution is: merge, build, commit. GitHub's merge button knows
+nothing of `.gitattributes` and still reports a conflict when two open
+PRs both touched it — the second one merges main and pushes.
+
+**A new first-party crate is Bazel-only unless it needs a
+`Cargo.toml`.** The lockfile records the Cargo workspace's resolution,
+so a crate with a `Cargo.toml` rewrites it on every branch that adds
+one; a crate with only a `BUILD.bazel` does not (the `<p>_config`
+crates and `datalib_problems` are the pattern). A `Cargo.toml` is
+needed only when something outside bazel has to see the crate.
 
 ## Push early, open the PR early, and watch CI
 
@@ -380,6 +415,30 @@ its cache and sandbox and can disagree with CI. Anything that reads
 through bazel so the fixture is rebuilt first. Insta snapshots are
 updated through sibling `.update` targets (`docs/dev/testing.md`).
 Coverage: `docs/dev/coverage.md`. Why a run was slow: `docs/dev/ci.md`.
+
+## Tests wait on the observable, never on the clock
+
+**A test never `sleep`s to order two writers, or to give something
+time to happen; it waits for the thing it is about to assert.** A
+sleep that is long enough on a warm mac is short on a loaded CI runner
+(the one on `2cbcc398` was), and a sleep that is long enough on CI
+makes every local run slower than it needs to be. Poll the row, the
+file, the endpoint — with a deadline, so a hang is a failure that
+names what never arrived rather than a timeout with no message.
+
+Two neighbours of the same mistake:
+
+- **A fixed timestamp in a test is a bomb** wherever anything is
+  measured from `now` — a retention window, a "recent" filter. Either
+  derive the stamp from `now`, or set the window in the test so wide
+  that the calendar cannot reach it (`process_log_days: 36500`, #567),
+  and say which in a comment.
+- **A test that takes more than a third of its timeout on CI is a
+  flake waiting to happen** once the runner is busy. Tag it `cpu:N`
+  or `exclusive` so bazel schedules it alone, or raise the timeout and
+  say why. `scripts/flaky_tests.py` names the ones that have already
+  flaked; a target it lists twice needs one of those two fixes, not a
+  re-run.
 
 ## Common commands
 

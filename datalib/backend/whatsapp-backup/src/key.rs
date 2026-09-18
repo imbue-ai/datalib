@@ -31,7 +31,10 @@ mod tests {
     /// Cross-check against the `encryptionloop` reference in
     /// `wa-crypt-tools/lib/utils.py` (the upstream Python). Input
     /// `root_key` is reproducible (`[0x42; 32]`) so this vector is
-    /// stable; output was computed once by running the Python:
+    /// stable; output was computed once by running the Python.
+    ///
+    /// wa-crypt-tools is GPL-3.0 and this repository is MIT: it is a
+    /// test oracle only. Do not port code from it.
     #[test]
     fn matches_python_reference_for_all_42s() {
         let root = [0x42u8; 32];

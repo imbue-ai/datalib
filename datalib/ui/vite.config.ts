@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "node:path";
+import { thirdPartyNotices } from "./tools/thirdPartyNotices";
 
 const BACKEND = process.env.DATALIB_BACKEND ?? "http://127.0.0.1:8731";
 
@@ -51,7 +52,7 @@ export default defineConfig(({ command }) => ({
   ...(command === "build"
     ? { root: CONFIG_DIR, build: { outDir: path.join(process.cwd(), "dist") } }
     : {}),
-  plugins: [vue()],
+  plugins: [vue(), thirdPartyNotices()],
   resolve: {
     alias: {
       "@": path.resolve(CONFIG_DIR, "src"),

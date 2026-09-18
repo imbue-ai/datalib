@@ -37,6 +37,13 @@ invocation is a local event with no upstream identity.
 `payload` is content and stays on the object table. `fetched_at_utc`,
 `attempt_count`, `last_attempt_at_utc`, `last_error`, `volatile_payload`
 and `tz_offset` go in `<table>_bookkeeping` (see `bookkeeping_ddl_for`).
+A failed attempt is also a row in the store's `problems` table (next
+section), keyed `<table>:<id>`, an error when the record has never
+fetched and a warning when an earlier fetch left a copy; a successful
+attempt — through `record_object_attempt` or the bulk path — clears
+it. **Report a per-record failure through `record_object_error`**, not
+only through `warn!`: a log line is about a run, a problem row is about
+the record, stays until the record fetches, and reaches the screen.
 The two stamps are UTC and `tz_offset` is the offset the writer's clock
 was in — the pair every stamp we mint is stored as (AGENTS.md,
 "Timestamp convention").
@@ -47,6 +54,23 @@ only, not re-fetch churn — which is what makes the `--reset-and-redownload`
 
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
+
+## Problems flow downstream with the data
+
+Every store a step owns holds a `problems` table (`datalib_problems`,
+in every raw store's `SHARED_DDL`): one row per thing the step could
+not fully do to one record, with a severity, a deterministic id and a
+sweep key. The owner sweeps it — per document in a render store, per
+entity in a raw store — and each consumer that reads a store pinned
+copies that store's rows for the source **wholesale** into its own,
+then adds its own: render copies the raw store's fetch-stage rows
+(minting them again under the source's id, which a download does not
+know), `grid_index` copies every render store's into the index. The
+pinned store is the complete truth about its source's problems at that
+commit, so the copy is the sweep and there is nothing to diff. Stamps
+travel with the row. The step then reports whole-store counts as
+`problems{severity=…}` metrics, which the Manage screen reads. Design
+and surfaces: `docs/dev/plans/problem_visibility.md`.
 
 ## Volatile fields: split them out, don't diff them
 

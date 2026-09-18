@@ -17,6 +17,7 @@ use crate::search::SearchRow;
 use datalib_core::repo::RepoError;
 use datalib_pin::{has_unpinnable_tables, head, is_missing_table, open_reader, Pin};
 use datalib_schema::edges::EdgeRow;
+use datalib_schema::problems::{ProblemRow, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
@@ -38,6 +39,7 @@ struct At {
     grid_rows: String,
     markdowns: String,
     edges: String,
+    problems: String,
 }
 
 /// The `grid_rows` columns every [`SearchRow`] is built from. One
@@ -48,7 +50,7 @@ const SEARCH_ROW_COLUMNS: &str =
     "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
      message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, upstream_id, \
-     upstream_entity_kind, qmd_path, byte_size, item_count";
+     upstream_entity_kind, qmd_path, byte_size, item_count, diff_status, diff_changed_columns";
 
 fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
     let kind: String = r.try_get("kind").unwrap_or_default();
@@ -98,6 +100,11 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         upstream_entity_kind: r.try_get("upstream_entity_kind").unwrap_or_default(),
         byte_size: r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
         item_count: r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
+        diff_status: r.try_get::<Option<String>, _>("diff_status").ok().flatten(),
+        diff_changed_columns: r
+            .try_get::<Option<String>, _>("diff_changed_columns")
+            .ok()
+            .flatten(),
         score: None,
     }
 }
@@ -203,7 +210,39 @@ impl At {
             grid_rows: pin.table("grid_rows"),
             markdowns: pin.table("markdowns"),
             edges: pin.table("edges"),
+            problems: pin.table("problems"),
         }
+    }
+
+    /// `SELECT * FROM problems` at the pin, with the caller's clause,
+    /// as typed rows. An index built before the table existed reads as
+    /// empty; a row this build cannot parse is an error.
+    async fn problem_rows(
+        &self,
+        where_sql: &str,
+        params: &[String],
+        limit: usize,
+    ) -> Result<Vec<ProblemRow>, RepoError> {
+        let sql = format!(
+            "SELECT * FROM {}{where_sql} ORDER BY last_seen_at_utc DESC, problem_uuid LIMIT ?",
+            self.problems
+        );
+        // Audited: the table expression is `Pin::table`'s; `where_sql`
+        // comes from `problems::parse`, which splices only the column
+        // names of its closed `Key` match and binds every value.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for p in params {
+            query = query.bind(p.clone());
+        }
+        let rows = match query.bind(limit as i64).fetch_all(&self.pool).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "problems") => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        rows.iter()
+            .map(ProblemRow::from_row)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(|e| RepoError::Internal(format!("{e:#}")))
     }
 }
 
@@ -291,6 +330,39 @@ impl IndexRepo for DoltRepo {
             source_label: text("source_label"),
             source_url: text("source_url_or_link"),
         }))
+    }
+
+    async fn problems(
+        &self,
+        query: &crate::problems::ProblemsQuery,
+        limit: usize,
+    ) -> Result<Vec<ProblemRow>, RepoError> {
+        let Some(at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        at.problem_rows(&query.where_sql, &query.params, limit)
+            .await
+    }
+
+    async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {
+        let Some(at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        // The document's own rows, and any entity-scoped row about one
+        // of its items — a parse failure knows the entity, not the
+        // document, and reaches it through the item it would have been.
+        let where_sql = format!(
+            " WHERE (scope_kind = ? AND scope_key = ?) \
+             OR (scope_kind = ? AND item_uuid IN (SELECT uuid FROM {} WHERE markdown_uuid = ?))",
+            at.grid_rows
+        );
+        let params = vec![
+            ScopeKind::Markdown.as_str().to_string(),
+            markdown_uuid.to_string(),
+            ScopeKind::Entity.as_str().to_string(),
+            markdown_uuid.to_string(),
+        ];
+        at.problem_rows(&where_sql, &params, 10_000).await
     }
 
     async fn list_docs(&self, limit: usize) -> Result<Vec<DocRow>, RepoError> {

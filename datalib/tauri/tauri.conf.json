@@ -26,7 +26,8 @@
       "binaries/latchkey-curl-router",
       "binaries/curl-impersonate",
       "binaries/latchkey",
-      "runtime"
+      "runtime",
+      "licenses"
     ],
     "icon": [
       "icons/32x32.png",

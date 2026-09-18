@@ -198,8 +198,9 @@ Pick the surface that fits the question:
 - **Semantic search** — the qmd index:
 
   ```sh
+  rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
   INDEX_PATH=<data_root>/unified_index/qmd_index/qmd/index.sqlite \
-      npx -y @tobilu/qmd query "that thing about the boat"
+      "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:

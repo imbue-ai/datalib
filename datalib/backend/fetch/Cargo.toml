@@ -1,0 +1,25 @@
+[package]
+name = "datalib-fetch"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "datalib_fetch"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+datalib-obs = { path = "../obs" }
+datalib-runtime = { path = "../runtime" }
+flate2 = { workspace = true }
+libc = "0.2"
+# rustls, never native-tls: the musl release binaries are fully static
+# and openssl cannot be (see perseus_render's Cargo.toml for the long
+# version). Roots come bundled, so no /etc/ssl at run time either.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = { workspace = true }
+tar = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

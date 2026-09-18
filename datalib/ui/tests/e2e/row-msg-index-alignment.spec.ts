@@ -36,7 +36,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 

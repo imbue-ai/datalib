@@ -178,7 +178,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
                 datalib_schema::grid_rows::DDL,
                 datalib_schema::markdowns::DDL,
                 datalib_schema::edges::DDL,
-                datalib_schema::render_problems::DDL,
+                datalib_schema::problems::DDL,
                 datalib_schema::source_cursors::DDL,
                 datalib_schema::render_cursor::DDL,
                 datalib_schema::render_inputs::DDL,

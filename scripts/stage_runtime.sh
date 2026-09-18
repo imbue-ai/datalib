@@ -3,27 +3,42 @@
 # Stage the bundled Node runtime + JS package trees (`latchkey`, `qmd`)
 # into one `runtime/` directory — the tree the backend binaries resolve
 # through `datalib_runtime::node_runtime` so that `latchkey` and `qmd`
-# run with NO Node/npm/npx on the host. The release tarball carries it
-# beside the binaries (`datalib-<v>-<triple>/runtime/`), the .app under
+# run with NO Node/npm/npx on the host. The release publishes it as its
+# own asset per platform (`runtime-<triple>.tar.gz`, fetched on first
+# use — docs/dev/runtime_fetch.md), the docker image unpacks that asset
+# beside the binaries, the .app carries it under
 # `Contents/Resources/runtime/` (datalib/tauri/stage-runtime.sh calls
 # this and then codesigns), and a checkout can stage one anywhere and
 # point `DATALIB_RUNTIME_DIR` at it.
 #
-#   scripts/stage_runtime.sh <dest>
+#   scripts/stage_runtime.sh <dest> [--cuda <cuda-dest>]
 #
 # Layout staged (and expected by the Rust resolver — keep in sync):
 #
 #   <dest>/
 #     node/bin/node                                    pinned Node
+#     node/LICENSE                                     its notice
 #     latchkey/<v>/node_modules/latchkey/dist/src/cli.js
 #     qmd/<v>/node_modules/@tobilu/qmd/dist/cli/qmd.js   (one tree per
 #                                                         distinct pin)
 #
+# Only THIS platform's CPU binding of node-llama-cpp is kept under
+# <dest>: pnpm links every optional `@node-llama-cpp/*` package the
+# lockfile names for the host OS, which on Linux x86_64 is 600 MB of
+# CUDA and Vulkan backends plus arm builds that cannot run here. With
+# `--cuda`, the two CUDA packages go to <cuda-dest> instead of being
+# dropped, laid out so that unpacking it over <dest> restores them
+# (the `-cuda` release asset). Vulkan is dropped: it is the backend
+# qmd's own fallback exists for, throwing at init on driverless
+# machines, and nobody has asked for it.
+#
 # Everything staged here comes out of Bazel. That is the whole design:
-# this script downloads nothing and resolves nothing. Three targets:
+# this script downloads nothing and resolves nothing. Four targets:
 #
 #   //datalib/tauri:bundled_node             the rules_nodejs toolchain's
 #                                            Node, NODE_VERSION in MODULE.bazel
+#   //third-party:bundled_licenses           Node's LICENSE (with the rest
+#                                            of the shipped notices)
 #   //third-party/qmd/runtime:qmd_tree       lockfile-pinned, sha512 per tarball
 #   //third-party/latchkey/runtime:latchkey_tree            likewise
 #
@@ -43,11 +58,20 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 <dest>" >&2
-    exit 2
-fi
-runtime_dir="$1"
+runtime_dir=""
+cuda_dir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cuda)
+            [[ $# -ge 2 ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            cuda_dir="$2"; shift 2 ;;
+        -*) echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2 ;;
+        *)
+            [[ -z "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            runtime_dir="$1"; shift ;;
+    esac
+done
+[[ -n "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
@@ -90,6 +114,7 @@ log "pins: latchkey=$latchkey_version qmd=$qmd_version"
 log "building runtime targets"
 (cd "$repo_root" && "$bazel" build \
     //datalib/tauri:bundled_node \
+    //third-party:bundled_licenses \
     //third-party/qmd/runtime:qmd_tree \
     //third-party/latchkey/runtime:latchkey_tree >&2)
 
@@ -133,12 +158,74 @@ prune_pkg() { # dest root, store glob
 log "staging node"
 mkdir -p "$runtime_dir/node/bin"
 rsync -a --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+# Node's own notice travels with the binary; the release's full set of
+# third-party notices is scripts/third_party_notices.sh's job.
+rsync -a --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
 
 stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
 
 stage_tree latchkey "$latchkey_version" "$bin/third-party/latchkey/runtime/node_modules"
 prune_pkg "$runtime_dir/latchkey/$latchkey_version/node_modules" 'playwright*'
+
+# ---------------------------------------------------------------------------
+# The node-llama-cpp platform filter.
+# ---------------------------------------------------------------------------
+
+# The `@node-llama-cpp/<name>` package node-llama-cpp imports for this
+# host on the CPU path, and the CUDA pair it imports instead when told
+# to (`getPrebuiltBinariesPackageDirectoryForBuildOptions` in its
+# dist/bindings/utils/compileLLamaCpp.js). Every other binding package
+# is dead weight here.
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64)  cpu_binding=linux-x64; cuda_bindings="linux-x64-cuda linux-x64-cuda-ext" ;;
+    Linux/aarch64) cpu_binding=linux-arm64; cuda_bindings="" ;;
+    Darwin/arm64)  cpu_binding=mac-arm64-metal; cuda_bindings="" ;;
+    Darwin/x86_64) cpu_binding=mac-x64; cuda_bindings="" ;;
+    *) fail "no node-llama-cpp binding known for $(uname -s)/$(uname -m)" ;;
+esac
+
+qmd_modules="$runtime_dir/qmd/$qmd_version/node_modules"
+store="$qmd_modules/.aspect_rules_js"
+
+# A binding package lives in the store as `@node-llama-cpp+<name>@<v>`
+# and is reached from node-llama-cpp's own node_modules through a
+# symlink `@node-llama-cpp/<name>`; both are what `--cuda` carries
+# across, and both are what the prune below removes.
+binding_paths() { # name → the store dir and the link(s), relative to node_modules
+    local name="$1"
+    (cd "$qmd_modules" && find .aspect_rules_js -maxdepth 1 -name "@node-llama-cpp+$name@*" \
+        && find .aspect_rules_js -maxdepth 4 -path "*/node_modules/@node-llama-cpp/$name" -type l)
+}
+
+if [[ -n "$cuda_dir" && -n "$cuda_bindings" ]]; then
+    cuda_modules="$cuda_dir/qmd/$qmd_version/node_modules"
+    log "staging the CUDA bindings to $cuda_dir"
+    rm -rf "$cuda_dir"
+    mkdir -p "$cuda_modules"
+    for name in $cuda_bindings; do
+        binding_paths "$name" | while IFS= read -r rel; do
+            rsync -aR --chmod=Du+wx,Fu+w "$qmd_modules/./$rel" "$cuda_modules/"
+        done
+    done
+elif [[ -n "$cuda_dir" ]]; then
+    log "no CUDA bindings for this platform; $cuda_dir not staged"
+fi
+
+kept=0
+for dir in "$store"/@node-llama-cpp+*; do
+    [[ -e "$dir" ]] || continue
+    name="$(basename "$dir")"; name="${name#@node-llama-cpp+}"; name="${name%@*}"
+    if [[ "$name" == "$cpu_binding" ]]; then
+        kept=1
+        continue
+    fi
+    log "dropping node-llama-cpp binding $name"
+    rm -rf "$dir"
+done
+[[ "$kept" == 1 ]] || fail "the $cpu_binding binding is not in the staged qmd tree"
+# The links into the dropped store dirs now dangle; sweep them.
+find "$qmd_modules" -type l ! -exec test -e {} \; -exec rm -f {} + 2>/dev/null || true
 
 # Assert the two entry points the Rust resolver will look for actually
 # resolve. Without this the staging can be subtly wrong — a moved entry,
@@ -149,6 +236,21 @@ for entry in \
     "$runtime_dir/latchkey/$latchkey_version/node_modules/latchkey/dist/src/cli.js"; do
     [[ -f "$entry" ]] || fail "staged entry missing: $entry"
 done
+
+# Prove the binding loads after the prune, not just that its files are
+# there: `getLlama` with `build: "never"` either opens a prebuilt
+# library or throws, and never reaches for cmake. `gpu: "auto"` is what
+# qmd asks for — Metal on a mac, else the CPU binding once the pruned
+# GPU packages fail to import. Run from the real package directory so
+# the bare `node-llama-cpp` import resolves the way qmd's own does.
+qmd_pkg="$(cd -P "$qmd_modules/@tobilu/qmd" && pwd -P)"
+log "smoke: loading the $cpu_binding binding"
+(cd "$qmd_pkg" && "$runtime_dir/node/bin/node" --input-type=module -e '
+const { getLlama } = await import("node-llama-cpp");
+const llama = await getLlama({ build: "never", gpu: "auto", progressLogs: false, logLevel: "error" });
+console.error(`>>> stage_runtime: node-llama-cpp loaded (gpu=${llama.gpu}, ${llama.cpuMathCores} math cores)`);
+await llama.dispose();
+') || fail "the staged node-llama-cpp binding does not load"
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight.

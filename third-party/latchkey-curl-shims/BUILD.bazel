@@ -99,6 +99,21 @@ copy_file(
     visibility = ["//visibility:public"],
 )
 
+# The LICENSE-* files the release packs beside the impersonator, for the
+# same platform the binaries above are chosen for.
+alias(
+    name = "licenses",
+    actual = select({
+        ":darwin_aarch64": "@latchkey_curl_shims_aarch64_apple_darwin//:licenses",
+        ":darwin_x86_64": "@latchkey_curl_shims_x86_64_apple_darwin//:licenses",
+        ":linux_x86_64_gnu": "@latchkey_curl_shims_x86_64_unknown_linux_gnu//:licenses",
+        ":linux_aarch64_gnu": "@latchkey_curl_shims_aarch64_unknown_linux_gnu//:licenses",
+        ":linux_x86_64_musl": "@latchkey_curl_shims_x86_64_unknown_linux_musl//:licenses",
+        ":linux_aarch64_musl": "@latchkey_curl_shims_aarch64_unknown_linux_musl//:licenses",
+    }),
+    visibility = ["//visibility:public"],
+)
+
 # Both shims, so `bazelisk build //third-party/latchkey-curl-shims`
 # stages the pair and anything that needs them as runfiles names one
 # label.

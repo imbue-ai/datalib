@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -64,6 +65,9 @@ pub struct ParsedEmail {
     /// into the render summary.
     pub docs_skipped: usize,
     pub scan: ScanResult,
+    /// Rows whose stored payload would not read as JSON, dropped —
+    /// reported by the processor rather than skipped in silence.
+    pub unparsed: Vec<Unparsed>,
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
@@ -130,9 +134,22 @@ async fn parse_async(
         None
     };
 
-    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
-    let mailboxes = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "mailboxes").await?;
-    let threads = load_payloads(&pool, datalib_etl::pin::Reads::At(&pin), "threads").await?;
+    let mut unparsed: Vec<Unparsed> = Vec::new();
+    let accounts = load_accounts(&pool, datalib_etl::pin::Reads::At(&pin), &mut unparsed).await?;
+    let mailboxes = load_payloads(
+        &pool,
+        datalib_etl::pin::Reads::At(&pin),
+        "mailboxes",
+        &mut unparsed,
+    )
+    .await?;
+    let threads = load_payloads(
+        &pool,
+        datalib_etl::pin::Reads::At(&pin),
+        "threads",
+        &mut unparsed,
+    )
+    .await?;
     // Every thread with at least one email — the load set on a cold
     // start, the denominator of the skipped count otherwise, and the
     // map from the driver's bucket keys back to thread keys.
@@ -188,6 +205,7 @@ async fn parse_async(
         docs,
         docs_skipped,
         scan,
+        unparsed,
     })
 }
 
@@ -371,6 +389,7 @@ async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, Stri
 async fn load_accounts(
     pool: &SqlitePool,
     reads: datalib_etl::pin::Reads<'_>,
+    unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<(String, Value)>> {
     let table = reads.table("accounts");
     let sql = format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
@@ -383,8 +402,9 @@ async fn load_accounts(
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
         let s: String = r.try_get("payload").unwrap_or_default();
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            out.push((id, v));
+        match serde_json::from_str::<Value>(&s) {
+            Ok(v) => out.push((id, v)),
+            Err(_) => unparsed.push(Unparsed::new("accounts", &id, &s)),
         }
     }
     Ok(out)
@@ -393,10 +413,12 @@ async fn load_accounts(
 async fn load_payloads(
     pool: &SqlitePool,
     reads: datalib_etl::pin::Reads<'_>,
-    table: &str,
+    table: &'static str,
+    unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<Value>> {
-    let table = reads.table(table);
-    let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
+    let pinned = reads.table(table);
+    let sql =
+        format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL");
     // Audited: `table` is a literal at both callsites.
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -404,9 +426,11 @@ async fn load_payloads(
         .with_context(|| format!("load_payloads {table}"))?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
         let s: String = r.try_get("payload").unwrap_or_default();
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            out.push(v);
+        match serde_json::from_str::<Value>(&s) {
+            Ok(v) => out.push(v),
+            Err(_) => unparsed.push(Unparsed::new(table, &id, &s)),
         }
     }
     Ok(out)

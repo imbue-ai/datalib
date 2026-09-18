@@ -99,6 +99,7 @@ rust_binary(
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
@@ -146,4 +147,26 @@ insta_update(
     name = "ingest_methods.update",
     test = ":datalib_step_unittests",
     test_args = ["ui_mirror_matches_the_declarations"],
+)
+
+# A release tarball with no `runtime/` fetches the runtime its manifest
+# names on first use, sha256-verified, and refuses one that hashes
+# wrong — through the real binary and the real resolver, against a
+# local stand-in for the release.
+rust_test(
+    name = "runtime_fetch_test",
+    size = "medium",
+    srcs = ["tests/runtime_fetch.rs"],
+    data = [":datalib_step"],
+    edition = "2021",
+    env = {
+        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+    },
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:sha2",
+        "@datalib_crates//:tar",
+        "@datalib_crates//:tempfile",
+    ],
 )

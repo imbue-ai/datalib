@@ -3,6 +3,7 @@ name = "datalib-etl-signal-render"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "datalib_etl_signal_render"

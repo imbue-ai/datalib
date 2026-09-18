@@ -272,6 +272,57 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         .collect()
 }
 
+/// The newest sample of one metric series per step, across every run
+/// the store keeps: what a step last counted, and in which run. A
+/// step that has never reported the series is absent — the reader
+/// draws "not counted", never a false zero.
+pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    // Every sample of the series, newest run first within a (step,
+    // labels) pair; the first of each pair is the answer. Two runs
+    // started in the same instant — a test, or two ticks of a wall
+    // clock at second resolution — fall back to the order the store
+    // recorded them in.
+    let rows = sqlx::query(
+        "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+         WHERE m.name = ? \
+         ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC",
+    )
+    .bind(name)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    let mut out: Vec<MetricRow> = Vec::new();
+    for r in &rows {
+        let step: String = r.get("step");
+        let labels: String = r.get("labels");
+        if out
+            .last()
+            .is_some_and(|m| m.step == step && m.labels == labels)
+        {
+            continue;
+        }
+        out.push(MetricRow {
+            run_id: r.get("run_id"),
+            step,
+            name: r.get("name"),
+            labels,
+            value: r.get("value"),
+            updated_at_utc: r.get("updated_at_utc"),
+            tz_offset: r.get("tz_offset"),
+        });
+    }
+    out
+}
+
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
         "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \

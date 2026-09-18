@@ -5,8 +5,10 @@
 # `//...` was analysed — 1.8 GB on every CI run, whether or not a single
 # action needed them, because loading a repository's BUILD file is what
 # fetches it. As action outputs they are fetched once per pin, cached in
-# the remote cache, and on a warm run under `--remote_download_minimal`
-# never moved at all.
+# the remote cache, and under `--remote_download_minimal` moved only to
+# a machine that runs an action taking them as an input — which is the
+# e2e test, run on the CI runner itself, so its fixture carries the
+# embedding model alone (`//tests/fixtures:materialize_tng_root_embed_only`).
 #
 # Three files, and the three code paths that load them are worth knowing
 # apart, because "qmd needs 2.2 GB of models" is true of the shipped app
@@ -20,11 +22,10 @@
 #                         long-lived `qmd mcp` daemon fails.
 #   qwen3-reranker        nothing, today. Both query paths disable
 #                         reranking (`"rerank": false` in daemon.rs,
-#                         `--no-rerank` in runner.rs). It is here so a
-#                         data root materialized for the e2e suite holds
-#                         what a real one does, and so flipping that flag
-#                         is a code change rather than a surprise
-#                         download.
+#                         `--no-rerank` in runner.rs). It is here so the
+#                         `dev_tng` root holds what a real one does, and
+#                         so flipping that flag is a code change rather
+#                         than a surprise download.
 #
 # Pinned to repo REVISIONS rather than `main`: HuggingFace serves
 # `resolve/main/...` as a moving pointer, so a re-quantized re-upload

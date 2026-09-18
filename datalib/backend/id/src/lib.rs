@@ -187,9 +187,82 @@ pub fn edge_id(
         .to_string()
 }
 
+/// Id for one `problems` row — one thing a step could not do to one
+/// record — from what produced it and nothing else.
+///
+/// Not in the recipe: the sample, the JSON path, the stamps, the
+/// render version. Two runs of the same code over the same record must
+/// mint the same id, and a run after a fix must mint *no* row rather
+/// than a different one, so anything that can vary between two runs of
+/// the same code stays out. `"problem"` as the leading component keeps
+/// it out of every entity id's space.
+#[allow(clippy::too_many_arguments)]
+pub fn problem_id(
+    source_id: &str,
+    stage: &str,
+    scope_kind: &str,
+    scope_key: &str,
+    item_uuid: Option<&str>,
+    field: Option<&str>,
+    reason: &str,
+    rule: Option<&str>,
+) -> String {
+    let recipe = format!(
+        "problem\u{1f}{source_id}\u{1f}{stage}\u{1f}{scope_kind}\u{1f}{scope_key}\u{1f}{}\u{1f}{}\u{1f}{reason}\u{1f}{}",
+        item_uuid.unwrap_or(""),
+        field.unwrap_or(""),
+        rule.unwrap_or(""),
+    );
+    Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
+        .as_hyphenated()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two problems on one record are two ids; the same problem twice
+    /// is one.
+    #[test]
+    fn problem_ids_follow_the_recipe_and_nothing_else() {
+        let a = problem_id(
+            "slack",
+            "grid_row",
+            "markdown",
+            "md-1",
+            Some("u-1"),
+            Some("created_at"),
+            "coercion_failed",
+            None,
+        );
+        let again = problem_id(
+            "slack",
+            "grid_row",
+            "markdown",
+            "md-1",
+            Some("u-1"),
+            Some("created_at"),
+            "coercion_failed",
+            None,
+        );
+        let other_field = problem_id(
+            "slack",
+            "grid_row",
+            "markdown",
+            "md-1",
+            Some("u-1"),
+            Some("modified_at"),
+            "coercion_failed",
+            None,
+        );
+        assert_eq!(a, again);
+        assert_ne!(a, other_field);
+        assert_ne!(
+            a,
+            entity_id_str(IdNamespace::Slack, Scope::ProviderGlobal, "problem", "md-1")
+        );
+    }
 
     #[test]
     fn is_deterministic() {

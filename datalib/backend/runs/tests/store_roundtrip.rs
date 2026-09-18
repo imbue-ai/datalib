@@ -112,6 +112,55 @@ async fn ticks_coalesce_but_log_lines_do_not() {
     );
 }
 
+/// `latest_metric` answers "what did each step last count?" across
+/// runs: the newest run that reported the series wins per step and
+/// label, an older run's value never shadows it, and a step that never
+/// reported is absent rather than zero.
+#[tokio::test]
+async fn latest_metric_is_the_newest_report_per_step_and_label() {
+    let td = tempfile::tempdir().unwrap();
+    let labelled = |step: &str, labels: &str, value: i64| MetricRow {
+        labels: labels.into(),
+        ..metric(step, "problems", value)
+    };
+    {
+        let w = start(td.path(), "run-1");
+        w.metric(labelled("slack/render_markdown", "severity=error", 4));
+        w.metric(labelled("slack/render_markdown", "severity=warning", 9));
+        w.metric(labelled("mail/render_markdown", "severity=error", 1));
+    }
+    // A later run: slack re-counted, mail did not run.
+    {
+        let w = start(td.path(), "run-2");
+        w.metric(labelled("slack/render_markdown", "severity=error", 0));
+        w.metric(labelled("slack/render_markdown", "severity=warning", 2));
+    }
+    let latest = datalib_runs::latest_metric(td.path(), "problems").await;
+    let find = |step: &str, labels: &str| {
+        latest
+            .iter()
+            .find(|m| m.step == step && m.labels == labels)
+            .map(|m| (m.value, m.run_id.clone()))
+    };
+    assert_eq!(
+        find("slack/render_markdown", "severity=error"),
+        Some((0, "run-2".into()))
+    );
+    assert_eq!(
+        find("slack/render_markdown", "severity=warning"),
+        Some((2, "run-2".into()))
+    );
+    assert_eq!(
+        find("mail/render_markdown", "severity=error"),
+        Some((1, "run-1".into())),
+        "a step the newer run skipped keeps its last count"
+    );
+    assert_eq!(find("mail/render_markdown", "severity=warning"), None);
+    assert!(datalib_runs::latest_metric(td.path(), "nothing")
+        .await
+        .is_empty());
+}
+
 /// The tail contract: a reader that remembers the last `seq` it saw
 /// gets only what came after.
 #[tokio::test]
@@ -484,15 +533,44 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     );
 }
 
+async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let all = log_query(
+            root,
+            &LogQuery {
+                run: None,
+                step: None,
+                q: "",
+                after_seq: 0,
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap_or_default();
+        if all.iter().any(|l| l.msg == msg) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "log line {msg:?} never reached the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 /// The server's lines share the table with the runs': no `run_id`, the
 /// process that wrote them, and the same tail cursor. Both writers hold
 /// the file at once, which on plain SQLite is ordinary.
 #[tokio::test]
 async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let td = tempfile::tempdir().unwrap();
+    // The rows below are stamped on a fixed date; only `max_runs` is
+    // under test, so neither age limit may reach them.
     let keep = Retention {
         max_runs: 1,
         max_age_days: 36500,
+        process_log_days: 36500,
         ..Retention::default()
     };
     let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
@@ -503,9 +581,12 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         msg: "ready".into(),
         ..Default::default()
     });
-    // Past the flush interval, so the line is in the file before the
-    // run's are and `seq` reads in the order things happened.
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // The line has to be in the file before the runs' are, or `seq`
+    // does not read in the order things happened. The server writer
+    // flushes on a timer after opening the store, and on a loaded CI
+    // runner that can take longer than any sleep chosen here, so wait
+    // for the row itself.
+    wait_for_log_line(td.path(), "ready").await;
     {
         let w = RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", keep).unwrap();
         w.log(line("a", "warn", "from the run"));

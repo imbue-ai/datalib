@@ -1,6 +1,12 @@
-//! Locate the Node runtime + npm package trees shipped beside the
-//! binaries (the .app's `Resources/runtime/`, the tarball's `runtime/`),
-//! so `latchkey` and `qmd` run without any Node/npm on the host.
+//! Locate the Node runtime + npm package trees `latchkey` and `qmd` run
+//! from, so neither needs any Node/npm on the host. Three places, in
+//! order: `$DATALIB_RUNTIME_DIR`; `runtime/` beside the binaries (the
+//! docker image, and the .app one level up); and the runtime a release
+//! tarball names in a manifest beside its binaries, which is fetched
+//! into the user's cache on first use — see `docs/dev/runtime_fetch.md`.
+//! The fetch itself lives in `datalib_fetch` (this crate has no
+//! dependencies, on purpose); a binary that wants it installs a
+//! [`RuntimeFetcher`] through [`enable_fetch`].
 //!
 //! The `npx -y <pkg>@<v>` fallback is a supply-chain hole — only the
 //! top-level version is pinned, ~170 transitive packages float, and
@@ -12,6 +18,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+
+pub use crate::runtime_manifest::{AssetKind, Manifest, RuntimeAsset, MANIFEST_FILE};
 
 /// Relative path of the Node executable inside `runtime/`.
 const NODE_REL: &str = "node/bin/node";
@@ -34,7 +42,7 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// `scripts/stage_runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.11.0";
+pub const LATCHKEY_VERSION: &str = "3.12.0";
 
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the
@@ -66,29 +74,79 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Resolve the staged `runtime/` root, or `None` when not bundled.
+/// Resolve the runtime root, or `None` when there is none to run from.
 pub fn runtime_root() -> Option<PathBuf> {
+    resolve_root().ok()
+}
+
+/// Where the lookup went and why it missed, for the error message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Miss {
+    pub looked_in: Vec<PathBuf>,
+    pub fetch: FetchOutcome,
+}
+
+/// What the manifest-driven fetch had to say when the staged candidates
+/// missed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchOutcome {
+    /// `$DATALIB_RUNTIME_DIR` was set and is not a directory: the
+    /// override is the whole answer.
+    Overridden,
+    /// A runtime was found, and it holds no `<kind>/<version>` tree
+    /// with the entry script — a stale stage, or a pin that moved.
+    NotInTree,
+    /// No manifest beside the binary — a checkout build, or an
+    /// installation that lost the file.
+    NoManifest,
+    /// The manifest could not be parsed.
+    BadManifest(String),
+    /// A manifest names a runtime, but this process installed no
+    /// [`RuntimeFetcher`], so it was only looked for in the cache.
+    NotEnabled { asset: String, cache: PathBuf },
+    /// The fetcher ran and could not deliver.
+    Failed { asset: String, reason: String },
+}
+
+fn resolve_root() -> Result<PathBuf, Miss> {
     if let Some(dir) = std::env::var_os(RUNTIME_DIR_ENV) {
         let dir = PathBuf::from(dir);
         // An explicitly-set override that doesn't exist is a
         // misconfiguration; still just miss (the caller reports where it
         // looked) but keep the check so we never return a dangling root.
-        return dir.is_dir().then_some(dir);
+        return if dir.is_dir() {
+            Ok(dir)
+        } else {
+            Err(Miss {
+                looked_in: vec![dir],
+                fetch: FetchOutcome::Overridden,
+            })
+        };
     }
-    runtime_root_candidates()
-        .into_iter()
-        .find(|root| root.join(NODE_REL).is_file())
+    let looked_in = runtime_root_candidates();
+    if let Some(root) = looked_in.iter().find(|root| root.join(NODE_REL).is_file()) {
+        return Ok(root.clone());
+    }
+    let mut looked_in = looked_in;
+    match fetched_root() {
+        Ok(root) => Ok(root.clone()),
+        Err(outcome) => {
+            if let FetchOutcome::NotEnabled { cache, .. } = &outcome {
+                looked_in.push(cache.clone());
+            }
+            Err(Miss {
+                looked_in,
+                fetch: outcome.clone(),
+            })
+        }
+    }
 }
 
 /// Where a staged tree is looked for when `$DATALIB_RUNTIME_DIR` is
 /// unset: `runtime/` beside the running binary (the tarball layout), or
 /// one level up (the .app's `Resources/{binaries,runtime}`).
 fn runtime_root_candidates() -> Vec<PathBuf> {
-    let Ok(exe) = std::env::current_exe() else {
-        return Vec::new();
-    };
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    let Some(exe_dir) = exe.parent() else {
+    let Some(exe_dir) = exe_dir() else {
         return Vec::new();
     };
     let mut out = vec![exe_dir.join("runtime")];
@@ -98,15 +156,115 @@ fn runtime_root_candidates() -> Vec<PathBuf> {
     out
 }
 
+fn exe_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    exe.parent().map(Path::to_path_buf)
+}
+
+/// The manifest beside the running binary, read once per process. A
+/// release tarball carries one; a checkout build and the .app do not.
+pub fn manifest() -> Result<&'static Manifest, FetchOutcome> {
+    static MANIFEST: OnceLock<Result<Manifest, FetchOutcome>> = OnceLock::new();
+    MANIFEST
+        .get_or_init(|| {
+            let path = exe_dir()
+                .map(|d| d.join(MANIFEST_FILE))
+                .ok_or(FetchOutcome::NoManifest)?;
+            let text = std::fs::read_to_string(&path).map_err(|_| FetchOutcome::NoManifest)?;
+            Manifest::parse(&text)
+                .map_err(|e| FetchOutcome::BadManifest(format!("{}: {e}", path.display())))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Where fetched runtimes live: `$XDG_CACHE_HOME/datalib/runtime`, else
+/// `~/.cache/datalib/runtime` — beside qmd's model cache, and the same
+/// on every platform. A cache directory rather than the data root so
+/// two roots on one machine share one copy and the `latchkey` launcher
+/// can find it with no data root in hand.
+pub fn runtime_cache_dir() -> Option<PathBuf> {
+    let base = match std::env::var_os("XDG_CACHE_HOME") {
+        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache"),
+    };
+    Some(base.join("datalib").join("runtime"))
+}
+
+/// The tree a manifest's CPU runtime unpacks into: named by the asset's
+/// sha256, so a directory that exists is one that was fetched, verified
+/// and unpacked whole (the fetcher renames it into place last), and a
+/// new release lands beside the old one rather than over it.
+pub fn fetched_runtime_dir(cache_dir: &Path, asset: &RuntimeAsset) -> PathBuf {
+    cache_dir.join(asset.dir_name())
+}
+
+/// Puts the runtime a manifest names in place and returns its root.
+/// Implemented by `datalib_fetch`; this crate only knows the shape.
+pub trait RuntimeFetcher: Send + Sync {
+    fn fetch(&self, manifest: &Manifest, cache_dir: &Path) -> Result<PathBuf, String>;
+}
+
+static FETCHER: OnceLock<Box<dyn RuntimeFetcher>> = OnceLock::new();
+
+/// Let a miss fetch. Called once, early, by the binaries that run
+/// `qmd` or `latchkey` from a release tarball; a second call is
+/// ignored. Must precede the first resolution: the result is cached.
+pub fn enable_fetch(fetcher: Box<dyn RuntimeFetcher>) {
+    let _ = FETCHER.set(fetcher);
+}
+
+/// The manifest's runtime, resolved at most once per process: a present
+/// tree costs a stat, a missing one costs the fetch, and a fetch that
+/// failed is not retried by the next `latchkey curl` in the same run.
+fn fetched_root() -> Result<&'static PathBuf, FetchOutcome> {
+    static FETCHED: OnceLock<Result<PathBuf, FetchOutcome>> = OnceLock::new();
+    FETCHED
+        .get_or_init(|| {
+            let manifest = manifest()?;
+            let cache = runtime_cache_dir().ok_or_else(|| FetchOutcome::Failed {
+                asset: manifest.cpu().name.clone(),
+                reason: "neither $XDG_CACHE_HOME nor $HOME is set, so there is no cache \
+                         directory to fetch into"
+                    .to_string(),
+            })?;
+            match FETCHER.get() {
+                Some(fetcher) => {
+                    fetcher
+                        .fetch(manifest, &cache)
+                        .map_err(|reason| FetchOutcome::Failed {
+                            asset: manifest.cpu().name.clone(),
+                            reason,
+                        })
+                }
+                None => {
+                    let dir = fetched_runtime_dir(&cache, manifest.cpu());
+                    if dir.join(NODE_REL).is_file() {
+                        Ok(dir)
+                    } else {
+                        Err(FetchOutcome::NotEnabled {
+                            asset: manifest.cpu().name.clone(),
+                            cache,
+                        })
+                    }
+                }
+            }
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
 /// No staged tree holds `<kind>@<version>`, and the npx fallback is not
 /// enabled. The message says where the lookup went and how to fix it,
-/// because it is the first thing a tarball user sees when `runtime/`
-/// did not come along with the binaries.
+/// because it is the first thing a tarball user sees when the runtime
+/// could not be fetched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingRuntime {
-    pub kind: String,
+    pub kind: &'static str,
     pub version: String,
     pub looked_in: Vec<PathBuf>,
+    pub fetch: FetchOutcome,
 }
 
 impl fmt::Display for MissingRuntime {
@@ -122,14 +280,36 @@ impl fmt::Display for MissingRuntime {
         for dir in &self.looked_in {
             write!(f, " {}", dir.display())?;
         }
+        match &self.fetch {
+            FetchOutcome::Overridden => {
+                write!(f, " ({RUNTIME_DIR_ENV} is set and is not a directory)")?
+            }
+            FetchOutcome::NotInTree => write!(
+                f,
+                " (a runtime is there, but holds no {}/{} tree with its entry script)",
+                self.kind, self.version
+            )?,
+            FetchOutcome::NoManifest => write!(
+                f,
+                ". No `{MANIFEST_FILE}` beside the binary, so nothing says which runtime to fetch"
+            )?,
+            FetchOutcome::BadManifest(e) => write!(f, ". The runtime manifest is unreadable: {e}")?,
+            FetchOutcome::NotEnabled { asset, .. } => write!(
+                f,
+                ". The manifest names {asset}, but this program does not fetch; \
+                 `datalib-step pull-runtime` does"
+            )?,
+            FetchOutcome::Failed { asset, reason } => {
+                write!(f, ". Fetching {asset} failed: {reason}")?
+            }
+        }
         write!(
             f,
-            ". Ship the `runtime/` tree beside the binaries (the release \
-             tarball and the .app carry it; `scripts/stage_runtime.sh` \
-             builds one from a checkout), point {RUNTIME_DIR_ENV} at a \
-             staged tree, or set {ALLOW_NPX_ENV}=1 to fetch {}@{} through \
-             `npx -y` from the npm registry — unpinned below the top \
-             level, install scripts on.",
+            ". Ship the `runtime/` tree beside the binaries (the .app and the \
+             docker image carry it; `scripts/stage_runtime.sh` builds one from \
+             a checkout), point {RUNTIME_DIR_ENV} at a staged tree, or set \
+             {ALLOW_NPX_ENV}=1 to fetch {}@{} through `npx -y` from the npm \
+             registry — unpinned below the top level, install scripts on.",
             self.kind, self.version
         )
     }
@@ -140,23 +320,27 @@ impl std::error::Error for MissingRuntime {}
 /// The one resolution every Node-based tool goes through: the staged
 /// tree, else — only with [`ALLOW_NPX_ENV`] set — `npx -y <pkg_spec>`.
 pub fn tool_command(
-    kind: &str,
+    kind: &'static str,
     version: &str,
     entry_rel: &str,
     pkg_spec: &str,
 ) -> Result<Command, MissingRuntime> {
-    if let Some(cmd) = bundled_command(kind, version, entry_rel) {
-        return Ok(cmd);
-    }
+    let miss = match resolve_root() {
+        Ok(root) => match command_in(&root, kind, version, entry_rel) {
+            Some(cmd) => return Ok(cmd),
+            None => Miss {
+                looked_in: vec![root],
+                fetch: FetchOutcome::NotInTree,
+            },
+        },
+        Err(miss) => miss,
+    };
     if !npx_allowed() {
-        let looked_in = match std::env::var_os(RUNTIME_DIR_ENV) {
-            Some(dir) => vec![PathBuf::from(dir)],
-            None => runtime_root_candidates(),
-        };
         return Err(MissingRuntime {
-            kind: kind.to_string(),
+            kind,
             version: version.to_string(),
-            looked_in,
+            looked_in: miss.looked_in,
+            fetch: miss.fetch,
         });
     }
     warn_npx_once(pkg_spec);
@@ -205,7 +389,10 @@ pub fn latchkey_command() -> Result<Command, MissingRuntime> {
 /// `<kind>/<version>` package with the bundled Node. `None` unless both
 /// the Node binary and the entry file are staged.
 pub fn bundled_command(kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
-    let root = runtime_root()?;
+    command_in(&runtime_root()?, kind, version, entry_rel)
+}
+
+fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
     let node = root.join(NODE_REL);
     let entry = root.join(kind).join(version).join(entry_rel);
     if !node.is_file() || !entry.is_file() {
@@ -339,6 +526,7 @@ mod tests {
         )
         .expect_err("no tree and no opt-in must not spawn npx");
         assert_eq!(err.looked_in, vec![base.clone()]);
+        assert_eq!(err.fetch, FetchOutcome::NotInTree);
         let text = err.to_string();
         assert!(text.contains("latchkey@9.9.9"), "{text}");
         assert!(text.contains(ALLOW_NPX_ENV), "{text}");

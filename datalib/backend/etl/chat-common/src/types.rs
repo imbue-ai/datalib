@@ -2,6 +2,7 @@
 //! row model before handing off to [`crate::render::render_all`].
 
 use datalib_etl_render::inputs::Input;
+use datalib_schema::problems::{Problem, Reason};
 use serde::Serialize;
 
 /// What flavor of item this is. Collapses each provider's richer event
@@ -129,6 +130,33 @@ pub struct NormalizedChatItem {
     /// it. Layout only: an aside still gets its own anchor and its own
     /// grid_row.
     pub is_aside: bool,
+    /// What the provider could not do with this item while normalizing
+    /// it — a stamp upstream sent that would not parse, a field left
+    /// empty for want of a shape. Each becomes a `problems` row on the
+    /// document, keyed to this item, when the grid rows are built. See
+    /// [`crate::own_stamp_ms`] for the common case.
+    pub problems: Vec<Problem>,
+}
+
+/// A record's own stamp, or `None` — with the difference between the
+/// two kinds of `None` recorded. Upstream sending nothing is an
+/// absence and says nothing; upstream sending something we could not
+/// read is a coercion failure, and goes into `problems` so the row's
+/// empty time is never mistaken for a record that had none. Callers
+/// apply their own fallback (the previous item's stamp, say) to the
+/// result the same way they did before.
+pub fn own_stamp_ms(
+    raw: Option<&str>,
+    field: &str,
+    parse: impl Fn(&str) -> Option<i64>,
+    problems: &mut Vec<Problem>,
+) -> Option<i64> {
+    let raw = raw.filter(|s| !s.trim().is_empty())?;
+    let ms = parse(raw);
+    if ms.is_none() {
+        problems.push(Problem::field(field, Reason::CoercionFailed, raw));
+    }
+    ms
 }
 
 /// The upstream's own identity for one chat item, carried through to

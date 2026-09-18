@@ -3,6 +3,7 @@
 
 pub mod db;
 pub mod dolt_repo;
+pub mod problems;
 pub mod qmd;
 pub mod query;
 pub mod repo;

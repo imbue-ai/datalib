@@ -479,6 +479,7 @@ export default defineConfig({
       testMatch: [
         // Explore / GridCard — the search grid.
         /grid-populated\.spec\.ts/,
+        /grid-card-fit\.spec\.ts/,
         /grid-context-menu\.spec\.ts/,
         /contents-cell-clamp\.spec\.ts/,
         /row-click-scroll\.spec\.ts/,
@@ -497,6 +498,8 @@ export default defineConfig({
         // grid it opens in a modal.
         /manager2-grid\.spec\.ts/,
         /manager2-history\.spec\.ts/,
+        // The run-log panel's grid, menu and drag-to-group bar.
+        /run-log\.spec\.ts/,
       ],
     },
   ],

@@ -221,8 +221,8 @@ build:buildbuddy-release-readonly --remote_upload_local_results=false
 # HuggingFace answered one of those cold fetches with `429 Too Many
 # Requests` on 2026-09-03 and failed the build. They are a build action
 # now (`//third-party/qmd_models`), so they ride the action cache
-# instead, and a warm run does not move them at all. The downloader
-# stays for everything else.
+# instead, and only a run that executes a consumer moves them. The
+# downloader stays for everything else.
 #
 # `_local_fallback=true` because the default is `false`, which turns a
 # BuildBuddy outage into a failed fetch rather than a slow one. With it,

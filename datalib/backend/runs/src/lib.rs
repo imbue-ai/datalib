@@ -14,8 +14,8 @@ pub use app_schema::runs::{
 };
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, log_after, open_or_create, runs, snapshot, snapshot_of, versions, LogSink,
-    ProcessLogWriter, RunWriter, Snapshot,
+    canonical_labels, latest_metric, log_after, open_or_create, runs, snapshot, snapshot_of,
+    versions, LogSink, ProcessLogWriter, RunWriter, Snapshot,
 };
 pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
 

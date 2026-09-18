@@ -1,24 +1,28 @@
 # Datalib — production runtime image.
 #
-# Ships the release tarball whole: the binaries (`datalib-dag`,
+# Ships the release tarball whole — the binaries (`datalib-dag`,
 # `datalib-step`, `datalib-http`, `datalib-migrate-config`,
 # `datalib-applet`, `datalib-doltlite`, `latchkey-curl-router`,
-# `curl-impersonate`), the bundled `runtime/` (Node plus the
-# lockfile-pinned `qmd` and `latchkey` package trees the binaries resolve
-# beside themselves) and the `latchkey` launcher — so users register
-# services and run syncs from a single container with no Node, npm or
-# npx in the image — and a pre-baked demo data library to try first.
+# `curl-impersonate`) and the `latchkey` launcher — plus the
+# release's runtime asset unpacked beside them as `runtime/` (Node plus
+# the lockfile-pinned `qmd` and `latchkey` package trees the binaries
+# resolve beside themselves), so users register services and run syncs
+# from a single container with no Node, npm or npx in the image and
+# nothing fetched at run time — and a pre-baked demo data library to
+# try first.
 #
-# Not built from source: this image consumes the per-triple Linux tarballs
+# Not built from source: this image consumes the per-triple Linux assets
 # already produced by `.github/workflows/release.yml`. The build context
-# must contain:
+# must contain, per arch:
 #
 #     dist/amd64/datalib-x86_64-unknown-linux-gnu.tar.gz
+#     dist/amd64/runtime-x86_64-unknown-linux-gnu.tar.gz         (+ .sha256)
 #     dist/arm64/datalib-aarch64-unknown-linux-gnu.tar.gz
+#     dist/arm64/runtime-aarch64-unknown-linux-gnu.tar.gz        (+ .sha256)
 #
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
-# docker-publish job in `release.yml` stages the tarballs from the
+# docker-publish job in `release.yml` stages the assets from the
 # just-created GitHub Release and the demo from the checkout.
 #
 # Bind mounts at runtime (see docs/user/docker.md):
@@ -42,7 +46,7 @@
 # share their Node major and latchkey pin through
 # `//tools:version_pins_test`, and nothing else.
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -83,19 +87,23 @@ RUN mkdir -p /root/.latchkey /data
 # that it matches the tree they are editing rather than the published
 # tag they inherited.
 
-# Stage the matching per-arch tarball. `TARGETARCH` is supplied
-# automatically by `docker buildx` (amd64 | arm64). The build context must
-# contain `dist/<arch>/datalib-*-linux-gnu.tar.gz` — see the top-of-
-# file comment for how it gets staged.
+# Stage the matching per-arch tarball and runtime. `TARGETARCH` is
+# supplied automatically by `docker buildx` (amd64 | arm64). The build
+# context must contain `dist/<arch>/datalib-*-linux-gnu.tar.gz` and
+# `dist/<arch>/runtime-*-linux-gnu.tar.gz` with its `.sha256` — see the
+# top-of-file comment for how they get staged.
 #
 # We use a glob in COPY so the caller doesn't have to thread the version
 # string through as another ARG; there is exactly one tarball per arch
 # dir, named with the workspace version that release.yml just built.
 #
-# The tarball's top dir becomes /opt/datalib as-is (binaries, `runtime/`,
-# the `latchkey` launcher), with symlinks onto PATH: the binaries look
-# for `runtime/` beside their canonical path, and the launcher resolves
-# its own link before looking. Nothing here is npm-installed.
+# The tarball's top dir becomes /opt/datalib as-is (binaries, the
+# `latchkey` launcher), with symlinks onto PATH, and the runtime asset
+# — checked against the sha256 the release published beside it —
+# unpacks into /opt/datalib/runtime/: the binaries look for `runtime/`
+# beside their canonical path before consulting `runtime.manifest`,
+# and the launcher resolves its own link before looking. Nothing here
+# is npm-installed, and nothing is fetched when the container runs.
 ARG TARGETARCH
 COPY dist/${TARGETARCH}/ /tmp/release/
 RUN set -eux; \
@@ -103,6 +111,9 @@ RUN set -eux; \
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' -print -quit)"; \
     test -n "$staged"; \
     mv "$staged" /opt/datalib; \
+    (cd /tmp/release && sha256sum -c runtime-*-linux-gnu.tar.gz.sha256); \
+    mkdir /opt/datalib/runtime; \
+    tar -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
     rm -rf /tmp/release; \
     for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
                datalib-http latchkey-curl-router curl-impersonate \

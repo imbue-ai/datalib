@@ -17,8 +17,8 @@ import type { SearchRow } from "@/api";
 
 /// A column a preset may name. Typed against the row the grid actually
 /// paints, so a preset naming a field that does not exist is a compile
-/// error rather than a column that silently never appears — AG Grid
-/// ignores an unknown `colId` without complaint.
+/// error rather than a column that silently never appears — the grid
+/// ignores an unknown column id without complaint.
 export type BrowseColumn = keyof SearchRow;
 
 /// Columns every source's browse opens with, in this order. `kind` leads
@@ -87,9 +87,28 @@ export function browsePresetTypes(): string[] {
 /// grid's own defaults, because there the source columns are the point.
 export function browseColumns(type: string | null): BrowseColumn[] | null {
   if (!type) return null;
+  if (type === DIFF_TYPE) return DIFF_COLUMNS;
   const extra = EXTRA[type] ?? ["channel", "author", "account", "project"];
   return [...ALWAYS.slice(0, -1), ...extra, "snippet"];
 }
+
+/// A diff group (`docs/dev/plans/diff_renderer.md`) is not a source
+/// type the catalog offers, so it is not in `EXTRA`: its rows are the
+/// underlying source's, and what a browse of one is for is *what
+/// changed* — every row that did, not one per document, with the two
+/// diff columns first.
+const DIFF_TYPE = "diff";
+const DIFF_COLUMNS: BrowseColumn[] = [
+  "diff_status",
+  "diff_changed_columns",
+  "kind",
+  "conversation_name",
+  "channel",
+  "author",
+  "created_at",
+  "modified_at",
+  "snippet",
+];
 
 /// The search a Browse of this group opens: the documents filed under
 /// it — one row per thread, conversation, PR or page, not the messages
@@ -99,6 +118,10 @@ export function browseColumns(type: string | null): BrowseColumn[] | null {
 /// data, not datalib's report on it: the storage rows sit in the same
 /// directory but are filed under `datalib`, and the filter leaves them
 /// out.
-export function browseQuery(groupId: string): string {
+export function browseQuery(groupId: string, type: string | null = null): string {
+  // A diff's browse is the rows that moved: `-change:unchanged` drops
+  // the rows a changed document carries for context, and every diff
+  // row is worth a line of its own, so no `is:document`.
+  if (type === DIFF_TYPE) return `source_id:${groupId} -change:unchanged`;
   return `source_id:${groupId} is:document`;
 }

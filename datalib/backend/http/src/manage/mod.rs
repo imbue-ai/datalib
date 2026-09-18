@@ -10,6 +10,7 @@
 
 mod activity;
 mod group;
+mod problems;
 mod status;
 
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ use crate::{usage, AppState, DagRecord, DagRunInfo};
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{EffectiveRun, StatusArgs, StatusFloor, StatusView, StepEdges, StepRecord};
 
+pub use problems::{counts_by_step, ProblemCounts};
 pub use status::dropped_detail;
 
 /// The floor that keeps a row's status from going backwards within one
@@ -97,6 +99,8 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("What it is doing now, or did last. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
+        ColumnSpec::new("problems", "Problems", ColumnType::Chips)
+            .describe("Errors (records dropped) and warnings (records kept with something lost) the step's store holds, as of its last run. A green zero means it counted and found none; blank means it has never counted. Double-click for the list."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
@@ -150,6 +154,9 @@ pub struct ManageRow {
     pub status_from: Option<String>,
     /// What the step has reported in the run in flight.
     pub activity: Vec<Chip>,
+    /// The errors and warnings its store holds — see `manage::problems`.
+    /// A group shows its render step's, the union for the source.
+    pub problems: Vec<Chip>,
     pub last_synced: Option<String>,
     /// Bytes on disk, with the recent measurements behind the number.
     pub disk: Timeseries,
@@ -766,6 +773,10 @@ impl RowCtx<'_> {
             Entry::Step(_) => self.progress(&id).map(activity::chips).unwrap_or_default(),
             Entry::Applet(_) => vec![],
         };
+        let problems = match e {
+            Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
+            Entry::Applet(_) => vec![],
+        };
         // A source is browsed as one thing, from its group's row. A
         // step's rows are not a separate view of the data; they are the
         // same rows.
@@ -802,6 +813,7 @@ impl RowCtx<'_> {
             status,
             status_from: None,
             activity,
+            problems,
             disk,
             actions: vec![browse, sync],
             seeds,
@@ -917,7 +929,14 @@ impl RowCtx<'_> {
             }),
         };
 
-        let seeds = group::group_seeds(&ordered, |c| row_of(c.id()).dropped.is_some());
+        let is_dropped = |c: &Entry<'_>| row_of(c.id()).dropped.is_some();
+        // A diff group has no source step of its own: a sync of it is a
+        // sync of what its step reads, which is its source's ingest.
+        let seeds = if g.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
+            group::diff_group_seeds(&ordered, is_dropped)
+        } else {
+            group::group_seeds(&ordered, is_dropped)
+        };
         let run_blocked = dropped_why.clone().or_else(|| {
             if !seeds.is_empty() {
                 None
@@ -964,6 +983,16 @@ impl RowCtx<'_> {
             .map(|c| row_of(c.id()))
             .find(|r| r.status.key == "running")
             .map(|r| r.activity.clone())
+            .unwrap_or_default();
+        // The last step in the pipeline that has counted: render's store
+        // is the union of everything upstream of it for this source, and
+        // the index's is the union of every source.
+        let problems = ordered
+            .iter()
+            .rev()
+            .map(|c| row_of(c.id()))
+            .find(|r| !r.problems.is_empty())
+            .map(|r| r.problems.clone())
             .unwrap_or_default();
         let last_synced = if dropped.is_some() {
             None
@@ -1014,6 +1043,7 @@ impl RowCtx<'_> {
             status,
             status_from,
             activity,
+            problems,
             last_synced,
             disk,
             actions: vec![browse, sync],

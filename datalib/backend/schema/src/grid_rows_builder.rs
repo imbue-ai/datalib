@@ -7,17 +7,8 @@
 
 use datalib_time::validate_iso_offset;
 
+use crate::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use crate::providers::Provider;
-use crate::render_problems::{
-    sample_of, Outcome, Problem, Reason, RenderProblemRow, ScopeKind, Stage,
-};
-
-fn blake3_hex(s: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    format!("{:016x}{:016x}", h.finish(), s.len())
-}
 
 /// Why a [`GridRowBuilder::build`] call was rejected.
 #[derive(Debug)]
@@ -221,11 +212,17 @@ impl GridRowBuilder {
         source_id: &str,
         scope_key: &str,
         render_version: u32,
-        problems: &mut Vec<RenderProblemRow>,
+        problems: &mut Vec<ProblemRow>,
     ) -> Option<GridRow> {
         // Keep the identity before `build` consumes the builder, so a
-        // rejected row can still be named.
+        // rejected row can still be named. A row with no uuid has no
+        // identity to key its problem on either; the id is then minted
+        // from the scope and the field alone, which is stable across
+        // runs, so the same bad record does not accumulate a new row
+        // every run.
         let uuid = self.uuid.clone();
+        let item_uuid = (!uuid.trim().is_empty()).then_some(uuid.as_str());
+        let scope = Scope::Markdown(scope_key);
         for (field, slot) in [
             ("created_at", &mut self.created_at),
             ("modified_at", &mut self.modified_at),
@@ -234,19 +231,14 @@ impl GridRowBuilder {
             if validate_iso_offset(&ts).is_ok() {
                 *slot = Some(ts);
             } else {
-                problems.push(problem_row(
-                    problem_key(&uuid, source_id, scope_key, &ts),
-                    scope_key,
+                problems.push(ProblemRow::new(
                     source_id,
-                    render_version,
+                    Stage::GridRow,
+                    scope,
+                    item_uuid,
                     Outcome::Nulled,
-                    Problem {
-                        field: Some(field.to_string()),
-                        path: None,
-                        reason: Reason::CoercionFailed,
-                        rule: None,
-                        sample: sample_of(&ts),
-                    },
+                    Problem::field(field, Reason::CoercionFailed, &ts),
+                    Some(render_version),
                 ));
             }
         }
@@ -258,19 +250,14 @@ impl GridRowBuilder {
                     // Cleared above.
                     GridRowError::InvalidStamp { field, .. } => *field,
                 };
-                problems.push(problem_row(
-                    problem_key(&uuid, source_id, scope_key, &e.to_string()),
-                    scope_key,
+                problems.push(ProblemRow::new(
                     source_id,
-                    render_version,
+                    Stage::GridRow,
+                    scope,
+                    item_uuid,
                     Outcome::Dropped,
-                    Problem {
-                        field: Some(field.to_string()),
-                        path: None,
-                        reason: Reason::NoIdentity,
-                        rule: None,
-                        sample: sample_of(""),
-                    },
+                    Problem::field(field, Reason::NoIdentity, ""),
+                    Some(render_version),
                 ));
                 // Deliberately no `warn!` here. The render path's
                 // diagnostics buffer is not installed (see the audit's
@@ -336,48 +323,10 @@ impl GridRowBuilder {
             markdown_uuid: self.markdown_uuid,
             byte_size: self.byte_size,
             item_count: self.item_count,
+            // A renderer never sets these: a diff marks a finished row.
+            diff_status: None,
+            diff_changed_columns: None,
         })
-    }
-}
-
-/// A row with no uuid has no identity to key its problem on either;
-/// it gets a surrogate derived from what went wrong, so the same bad
-/// record does not accumulate a new problem row every run.
-fn problem_key(uuid: &str, source_id: &str, scope_key: &str, detail: &str) -> String {
-    if uuid.trim().is_empty() {
-        format!(
-            "noid:{}",
-            &blake3_hex(&format!("{source_id}\x1f{scope_key}\x1f{detail}"))[..16]
-        )
-    } else {
-        uuid.to_string()
-    }
-}
-
-fn problem_row(
-    key: String,
-    scope_key: &str,
-    source_id: &str,
-    render_version: u32,
-    outcome: Outcome,
-    problem: Problem,
-) -> RenderProblemRow {
-    RenderProblemRow {
-        uuid: key,
-        scope_key: scope_key.to_string(),
-        scope_kind: ScopeKind::Markdown.as_str().to_string(),
-        source_id: source_id.to_string(),
-        stage: Stage::GridRow.as_str().to_string(),
-        outcome: outcome.as_str().to_string(),
-        problems: serde_json::to_string(&vec![problem]).unwrap_or_else(|_| "[]".into()),
-        // Left for the store to stamp; it is the only layer that can
-        // see whether this uuid already had a row, and so the only one
-        // that can tell "first seen" from "seen again". See the field
-        // docs.
-        first_seen_at_utc: String::new(),
-        last_seen_at_utc: String::new(),
-        tz_offset: None,
-        render_version: render_version as i64,
     }
 }
 
@@ -453,17 +402,37 @@ mod builder_tests {
             .expect("the row survives");
         assert!(row.created_at.is_none());
         assert_eq!(problems.len(), 1);
-        assert_eq!(problems[0].uuid, "u-1");
-        assert_eq!(problems[0].outcome, Outcome::Nulled.as_str());
-        assert!(
-            problems[0].problems.contains("created_at"),
-            "{}",
-            problems[0].problems
-        );
-        assert!(
-            problems[0].problems.contains("16 Jun 2026"),
-            "{}",
-            problems[0].problems
+        assert_eq!(problems[0].item_uuid.as_deref(), Some("u-1"));
+        assert_eq!(problems[0].scope_key, "doc-1");
+        assert_eq!(problems[0].outcome, Outcome::Nulled);
+        assert_eq!(problems[0].field.as_deref(), Some("created_at"));
+        assert_eq!(problems[0].sample, "16 Jun 2026");
+    }
+
+    /// Two bad stamps on one record are two rows with two ids — the
+    /// store's primary key is the problem, not the record. Under the
+    /// old item-keyed table this was a constraint failure on the
+    /// second insert.
+    #[test]
+    fn two_bad_stamps_are_two_rows() {
+        let mut problems = Vec::new();
+        let row = ok_builder()
+            .created_at(Some("16 Jun 2026".to_string()))
+            .modified_at(Some("yesterday".to_string()))
+            .build_or_record("src", "doc-1", 3, &mut problems)
+            .expect("the row survives");
+        assert!(row.created_at.is_none() && row.modified_at.is_none());
+        assert_eq!(problems.len(), 2);
+        assert_ne!(problems[0].problem_uuid, problems[1].problem_uuid);
+        let mut again = Vec::new();
+        ok_builder()
+            .created_at(Some("16 Jun 2026".to_string()))
+            .modified_at(Some("yesterday".to_string()))
+            .build_or_record("src", "doc-1", 3, &mut again);
+        assert_eq!(
+            problems.iter().map(|p| &p.problem_uuid).collect::<Vec<_>>(),
+            again.iter().map(|p| &p.problem_uuid).collect::<Vec<_>>(),
+            "the same record on the next run mints the same ids"
         );
     }
 
@@ -480,11 +449,7 @@ mod builder_tests {
         assert_eq!(row.created_at.as_deref(), Some("2026-06-16T00:00:00+00:00"));
         assert!(row.modified_at.is_none());
         assert_eq!(problems.len(), 1);
-        assert!(
-            problems[0].problems.contains("modified_at"),
-            "{}",
-            problems[0].problems
-        );
+        assert_eq!(problems[0].field.as_deref(), Some("modified_at"));
         let err = ok_builder()
             .modified_at(Some("yesterday".to_string()))
             .build()
@@ -515,11 +480,9 @@ mod builder_tests {
             .build_or_record("src", "doc-1", 3, &mut problems);
         assert!(row.is_none());
         assert_eq!(problems.len(), 1);
-        assert!(
-            problems[0].uuid.starts_with("noid:"),
-            "{}",
-            problems[0].uuid
-        );
-        assert_eq!(problems[0].outcome, Outcome::Dropped.as_str());
+        assert!(problems[0].item_uuid.is_none());
+        assert_eq!(problems[0].outcome, Outcome::Dropped);
+        assert_eq!(problems[0].reason, Reason::NoIdentity);
+        assert_eq!(problems[0].field.as_deref(), Some("uuid"));
     }
 }

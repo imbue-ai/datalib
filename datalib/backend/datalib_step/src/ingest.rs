@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::{CheckpointSink, RunCtx};
+use datalib_schema::problems::{Severity, METRIC};
 
 use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
@@ -93,6 +94,29 @@ pub async fn run(
         ),
     )
     .await?;
+
+    // What the download could not fetch, counted the way every render
+    // step counts its own: the Manage row's errors and warnings. Whole
+    // store, zero included; never a reason to fail the step.
+    match datalib_etl::doltlite_raw::problem_counts_at_path(&datalib_etl::raw_layout::entities_db(
+        &planned.raw_path,
+    ))
+    .await
+    {
+        Ok(counts) => {
+            for severity in [Severity::Error, Severity::Warning] {
+                progress.metric(
+                    METRIC,
+                    &[severity.metric_label()],
+                    counts.get(&severity).copied().unwrap_or(0),
+                );
+            }
+        }
+        Err(e) => tracing::warn!(
+            error = %format!("{e:#}"),
+            "download: could not count the raw store's problems; the Manage row shows none"
+        ),
+    }
 
     // Never fail the step here: the download itself has completed and
     // committed. A version we cannot read is a reason to fall back to

@@ -1,7 +1,8 @@
 //! The Garmin SSO login the Connect phone app performs, ported from
-//! garth: email + password (+ an emailed MFA code) → a service ticket →
-//! a year-long OAuth1 token → the first bearer. Interactive by design;
-//! nothing in the pipeline calls it.
+//! garth (https://github.com/matin/garth, MIT, Copyright (c) 2023
+//! Matin Tamizi): email + password (+ an emailed MFA code) → a service
+//! ticket → a year-long OAuth1 token → the first bearer. Interactive by
+//! design; nothing in the pipeline calls it.
 
 use std::io::{BufRead, Write};
 use std::path::Path;

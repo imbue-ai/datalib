@@ -155,6 +155,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         markdown_uuid: Some(doc_uuid.clone()),
         byte_size: None,
         item_count: Some(pages.len() as i64),
+        diff_status: None,
+        diff_changed_columns: None,
     });
 
     for (number, text) in pages {
@@ -195,6 +197,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             markdown_uuid: Some(doc_uuid.clone()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         });
     }
     rows

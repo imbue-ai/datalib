@@ -1,12 +1,17 @@
 # `grid_rows` — the union table behind the grid
 
-The AG Grid in `datalib/ui` shows one row per "displayable thing" in
+The grid in `datalib/ui` shows one row per "displayable thing" in
 the mirror: chat conversations, individual messages, content blocks
 (tool_use / tool_result / thinking), Slack threads, Slack messages.
 Rather than have the Rust backend dispatch per-provider — five queries
 unioned in code, with five distinct row builders — every ingest writes a
 denormalized projection into a single Dolt table, **`grid_rows`**, and
 the backend reads it with one query.
+
+The index holds one more table the grid does not read: `problems`,
+every source's render-store `problems` copied in whole by `grid_index`
+and served by the applet at `/problems` — see
+[`plans/problem_visibility.md`](plans/problem_visibility.md).
 
 ## Why a union table
 
@@ -81,8 +86,9 @@ translates each row into a `SearchRow` for the HTTP API.
    `datalib/ui/src/api.ts` and declare it in `columns()` in
    `datalib/backend/applets/src/unified_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
-   draws them by type (`cards/typedColumns.ts`); a width or a hover the
-   type cannot know goes in `GridCard`'s `columnOverrides`.
+   draws them by type (`cards/typedColumns.ts`, over the renderers in
+   `cards/cellRenderers.ts`); a width or a hover the type cannot know
+   goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
@@ -387,6 +393,17 @@ a kind here means adding a row to this table.
 job to say: a Table counts rows, a Source Size counts files, a PDF
 document counts pages, a conversation counts messages.
 
+### `diff_status`, `diff_changed_columns`
+
+**NULL on every row a real source renders.** Set only by a diff group
+(`docs/dev/plans/diff_renderer.md`), whose rows are two renders of the
+same source subtracted: `diff_status` is `added`, `removed`, `modified`
+or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
+modified row `diff_changed_columns` names the columns that differ,
+sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
+says a row came from a diff tree; nothing else about the row changes —
+`provider` is still the source's, so its icon and CSS apply.
+
 ## Storage rows: what a source weighs
 
 Every source's render wave ends by measuring its own raw store and
@@ -427,7 +444,7 @@ measurement is one row, keyed on `(source, kind, measured path)` and
 nothing else, so a re-render overwrites it and `dolt_diff` over the
 store reads as "these numbers moved". The series behind it accumulates
 in `source_measurements`, a table in the same per-source
-`indexed_markdown.doltlite_db` that `render_problems` lives in, keyed
+`indexed_markdown.doltlite_db` that `problems` lives in, keyed
 `(subject, measured_at_utc)`.
 
 Putting the series in `grid_rows` instead was considered and rejected

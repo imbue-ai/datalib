@@ -99,8 +99,8 @@ describe("the exact stamp behind the hover", () => {
 
 // Sorting the column. The rendered text is "5 minutes ago", and sorting
 // on *that* would order the column alphabetically — "10 minutes ago"
-// before "2 hours ago" before "seconds ago". AG Grid sorts the row value
-// rather than what a renderer painted, so the text is never the key;
+// before "2 hours ago" before "seconds ago". The grid sorts the row value
+// rather than what a formatter painted, so the text is never the key;
 // what these pin is that the value comparison is on instants and not on
 // the strings the value happens to be.
 describe("ordering by when, not by how it reads", () => {
@@ -137,7 +137,7 @@ describe("ordering by when, not by how it reads", () => {
   it("sorts 'never run' as forever ago, so reversing really reverses", () => {
     // A step that has never run is older than anything that has, not a
     // special case pinned to one end of the column. That keeps this a
-    // plain total order: AG Grid negates a comparator's result for a
+    // plain total order: the grid negates a comparator's result for a
     // descending sort, and the whole column — nulls included — turns
     // over with it. It is also how one click on the header groups every
     // never-run step together.
@@ -146,7 +146,7 @@ describe("ordering by when, not by how it reads", () => {
     expect(sorted([a, null, b]), "ascending: oldest first").toEqual([null, a, b]);
 
     // Descending is exactly that reversed, which is the property worth
-    // having. Modelled the way AG Grid applies it: negate the result.
+    // having. Modelled the way the grid applies it: negate the result.
     const desc = [a, null, b].sort((x, y) => -compareStamps(x, y));
     expect(desc, "descending is the ascending order reversed").toEqual([b, a, null]);
     expect(desc).toEqual([...sorted([a, null, b])].reverse());

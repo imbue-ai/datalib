@@ -1,3 +1,4 @@
+import { type GridApi } from "./grid-helpers";
 import { test, expect } from "@playwright/test";
 
 // The grid's `Indexed` / `Embedded` columns, end to end against the
@@ -57,19 +58,19 @@ test("the columns are off by default and render check marks once shown", async (
 }) => {
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 
   // Off by default. This is the assertion that fails if someone drops
-  // `hide: true` — an easy thing to lose in a colDef edit, and one
+  // `hidden` — an easy thing to lose in a column edit, and one
   // nothing else would notice.
   await expect(
-    page.locator('.ag-header-cell[col-id="qmd_indexed"]'),
+    page.locator('.grid-box .slick-header-column[col-id="qmd_indexed"]'),
     "Indexed must be hidden until asked for",
   ).toHaveCount(0);
   await expect(
-    page.locator('.ag-header-cell[col-id="qmd_embedded"]'),
+    page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]'),
   ).toHaveCount(0);
 
   // …but the summary line is on screen regardless, which is how a user
@@ -78,28 +79,19 @@ test("the columns are off by default and render check marks once shown", async (
     "documents searchable",
   );
 
-  // Turn them on the way the Columns tool panel does.
-  await page.evaluate(() => {
-    const w = window as unknown as {
-      __fwGridApi?: {
-        applyColumnState: (p: {
-          state: { colId: string; hide: boolean }[];
-        }) => void;
-      };
-    };
-    w.__fwGridApi!.applyColumnState({
-      state: [
-        { colId: "qmd_indexed", hide: false },
-        { colId: "qmd_embedded", hide: false },
-      ],
-    });
-  });
+  // Turn them on the way the column picker does.
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns([
+      "qmd_indexed",
+      "qmd_embedded",
+    ]),
+  );
 
   await expect(
-    page.locator('.ag-header-cell[col-id="qmd_indexed"]'),
+    page.locator('.grid-box .slick-header-column[col-id="qmd_indexed"]'),
   ).toBeVisible();
   await expect(
-    page.locator('.ag-header-cell[col-id="qmd_embedded"]'),
+    page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]'),
   ).toBeVisible();
 
   // Showing a column is what triggers the per-document request, so the
@@ -108,13 +100,13 @@ test("the columns are off by default and render check marks once shown", async (
   // which also pins that un-hiding actually fetches, instead of leaving
   // the columns permanently blank.
   const firstIndexed = page
-    .locator('.ag-grid-scrolling-rows [role="row"] [col-id="qmd_indexed"]')
+    .locator('.grid-box .slick-row [col-id="qmd_indexed"]')
     .first();
   await expect(firstIndexed).toHaveText(CHECK, { timeout: 15_000 });
 
   for (const colId of ["qmd_indexed", "qmd_embedded"]) {
     const cells = page.locator(
-      `.ag-grid-scrolling-rows [role="row"] [col-id="${colId}"]`,
+      `.grid-box .slick-row [col-id="${colId}"]`,
     );
     const texts = await cells.allInnerTexts();
     expect(texts.length, `${colId} cells rendered`).toBeGreaterThan(0);

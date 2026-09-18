@@ -349,7 +349,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
             }
-            download_problems::report(&summary.problems);
+            download_problems::report(db.pool(), &summary.problems).await;
             return Ok::<(), anyhow::Error>(());
         }
 

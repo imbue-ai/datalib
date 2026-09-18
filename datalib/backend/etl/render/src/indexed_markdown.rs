@@ -25,9 +25,9 @@ use datalib_schema::edges::DDL as EDGES_DDL;
 use datalib_schema::grid_rows::DDL as GRID_ROWS_DDL;
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
 use datalib_schema::measurements::{SourceMeasurementRow, DDL as MEASUREMENTS_DDL};
+use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, DDL as PROBLEMS_DDL};
 use datalib_schema::render_cursor::{RenderCursorRow, DDL as RENDER_CURSOR_DDL};
 use datalib_schema::render_inputs::{DDL as RENDER_INPUTS_DDL, INDEX_DDL as RENDER_INPUTS_INDEX};
-use datalib_schema::render_problems::{RenderProblemRow, ScopeKind, DDL as RENDER_PROBLEMS_DDL};
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
@@ -48,7 +48,7 @@ fn store_ddl() -> Vec<&'static str> {
         .iter()
         .chain(MARKDOWNS_DDL.iter())
         .chain(EDGES_DDL.iter())
-        .chain(RENDER_PROBLEMS_DDL.iter())
+        .chain(PROBLEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
@@ -337,7 +337,7 @@ impl IndexedMarkdownStore {
                 crate::grid_index::delete_document_rows(conn, markdown_uuid)
                     .await
                     .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-                sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+                sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(markdown_uuid)
                     .execute(&mut **conn)
@@ -595,11 +595,7 @@ fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
 }
 
 impl IndexedMarkdownStore {
-    async fn sweep_problems(
-        &self,
-        markdown_uuid: &str,
-        problems: &[RenderProblemRow],
-    ) -> Result<()> {
+    async fn sweep_problems(&self, markdown_uuid: &str, problems: &[ProblemRow]) -> Result<()> {
         let mut guard = self.write_lock.acquire().await?;
         let conn = guard.conn();
         // Read the prior `first_seen_at_utc` for every uuid about to be
@@ -609,7 +605,7 @@ impl IndexedMarkdownStore {
         // `first_seen_at_utc` a synonym for `last_seen_at_utc`, and "this has
         // been broken since Tuesday" would be unanswerable.
         let seen: HashMap<String, String> = sqlx::query(
-            "SELECT uuid, first_seen_at_utc FROM render_problems \
+            "SELECT problem_uuid, first_seen_at_utc FROM problems \
              WHERE scope_kind = ? AND scope_key = ?",
         )
         .bind(ScopeKind::Markdown.as_str())
@@ -620,7 +616,7 @@ impl IndexedMarkdownStore {
         .into_iter()
         .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
         .collect::<Result<_>>()?;
-        sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
+        sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
             .bind(ScopeKind::Markdown.as_str())
             .bind(markdown_uuid)
             .execute(&mut **conn)
@@ -636,14 +632,14 @@ impl IndexedMarkdownStore {
     async fn insert_problems(
         &self,
         conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-        problems: &[RenderProblemRow],
+        problems: &[ProblemRow],
         seen: &HashMap<String, String>,
     ) -> Result<()> {
         let now = datalib_time::split_stamp(&self.now);
         for p in problems {
-            let stamped = RenderProblemRow {
+            let stamped = ProblemRow {
                 first_seen_at_utc: seen
-                    .get(&p.uuid)
+                    .get(&p.problem_uuid)
                     .cloned()
                     .unwrap_or_else(|| now.utc.clone()),
                 last_seen_at_utc: now.utc.clone(),
@@ -652,14 +648,14 @@ impl IndexedMarkdownStore {
             };
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
-            let sql = datalib_etl::bulk::insert_sql::<RenderProblemRow>();
-            // Audited: `sql` is built from `RenderProblemRow`'s
+            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            // Audited: `sql` is built from `ProblemRow`'s
             // associated consts, never from row data; all values bound.
             stamped
                 .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
                 .execute(&mut **conn)
                 .await
-                .with_context(|| format!("insert render_problem {}", p.uuid))?;
+                .with_context(|| format!("insert problem {}", p.problem_uuid))?;
         }
         Ok(())
     }
@@ -710,36 +706,105 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Replace every row of one stage with `rows`, stamps carried as
+    /// they are. How the fetch stage reaches this store: the render
+    /// step reads the raw store's `problems` at the commit it rendered
+    /// from — the complete truth about what the download could not do
+    /// — and hands them here whole, so there is nothing to sweep.
+    pub fn replace_stage_problems(&self, stage: Stage, rows: &[ProblemRow]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM problems WHERE stage = ?")
+                .bind(stage.as_str())
+                .execute(&mut **conn)
+                .await
+                .with_context(|| format!("clear {} problems", stage.as_str()))?;
+            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            for row in rows {
+                // Audited: `sql` is built from `ProblemRow`'s associated
+                // consts, never from row data; all values bound.
+                row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("insert problem {}", row.problem_uuid))?;
+            }
+            Ok(())
+        })
+    }
+
+    /// A document's problems without the document: what a run records
+    /// for one it tried to produce and could not. Same sweep as
+    /// [`put_document`](Self::put_document)'s, so producing it next
+    /// time clears these.
+    pub fn put_document_problems(&self, markdown_uuid: &str, rows: &[ProblemRow]) -> Result<()> {
+        blocking(self.sweep_problems(markdown_uuid, rows))
+    }
+
     /// Problems not attached to any document — a payload that would not
-    /// deserialize has no `markdown_uuid` to hang off. Swept by the
-    /// raw-store entity id instead, so they clear when that entity is
-    /// next parsed successfully.
+    /// deserialize has no `markdown_uuid` to hang off. Keyed by the
+    /// raw-store entity id, `<table>:<id>`. `whole_tables` names the
+    /// tables the caller read every row of: their entity-scoped
+    /// problems are replaced by `problems`, so an entity that reads
+    /// cleanly now is cleared. An entity in `problems` from any other
+    /// table is replaced by name and its neighbours are left alone.
     pub fn put_entity_problems(
         &self,
-        entity_id: &str,
-        problems: &[RenderProblemRow],
+        whole_tables: &[&str],
+        problems: &[ProblemRow],
     ) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            let seen: HashMap<String, String> = sqlx::query(
-                "SELECT uuid, first_seen_at_utc FROM render_problems \
-                 WHERE scope_kind = ? AND scope_key = ?",
-            )
-            .bind(ScopeKind::Entity.as_str())
-            .bind(entity_id)
-            .fetch_all(&mut **conn)
-            .await
-            .context("read prior first_seen_at_utc")?
-            .into_iter()
-            .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-            .collect::<Result<_>>()?;
-            sqlx::query("DELETE FROM render_problems WHERE scope_kind = ? AND scope_key = ?")
-                .bind(ScopeKind::Entity.as_str())
-                .bind(entity_id)
-                .execute(&mut **conn)
-                .await
-                .context("clear prior problems for this entity")?;
+            let mut seen: HashMap<String, String> = HashMap::new();
+            // `INSTR(x, ?) = 1` rather than `LIKE 'table:%'`: a table
+            // name may hold `_`, which LIKE reads as a wildcard.
+            let prefixes: Vec<String> = whole_tables.iter().map(|t| format!("{t}:")).collect();
+            let mut entities: Vec<&str> = problems.iter().map(|p| p.scope_key.as_str()).collect();
+            entities.sort_unstable();
+            entities.dedup();
+            let clears: Vec<(&'static str, &str)> = prefixes
+                .iter()
+                .map(|p| {
+                    (
+                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                     WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+                        p.as_str(),
+                    )
+                })
+                .chain(entities.iter().map(|e| {
+                    (
+                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                     WHERE scope_kind = ? AND scope_key = ?",
+                        *e,
+                    )
+                }))
+                .collect();
+            for (select, key) in clears {
+                let delete = if select.contains("INSTR") {
+                    "DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
+                } else {
+                    "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
+                };
+                for (uuid, first) in sqlx::query(select)
+                    .bind(ScopeKind::Entity.as_str())
+                    .bind(key)
+                    .fetch_all(&mut **conn)
+                    .await
+                    .context("read prior first_seen_at_utc")?
+                    .into_iter()
+                    .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
+                    .collect::<Result<Vec<_>>>()?
+                {
+                    seen.insert(uuid, first);
+                }
+                sqlx::query(delete)
+                    .bind(ScopeKind::Entity.as_str())
+                    .bind(key)
+                    .execute(&mut **conn)
+                    .await
+                    .context("clear prior entity problems")?;
+            }
             self.insert_problems(conn, problems, &seen).await
         })
     }
@@ -873,6 +938,7 @@ impl IndexedMarkdownStore {
                     },
                     render_version,
                     rows,
+                    sections: Vec::new(),
                     edges,
                     problems: Vec::new(),
                 });
@@ -881,16 +947,48 @@ impl IndexedMarkdownStore {
         })
     }
 
-    pub fn problem_counts(&self) -> Result<HashMap<String, i64>> {
+    /// Every problem the store holds at the reader's pin — the whole
+    /// table, because a consumer copies it wholesale: the pinned store
+    /// is the complete truth about this source's problems at that
+    /// commit, so the copy is the sweep. A store written before the
+    /// table existed reads as empty, with a warning that says so.
+    pub fn problems_at_pin(&self) -> Result<Vec<ProblemRow>> {
+        assert!(self.pin.is_some(), "problems_at_pin is a reader's call");
         blocking(async {
-            let rows =
-                sqlx::query("SELECT outcome, COUNT(*) FROM render_problems GROUP BY outcome")
-                    .fetch_all(&self.pool)
-                    .await
-                    .context("count problems")?;
+            let rows = match sqlx::query("SELECT * FROM pinned_problems ORDER BY problem_uuid")
+                .fetch_all(&self.pool)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(e) if datalib_etl::pin::is_missing_table(&e, "pinned_problems") => {
+                    tracing::warn!(
+                        store = %self.path.display(),
+                        "this render store predates the problems table; reading it as clean"
+                    );
+                    return Ok(Vec::new());
+                }
+                Err(e) => return Err(e).context("read problems"),
+            };
+            rows.iter().map(ProblemRow::from_row).collect()
+        })
+    }
+
+    /// Whole-store counts by severity: what the step reports at its
+    /// end. A severity this build cannot name is an error — the store
+    /// was written by a newer build and a silent zero would read as
+    /// clean.
+    pub fn problem_counts(&self) -> Result<HashMap<Severity, i64>> {
+        blocking(async {
+            let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
+                .fetch_all(&self.pool)
+                .await
+                .context("count problems")?;
             let mut out = HashMap::new();
             for r in rows {
-                out.insert(r.try_get::<String, _>(0)?, r.try_get::<i64, _>(1)?);
+                let word: String = r.try_get(0)?;
+                let severity = Severity::parse(&word)
+                    .with_context(|| format!("problems.severity: unknown spelling {word:?}"))?;
+                out.insert(severity, r.try_get::<i64, _>(1)?);
             }
             Ok(out)
         })
@@ -915,9 +1013,8 @@ impl IndexedMarkdownStore {
 mod tests {
     use super::*;
     use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     use datalib_schema::providers::Provider;
-    use datalib_schema::render_problems::Stage;
-    use datalib_schema::render_problems::{Outcome, Problem, Reason};
 
     fn store(dir: &Path) -> IndexedMarkdownStore {
         IndexedMarkdownStore::open(dir).expect("open store")
@@ -973,7 +1070,7 @@ mod tests {
         dir: &Path,
         markdown_uuid: &str,
         _label: &str,
-        problems: Vec<RenderProblemRow>,
+        problems: Vec<ProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             markdown_uuid: markdown_uuid.to_string(),
@@ -983,6 +1080,7 @@ mod tests {
             md_path: dir.join(format!("{markdown_uuid}.md")),
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems,
         }
@@ -1220,25 +1318,16 @@ mod tests {
         assert_eq!(bytes, Some(140), "the later write wins");
     }
 
-    fn problem(uuid: &str, scope: &str) -> RenderProblemRow {
-        RenderProblemRow {
-            uuid: uuid.into(),
-            scope_key: scope.into(),
-            scope_kind: ScopeKind::Markdown.as_str().into(),
-            source_id: "src".into(),
-            stage: Stage::GridRow.as_str().into(),
-            outcome: Outcome::Nulled.as_str().into(),
-            problems: serde_json::to_string(&vec![Problem::field(
-                "created_at",
-                Reason::CoercionFailed,
-                "not-a-date",
-            )])
-            .unwrap(),
-            first_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
-            last_seen_at_utc: "2026-01-01T00:00:00+00:00".into(),
-            tz_offset: None,
-            render_version: 7,
-        }
+    fn problem(uuid: &str, scope: &str) -> ProblemRow {
+        ProblemRow::new(
+            "src",
+            Stage::GridRow,
+            Scope::Markdown(scope),
+            Some(uuid),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "not-a-date"),
+            Some(7),
+        )
     }
 
     /// The write path has no skip of its own: the same document written
@@ -1392,14 +1481,17 @@ mod tests {
             &doc_with(root, "md-2", "fp-1", vec![problem("row-b", "md-2")]),
         )
         .unwrap();
-        assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(2));
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            Some(2)
+        );
 
         // A second run that only reprocesses md-2, and finds it clean.
         s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
 
         let counts = s.problem_counts().unwrap();
         assert_eq!(
-            counts.get("nulled").copied(),
+            counts.get(&Severity::Warning).copied(),
             Some(1),
             "md-2's problem cleared; md-1's must not have — it was never looked at"
         );
@@ -1444,7 +1536,7 @@ mod tests {
         assert!(!first.md_path.exists(), "the old file is gone");
         assert!(!empty.md_path.exists(), "and so is the one just written");
         assert_eq!(
-            s.problem_counts().unwrap().get("nulled").copied(),
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
             Some(1),
             "the record of why every row went stays"
         );
@@ -1462,13 +1554,104 @@ mod tests {
             &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
         )
         .unwrap();
-        assert_eq!(s.problem_counts().unwrap().get("nulled").copied(), Some(1));
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Warning).copied(),
+            Some(1)
+        );
 
         s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
         assert!(
             s.problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
         );
+    }
+
+    /// A document the run could not produce at all — a PDF whose
+    /// conversion failed — carries its problem on its own scope with no
+    /// document behind it, and the run that does produce it sweeps the
+    /// problem like any other. Reported twice, it is one row with its
+    /// first-seen stamp kept.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_that_failed_to_render_keeps_its_problem_until_it_renders() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let failed = ProblemRow::new(
+            "src",
+            Stage::Render,
+            Scope::Markdown("md-1"),
+            Some("md-1"),
+            Outcome::Dropped,
+            Problem::record(Reason::RenderFailed, "pdftotext: exit 1"),
+            Some(7),
+        );
+        s.put_document_problems("md-1", std::slice::from_ref(&failed))
+            .unwrap();
+        s.put_document_problems("md-1", &[failed]).unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(1),
+            "the same failure twice is one row"
+        );
+        assert!(
+            s.all_document_uuids().unwrap().is_empty(),
+            "no document behind it"
+        );
+
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        assert!(
+            s.problem_counts().unwrap().is_empty(),
+            "the run that produced the document swept its failure"
+        );
+    }
+
+    /// Entity-scoped problems clear by what the parse read: a table it
+    /// read whole is replaced by the report, a table it read in part
+    /// keeps what it had, and an entity named in the report is always
+    /// replaced by name.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn entity_problems_clear_by_what_the_parse_read() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let unreadable = |entity: &str| {
+            ProblemRow::new(
+                "src",
+                Stage::Parse,
+                Scope::Entity(entity),
+                None,
+                Outcome::Dropped,
+                Problem::record(Reason::Undeserializable, "{"),
+                Some(7),
+            )
+        };
+        s.put_entity_problems(
+            &["users", "messages"],
+            &[unreadable("users:u1"), unreadable("messages:m1")],
+        )
+        .unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(2)
+        );
+        // A narrowed run read users whole and no messages: u1 reads
+        // cleanly now and goes; m1 was not looked at and stays.
+        s.put_entity_problems(&["users"], &[]).unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(1),
+            "the table not read keeps its rows"
+        );
+        // A partial read that names m1 again replaces it by name and
+        // adds m2, without claiming anything about the rest.
+        s.put_entity_problems(&[], &[unreadable("messages:m1"), unreadable("messages:m2")])
+            .unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(2)
+        );
+        s.put_entity_problems(&["messages"], &[]).unwrap();
+        assert!(s.problem_counts().unwrap().is_empty());
     }
 
     /// A bucket that declared a whole table is stale when any row of it

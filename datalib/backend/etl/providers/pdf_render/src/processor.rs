@@ -76,6 +76,9 @@ impl RenderProcessor for PdfRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render::render_targets(&to_render, &out_dir, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
+        for (doc_uuid, error) in &s.failures {
+            ctx.report_document_failed(doc_uuid, error, self.render_version())?;
+        }
 
         // Every document this run looked at is declared with nothing —
         // one the corpus no longer reaches, because its last file was

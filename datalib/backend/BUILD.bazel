@@ -8,6 +8,9 @@ exports_files([
     # Wired into `bazelisk build --config=clippy` via .bazelrc — see
     # `--@rules_rust//rust/settings:clippy.toml=//datalib/backend:clippy.toml`.
     "clippy.toml",
+    # read by //tools:license_lists_test
+    "about.toml",
+    "deny.toml",
 ])
 
 # Enforces that every copy of the project version matches

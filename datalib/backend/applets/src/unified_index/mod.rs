@@ -16,6 +16,7 @@ use axum::{
     Router,
 };
 mod columns;
+mod problems;
 
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
@@ -83,6 +84,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             .route("/search", get(search_handler))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
+            .route("/problems", get(problems::handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))
             .route(
@@ -153,14 +155,29 @@ fn ensure_models(root: &std::path::Path) {
     // the first semantic query.
     let effective = datalib_qmd_models::effective_models_dir(&qmd_dir, &models_dir);
     std::thread::spawn(move || {
-        if let Err(e) =
-            datalib_qmd_models::ensure_models(&effective, datalib_qmd_models::PINNED_MODELS)
-        {
-            eprintln!(
+        let models = datalib_qmd_models::PINNED_MODELS;
+        match datalib_qmd_models::ensure_models(
+            &effective,
+            models,
+            datalib_qmd_models::Fetch::from_env(),
+        ) {
+            Ok(outcomes) => {
+                let missing = datalib_qmd_models::missing(models, &outcomes);
+                if !missing.is_empty() {
+                    eprintln!(
+                        "datalib-applet unified_index: not fetching {} into {} \
+                         ({} is set); whatever needs them will fail",
+                        missing.join(", "),
+                        effective.display(),
+                        datalib_qmd_models::NO_FETCH_ENV
+                    );
+                }
+            }
+            Err(e) => eprintln!(
                 "datalib-applet unified_index: could not provision qmd's models in {} ({e:#}); \
                  semantic search will fail until `datalib-step pull-models` succeeds",
                 effective.display()
-            );
+            ),
         }
     });
 }
@@ -204,6 +221,13 @@ pub struct ChatResponse {
     pub source_label: Option<String>,
     pub source_url: Option<String>,
     pub body: String,
+    /// What render could not fully do to this document, errors first.
+    /// Drawn above the body.
+    pub problems: Vec<problems::DocProblem>,
+    /// Anything the applet could not read while answering; the document
+    /// still opens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
     /// Outgoing edges from this markdown. The UI uses this to render
     /// the "outgoing destinations" list at the top of the doc preview
     /// AND to resolve `<span data-edge-id>` clicks inside the body to
@@ -566,6 +590,23 @@ async fn chat(
         .outgoing_edges(&markdown_uuid)
         .await
         .unwrap_or_default();
+    // What render could not fully do to this document, for the banner
+    // above the body. A read that fails is said, not swallowed: the
+    // document still opens, and the banner says the problems could not
+    // be read rather than showing none.
+    let (problems, errors) = match s.repo.document_problems(&markdown_uuid).await {
+        Ok(mut rows) => {
+            problems::sort_for_banner(&mut rows);
+            (
+                rows.into_iter().map(problems::DocProblem::of).collect(),
+                Vec::new(),
+            )
+        }
+        Err(e) => (
+            Vec::new(),
+            vec![format!("could not read this document's problems: {e}")],
+        ),
+    };
     Ok(Json(ChatResponse {
         markdown_uuid,
         name: meta.name,
@@ -577,6 +618,8 @@ async fn chat(
         source_url,
         body,
         outgoing_edges,
+        problems,
+        errors,
     }))
 }
 

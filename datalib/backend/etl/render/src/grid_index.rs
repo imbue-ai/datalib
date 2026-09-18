@@ -23,11 +23,14 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
+use datalib_schema::problems::{ProblemRow, DDL as PROBLEMS_DDL};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
+
+use crate::section::Section;
 
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
@@ -243,6 +246,51 @@ pub struct GridIndexSummary {
     /// Documents dropped because the source that owned them stopped holding
     /// them. Only a cursor-driven run can be non-zero here.
     pub markdowns_removed: usize,
+    /// Problem rows copied in from the render stores this run read.
+    pub problems_copied: usize,
+}
+
+/// Whole-index counts by severity, for the step's report.
+pub async fn problem_counts(
+    pool: &SqlitePool,
+) -> Result<HashMap<datalib_schema::problems::Severity, i64>> {
+    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
+        .fetch_all(pool)
+        .await
+        .context("count the index's problems")?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let word: String = r.try_get(0)?;
+        let severity = datalib_schema::problems::Severity::parse(&word)
+            .with_context(|| format!("problems.severity: unknown spelling {word:?}"))?;
+        out.insert(severity, r.try_get::<i64, _>(1)?);
+    }
+    Ok(out)
+}
+
+/// One source's `problems`, replaced whole. The stamps come through
+/// unchanged: `first_seen_at_utc` is when the problem was first seen
+/// where it happened, not when the index first copied it.
+pub(crate) async fn replace_source_problems(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    source_id: &str,
+    rows: &[ProblemRow],
+) -> Result<()> {
+    sqlx::query("DELETE FROM problems WHERE source_id = ?")
+        .bind(source_id)
+        .execute(&mut **conn)
+        .await
+        .context("clear the source's problems")?;
+    let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+    for row in rows {
+        // Audited: `sql` is built from `ProblemRow`'s associated consts,
+        // never from row data; all values bound.
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("insert problem {}", row.problem_uuid))?;
+    }
+    Ok(())
 }
 
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
@@ -254,6 +302,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         // `source_cursors` belongs in this list, not beside it: the reconcile
         // drops and rebuilds every table named here together, and a cursor
         // that survived a rebuild would tell the next run "nothing changed"
@@ -534,6 +583,12 @@ pub struct RenderedMarkdown {
     /// Empty means there is no document: the store drops it, `.md` and
     /// all, keeping only its `problems`.
     pub rows: Vec<GridRow>,
+    /// The document piece by piece, in order, each piece keyed by the
+    /// `data-section-uuid` it wraps or unkeyed when it wraps none —
+    /// concatenated they are the `.md`'s bytes. Empty from a renderer
+    /// that has not been taught sections, and when read back from the
+    /// store, which never holds the markdown.
+    pub sections: Vec<Section>,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -542,7 +597,7 @@ pub struct RenderedMarkdown {
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
     /// Empty when read back from the store, where they are already rows.
-    pub problems: Vec<datalib_schema::render_problems::RenderProblemRow>,
+    pub problems: Vec<datalib_schema::problems::ProblemRow>,
 }
 
 /// Write one rendered document into the index unconditionally. `out_dir`
@@ -626,6 +681,10 @@ pub async fn build_grid_index_for(
     // run will advance, and the ids each source dropped.
     let mut advanced: Vec<(String, String)> = Vec::new();
     let mut removed: Vec<(String, String)> = Vec::new();
+    // `source_id → its problems at the pin`, for every store read. The
+    // copy is wholesale per source: the pinned store is the complete
+    // truth about that source's problems, so there is nothing to diff.
+    let mut problems: Vec<(String, Vec<ProblemRow>)> = Vec::new();
     {
         let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
         for source in sources {
@@ -689,6 +748,12 @@ pub async fn build_grid_index_for(
             let found = store
                 .documents_matching(out_dir, scan.render.as_ref(), &pin)
                 .with_context(|| format!("read documents from {stanza}"))?;
+            problems.push((
+                stanza.clone(),
+                store
+                    .problems_at_pin()
+                    .with_context(|| format!("read problems from {stanza}"))?,
+            ));
             let present: HashSet<&str> = found.iter().map(|d| d.markdown_uuid.as_str()).collect();
             match &scan.render {
                 // An id the diff named that the store no longer has is a
@@ -747,6 +812,12 @@ pub async fn build_grid_index_for(
         let now = run_stamp(now_override);
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        for (source_id, rows) in &problems {
+            replace_source_problems(conn, source_id, rows)
+                .await
+                .with_context(|| format!("copy {source_id}'s problems into the index"))?;
+            summary.problems_copied += rows.len();
+        }
         for (source_id, store_commit) in &advanced {
             write_source_cursor(
                 conn,
@@ -885,7 +956,7 @@ pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Res
 }
 
 /// The rows a document owns: its grid rows, its outgoing edges and its
-/// `markdowns` row. Not its `render_problems`, which say why a document
+/// `markdowns` row. Not its `problems`, which say why a document
 /// is the way it is and outlive one that ends with nothing.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -1254,6 +1325,8 @@ mod insert_round_trip_tests {
             markdown_uuid: Some("md-1701".into()),
             byte_size: Some(4_096),
             item_count: Some(17),
+            diff_status: Some("modified".into()),
+            diff_changed_columns: Some("text|author".into()),
         }
     }
 
@@ -1362,6 +1435,8 @@ mod id_claim_tests {
             markdown_uuid: Some(markdown_uuid.into()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         }
     }
 
@@ -1495,6 +1570,8 @@ mod write_lock_tests {
             markdown_uuid: Some(uuid.clone()),
             byte_size: None,
             item_count: None,
+            diff_status: None,
+            diff_changed_columns: None,
         };
         RenderedMarkdown {
             markdown_uuid: uuid.clone(),
@@ -1504,6 +1581,7 @@ mod write_lock_tests {
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
             render_version: 1,
             rows: vec![row],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: Vec::new(),
         }
@@ -1985,6 +2063,7 @@ mod source_cursor_tests {
             md_path: rendered_root(root, source).join(format!("{uuid}.md")),
             render_version: 1,
             rows: vec![row],
+            sections: Vec::new(),
             edges: Vec::new(),
             problems: Vec::new(),
         }
@@ -2257,6 +2336,57 @@ mod source_cursor_tests {
             .await
             .unwrap();
         assert_eq!(left, "md-1");
+    }
+
+    /// Problems flow downstream with the data: a source's `problems`
+    /// are copied into the index whole, stamps included, and a render
+    /// that fixes the document clears them there too — even on an
+    /// incremental run that only read the changed document.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sources_problems_are_copied_into_the_index_and_cleared_when_fixed() {
+        use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let mut bad = doc(root, "src", "md-1", "a");
+        bad.problems.push(ProblemRow::new(
+            "src",
+            Stage::GridRow,
+            Scope::Markdown("md-1"),
+            Some("md-1"),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
+            Some(1),
+        ));
+        render(root, "src", &[bad, doc(root, "src", "md-2", "b")]);
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.problems_copied, 1);
+        let (uuid, first_seen): (String, String) =
+            sqlx::query_as("SELECT problem_uuid, first_seen_at_utc FROM problems")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !first_seen.is_empty(),
+            "the render store's stamp came through"
+        );
+        let counts = super::problem_counts(&pool).await.unwrap();
+        assert_eq!(
+            counts.get(&datalib_schema::problems::Severity::Warning),
+            Some(&1)
+        );
+
+        // Fixed: the same document renders clean. The index only reads
+        // md-1 this run (the cursor names the changed document), and
+        // the copy is still whole-source, so the row goes.
+        render(root, "src", &[doc(root, "src", "md-1", "a fixed")]);
+        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(s.markdowns_loaded, 1, "only the changed document was read");
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "{uuid} should be gone from the index");
     }
 
     /// An unusable cursor must fall back to reading the store whole, not to

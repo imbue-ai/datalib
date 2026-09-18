@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Stage the bundled runtime into `datalib/tauri/runtime/` (shipped by
-# tauri.conf.json under the .app's `Contents/Resources/runtime/`), put
-# the user-facing `latchkey` launcher beside the sidecar binaries, and
+# tauri.conf.json under the .app's `Contents/Resources/runtime/`), the
+# third-party notices into `datalib/tauri/licenses/`, put the
+# user-facing `latchkey` launcher beside the sidecar binaries, and
 # — on a signing build — codesign everything that will be notarized.
 # The staging itself is `scripts/stage_runtime.sh`, shared with the
 # release tarball; this file is only what the .app adds on top.
@@ -23,6 +24,10 @@ runtime_dir="$script_dir/runtime"
 log() { printf '>>> stage-runtime: %s\n' "$*" >&2; }
 
 "$repo_root/scripts/stage_runtime.sh" "$runtime_dir"
+
+# The third-party notices, shipped under Contents/Resources/licenses/
+# (tauri.conf.json lists the directory).
+"$repo_root/scripts/third_party_notices.sh" "$script_dir/licenses"
 
 # User-facing `latchkey` launcher: bundled node + staged tree +
 # LATCHKEY_CURL pointed at the bundled router curl. Lands next to the

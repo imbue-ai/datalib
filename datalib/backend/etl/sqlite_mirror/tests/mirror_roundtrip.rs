@@ -688,17 +688,18 @@ async fn table_filters_select_what_is_mirrored() -> Result<()> {
 
     let pool = f.mirror_pool().await?;
     let mut names: Vec<String> = sqlx::query(
-        // `sync_%` is the raw store's own bookkeeping (created by
-        // `doltlite_raw::open`); `sqlite_%` is SQLite's internal
-        // `sqlite_sequence`, which the AUTOINCREMENT in that bookkeeping
-        // brings along. Neither is mirrored content.
+        // `sqlite_%` is SQLite's internal `sqlite_sequence`, which the
+        // AUTOINCREMENT in the store's bookkeeping brings along; the
+        // store's own tables (`doltlite_raw::SHARED_TABLES`) are
+        // filtered below. Neither is mirrored content.
         "SELECT name FROM sqlite_master WHERE type = 'table' \
-         AND name NOT LIKE 'sync_%' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+         AND name NOT LIKE 'sqlite_%' ORDER BY name",
     )
     .fetch_all(&pool)
     .await?
     .iter()
     .map(|r| r.get::<String, _>("name"))
+    .filter(|n| !datalib_etl::doltlite_raw::SHARED_TABLES.contains(&n.as_str()))
     .collect();
     names.sort();
     assert_eq!(

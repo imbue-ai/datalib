@@ -1432,6 +1432,8 @@ grid_rows
     markdown_uuid
     byte_size
     item_count
+    diff_status
+    diff_changed_columns
 markdowns
     markdown_uuid
     source_id
@@ -1444,6 +1446,24 @@ markdowns
     upstream_cursor
     renderer_version
     bucket_key
+problems
+    problem_uuid
+    source_id
+    stage
+    severity
+    outcome
+    reason
+    scope_kind
+    scope_key
+    item_uuid
+    field
+    path
+    rule
+    sample
+    first_seen_at_utc
+    last_seen_at_utc
+    tz_offset
+    render_version
 render_cursor
     source_id
     raw_commit
@@ -1454,18 +1474,6 @@ render_inputs
     bucket_key
     input_table
     input_id
-render_problems
-    uuid
-    scope_key
-    scope_kind
-    source_id
-    stage
-    outcome
-    problems
-    first_seen_at_utc
-    last_seen_at_utc
-    tz_offset
-    render_version
 source_cursors
     source_id
     store_commit
