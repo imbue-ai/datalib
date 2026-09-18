@@ -82,6 +82,7 @@ pub(crate) async fn migrate_stamps(
         .await?;
     }
     if !has("tz_offset") {
+        // Safe: `spec.table` is one of the literals above.
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE {} ADD COLUMN tz_offset VARCHAR(8)",
             spec.table
@@ -108,6 +109,8 @@ async fn rewrite_rows(
         .copied()
         .chain(new_cols.iter().copied())
         .collect();
+    // Safe: the table and every column name are literals from the
+    // `StampColumns` consts above.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM {}",
         select_cols.join(", "),

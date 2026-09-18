@@ -1409,11 +1409,10 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-/// A job as the API serves it: the row, plus the two answers every
-/// reader used to derive from `state` for itself — and derived
-/// differently. `active` is [`SyncJobRow::is_active`] (a job told to
-/// stop is active until the worker stamps it finished); `stopping` is
-/// that wind-down.
+/// A job as the API serves it: the row, plus two verdicts on its
+/// `state` that every reader needs and none should compute for itself.
+/// `active` is [`SyncJobRow::is_active`] (a job told to stop is active
+/// until the worker stamps it finished); `stopping` is that wind-down.
 #[derive(Debug, Serialize)]
 pub struct SyncJobView {
     #[serde(flatten)]

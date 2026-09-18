@@ -194,6 +194,8 @@ mod tests {
     }
 
     async fn count_at(pool: &SqlitePool, pin: &Pin) -> Result<i64, sqlx::Error> {
+        // Safe: `Pin::table` is a literal name and a hash checked to be
+        // 40 hex characters.
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) FROM {}",
             pin.table("t")
