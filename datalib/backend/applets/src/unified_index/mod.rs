@@ -16,6 +16,7 @@ use axum::{
     Router,
 };
 mod columns;
+mod problems;
 
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
@@ -83,6 +84,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             .route("/search", get(search_handler))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
+            .route("/problems", get(problems::handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))
             .route(

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
+use datalib_schema::problems::{Severity, METRIC};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
@@ -67,8 +68,19 @@ pub async fn run(
         ("markdowns_loaded", summary.markdowns_loaded),
         ("markdowns_removed", summary.markdowns_removed),
         ("rows_inserted", summary.rows_inserted),
+        ("problems_copied", summary.problems_copied),
     ] {
         progress.metric(name, &[], n as i64);
+    }
+    // The index's whole-store counts, the way every render step reports
+    // its own: what the Manage row for the index shows.
+    let counts = datalib_etl_render::grid_index::problem_counts(&pool).await?;
+    for severity in [Severity::Error, Severity::Warning] {
+        progress.metric(
+            METRIC,
+            &[severity.metric_label()],
+            counts.get(&severity).copied().unwrap_or(0),
+        );
     }
 
     let msg = format!(

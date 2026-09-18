@@ -209,6 +209,9 @@ pub enum ChipKind {
     Metric,
     Warning,
     Error,
+    /// Checked and found clean: a green zero, as opposed to `Idle`'s
+    /// nothing-to-do grey-green.
+    Ok,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

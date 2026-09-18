@@ -135,6 +135,7 @@
 .tg-chip-idle { color: var(--datalib-log-ok); }
 .tg-chip-warning { color: var(--datalib-log-warn); }
 .tg-chip-error { color: var(--datalib-log-error); }
+.tg-chip-ok { color: var(--datalib-log-ok); }
 
 .tg-series {
   display: flex;

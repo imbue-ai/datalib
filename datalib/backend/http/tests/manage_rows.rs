@@ -120,6 +120,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "identity",
             "status",
             "chips",
+            "chips",
             "timestamp",
             "timeseries",
             "actions"
@@ -127,6 +128,10 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     );
     let rows = by_key(&got);
     assert_eq!(rows.len(), 6, "{got}");
+    // Nothing has counted its problems, so no row claims a green zero.
+    for (key, row) in &rows {
+        assert_eq!(row["problems"], serde_json::json!([]), "{key}: {row}");
+    }
 
     let slack = &rows["group:slack"];
     assert_eq!(slack["kind"], "group");
@@ -281,6 +286,77 @@ async fn a_finished_run_reaches_the_rows() {
     );
     assert_eq!(slack["last_synced"], "2026-08-31T10:00:09+01:00");
     assert!(slack["status"].get("segments").is_none(), "{slack}");
+}
+
+/// The Problems cell reads the `problems{severity=…}` metrics a step
+/// reported at the end of its last run: red and yellow on the render
+/// step that counted some, a green zero on the index that counted none,
+/// nothing on the ingest step that never counted — and the group shows
+/// its last counting step's.
+#[tokio::test]
+async fn problem_counts_reach_the_rows_from_the_run_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None);
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let metric = |step: &str, labels: &str, value: i64| datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: step.into(),
+            name: datalib_problems::METRIC.into(),
+            labels: labels.into(),
+            value,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        };
+        w.metric(metric("slack/render_markdown", "severity=error", 2));
+        w.metric(metric("slack/render_markdown", "severity=warning", 5));
+        w.metric(metric("unified_index/grid_index", "severity=error", 0));
+        w.metric(metric("unified_index/grid_index", "severity=warning", 0));
+    }
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    let chips = |key: &str| -> Vec<(String, String)> {
+        rows[key]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["kind"].as_str().unwrap().to_string(),
+                    c["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let red_and_yellow = vec![
+        ("error".to_string(), "2 errors".to_string()),
+        ("warning".to_string(), "5 warnings".to_string()),
+    ];
+    assert_eq!(chips("slack/render_markdown"), red_and_yellow);
+    assert_eq!(
+        chips("group:slack"),
+        red_and_yellow,
+        "the group shows render's"
+    );
+    assert_eq!(
+        chips("slack/ingest"),
+        vec![],
+        "never counted: blank, not zero"
+    );
+    assert_eq!(
+        chips("unified_index/grid_index"),
+        vec![("ok".to_string(), "0".to_string())]
+    );
+    assert_eq!(
+        chips("group:unified_index"),
+        vec![("ok".to_string(), "0".to_string())]
+    );
 }
 
 /// An entry the loader drops still has a row — it is still in the

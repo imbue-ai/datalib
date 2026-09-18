@@ -744,7 +744,7 @@ export type StatusView = {
   segments?: Segment[] | null;
 };
 
-export type ChipKind = "info" | "idle" | "metric" | "warning" | "error";
+export type ChipKind = "info" | "idle" | "metric" | "warning" | "error" | "ok";
 export type Chip = { kind: ChipKind; text: string; title: string };
 
 /// A button on a row. Data decides whether it appears and what it says;
@@ -777,6 +777,10 @@ export type ManageRow = {
   status: StatusView;
   status_from: string | null;
   activity: Chip[];
+  /// Errors and warnings the step's store holds, as of its last run:
+  /// red and yellow chips, a green zero, or nothing when it has never
+  /// counted. A group shows its last counting step's.
+  problems: Chip[];
   last_synced: string | null;
   disk: Timeseries;
   actions: Action[];
@@ -819,8 +823,13 @@ export function fetchManageRows(refresh = false, signal?: AbortSignal): Promise<
 export type TableResponse = {
   columns: ColumnSpec[];
   rows: Record<string, unknown>[];
+  /// The field that identifies a row; `key` when the endpoint does not say.
+  row_key?: string;
   tree?: boolean;
   error?: string | null;
+  /// Things the endpoint could not do and still answered — a filter
+  /// the grammar refused, say. The rows are what the rest matched.
+  errors?: string[];
 };
 
 export function fetchTable(url: string, signal?: AbortSignal): Promise<TableResponse> {
