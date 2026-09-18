@@ -221,13 +221,14 @@ bare `datalib-step` in the config finds the sibling binary. Add
 
 A sync also spawns `latchkey` and `qmd`, which the binaries run from a
 `runtime/` tree (Node plus both package trees, lockfile-pinned by
-Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR`. The
+Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR` — a
+release install fetches it instead, see `runtime_fetch.md`. The
 `bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;
 for a hand-run binary, stage it once and point at it:
 
 ```sh
-scripts/stage_runtime.sh ~/.cache/datalib/runtime
-export DATALIB_RUNTIME_DIR=~/.cache/datalib/runtime
+scripts/stage_runtime.sh ~/.cache/datalib/staged-runtime
+export DATALIB_RUNTIME_DIR=~/.cache/datalib/staged-runtime
 ```
 
 Without a tree the spawn fails with a message naming both fixes. The

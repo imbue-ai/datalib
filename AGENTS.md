@@ -59,6 +59,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl; read before touching `latchkey_curl_dispatch.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
+- [`docs/dev/runtime_fetch.md`](docs/dev/runtime_fetch.md) — where the Node runtime `qmd` and `latchkey` run from comes from: staged beside the binaries, or fetched sha256-pinned on first use. Read before touching `node_runtime.rs`, `stage_runtime.sh` or the release's runtime job.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
 

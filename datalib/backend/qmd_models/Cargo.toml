@@ -11,13 +11,9 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+datalib-fetch = { path = "../fetch" }
 datalib-obs = { path = "../obs" }
 datalib-runtime = { path = "../runtime" }
-# rustls, never native-tls: the musl release binaries are fully static
-# and openssl cannot be (see perseus_render's Cargo.toml for the long
-# version). Roots come bundled, so no /etc/ssl at run time either.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

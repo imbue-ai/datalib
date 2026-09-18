@@ -13,11 +13,10 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:reqwest",
-        "@datalib_crates//:sha2",
     ],
 )
 

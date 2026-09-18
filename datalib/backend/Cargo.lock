@@ -933,6 +933,7 @@ dependencies = [
  "chrono",
  "clap",
  "datalib-core",
+ "datalib-fetch",
  "datalib-problems",
  "datalib-qmd-indexer",
  "datalib-qmd-models",
@@ -2238,6 +2239,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-fetch"
+version = "0.34.1"
+dependencies = [
+ "anyhow",
+ "datalib-obs",
+ "datalib-runtime",
+ "flate2",
+ "libc",
+ "reqwest",
+ "sha2 0.11.0",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "datalib-http"
 version = "0.34.1"
 dependencies = [
@@ -2248,6 +2264,7 @@ dependencies = [
  "clap",
  "datalib-core",
  "datalib-dag",
+ "datalib-fetch",
  "datalib-problems",
  "datalib-time",
  "futures",
@@ -2323,10 +2340,9 @@ name = "datalib-qmd-models"
 version = "0.34.1"
 dependencies = [
  "anyhow",
+ "datalib-fetch",
  "datalib-obs",
  "datalib-runtime",
- "reqwest",
- "sha2 0.11.0",
  "tempfile",
 ]
 
@@ -2736,6 +2752,16 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -6027,6 +6053,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7209,6 +7246,16 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
+]
 
 [[package]]
 name = "xml5ever"
