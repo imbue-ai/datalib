@@ -9,6 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_dag::events::Event;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::diff::{diff_document, Counts};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -43,6 +44,33 @@ pub struct DiffPair {
 /// What a diff renders at most, per side, when the config does not say:
 /// enough for a week of a busy source, and far short of "everything".
 pub const DEFAULT_MAX_DOCUMENTS: usize = 1000;
+
+/// A side rendered past `max_documents`. Its own type so the step can
+/// tell this failure from any other and say what to do about it as a
+/// hint, the way an auth failure names its fix.
+#[derive(Debug)]
+pub struct DiffTooLarge {
+    pub pin: String,
+    pub max_documents: usize,
+}
+
+impl std::fmt::Display for DiffTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the diff at {} touches more than {} document(s). A diff this large was \
+             probably not the one meant: choose two closer commits, or raise \
+             `params.diff.max_documents` to say it was",
+            self.pin, self.max_documents
+        )
+    }
+}
+
+impl std::error::Error for DiffTooLarge {}
+
+fn too_large(e: &anyhow::Error) -> Option<&DiffTooLarge> {
+    e.chain().find_map(|c| c.downcast_ref::<DiffTooLarge>())
+}
 
 /// Take `diff` out of the step's params; what is left is the source
 /// type's own render config, parsed as strictly as on the source's step.
@@ -142,7 +170,21 @@ pub async fn run(
     let report =
         tokio::task::spawn_blocking(move || render_diff_source(&processors, source, &pair))
             .await
-            .context("diff render task panicked")??;
+            .context("diff render task panicked")?;
+    let report = match report {
+        Ok(r) => r,
+        Err(e) => {
+            // The cap is advice as much as an error: say what to do
+            // where a person reads the run, like an auth failure does.
+            if let Some(cap) = too_large(&e) {
+                emitter.event(&Event::Hint {
+                    step: String::new(), // re-tagged by the runner
+                    msg: cap.to_string(),
+                });
+            }
+            return Err(e);
+        }
+    };
     tracing::info!(
         docs = report.docs,
         removed = report.removed,
@@ -166,6 +208,11 @@ pub async fn run(
 struct Side {
     docs: BTreeMap<String, Collected>,
     buckets: BTreeMap<String, Vec<Input>>,
+    /// Set once the sink refused a document past the cap. The refusal
+    /// is an error the processor sees too, but a processor is entitled
+    /// to log a document's failure and carry on — so the side fails on
+    /// this after the processors return, whatever they did with it.
+    capped: bool,
 }
 
 /// One emitted document with its markdown as sections, read off the
@@ -488,12 +535,15 @@ fn collect(
     let mut side = Side::default();
     let mut sectionless_sources: BTreeSet<String> = BTreeSet::new();
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
-        if side.docs.len() >= max_documents && !side.docs.contains_key(&md.markdown_uuid) {
-            anyhow::bail!(
-                "the diff at {pin} touches more than {max_documents} document(s). A diff \
-                 this large was probably not the one meant: choose two closer commits, \
-                 or raise `params.diff.max_documents` to say it was"
-            );
+        if side.capped
+            || (side.docs.len() >= max_documents && !side.docs.contains_key(&md.markdown_uuid))
+        {
+            side.capped = true;
+            return Err(DiffTooLarge {
+                pin: pin.to_string(),
+                max_documents,
+            }
+            .into());
         }
         let sections = if md.sections.is_empty() {
             sectionless_sources.insert(md.source_id.clone());
@@ -530,6 +580,13 @@ fn collect(
             "diff: this renderer declares no sections; its documents diff as one block, \
              with no added or removed section bands"
         );
+    }
+    if side.capped {
+        return Err(DiffTooLarge {
+            pin: pin.to_string(),
+            max_documents,
+        }
+        .into());
     }
     Ok(side)
 }
@@ -591,10 +648,12 @@ mod tests {
         }
     }
 
-    /// One processor, `n` documents; the sink refuses the one past the cap.
+    /// One processor, `n` documents; the sink refuses the one past the
+    /// cap — and the side fails even when the processor, as contact-common
+    /// does, logs a document's failure and carries on.
     #[test]
     fn a_side_past_the_cap_fails_the_step() {
-        struct Emits(usize);
+        struct Emits(usize, bool);
         #[async_trait::async_trait]
         impl RenderProcessor for Emits {
             fn id(&self) -> &str {
@@ -602,7 +661,7 @@ mod tests {
             }
             async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
                 for i in 0..self.0 {
-                    ctx.emit_doc(RenderedMarkdown {
+                    let emitted = ctx.emit_doc(RenderedMarkdown {
                         markdown_uuid: format!("d{i}"),
                         source_id: "s".into(),
                         upstream_cursor: None,
@@ -613,7 +672,12 @@ mod tests {
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
                         edges: vec![],
                         problems: vec![],
-                    })?;
+                    });
+                    // `true`: swallow the sink's answer, as a provider that
+                    // treats every failed document as that document's own.
+                    if !self.1 {
+                        emitted?;
+                    }
                 }
                 Ok("ok".into())
             }
@@ -621,8 +685,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let progress = Progress::default();
         let none: HashSet<String> = HashSet::new();
-        let run = |n: usize, cap: usize| {
-            let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Emits(n))];
+        let run = |n: usize, cap: usize, swallows: bool| {
+            let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Emits(n, swallows))];
             collect(
                 &procs,
                 "s",
@@ -635,13 +699,21 @@ mod tests {
                 cap,
             )
         };
-        assert_eq!(run(3, 3).unwrap().docs.len(), 3, "at the cap is fine");
-        let err = match run(4, 3) {
-            Ok(_) => panic!("the fourth document must fail the side"),
-            Err(e) => format!("{e:#}"),
-        };
-        assert!(err.contains("more than 3 document(s)"), "{err}");
-        assert!(err.contains("max_documents"), "{err}");
+        assert_eq!(
+            run(3, 3, false).unwrap().docs.len(),
+            3,
+            "at the cap is fine"
+        );
+        for swallows in [false, true] {
+            let err = match run(4, 3, swallows) {
+                Ok(_) => panic!("the fourth document must fail the side (swallows={swallows})"),
+                Err(e) => e,
+            };
+            assert!(too_large(&err).is_some(), "{err:#}");
+            let text = format!("{err:#}");
+            assert!(text.contains("more than 3 document(s)"), "{text}");
+            assert!(text.contains("max_documents"), "{text}");
+        }
     }
 
     #[test]
