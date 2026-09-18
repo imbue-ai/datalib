@@ -17,6 +17,14 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what} has a type the renderer does not handle and was left empty`;
     case "deliberate_loss":
       return `${what} was trimmed by the rule ${p.rule ?? "?"}`;
+    case "render_failed":
+      return `${what} could not be rendered`;
+    case "fetch_failed":
+      return `${what} could not be fetched from the source`;
+    case "not_found":
+      return `${what} is not there upstream`;
+    case "forbidden":
+      return `${what} cannot be read with this credential`;
     case "noted":
       return `${what}: a finding, nothing lost`;
     default:
