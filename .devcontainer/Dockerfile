@@ -61,7 +61,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && node --version && npm --version
-ARG LATCHKEY_VERSION=3.11.0
+ARG LATCHKEY_VERSION=3.12.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
