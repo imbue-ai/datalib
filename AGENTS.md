@@ -321,6 +321,22 @@ by timing and filesystem locking, and a mac laptop and a Linux container
 disagree readily. If a doltlite-touching change is green locally and red
 or slow in CI, count the opens first.
 
+## License: MIT, and what may come in
+
+The repo is MIT (`LICENSE`). Every dependency is gated by
+`datalib/backend/deny.toml`'s allow list (permissive licenses only), and
+a release ships the notices of everything it bundles — Rust crates, the
+UI bundle, DoltLite, curl-impersonate, Node — assembled by
+`scripts/third_party_notices.sh`. Two rules for code that is not a
+dependency:
+
+- **Nothing copyleft gets vendored or ported**, however small. A GPL or
+  AGPL project may be a test oracle or a source of facts about a wire
+  format (`whatsapp-backup/src/key.rs`, `signal-backup/proto/`), never
+  a source of code.
+- **Say where it came from.** Ported MIT/BSD code names the project and
+  its copyright line in the file header (`garmin/src/login.rs`).
+
 ## Git: prefer merges over rebases
 
 `git pull` (default merge), not `git pull --rebase`. Rebasing rewrites

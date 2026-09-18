@@ -48,7 +48,8 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [licenses]
 version = 2
-# The workspace's own crates carry no license field (`publish = false`).
+# The workspace's own crates are `publish = false`; they are MIT (../../LICENSE)
+# but there is nothing to check them against.
 private = { ignore = true }
 allow = [
     "MIT",

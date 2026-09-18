@@ -4,7 +4,10 @@ The ingest step of a `garmin` group mirrors one Garmin Connect account
 into a doltlite raw store, over the same API the Garmin Connect phone
 app uses (`connectapi.garmin.com`). There is no public Garmin API for
 individuals; this one is what `garth`, `python-garminconnect` and
-GarminDB all sit on, and the request shapes here are ported from them.
+GarminDB all sit on. The endpoints and query parameters here are the
+same facts those projects observed; the only code ported from any of
+them is the SSO login, from `garth` (MIT). GarminDB is GPL-2.0 and
+nothing was taken from it beyond which URLs exist.
 
 ```
 <data_root>/<group>/ingest/entities.doltlite_db

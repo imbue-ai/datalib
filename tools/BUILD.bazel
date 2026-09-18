@@ -111,6 +111,21 @@ py_test(
     main = "check_qmd_model_pins.py",
 )
 
+# cargo-about (the release's third-party notices) must accept every
+# license cargo-deny (the PR gate) allows, or a release fails where a
+# PR passed.
+py_test(
+    name = "license_lists_test",
+    size = "small",
+    srcs = ["check_license_lists.py"],
+    data = [
+        "//datalib/backend:about.toml",
+        "//datalib/backend:deny.toml",
+        "//datalib/tauri:deny.toml",
+    ],
+    main = "check_license_lists.py",
+)
+
 # The shipped-binary list lives in two places that must agree:
 # `replace_prefixes` on `//datalib/backend:bin`, and the hand-written
 # `cp` block in release.yml's stage step. Both carry a "keep in sync"

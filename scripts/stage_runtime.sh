@@ -17,6 +17,7 @@
 #
 #   <dest>/
 #     node/bin/node                                    pinned Node
+#     node/LICENSE                                     its notice
 #     latchkey/<v>/node_modules/latchkey/dist/src/cli.js
 #     qmd/<v>/node_modules/@tobilu/qmd/dist/cli/qmd.js   (one tree per
 #                                                         distinct pin)
@@ -32,10 +33,12 @@
 # machines, and nobody has asked for it.
 #
 # Everything staged here comes out of Bazel. That is the whole design:
-# this script downloads nothing and resolves nothing. Three targets:
+# this script downloads nothing and resolves nothing. Four targets:
 #
 #   //datalib/tauri:bundled_node             the rules_nodejs toolchain's
 #                                            Node, NODE_VERSION in MODULE.bazel
+#   //third-party:bundled_licenses           Node's LICENSE (with the rest
+#                                            of the shipped notices)
 #   //third-party/qmd/runtime:qmd_tree       lockfile-pinned, sha512 per tarball
 #   //third-party/latchkey/runtime:latchkey_tree            likewise
 #
@@ -111,6 +114,7 @@ log "pins: latchkey=$latchkey_version qmd=$qmd_version"
 log "building runtime targets"
 (cd "$repo_root" && "$bazel" build \
     //datalib/tauri:bundled_node \
+    //third-party:bundled_licenses \
     //third-party/qmd/runtime:qmd_tree \
     //third-party/latchkey/runtime:latchkey_tree >&2)
 
@@ -154,6 +158,9 @@ prune_pkg() { # dest root, store glob
 log "staging node"
 mkdir -p "$runtime_dir/node/bin"
 rsync -a --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+# Node's own notice travels with the binary; the release's full set of
+# third-party notices is scripts/third_party_notices.sh's job.
+rsync -a --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
 
 stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
