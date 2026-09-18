@@ -5,19 +5,17 @@
 //! finds every model already in place and never talks to HuggingFace.
 
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use datalib_obs::status_line;
 use datalib_runtime::qmd::PinnedModel;
-use sha2::{Digest, Sha256};
 
+pub use datalib_fetch::sha256_file;
 pub use datalib_runtime::qmd::PINNED_MODELS;
 
-const CHUNK: usize = 1 << 20;
-const ATTEMPTS: u32 = 6;
+const TAG: &str = "[qmd-models]";
 
 /// What `ensure_models` did for each model, for the caller's log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +63,7 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel) -> Result<Outcome> {
             return Ok(Outcome::Verified);
         }
         status_line!(
-            "[qmd-models] {} does not match the pinned sha256 for {}@{} — replacing it",
+            "{TAG} {} does not match the pinned sha256 for {}@{} — replacing it",
             path.display(),
             model.repo,
             model.revision
@@ -74,12 +72,12 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel) -> Result<Outcome> {
         let _ = fs::remove_file(stamp_path(&path));
     }
     status_line!(
-        "[qmd-models] fetching {} ({} @ {})",
+        "{TAG} fetching {} ({} @ {})",
         model.cache_name(),
         model.repo,
         &model.revision[..12.min(model.revision.len())]
     );
-    download_verified(&model.url(), model.sha256, &path)?;
+    datalib_fetch::download_verified(TAG, &model.url(), model.sha256, &path)?;
     write_stamp(&path, model.sha256)?;
     Ok(if present {
         Outcome::Replaced
@@ -141,124 +139,6 @@ fn write_stamp(path: &Path, sha: &str) -> Result<()> {
         .with_context(|| format!("write {}", stamp.display()))
 }
 
-pub fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        let n = f
-            .read(&mut buf)
-            .with_context(|| format!("read {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex(&hasher.finalize()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
-/// place only on a matching digest. HuggingFace has answered a cold
-/// fetch with 429 before, so a retryable status backs off and tries
-/// again rather than failing the sync on the first refusal.
-fn download_verified(url: &str, want: &str, dest: &Path) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        // The whole-request timeout would cap a multi-GB download; a
-        // stalled body read is caught by the connection's own timeouts
-        // and retried below.
-        .timeout(None)
-        .user_agent(concat!("datalib/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("build http client")?;
-    let mut delay = Duration::from_secs(2);
-    for attempt in 1..=ATTEMPTS {
-        match fetch_once(&client, url, want, dest) {
-            Ok(()) => return Ok(()),
-            Err(Retry(reason)) if attempt < ATTEMPTS => {
-                status_line!(
-                    "[qmd-models] {url}: {reason}; retrying in {}s ({attempt}/{ATTEMPTS})",
-                    delay.as_secs()
-                );
-                std::thread::sleep(delay);
-                delay *= 2;
-            }
-            Err(Retry(reason)) => bail!("{url}: {reason} (gave up after {ATTEMPTS} attempts)"),
-            Err(Fatal(e)) => return Err(e),
-        }
-    }
-    unreachable!("the loop returns or bails on its last attempt")
-}
-
-enum FetchError {
-    Retry(String),
-    Fatal(anyhow::Error),
-}
-use FetchError::{Fatal, Retry};
-
-impl From<anyhow::Error> for FetchError {
-    fn from(e: anyhow::Error) -> Self {
-        Fatal(e)
-    }
-}
-
-fn fetch_once(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    want: &str,
-    dest: &Path,
-) -> std::result::Result<(), FetchError> {
-    let mut resp = client
-        .get(url)
-        .send()
-        .map_err(|e| Retry(format!("request failed: {e}")))?;
-    let status = resp.status();
-    if status.as_u16() == 429 || status.is_server_error() {
-        return Err(Retry(format!("HTTP {status}")));
-    }
-    if !status.is_success() {
-        return Err(Fatal(anyhow::anyhow!("{url}: HTTP {status}")));
-    }
-    let partial = dest.with_extension("partial");
-    let mut file =
-        fs::File::create(&partial).with_context(|| format!("create {}", partial.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        let n = match resp.read(&mut buf) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = fs::remove_file(&partial);
-                return Err(Retry(format!("read failed mid-body: {e}")));
-            }
-        };
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])
-            .with_context(|| format!("write {}", partial.display()))?;
-    }
-    file.sync_all()
-        .with_context(|| format!("sync {}", partial.display()))?;
-    drop(file);
-    let got = hex(&hasher.finalize());
-    if got != want {
-        let _ = fs::remove_file(&partial);
-        return Err(Fatal(anyhow::anyhow!(
-            "{url}: sha256 {got}, expected {want} — the pinned revision no longer serves \
-             the pinned bytes, or something rewrote the download; nothing was kept"
-        )));
-    }
-    fs::rename(&partial, dest)
-        .with_context(|| format!("rename {} -> {}", partial.display(), dest.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,13 +187,5 @@ mod tests {
             effective_models_dir(&state, &default),
             fs::canonicalize(&target).unwrap()
         );
-    }
-
-    #[test]
-    fn sha256_of_known_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("f");
-        fs::write(&path, b"hello").unwrap();
-        assert_eq!(sha256_file(&path).unwrap(), HELLO_SHA);
     }
 }

@@ -8,6 +8,7 @@ members = [
     "core",
     "runtime",
     "qmd_models",
+    "fetch",
     "dag",
     "dirtree_diff",
     "http",
@@ -223,6 +224,7 @@ cbc = { version = "0.2", features = ["block-padding"] }
 ctr = "0.10"
 cipher = { version = "0.5", features = ["block-padding"] }
 flate2 = "1.0"
+tar = "0.4"
 # GHASH (the universal hash inside GCM) and AES-CTR primitives,
 # composed by `datalib-whatsapp-backup` into a hand-rolled
 # GCM decrypt. We can't use the `aes-gcm` crate here: WhatsApp's

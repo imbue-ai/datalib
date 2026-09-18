@@ -130,6 +130,14 @@ enum Cmd {
         #[arg(long)]
         models_dir: Option<PathBuf>,
     },
+    /// Utility (not a pipeline step): put the Node runtime for qmd and
+    /// latchkey in place — the tree beside the binaries when one is
+    /// shipped, else the release asset `runtime.manifest` names,
+    /// fetched sha256-verified into `~/.cache/datalib/runtime` — and
+    /// run `qmd --version` through it. What every sync does on its
+    /// first `qmd` or `latchkey`, runnable ahead of time. Needs no data
+    /// root.
+    PullRuntime,
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
     /// `{"fixture_path": …}`), for later replay via `--playback-root`.
@@ -185,6 +193,10 @@ static CHECKPOINTS: std::sync::OnceLock<std::sync::Arc<datalib_etl::processor::C
 async fn main() {
     let cli = Cli::parse();
     let _obs_guard = datalib_obs::init(&cli.obs, "datalib-step").ok();
+    // Before the first `qmd` or `latchkey` spawn, wherever it comes
+    // from: a release tarball without `runtime/` beside its binaries
+    // fetches the one its manifest names, once per machine.
+    datalib_fetch::enable_runtime_fetch();
 
     // `probe` is answered before any of the step machinery below: it
     // owns no tree, claims no outputs and must leave stdout holding
@@ -217,6 +229,23 @@ async fn main() {
                         dir.join(model.cache_name()).display()
                     );
                 }
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    // `pull-runtime` likewise. Off the async runtime for the same
+    // reason as `pull-models`.
+    if let Some(Cmd::PullRuntime) = &cli.cmd {
+        let out = tokio::task::spawn_blocking(pull_runtime)
+            .await
+            .expect("pull-runtime task panicked");
+        match out {
+            Ok(report) => {
+                datalib_obs::status_line!("{report}");
                 std::process::exit(0);
             }
             Err(e) => {
@@ -327,6 +356,7 @@ async fn run(
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Login { .. }) => unreachable!("login is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
+        Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         None => {
             let env = StepEnv::from_env()?;
             run_function(
@@ -395,6 +425,32 @@ async fn run_function(
             qmd_index::run(data_root, &env, models_dir, emitter).await
         }
     }
+}
+
+/// Resolve qmd through the runtime resolver — fetching on a miss, now
+/// that the fetcher is enabled — and run `--version` through it, so
+/// the report names the tree that will serve the next sync and proves
+/// its Node starts.
+fn pull_runtime() -> Result<String> {
+    let mut cmd = datalib_runtime::qmd::qmd_command(datalib_runtime::qmd::DEFAULT_QMD_VERSION)?;
+    let root = datalib_runtime::node_runtime::runtime_root()
+        .context("no runtime root after a successful resolution")?;
+    let out = cmd
+        .arg("--version")
+        .output()
+        .with_context(|| datalib_runtime::node_runtime::display_command(&cmd))?;
+    anyhow::ensure!(
+        out.status.success(),
+        "`{}` failed ({}): {}",
+        datalib_runtime::node_runtime::display_command(&cmd),
+        out.status,
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(format!(
+        "runtime: {}\nqmd --version: {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stdout).trim()
+    ))
 }
 
 /// The two index steps have one reader each — the `unified_index`
