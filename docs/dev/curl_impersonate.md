@@ -48,7 +48,14 @@ and pins the upstream commit it builds; the router is a small Rust
 program in the same repo. Each release ships one
 `latchkey-curl-shims-<triple>.tar.gz` per platform holding both
 binaries and the license notices of everything linked into the
-impersonator, plus a `SHA256SUMS`.
+impersonator, plus a `SHA256SUMS`. Every tarball, and each binary
+inside it, carries a build provenance attestation (a SLSA statement
+signed through Sigstore and stored with that repo) tying its bytes to
+the workflow, commit and run that produced it:
+
+```sh
+gh attestation verify latchkey-curl-shims-<triple>.tar.gz -R imbue-ai/latchkey-curl-shims
+```
 
 In this tree:
 
@@ -72,11 +79,15 @@ ignores them when it derives datalib's own version.
 When `latchkey-curl-shims` publishes a new release — a newer Chrome
 profile, a router change:
 
-1. Set `LATCHKEY_CURL_SHIMS_RELEASE` in `MODULE.bazel` to the new tag
-   and copy the six sha256s from the release's `SHA256SUMS`.
-2. `bazelisk build //third-party/latchkey-curl-shims` and run one
+1. Download the six tarballs and `SHA256SUMS` from the release, check
+   the sums, and run `gh attestation verify` on each tarball (above).
+   The sha256s in `MODULE.bazel` are what every later build trusts, so
+   this is the moment to be sure they name attested bytes.
+2. Set `LATCHKEY_CURL_SHIMS_RELEASE` in `MODULE.bazel` to the new tag
+   and copy the six sha256s in.
+3. `bazelisk build //third-party/latchkey-curl-shims` and run one
    impersonating request (above) to see it work.
-3. If the release changed the default profile, nothing here needs to
+4. If the release changed the default profile, nothing here needs to
    follow: `DATALIB_IMPERSONATE_PROFILE` is only an override.
 
 The names are the contract. If a release ever renames a binary, the

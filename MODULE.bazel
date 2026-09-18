@@ -123,8 +123,10 @@ http_archive(
 # selects the pair for the target platform. What each binary does and
 # how to bump: docs/dev/curl_impersonate.md.
 #
-# The sha256s come from the SHA256SUMS published with the release.
-LATCHKEY_CURL_SHIMS_RELEASE = "v0.2.0"
+# The sha256s come from the SHA256SUMS published with the release, and
+# each tarball's build provenance attestation was verified with
+# `gh attestation verify` before its sum was written here.
+LATCHKEY_CURL_SHIMS_RELEASE = "v0.2.1"
 
 [
     http_archive(
@@ -149,12 +151,12 @@ filegroup(
 """,
     )
     for triple, sha in [
-        ("aarch64-apple-darwin", "69c6ec03f185af10a73cba431b961ff749064bf3cec6bf661f8127ab78a83252"),
-        ("x86_64-apple-darwin", "18ef87db3cf5ef07895b64fd9031812a149f19100f710d6d5ddce887f78fbab0"),
-        ("x86_64-unknown-linux-gnu", "ba27a9d322c8f07004e0e9b3e753063424b4a471729300500ce857414e4aefe9"),
-        ("aarch64-unknown-linux-gnu", "88f68e3df5e7625032d07bb6c5f183779d439bbcdc0b6f6aaa70a29db14d59ac"),
-        ("x86_64-unknown-linux-musl", "ca5473ac80092741ecc0d8b4cc477292563c5c2f29eaed2c88b7afe945595739"),
-        ("aarch64-unknown-linux-musl", "171d09c68a1139c69122847ee1dbe9e68cac794ad0fa469d9c574d92677d8a28"),
+        ("aarch64-apple-darwin", "d309479b0d96ebe192fbc9ed5cb685923462af6eb939c0f1aa0358b6a0e39db1"),
+        ("x86_64-apple-darwin", "9bd9eb94e9588ce4d093e3472e711c68f02af601d8875f85127d9301a9c82d2f"),
+        ("x86_64-unknown-linux-gnu", "0f50df271b06bab4dd6c7c2cfbd1259cc527150d5b0beebb3e0e9dec0d6a41dd"),
+        ("aarch64-unknown-linux-gnu", "54025b77c407a821f870eaad6f76ad4578e174a936ed6758b92148d9d38a315d"),
+        ("x86_64-unknown-linux-musl", "c7cd5e7710d3f1e79f4b7116175afead3eb61cf1c674605f64e9fe910701c0e4"),
+        ("aarch64-unknown-linux-musl", "260093c5b7df73a89690101c822924fb8337234f629277e241bcfb8f24d198e3"),
     ]
 ]
 
