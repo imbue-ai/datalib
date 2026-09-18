@@ -10,7 +10,9 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_chat_common::types::{
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Lookup;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
@@ -410,6 +412,17 @@ fn build_chat(
             }
         }
 
+        // No `Date` header, or one we cannot parse, is a null
+        // `created_at` — not the epoch — and the second is recorded.
+        // There is no parent stamp to inherit here: an email thread's
+        // items are the emails.
+        let mut problems = Vec::new();
+        let date_ms = own_stamp_ms(
+            em.received_at.as_deref(),
+            "received_at",
+            iso_to_ms,
+            &mut problems,
+        );
         items.push(NormalizedChatItem {
             message_uuid: email_uuid(&em.account_id, &em.id),
             author_id: em.account_id.clone(),
@@ -418,10 +431,7 @@ fn build_chat(
             } else {
                 parsed_eml.from_display.clone()
             },
-            // No `Date` header, or one we cannot parse, is a null
-            // `created_at` — not the epoch. There is no parent stamp to
-            // inherit here: an email thread's items are the emails.
-            date_ms: em.received_at.as_deref().and_then(iso_to_ms),
+            date_ms,
             text: (!text.trim().is_empty()).then_some(text),
             kind: ItemKind::Text,
             attachments: Vec::new(),
@@ -432,6 +442,7 @@ fn build_chat(
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems,
         });
     }
 
@@ -493,12 +504,8 @@ fn labels_for_email(
         .collect()
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `created_at`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable.
+/// unparseable, which the caller records through `own_stamp_ms`.
 fn iso_to_ms(s: &str) -> Option<i64> {
     datalib_time::parse_strict(s)
         .ok()

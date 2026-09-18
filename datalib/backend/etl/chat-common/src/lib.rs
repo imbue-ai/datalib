@@ -12,6 +12,6 @@ pub use render::{render_all, RenderProfile, RenderSummary, LAYOUT_VERSION};
 // taking a dependency on `datalib-time` just for the enum.
 pub use datalib_time::RecordStampPrecision;
 pub use types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, NormalizedReaction,
 };

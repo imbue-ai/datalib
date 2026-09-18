@@ -196,6 +196,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
             kind_label: Some(kind_for_message(&room.network, &m.event_type)),
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         };
     }
 
@@ -217,6 +218,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
         kind_label: Some(kind_for_message(&room.network, &m.event_type)),
         source_ref: None,
         is_aside: false,
+        problems: Vec::new(),
     }
 }
 

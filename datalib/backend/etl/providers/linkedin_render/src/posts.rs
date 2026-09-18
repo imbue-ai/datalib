@@ -11,7 +11,7 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
@@ -277,11 +277,13 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         }
         text.push_str(&format!("[🔗 View on LinkedIn]({u})"));
     }
+    let mut problems = Vec::new();
+    let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
     NormalizedChatItem {
         message_uuid: uuid5(&format!("msg:posts:{key}:{role}:{date}:{text}")),
         author_id: "me".to_string(),
         author_display: ME.to_string(),
-        date_ms: parse_date_ms(date),
+        date_ms,
         text: nonempty(&text).map(str::to_string),
         kind: ItemKind::Text,
         attachments: linkout(url),
@@ -291,6 +293,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        problems,
     }
 }
 
@@ -313,6 +316,7 @@ fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedCha
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        problems: Vec::new(),
     }
 }
 

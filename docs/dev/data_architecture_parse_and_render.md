@@ -441,12 +441,23 @@ Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
-**Status: R1's sink is built for the grid-row stage and unwired for
-the parse stage; R2–R7 are adopted in principle and not built.** The
-sink is the `problems` table (`datalib_problems`), one row per problem
-per record, in the source's render store; what it covers, what it does
-not, and the plan to put it on screen are
-[`plans/problem_visibility.md`](plans/problem_visibility.md). The
+**Status: R1's sink is built for the grid-row, parse and render
+stages and on screen; R2's middle category is what the sink makes
+possible and is followed where the sink is wired; R3–R7 are adopted in
+principle and not built.** The sink is the `problems` table
+(`datalib_problems`), one row per problem per record, in the source's
+render store, copied into the unified index, counted on the Manage row
+and shown on the document. How it is wired at each stage:
+
+| stage | how a problem gets in | swept by |
+| --- | --- | --- |
+| grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
+| parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
+| parse, no document yet | `RenderCtx::report_unparsed` with a `ReadScope` | the tables the parse read whole |
+| render, whole document | `RenderCtx::report_document_failed` | the document, when it next renders |
+
+The design and what is still open are
+[`plans/problem_visibility.md`](plans/problem_visibility.md); the
 audit that produced it is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
@@ -492,9 +503,13 @@ thousand Slack messages has a field we did not expect."
 
 - **absent** — nothing to render: emit nothing, exit 0.
 - **malformed but isolated** — this record is bad, the rest are fine:
-  drop it, count it (R1), continue, exit 0.
+  drop it, count it (R1), continue, exit 0. A provider's parse
+  collects the rows it could not read as `Unparsed` instead of
+  `continue`ing past them, and its processor reports them; a
+  conversion that fails on one document reports that document.
 - **malformed systemically** — the input is not what we think it is:
-  exit non-zero, `data`, poison the subtree.
+  exit non-zero, `data`, poison the subtree. The threshold between
+  this and the previous category is R4, which is not built.
 
 ### R3 — Any rule that turns a non-null source value into null is a judgment call
 

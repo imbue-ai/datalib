@@ -11,7 +11,8 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
@@ -122,11 +123,14 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         // `create_time` of its own whose messages carry none either
         // genuinely has no time to report, and `None` says so rather
         // than filing the whole thread under 1970.
-        let ms = m
-            .create_time
-            .as_deref()
-            .and_then(iso_to_ms)
-            .or_else(|| last_ms.map(|p| p + 1));
+        let mut problems = Vec::new();
+        let ms = own_stamp_ms(
+            m.create_time.as_deref(),
+            "create_time",
+            iso_to_ms,
+            &mut problems,
+        )
+        .or_else(|| last_ms.map(|p| p + 1));
         last_ms = ms.or(last_ms);
 
         let kind_label = kind_for_role_and_type(m.role.as_deref(), m.content_type.as_deref());
@@ -173,6 +177,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
                 msg_id.natural_key.clone(),
             )),
             is_aside: is_tool_role(m.role.as_deref()),
+            problems,
         });
     }
 
@@ -320,13 +325,10 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `created_at`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Parse an ISO-8601 timestamp to unix millis. Accepts `…Z` and explicit
-/// offsets; returns `None` on anything unparseable (callers fall back to
-/// the bumped previous time).
+/// offsets; returns `None` on anything unparseable — the caller records
+/// that through `own_stamp_ms` before falling back to the bumped
+/// previous time.
 fn iso_to_ms(s: &str) -> Option<i64> {
     // Through `datalib-time`, not `chrono` directly: timestamps are a
     // cross-source concept and exactly one crate decides how a string

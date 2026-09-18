@@ -76,6 +76,7 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         });
     }
     vec![monthly_chat(
@@ -160,6 +161,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: Vec::new(),
             }
         })
         .collect();

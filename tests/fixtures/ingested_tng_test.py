@@ -123,6 +123,20 @@ SCOPE_TAG_BY_PROVIDER = {
 # a silent pass.
 PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 
+# The one `problems` row the fixture is built to produce: conversation
+# `c0000006`'s reply carries `created_at = "stardate 47988.1"`, which the
+# claude renderer records as a nulled `created_at` on that message. The
+# id is `datalib_id::problem_id` over (source, stage, scope, item, field,
+# reason, rule) and nothing else, which is why it can be written down.
+# The columns are `_problems()`'s, `|`-joined by the doltlite shell.
+POISONED_PROBLEM = (
+    "37f8fe60-9c94-5398-a0d9-4be95d77089b"  # problem_uuid
+    "|warning|parse|markdown"
+    "|fb0232cd-d04b-5372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
+    "|dcce3451-eb4f-53dd-bce7-7e0b22d3af16"  # the reply's item uuid
+    "|created_at|coercion_failed|stardate 47988.1"
+)
+
 
 def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
     """UUIDv5 over the five-component recipe, joined with \x1f.
@@ -651,9 +665,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _problems(self) -> dict[str, list[str]]:
         """Per-source `problems` rows, as `source -> [summary…]`.
 
-        Each entry names the severity, the scope, the field and the
-        reason, so a failure message says what was dropped rather than
-        only how many.
+        Each entry names the id, the severity, the stage, the scope, the
+        item, the field, the reason and the sample, so a failure message
+        says what was dropped rather than only how many — and so the id
+        can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
         for store in sorted(
@@ -661,12 +676,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
         ):
             rows = self._query(
                 store,
-                "SELECT severity, scope_key, item_uuid, field, reason, sample "
+                "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
+                "item_uuid, field, reason, sample "
                 "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
                 out[store.parent.parent.name] = rows
         return out
+
+    def _index_problems(self) -> list[str]:
+        """The index's copy of every source's problems, same columns."""
+        return self._query(
+            self._index_db,
+            "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
+            "item_uuid, field, reason, sample "
+            "FROM problems ORDER BY problem_uuid;",
+        )
 
     def _source_cursors(self) -> dict[str, str]:
         """`source_id -> store_commit` from the index's cursor table."""
@@ -990,22 +1015,31 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"a placeholder; got {placeholders}",
         )
 
-        # Nothing in the TNG fixture may land in the problem sink.
-        #
-        # This is the assertion that keeps the sink honest in both
-        # directions. Every renderer now drops-and-records a row it
-        # cannot build instead of failing the step, which is what stops
-        # one bad record from poisoning `grid_index` for every other
-        # source — but the same change means a projection that quietly
-        # started dropping rows would no longer show up as a failure
-        # anywhere. Here it does: the fixture is known-good, so any
-        # `problems` row is a regression, and the message names
-        # the row and the reason rather than just a count.
+        # Exactly one record in the TNG fixture may land in the problem
+        # sink: the one built to. Every renderer drops-and-records a row
+        # it cannot build instead of failing the step, which is what
+        # stops one bad record from poisoning `grid_index` for every
+        # other source — but the same change means a projection that
+        # quietly started dropping rows would no longer show up as a
+        # failure anywhere. Here it does: the fixture is known-good
+        # apart from `c0000006`'s reply, whose `created_at` is
+        # "stardate 47988.1", so any other row is a regression and the
+        # message names it. The poisoned row is what proves the sink
+        # works end to end — through the real render, into the source's
+        # store, and copied into the index — and its id is pinned so a
+        # later run mints the same one (asserted after run 2 and run 4).
+        problems1 = self._problems()
         self.assertEqual(
-            self._problems(),
-            {},
-            "the TNG fixture must render clean; a row here means a "
-            "projection started dropping or nulling data",
+            problems1,
+            {"claude-api": [POISONED_PROBLEM]},
+            "the TNG fixture renders clean apart from its poisoned reply; "
+            "any other row here means a projection started dropping or "
+            "nulling data",
+        )
+        self.assertEqual(
+            self._index_problems(),
+            [POISONED_PROBLEM],
+            "grid_index copies the source's problems into the index",
         )
 
         # ── id-space guardrails ─────────────────────────────────
@@ -1147,6 +1181,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_shape(), shape1, "run 2 must leave the index unchanged"
         )
+        self.assertEqual(
+            self._problems(),
+            problems1,
+            "run 2 re-rendered nothing, and the poisoned row — its id "
+            "included — is exactly what run 1 left",
+        )
         # Ids specifically, not just how many of them there are.
         #
         # Note what this does and does not prove. A steady-state re-run
@@ -1273,6 +1313,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_pipeline(reset=False)
         self.assertEqual(
             self._index_shape(), shape1, "run 4 must rebuild the same index"
+        )
+        self.assertEqual(
+            self._problems(),
+            problems1,
+            "run 4 re-derived everything from scratch, and the poisoned "
+            "row's id is a function of the record, so it is the same id",
         )
         self.assertEqual(
             self._index_ids(),

@@ -504,6 +504,7 @@ fn build_item(
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        problems: Vec::new(),
     }
 }
 

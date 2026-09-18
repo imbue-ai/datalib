@@ -102,6 +102,10 @@ closed_vocabulary! {
         /// These are the rows R3's judgment-call table is generated
         /// from, which is why `Problem::rule` exists.
         DeliberateLoss,
+        /// The projection itself failed on this record — a converter
+        /// error, a renderer that gave up on the document. → drop it
+        /// this run; a page from an earlier run may still be on disk.
+        RenderFailed,
         /// Nothing was lost; this is a finding worth publishing.
         Noted,
     }
@@ -195,7 +199,7 @@ pub fn sample_of(s: &str) -> String {
 
 /// One thing that went wrong, before it is tied to a record and a
 /// store: what a renderer or a fetcher hands to [`ProblemRow::new`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Problem {
     pub reason: Reason,
     /// The field this is about; `None` for a record-level problem

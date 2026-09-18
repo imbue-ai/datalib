@@ -344,3 +344,36 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 Perfect. Make it so.
 
 </div>
+
+
+=== claude_export/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md ===
+---
+title: "Poisoned: a message with an unreadable stamp (all)"
+provider: claude
+source_label: "Claude"
+chat_uuid: fb0232cd-d04b-5372-b44e-148a47ada7a2
+markdown_uuid: fb0232cd-d04b-5372-b44e-148a47ada7a2
+period: all
+display: "Poisoned: a message with an unreadable stamp"
+account: jlpicard@enterprise.starfleet.test
+external_id: c0000006-1701-4d00-8000-00000000c006
+item_count: 2
+---
+
+<h1 class="page-title" data-page-title-uuid="fb0232cd-d04b-5372-b44e-148a47ada7a2">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-4bfa3277-ca76-5472-9181-d964975c6943" data-section-uuid="4bfa3277-ca76-5472-9181-d964975c6943" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+
+Computer, what stardate is it?
+
+</div>
+
+<div id="m-dcce3451-eb4f-53dd-bce7-7e0b22d3af16" data-section-uuid="dcce3451-eb4f-53dd-bce7-7e0b22d3af16" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+
+Stardate 47988.1. The chronometer is on ship's time.
+
+</div>
