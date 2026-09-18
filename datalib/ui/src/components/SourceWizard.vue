@@ -712,15 +712,13 @@ function unknownValues(field: Field): string[] {
 }
 
 /// What a field's picker is a picker *of*, for the sentences around it.
-/// An email account has folders and labels, a Claude account has
-/// conversations, a Slack workspace has channels and DMs — and calling
-/// any of them "labels" reads as a bug.
-const PROBE_NOUNS: Record<ProbeNoun, string> = {
-  labels: "labels",
-  mailboxes: "folders",
-  conversations: "conversations",
-  channels: "channels",
-};
+/// A mailbox goes by the source's own word — Gmail's "labels", a JMAP
+/// server's "folders" — since the other word reads as a bug; a Claude
+/// account has conversations and a Slack workspace channels.
+function probeNoun(probe: ProbeNoun): string {
+  if (probe === "labels" || probe === "mailboxes") return chosen.value?.mailboxNoun ?? "folders";
+  return probe;
+}
 
 /// The noun each item kind is counted under in the "Reached …" line.
 const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
@@ -742,7 +740,7 @@ const probeSummary = computed(() => {
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }
   if (counts.size === 0) return "nothing to pick from";
-  return [...counts].map(([noun, n]) => `${n} ${PROBE_NOUNS[noun]}`).join(", ");
+  return [...counts].map(([noun, n]) => `${n} ${probeNoun(noun)}`).join(", ");
 });
 
 // Load the account list as soon as there is a service to load it for:
@@ -1166,7 +1164,7 @@ function submit() {
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
                 Run “Test connection” to pick from this account’s real
-                {{ PROBE_NOUNS[f.probe] }} instead of typing them.
+                {{ probeNoun(f.probe) }} instead of typing them.
               </small>
             </span>
             <input

@@ -80,9 +80,9 @@ export type Field =
       probe?: ProbeNoun;
     });
 
-/// What a `probe:` field is a picker *of*. The value is the word the
-/// wizard uses around the picker — "pick from this account's real
-/// folders" — so it has to read as one.
+/// What a `probe:` field is a picker *of*: which of the probe's items
+/// it takes. The wizard says `labels` and `mailboxes` in the source's
+/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels";
 
 export type CatalogEntry = {
@@ -117,6 +117,11 @@ export type CatalogEntry = {
   /// Nothing is pre-filled from it: a blank name still falls back to
   /// the id.
   nameHint: string;
+  /// What this source calls a mailbox on its own screens — Gmail says
+  /// "labels", every other mail client "folders" — used in the
+  /// sentences around a `labels`/`mailboxes` picker. Defaults to
+  /// "folders".
+  mailboxNoun?: "labels" | "folders";
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
   /// False for a provider that declares no render step at all.
@@ -399,6 +404,7 @@ export const CATALOG: CatalogEntry[] = [
     icon: "gmail",
     defaultName: "gmail",
     nameHint: "Work Gmail",
+    mailboxNoun: "labels",
     wizard: true,
     canProbe: true,
     credentialService: "google-gmail",
