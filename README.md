@@ -3,7 +3,7 @@
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
 datalib mirrors your personal data — chats, email, messages, contacts,
-documents, photos — out of the services that hold it and into one place
+documents, photos, health and fitness — out of the services that hold it and into one place
 you own: a folder on your own computer, in open formats, with history.
 Once it is there you can search it, join it across sources, and point
 whatever tools you like at it, without asking anyone's permission.
@@ -42,7 +42,7 @@ look before you hand it anything of yours. Building from source is the
 
 ## Read this before you point an agent at it
 
-datalib is plain old software. Running a sync invokes no AI model and no
+datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
 agent, and nothing leaves your machine: the only network traffic is
 datalib reading from the services you configured, plus a one-time
 download of the search models the first time the semantic index is
