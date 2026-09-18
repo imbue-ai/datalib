@@ -180,7 +180,7 @@ pub struct GroupEntry {
 
 /// The `type` of a group that mirrors nothing itself but renders what
 /// changed in another group's raw store between two commits — see
-/// `docs/dev/plans/diff_renderer.md`. Not a provider: `datalib-step`
+/// `docs/dev/plans/completed/diff_renderer.md`. Not a provider: `datalib-step`
 /// runs the `source` group's renderer under it.
 pub const DIFF_GROUP_TYPE: &str = "diff";
 

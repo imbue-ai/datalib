@@ -30,7 +30,6 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         message_index: None,
         entire_chat: format!("/chat/{uuid}"),
         text: String::new(),
-        slack_link: None,
         qmd_path: Some(qmd_path.into()),
         source_url: None,
         git_sha: None,

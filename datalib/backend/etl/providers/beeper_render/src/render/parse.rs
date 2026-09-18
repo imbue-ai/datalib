@@ -396,6 +396,8 @@ async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Res
          WHERE 1 = 1{room_filter}
          ORDER BY room_uuid, timestamp_ms"
     );
+    // Audited: the same two interpolations as `bucket_sql` above —
+    // `period_expr` from the `Period` enum and the bound room run.
     let mut events_query = sqlx::query(sqlx::AssertSqlSafe(events_sql));
     for room in &room_binds {
         events_query = events_query.bind(room);

@@ -289,7 +289,7 @@
    the text's box, which the theme's flex centring is not. */
 .slick-cell .datalib-clamp-2 { line-height: 1.25; }
 
-/* ── a diff group's rows (docs/dev/plans/diff_renderer.md) ──────── */
+/* ── a diff group's rows (docs/dev/plans/completed/diff_renderer.md) ──────── */
 /* By what happened to the row between the two commits, and the cells
    of a modified row that moved — classes from GridCard's item metadata.
    The tints sit over the theme's own row background in either scheme. */

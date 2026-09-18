@@ -112,12 +112,12 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid, \
+         message_index, entire_chat, text, qmd_path, source_url, markdown_uuid, \
          is_document) \
          VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  '2026-04-01T10:00:00.000000Z','+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
+                 'summary', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
     )
     .execute(&writer)
     .await
@@ -125,10 +125,10 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, markdown_uuid, is_document) \
+         message_index, entire_chat, text, markdown_uuid, is_document) \
          VALUES ('m-1','claude','User Input','Claude','2026-04-01T10:01:00+00:00', \
                  '2026-04-01T10:01:00.000000Z','+00:00', \
-                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1', 0)",
+                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','c-1', 0)",
     )
     .execute(&writer)
     .await
@@ -398,7 +398,6 @@ async fn every_wire_field_survives_the_round_trip() {
         .message_index(Some(0))
         .entire_chat("/chat/row-1")
         .text("Stardate 47988.1")
-        .slack_link(Some("slack://x".to_string()))
         .qmd_path(Some("claude-api/render_markdown/row-1.md".to_string()))
         .source_url(Some("https://claude.ai/chat/row-1".to_string()))
         .git_sha(Some("abc123".to_string()))

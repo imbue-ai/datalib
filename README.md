@@ -93,16 +93,19 @@ type that is not one product spells its sources out — email's are
 | Signal | `signal` | Android backup file | Messages + media |
 | WhatsApp | `whatsapp` | Android `crypt15` backup | Messages + media |
 | Apple Messages | `apple_messages` | The Messages app's own `chat.db` on a Mac (or a copy) | iMessage / SMS chats with tapbacks; attachments by name |
+| Claude Code | `claude_code` | Claude Code's own transcripts on this machine (`~/.claude/projects`) | Every session — terminal, desktop app, IDE extension — and its subagents, rendered one document per transcript |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 | Facebook | `facebook` | "Download your information" export (JSON) | Posts, photo albums, comments, reactions; friends as contacts; every other file of the export mirrored to the raw store |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history, rendered as one page of interactive plots |
+| AirVisual | `airvisual` | An IQAir AirVisual Pro's data folder: its Samba share mounted, or a copy | Every logged sample (PM2.5, CO2, temperature, humidity, …) per device, rendered as one page of interactive plots |
 | Garmin | `garmin` | Web API (its own login, not latchkey) | Per-day health metrics (sleep, heart rate, stress, body battery, HRV, SpO2, …), weigh-ins, activities + original FIT files, devices, records, gear, badges, workouts, goals; the weigh-ins rendered as one page with an interactive plot |
 | Perseus | `perseus` | Public download | TEI editions of Greek and Latin texts from PerseusDL |
 | PDFs | `pdf` | Local directory tree | Every PDF under it, converted to markdown and keyed on content hash (no OCR yet) |
 | Music / photos / video | `media` | Local directory tree | Every audio, image and video file with its metadata, plus `.m3u` playlists; download-only, no rendered markdown |
 | Local files | `fsindex` | Local directory tree | An index of every entry (path, kind, size, blake3); download-only, no rendered markdown |
 | Photos | `lightroom` | Adobe Lightroom Classic catalog (`.lrcat`) | A deduplicated, versioned mirror of every table — an incremental backup with full history; download-only, no rendered markdown |
+| Apple Photos | `apple_photos` | An Apple Photos `.photoslibrary` (or its `Photos.sqlite`) | The same versioned mirror of the library's database — assets, albums, people, edits; download-only, no rendered markdown |
 
 See [`docs/user/config_examples/all_sources.toml`](docs/user/config_examples/all_sources.toml)
 for one fully-commented config entry per source, and

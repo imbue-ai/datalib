@@ -1,11 +1,13 @@
 # Problem visibility: every error and warning a step meets, shown to the user
 
-**Status: built through PR 5 (2026-09-18), with a tail.** §1 is the
-audit as it stood at `137cb5c1`, before any of this landed — read it
-as the record of what was true then, not as a description of the
-tree. §3 says per PR what landed and what is still open: the
-per-provider fetch migration, R3's lossy-rules table, R4's drop
-budget. Where this doc and the tree disagree, the tree wins.
+**Status: built through PR 5 (2026-09-18), with a tail. This stays
+in `plans/` until the provider tail in §3 is done — the providers
+that still `warn!` past a per-record fetch failure instead of
+recording it.** §1 is the audit as it stood at `137cb5c1`, before any
+of this landed — read it as the record of what was true then, not as
+a description of the tree. §3 says per PR what landed and what is
+still open: the per-provider fetch migration, R3's lossy-rules table,
+R4's drop budget. Where this doc and the tree disagree, the tree wins.
 
 ## 0. What we want
 
@@ -408,18 +410,22 @@ than only the banner; problems on `edges`.
 
 ## 5. Docs to touch
 
+All done, except the last:
+
 - `data_architecture_parse_and_render.md` §4 — banner, and R1's
-  paragraph rewritten around `problems` (PR 1).
-- `etl/README.md` — a "Problems" section beside "Bookkeeping lives in
-  a sidecar table", stating the copy rule of §D3 (PR 2, PR 5).
+  paragraph rewritten around `problems`; the fetch rows in its table.
+- `data_architecture_ingestion.md` §"Error handling" — a per-record
+  fetch failure is a `problems` row, not only a `warn!`.
+- `etl/README.md` — "Problems flow downstream with the data", the
+  copy rule of §D3.
 - `app_stores.md` — `problems` in each store's table list.
 - `grid_rows.md` — the index has a second table the grid reads.
-- `AGENTS.md` — one line under the data-quality conventions: an error
-  or a warning about a record goes through `problems`, never only to
-  the log; and where the counts show.
-- This doc: move to `plans/completed/` when PR 5's checklist is done,
-  or delete it if by then §D1–D6 have been folded into the reference
-  docs above.
+- `AGENTS.md` — the one line under "Fallbacks": an error or a warning
+  about a record goes through `problems`, never only to the log; and
+  where the counts show.
+- This doc: move to `plans/completed/` when the provider tail in §3
+  is done, or delete it if by then §D1–D6 have been folded into the
+  reference docs above.
 
 ## 6. Open questions
 

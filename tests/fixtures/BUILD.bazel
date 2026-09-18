@@ -102,13 +102,12 @@ filegroup(
 
 filegroup(
     name = "source_json",
-    srcs = glob([
-        "github_api/**/*.jsonl",
-        "gitlab_api/**/*.jsonl",
-        "notion_web/**/*.jsonl",
-    ]) + [
-        # Provider fixtures moved into their respective Rust crates so
-        # the sample data is co-located with the code under test.
+    # Every provider's fixture lives in its own crate, beside the code
+    # under test.
+    srcs = [
+        "//datalib/backend/etl/providers/github:tng_fixture",
+        "//datalib/backend/etl/providers/gitlab:tng_fixture",
+        "//datalib/backend/etl/providers/notion:tng_fixture",
         "//datalib/backend/etl/providers/slack:tng_fixture",
         "//datalib/backend/etl/providers/chatgpt:tng_fixture",
         "//datalib/backend/etl/providers/claude:tng_fixture",
@@ -190,9 +189,9 @@ genrule(
             "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
             "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
             "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-            "tests/fixtures/github_api",
-            "tests/fixtures/gitlab_api",
-            "tests/fixtures/notion_web",
+            "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+            "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+            "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
             # Beeper is different — the fixture is SQL + media, not
             # an HTTP capture tree. run_sync_pipeline.py
             # materializes a BeeperTexts-shaped dir from it on the
@@ -289,14 +288,12 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        # FIXME: move these into their provider specific directories.
-        "tests/fixtures/github_api",
-        "tests/fixtures/gitlab_api",
-        "tests/fixtures/notion_web",
+        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
         "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
@@ -351,14 +348,12 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
         "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        # FIXME: move these into their provider specific directories.
-        "tests/fixtures/github_api",
-        "tests/fixtures/gitlab_api",
-        "tests/fixtures/notion_web",
+        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
         "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",

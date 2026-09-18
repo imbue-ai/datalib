@@ -385,6 +385,29 @@ These sources need nothing but a path on their ingest step:
   the picker rather than typing the path, and if a sync still reports
   "Operation not permitted", grant Datalib Full Disk Access in System
   Settings → Privacy & Security.
+- **`claude_code`** — the transcripts Claude Code keeps on this machine.
+  A bare `[steps.params.sessions]` reads the standard location,
+  `~/.claude/projects`, where every Claude Code — terminal, desktop app,
+  IDE extension — writes them; set `sessions.path` only for a copy kept
+  elsewhere. No credentials. Claude Code deletes old sessions on its own
+  schedule, and the mirror keeps them.
+
+## AirVisual (IQAir)
+
+An AirVisual Pro serves its own history files over Samba. On the
+device, *Settings › Network › Access Pro data* shows the share's
+address and password (the user is `airvisual`); mount it, or copy the
+folder off it. Then list each monitor under the ingest step:
+
+```toml
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"
+```
+
+Every `*_AirVisual_values.txt` under the path is read, archive folders
+included. The device's serial and name come from the folder's own
+`latest_config_measurements.json`; a copy that lacks that file needs
+`serial = "…"` on the entry. There is no cloud account involved.
 
 ## Other sources
 

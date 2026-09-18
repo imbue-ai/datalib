@@ -975,7 +975,7 @@ type MenuScope = {
   links: { web: SearchRow[]; local: string[] };
 };
 
-const linkOf = (r: SearchRow): string => r.source_url || r.slack_link || "";
+const linkOf = (r: SearchRow): string => r.source_url || "";
 
 function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const anchor = args.row != null ? rowData(args.row) : null;
@@ -1000,9 +1000,8 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
         ),
       }
     : null;
-  // A row's outbound linkout: the generic source_url (Slack permalink,
-  // LinkedIn post, …), falling back to the legacy slack_link column.
-  // Local files (today: the `pdf` source) carry a `file://` URL, which
+  // A row's outbound linkout is source_url (Slack permalink, LinkedIn
+  // post, …). Local files (today: the `pdf` source) carry a `file://` URL, which
   // `window.open` cannot usefully follow from an http origin — a
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.

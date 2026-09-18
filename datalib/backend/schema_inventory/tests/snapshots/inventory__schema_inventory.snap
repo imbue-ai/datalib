@@ -1201,11 +1201,6 @@ records
     id
     payload
     transcript_id
-    session_id
-    record_type
-    timestamp
-    parent_uuid
-    is_sidechain
 transcripts
     id
     payload
@@ -1420,7 +1415,6 @@ grid_rows
     message_index
     entire_chat
     text
-    slack_link
     qmd_path
     source_url
     git_sha

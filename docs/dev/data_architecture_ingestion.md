@@ -27,7 +27,7 @@ The ETL pipeline currently has three stages, each running as a **subprocess step
 2. **Render** — derive `.md` files under `<stanza>/render_markdown/...` plus that source's render store (`indexed_markdown.doltlite_db`) from the raw store, deterministically (indexing with qmd is the separate `qmd_index` step).
 3. **Grid index (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
-Each provider (data source) is **two** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Download and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
+Each provider (data source) is **three** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib-etl-<name>-config` is the config schema (serde structs, nothing else), `datalib-etl-<name>` downloads, and `datalib-etl-<name>-render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Ingest and render are separate crates". Grid index is provider-agnostic and lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`); a new provider needs no grid_index-side changes.
 
 ## Layering of concerns: download is downstream-agnostic
 The per-stage modules within a provider crate form a strict layer with a single allowed dependency direction:
@@ -73,6 +73,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent object ide
 - Every raw-store entity table keys by the upstream provider's identifier — no surrogate `AUTOINCREMENT`. That's what makes `dolt diff` stable across re-fetches, what makes `ON CONFLICT(id) DO UPDATE` work, and what makes cross-table references (e.g. `messages.conversation_id`) mean something.
 - When an upstream doesn't expose a stable UUID, we **synthesize one via UUIDv5** from a per-provider namespace and the most stable available fields. This is done in the data source's schema_raw.rs DDL.
 - We do **not** use row autoincrement or hashes-of-content as identity for objects. Both break the Ship-of-Theseus property: autoincrement isn't deterministic across re-ingest; content hashes change every time the content does.
+- **Sanctioned divergence: a content-hash id when the export carries no stable field at all.** Facebook's export gives most records — posts, comments, the profile — no `fbid` or any other id, so `facebook` mints `uuidv5(table, canonical JSON)` for those. The cost is named and accepted: an edit to such a record is a delete plus an add in `dolt_diff`, never a modification. Reach for this only after confirming there is no stable field; a synthesized UUIDv5 over stable fields is always preferred.
 - The **projection** side of identity — `GridRow.uuid`, the `upstream_*` backpointers, `source_url`, and the per-provider cross-references the UI links sideways through — moved to [`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#identity-and-backpointers-are-first-class-in-the-projection).
 
 ### `schema_raw.rs`: Per-provider schema layout
@@ -103,6 +104,8 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 3. **Writer-supplied per-row state** (`fetched_at_utc`, `attempt_count`, `last_attempt_at_utc`, `last_error`, per-row cursors like CardDAV `etag`, ChatGPT `last_listing_update_time`, YoLink `last_ts_ms`, server-supplied freshness markers like `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
 
 The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed, and the sidecar churn stays out of any cross-stage fingerprint.
+
+**Sanctioned divergence: no sidecar for a snapshot input read whole every run.** `facebook`, `claude_code` and `airvisual` read a local export or tree from the start every run; there is no per-row fetch to record, so a sidecar would only churn `last_attempt_at_utc` on every row for nothing. Those tables have no `<t>_bookkeeping`. A provider that fetches records one at a time from a service keeps the sidecar — it is what makes a partial run resumable and a failed row visible.
 
 ### Blobs and the CAS split
 Attachment bytes are split out of the entity database into a sibling content-addressable store. We do this because:
@@ -299,10 +302,10 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 8 of the 20 providers with a download side use `DownloadRun`**
-(beeper, chatgpt, claude, email, github, gitlab, notion, slack; checked
-2026-09-05). The other twelve write no `sync_runs` row and no deltas at
-all — their history is still in the commits, but nothing precomputes it.
+**Only 8 of the 26 providers with a download side use `DownloadRun`**
+(beeper, chatgpt, claude, email, github, gitlab, notion, slack). The
+other eighteen write no `sync_runs` row and no deltas at all — their
+history is still in the commits, but nothing precomputes it.
 
 One thing `removed` does *not* mean: it counts rows **our downloader
 deleted**, not rows the provider stopped serving. Those coincide only
@@ -319,7 +322,7 @@ the input dropped is simply not written back. The old rows stay in
 history, so `dolt_diff` still says what went.
 
 Mechanically it is the config-driven form of `--reset-and-redownload`:
-[`download.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
+[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
 two together, and every provider already truncates on that knob. The
 blob CAS keeps its bytes — orphans there wait on a collector we have not
 built.
@@ -430,7 +433,7 @@ subtracted, written as an ordinary render tree — documents with the
 changes marked, `grid_rows` with `diff_status` set — so everything that
 serves a source serves the difference. "Compare two syncs…" on the
 Manage screen writes one; [`config_model.md`](config_model.md) has the
-shape and [`plans/diff_renderer.md`](plans/diff_renderer.md) the design
+shape and [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) the design
 and what it cost to build.
 
 What a diff can show is bounded by what the ingest carried into the
@@ -613,13 +616,14 @@ We want enough transient error handling that syncs "usually" work.  The goals ar
 Distinctions every provider should try to follow.  
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (see [Retry and fetch durability](#transient-vs-non-transient) below), advance the cursor, keep going. The run's `FetchSummary` reports `errors=N`.
+- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), which render carries forward and the Manage row counts. A configured entry upstream does not have — a label, a channel, a conversation id — goes through [`download_problems::report`](/datalib/backend/etl/src/download_problems.rs), which writes one config-keyed row per entry, every run until the config is corrected. How the rows travel: [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
 - **Auth failures and consecutive-failure budgets are fatal.** A workspace-wide 401 / 403 from the auth provider, or N back-to-back per-item failures on the same source, should return `Err` from `fetch(...)`. Even on auth failure, the orchestrator should still `dolt_commit` to record what *did* get pulled before the failure plus a note about the problem, then exit non-zero once other pipeline pathways finish.
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template for the second pattern.
 
-There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`)
+There are existing chokepoint mechanisms to enforce some of these rules, but not all can be generically enforced (Slack's HTTP-200 `error:"ratelimited"` body; GitHub's `403 + x-ratelimit-remaining:0`).
 
-ChatGPT seems to have a 200 requests/hour rate limit.  You have to stop for a while once you hit it.  What's the right approach?  Do you want to sleep for an hour?  Or just run it again in an hour?  Josh: right option is run forever, up to some "how long to run without making progress before giving up".
+A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/src/retry.rs)) says the run has gone too long without progress; then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:
