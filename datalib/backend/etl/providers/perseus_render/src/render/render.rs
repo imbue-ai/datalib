@@ -143,6 +143,7 @@ fn render_book(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges,
         problems,
     })
@@ -218,6 +219,7 @@ fn render_chapter(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        sections: Vec::new(),
         edges,
         problems,
     })

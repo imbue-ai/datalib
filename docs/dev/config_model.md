@@ -62,6 +62,18 @@ is the mount prefix and a JavaScript identifier, unique on its own and
 not composed; `group` on an applet only says which Manage row it is
 filed under.
 
+**A diff group** is a group of `type = "diff"` with a `source`: it
+mirrors nothing itself and renders what changed in the `source` group's
+raw store between two commits, as documents with the changes marked and
+`grid_rows` with a `diff_status`. Its one step is `render_markdown`,
+reading `<source>/ingest`, with the two commits under `params.diff`
+(`from` and `to`, both required, and `max_documents`, the most
+documents a side may render before the step fails, default 1000); the
+rest of `params` is the source type's render config. The fan-ins name it like any render step. The
+source's id and type reach the step as `DATALIB_DAG_SOURCE_GROUP` and
+`DATALIB_DAG_SOURCE_GROUP_TYPE`, set by the loader in the step's `env`. `docs/dev/plans/diff_renderer.md`
+has the design; `configs/dag_example.toml` has one.
+
 `configs/dag_example.toml` is the commented, complete version;
 `docs/user/config_examples/` has the shapes people start from.
 
@@ -161,8 +173,8 @@ file runs.
 
 | the entry | is dropped when |
 |---|---|
-| a group | its id is not one segment, is `system`, or is a duplicate |
-| a step | its function is not one segment; its group is undeclared; it has no `command` and no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; its id is under `system`, duplicated, or nested with another; an input names itself |
+| a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
+| a step | its function is not one segment; its group is undeclared; it has no `command` and no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; its id is under `system`, duplicated, or nested with another; an input names itself; under a `diff` group it is not `render_markdown`, or it has inputs and the first is not `<source>/ingest` |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate |
 

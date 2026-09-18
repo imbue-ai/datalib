@@ -169,7 +169,20 @@ pub struct GroupEntry {
     /// is the plan for making search use it.
     #[serde(default)]
     pub description: Option<String>,
+    /// For a group of type [`DIFF_GROUP_TYPE`] only: the source group whose
+    /// raw store its render step compares at two commits. The loader
+    /// checks it names a source that renders; the source's type reaches
+    /// the step as `DATALIB_DAG_SOURCE_GROUP_TYPE`. The raw store itself
+    /// still comes from the step's first input, as for any render.
+    #[serde(default)]
+    pub source: Option<String>,
 }
+
+/// The `type` of a group that mirrors nothing itself but renders what
+/// changed in another group's raw store between two commits — see
+/// `docs/dev/plans/diff_renderer.md`. Not a provider: `datalib-step`
+/// runs the `source` group's renderer under it.
+pub const DIFF_GROUP_TYPE: &str = "diff";
 
 /// One applet instance. Deliberately a subset of [`StepEntry`]: an applet
 /// declares no `inputs` because it is not scheduled and owns no artifacts.
@@ -763,9 +776,30 @@ fn accept_groups(
     let mut accepted = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
+    // A diff group's `source` may name a group declared after it, so the
+    // check reads the whole file rather than what has been accepted so far.
+    let declared: BTreeMap<&str, &GroupEntry> = candidates
+        .iter()
+        .map(|c| (c.entry.id.as_str(), &c.entry))
+        .collect();
+    let source_problems: Vec<(String, String, Option<String>)> = candidates
+        .iter()
+        .filter_map(|c| {
+            diff_source_problem(&c.entry, &declared)
+                .map(|(msg, help)| (c.entry.id.clone(), msg, help))
+        })
+        .collect();
 
     for c in candidates {
         let id = c.entry.id.clone();
+        if let Some((_, msg, help)) = source_problems.iter().find(|(pid, _, _)| *pid == id) {
+            let mut d = c.diag(Severity::Rejected, text, Some("source"), msg.clone());
+            if let Some(help) = help {
+                d = d.with_help(help.clone());
+            }
+            diags.push(d);
+            continue;
+        }
         if !valid_id_segment(&id) {
             diags.push(c.diag(
                 Severity::Rejected,
@@ -819,6 +853,48 @@ fn accept_groups(
     (accepted, diags)
 }
 
+/// Why a group's `source` is unusable, with the fix: a `diff` group has to
+/// name a source that renders, and only a `diff` group names one at all.
+fn diff_source_problem(
+    g: &GroupEntry,
+    declared: &BTreeMap<&str, &GroupEntry>,
+) -> Option<(String, Option<String>)> {
+    let is_diff = g.r#type.as_deref() == Some(DIFF_GROUP_TYPE);
+    match (&g.source, is_diff) {
+        (None, false) => None,
+        (Some(_), false) => Some((
+            "`source` is only for a group of type \"diff\": it names the group whose raw \
+             store the diff compares"
+                .to_string(),
+            Some("remove `source`, or make this a diff group with `type = \"diff\"`".into()),
+        )),
+        (None, true) => Some((
+            "a diff group needs a `source`: the id of the group whose raw store its \
+             render step compares at two commits"
+                .to_string(),
+            None,
+        )),
+        (Some(source), true) => match declared.get(source.as_str()) {
+            None => Some((
+                format!("source {source:?} names no declared group"),
+                Some(format!(
+                    "declared groups: {}",
+                    id_list(declared.keys().copied().filter(|k| *k != g.id.as_str()))
+                )),
+            )),
+            Some(src) if src.r#type.as_deref() == Some(DIFF_GROUP_TYPE) => Some((
+                format!("source {source:?} is itself a diff group; a diff compares a source's raw store, which a diff group does not have"),
+                None,
+            )),
+            Some(src) if src.r#type.is_none() => Some((
+                format!("source {source:?} has no `type`, so it mirrors nothing to compare"),
+                None,
+            )),
+            Some(_) => None,
+        },
+    }
+}
+
 /// The step rules, applied entry by entry. A grouped step's `function` must
 /// be one directory name and its group must exist; a custom step's `id` must
 /// be a usable path. Every step's id is unique, un-nested with every other,
@@ -844,6 +920,7 @@ fn accept_steps(
     for c in candidates {
         let id = c.entry.id.clone();
         let mut group_type: Option<&str> = None;
+        let mut source_group: Option<(&str, &str)> = None;
         match (&c.entry.group, &c.entry.function) {
             (Some(g), Some(f)) => {
                 if !valid_id_segment(f) {
@@ -860,7 +937,58 @@ fn accept_steps(
                     continue;
                 }
                 match groups.get(g.as_str()) {
-                    Some(group) => group_type = group.r#type.as_deref(),
+                    Some(group) => {
+                        group_type = group.r#type.as_deref();
+                        if group_type == Some(DIFF_GROUP_TYPE) {
+                            if f != DIFF_GROUP_FUNCTION {
+                                diags.push(
+                                    c.diag(
+                                        Severity::Rejected,
+                                        text,
+                                        Some("function"),
+                                        format!(
+                                            "a diff group has one step, `{DIFF_GROUP_FUNCTION}`; \
+                                             it has no raw store of its own to `{f}` into"
+                                        ),
+                                    )
+                                    .with_help(format!(
+                                        "the store it compares is group {:?}'s, named by this \
+                                         step's `inputs`",
+                                        group.source.as_deref().unwrap_or("?")
+                                    )),
+                                );
+                                continue;
+                            }
+                            // Accepted groups only: a `source` that failed its
+                            // own rules dropped the diff group with it.
+                            source_group = group
+                                .source
+                                .as_deref()
+                                .and_then(|s| groups.get(s))
+                                .and_then(|src| Some((src.id.as_str(), src.r#type.as_deref()?)));
+                            // Its raw store is its source's: named as the first
+                            // input, or — in a root with no ingest steps, like a
+                            // materialized fixture — not named at all, and read
+                            // from `<source>/ingest` by the step.
+                            let expected =
+                                format!("{}/ingest", group.source.as_deref().unwrap_or(""));
+                            if !c.entry.inputs.is_empty()
+                                && c.entry.inputs.first() != Some(&expected)
+                            {
+                                diags.push(c.diag(
+                                    Severity::Rejected,
+                                    text,
+                                    Some("inputs"),
+                                    format!(
+                                        "a diff group's render reads the raw store its first \
+                                             input names, which has to be its source's: `inputs = \
+                                             [{expected:?}]`"
+                                    ),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                     None if dropped_groups.contains(g) => {
                         diags.push(
                             c.diag(
@@ -1016,7 +1144,7 @@ fn accept_steps(
             );
         }
 
-        let spec = match spec_of(&c.entry, group_type) {
+        let spec = match spec_of(&c.entry, group_type, source_group) {
             Ok(spec) => spec,
             Err(e) => {
                 diags.push(c.diag(Severity::Rejected, text, Some("command"), format!("{e:#}")));
@@ -1065,7 +1193,16 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
 /// other bare name: `binary_dir`, then `PATH`.
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
-fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
+/// The one function a diff group's step performs: the tree the fan-ins
+/// read a group's documents from is `<group>/render_markdown`, whoever
+/// wrote it.
+const DIFF_GROUP_FUNCTION: &str = "render_markdown";
+
+fn spec_of(
+    e: &StepEntry,
+    group_type: Option<&str>,
+    source_group: Option<(&str, &str)>,
+) -> Result<StepSpec> {
     let mut argv = match &e.command {
         Some(command) => shlex::split(command)
             .with_context(|| format!("command {command:?} has unbalanced quoting"))?,
@@ -1085,14 +1222,21 @@ fn spec_of(e: &StepEntry, group_type: Option<&str>) -> Result<StepSpec> {
         argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
     }
 
-    let mut spec = StepSpec::new(
-        &e.id,
-        StepRun::Subprocess {
-            argv,
-            env: e.env.clone(),
-            params,
-        },
-    );
+    // The source's id and type ride in the step's own environment:
+    // forwarded like any `env` entry, and in the fingerprint with it, so
+    // changing the source re-runs the diff.
+    let mut env = e.env.clone();
+    if let Some((id, t)) = source_group {
+        env.insert(
+            crate::subprocess::ENV_SOURCE_GROUP.to_string(),
+            id.to_string(),
+        );
+        env.insert(
+            crate::subprocess::ENV_SOURCE_GROUP_TYPE.to_string(),
+            t.to_string(),
+        );
+    }
+    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
@@ -1786,6 +1930,141 @@ mod tests {
         assert!(err.contains("duplicate id"), "{err}");
         // Same rule, said the other way: two steps writing one tree.
         assert!(err.contains("tree it writes"), "{err}");
+    }
+
+    fn diff_config(group: &str, step: &str) -> String {
+        format!(
+            r#"
+            [[groups]]
+            id = "slack"
+            type = "slack"
+
+            [[groups]]
+            id = "notes"
+
+            [[groups]]
+            id = "slack-diff"
+            {group}
+
+            [[steps]]
+            group = "slack"
+            function = "ingest"
+            params.api = {{}}
+
+            [[steps]]
+            group = "slack-diff"
+            {step}
+            "#
+        )
+    }
+
+    /// A diff group is `type = "diff"` plus a `source`; its one step is
+    /// `render_markdown` reading the source's ingest tree, and the
+    /// source's type rides in that step's env, fingerprinted with it.
+    #[test]
+    fn a_diff_group_forwards_its_sources_type_in_the_steps_env() {
+        let cfg: DagConfig = toml::from_str(&diff_config(
+            r#"type = "diff"
+            source = "slack""#,
+            r#"function = "render_markdown"
+            inputs = ["slack/ingest"]
+            params.diff = { from = "aaa", to = "bbb" }"#,
+        ))
+        .unwrap();
+        let specs = to_specs(&cfg).unwrap();
+        let diff = specs
+            .iter()
+            .find(|s| s.id == "slack-diff/render_markdown")
+            .expect("the diff step is accepted");
+        assert_eq!(diff.group_type.as_deref(), Some(DIFF_GROUP_TYPE));
+        let StepRun::Subprocess { env, .. } = &diff.run else {
+            panic!("built-in step");
+        };
+        assert_eq!(
+            env.get(crate::subprocess::ENV_SOURCE_GROUP_TYPE)
+                .map(String::as_str),
+            Some("slack")
+        );
+        assert!(
+            diff.fingerprint_material()
+                .contains("DATALIB_DAG_SOURCE_GROUP_TYPE=slack"),
+            "the source's type is in the fingerprint"
+        );
+    }
+
+    /// A root with no ingest steps — a materialized fixture — declares
+    /// the diff step with no inputs, and the step reads `<source>/ingest`.
+    #[test]
+    fn a_diff_step_may_declare_no_inputs() {
+        let cfg: DagConfig = toml::from_str(&diff_config(
+            r#"type = "diff"
+            source = "slack""#,
+            r#"function = "render_markdown"
+            params.diff = { from = "aaa", to = "bbb" }"#,
+        ))
+        .unwrap();
+        let specs = to_specs(&cfg).unwrap();
+        assert!(specs.iter().any(|s| s.id == "slack-diff/render_markdown"));
+    }
+
+    /// Every way a diff group can be mis-declared names the rule it broke.
+    #[test]
+    fn a_diff_group_is_dropped_with_the_rule_it_broke() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                r#"type = "diff""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/ingest"]"#,
+                "needs a `source`",
+            ),
+            (
+                r#"type = "diff"
+                source = "nowhere""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/ingest"]"#,
+                "names no declared group",
+            ),
+            (
+                r#"type = "diff"
+                source = "notes""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/ingest"]"#,
+                "has no `type`",
+            ),
+            (
+                r#"type = "diff"
+                source = "slack-diff""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/ingest"]"#,
+                "is itself a diff group",
+            ),
+            (
+                r#"type = "slack"
+                source = "slack""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/ingest"]"#,
+                "only for a group of type \"diff\"",
+            ),
+            (
+                r#"type = "diff"
+                source = "slack""#,
+                r#"function = "ingest"
+                params.api = {}"#,
+                "has one step, `render_markdown`",
+            ),
+            (
+                r#"type = "diff"
+                source = "slack""#,
+                r#"function = "render_markdown"
+                inputs = ["slack/render_markdown"]"#,
+                "has to be its source's",
+            ),
+        ];
+        for (group, step, expect) in cases {
+            let cfg: DagConfig = toml::from_str(&diff_config(group, step)).unwrap();
+            let err = to_specs(&cfg).unwrap_err().to_string();
+            assert!(err.contains(expect), "{group}\n{step}\n→ {err}");
+        }
     }
 
     /// Two sources of the same type, which is what "+ Data Source"

@@ -300,6 +300,7 @@ pub fn render_gitlab(
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
+            sections: Vec::new(),
             edges: Vec::new(),
             problems,
         })?;

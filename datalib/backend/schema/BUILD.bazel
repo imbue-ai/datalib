@@ -15,6 +15,7 @@ rust_library(
         "src/render_cursor.rs",
         "src/render_inputs.rs",
         "src/measurements.rs",
+        "src/diff_status.rs",
     ],
     crate_name = "datalib_schema",
     edition = "2021",

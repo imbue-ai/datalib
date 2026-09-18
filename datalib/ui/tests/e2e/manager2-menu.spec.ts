@@ -26,6 +26,7 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
     "Browse every source",
     "Sync now",
     "Edit settings…",
+    "Compare two syncs…",
     "Show log",
     "Show commit history",
     "Remove from config, with everything under it",

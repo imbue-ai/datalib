@@ -48,7 +48,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
-use datalib_etl_render::section::msg_div_open;
+use datalib_etl_render::section::{join, msg_div_open, Section};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -185,8 +185,8 @@ fn render_one(
     };
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let md = render_markdown(profile, chat, doc, &chat_title, &doc_title);
-    fs::write(&md_path, &md).with_context(|| format!("write {}", md_path.display()))?;
+    let sections = render_markdown(profile, chat, doc, &chat_title, &doc_title);
+    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
         .strip_prefix(out_dir)
@@ -220,6 +220,7 @@ fn render_one(
         md_path,
         render_version: profile.render_version,
         rows,
+        sections,
         edges: Vec::new(),
         problems,
     })
@@ -295,8 +296,8 @@ fn render_markdown(
     // heading takes them apart, so a clamp cannot eat the period.
     chat_title: &str,
     title: &str,
-) -> String {
-    let mut s = String::with_capacity(8 * 1024);
+) -> Vec<Section> {
+    let mut s = String::with_capacity(1024);
     s.push_str("---\n");
     s.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
     s.push_str(&format!("provider: {}\n", profile.provider));
@@ -338,9 +339,10 @@ fn render_markdown(
 
     if doc.items.is_empty() {
         s.push_str("_(no messages)_\n");
-        return s;
+        return vec![Section::unkeyed(s)];
     }
 
+    let mut sections = vec![Section::unkeyed(s)];
     let mut i = 0;
     while i < doc.items.len() {
         let run_end = doc.items[i..]
@@ -348,23 +350,26 @@ fn render_markdown(
             .position(|it| !it.is_aside)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
-            render_aside_run(&mut s, profile, &doc.items[i..run_end]);
+            render_aside_run(&mut sections, profile, &doc.items[i..run_end]);
             i = run_end;
         } else {
-            render_item(&mut s, profile, &doc.items[i]);
+            sections.push(render_item(profile, &doc.items[i]));
             i += 1;
         }
     }
-    render_orphan_reactions(&mut s, doc);
-    s
+    if let Some(orphans) = render_orphan_reactions(doc) {
+        sections.push(Section::unkeyed(orphans));
+    }
+    sections
 }
 
 /// Reactions the provider could not place on any message in this
 /// document, listed at the end under the upstream id they name.
-fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
+fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
     if doc.orphan_reactions.is_empty() {
-        return;
+        return None;
     }
+    let mut s = String::new();
     s.push_str("---\n\n## Reactions to messages not in this mirror\n\n");
     for group in &doc.orphan_reactions {
         s.push_str(&format!(
@@ -382,6 +387,7 @@ fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
         }
     }
     s.push('\n');
+    Some(s)
 }
 
 /// Wrap one run of adjacent asides in a single collapsed `<details>`.
@@ -389,20 +395,26 @@ fn render_orphan_reactions(s: &mut String, doc: &NormalizedDoc) {
 /// The `<details>` sits *outside* the per-message `<div>`s so every
 /// anchor, copy button and grid-row highlight inside it keeps working
 /// unchanged — the frontend opens the enclosing `<details>` when it
-/// scrolls to a section within one.
-fn render_aside_run(s: &mut String, profile: &RenderProfile, items: &[NormalizedChatItem]) {
+/// scrolls to a section within one. Its opener and closer are unkeyed
+/// sections of their own, so each aside stays its own keyed section.
+fn render_aside_run(
+    sections: &mut Vec<Section>,
+    profile: &RenderProfile,
+    items: &[NormalizedChatItem],
+) {
     let plural = if items.len() == 1 { "" } else { "s" };
-    s.push_str(&format!(
+    sections.push(Section::unkeyed(format!(
         "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
         n = items.len(),
-    ));
+    )));
     for item in items {
-        render_item(s, profile, item);
+        sections.push(render_item(profile, item));
     }
-    s.push_str("</details>\n\n");
+    sections.push(Section::unkeyed("</details>\n\n".to_string()));
 }
 
-fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatItem) {
+fn render_item(profile: &RenderProfile, item: &NormalizedChatItem) -> Section {
+    let mut s = String::with_capacity(512);
     s.push_str(&msg_div_open(&item.message_uuid, profile.provider));
     s.push_str("\n\n");
 
@@ -421,7 +433,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 ts = timestamp_html(item.date_ms)
             ));
             s.push_str("</div>\n\n");
-            return;
+            return Section::keyed(&item.message_uuid, s);
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -454,7 +466,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
                 s.push_str("\n*[attachment metadata missing]*\n");
             }
             for att in &item.attachments {
-                render_attachment(s, att);
+                render_attachment(&mut s, att);
             }
         }
         ItemKind::System => unreachable!(),
@@ -482,6 +494,7 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
     }
 
     s.push_str("\n</div>\n\n");
+    Section::keyed(&item.message_uuid, s)
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -1025,13 +1038,13 @@ mod tests {
             render_version: 1,
         };
         let chat = mk_chat();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &profile,
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(md.contains("Make it so."));
         assert!(md.contains("🫡 Will Riker"));
         assert!(md.contains("id=\"m-33333333"));
@@ -1045,13 +1058,13 @@ mod tests {
     #[test]
     fn message_header_is_an_h2_with_a_hoverable_short_timestamp() {
         let chat = mk_chat();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(
             md.contains("## <span class=\"msg-author\">Picard</span> "),
             "{md}"
@@ -1069,13 +1082,13 @@ mod tests {
     fn an_author_named_in_markup_cannot_break_out_of_the_header() {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].author_display = "<script>x</script> & co".to_string();
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
         assert!(
             md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
             "{md}"
@@ -1104,13 +1117,13 @@ mod tests {
                 source_ref: None,
             }],
         }];
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test \u{b7} Bridge Crew",
             "Test \u{b7} Bridge Crew (2364-04)",
-        );
+        ));
 
         assert!(
             md.contains(
@@ -1157,13 +1170,13 @@ mod tests {
             spoken,
             aside_item("aside-3", "third tool"),
         ];
-        let md = render_markdown(
+        let md = join(&render_markdown(
             &test_profile(),
             &chat,
             &chat.buckets[0],
             "Test · Bridge Crew",
             "Test · Bridge Crew (2364-04)",
-        );
+        ));
 
         assert_eq!(
             md.matches("<details class=\"tool-group\">").count(),
@@ -1177,6 +1190,60 @@ mod tests {
         for uuid in ["aside-1", "aside-2", "aside-3"] {
             assert!(md.contains(&format!("id=\"m-{uuid}\"")), "{md}");
         }
+    }
+
+    /// A document's sections are one per item, each keyed by the item
+    /// it wraps, with the frontmatter and the `<details>` wrappers
+    /// unkeyed between them — the shape a diff subtracts by. And their
+    /// join is the document: sectioning changed no byte.
+    #[test]
+    fn every_item_is_one_keyed_section_and_the_join_is_the_document() {
+        let mut chat = mk_chat();
+        let spoken = chat.buckets[0].items[0].clone();
+        chat.buckets[0].items = vec![
+            spoken.clone(),
+            aside_item("aside-1", "first tool"),
+            aside_item("aside-2", "second tool"),
+            spoken.clone(),
+        ];
+        let sections = render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
+        );
+        let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                None,
+                Some(spoken.message_uuid.as_str()),
+                None,
+                Some("aside-1"),
+                Some("aside-2"),
+                None,
+                Some(spoken.message_uuid.as_str()),
+            ],
+            "{sections:#?}"
+        );
+        for s in &sections {
+            if let Some(uuid) = &s.uuid {
+                assert!(
+                    s.md.starts_with(&msg_div_open(uuid, Provider::Test)),
+                    "{}",
+                    s.md
+                );
+                assert!(s.md.ends_with("</div>\n\n"), "{}", s.md);
+            }
+        }
+        assert!(
+            sections[0].md.starts_with("---\ntitle:"),
+            "{}",
+            sections[0].md
+        );
+        assert!(sections[2].md.starts_with("<details"), "{}", sections[2].md);
+        assert_eq!(sections[5].md, "</details>\n\n");
     }
 
     #[test]
@@ -1205,7 +1272,13 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
         };
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
     }
@@ -1226,7 +1299,13 @@ mod tests {
         chat.source_url = Some("https://example.com/post/42".to_string());
 
         // Title gets the `↗` source link.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
             "title carries the source linkout: {md}"
@@ -1282,7 +1361,13 @@ mod tests {
         chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
 
         // Message header carries a `↗` linkout.
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(
             md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
             "message header carries the per-message linkout: {md}"
@@ -1432,7 +1517,13 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items[0].date_ms = None;
-        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "Test (2364-04)");
+        let md = join(&render_markdown(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "Test (2364-04)",
+        ));
         assert!(md.contains("(no timestamp)"), "{md}");
         assert!(!md.contains("1970"), "{md}");
     }

@@ -9,7 +9,7 @@ exports_files(["Cargo.toml"])
 # first subdirectory as the addressbook label.
 filegroup(
     name = "tng_fixture",
-    srcs = glob(["tests/fixtures/carddav_tng/**/*.vcf"]),
+    srcs = glob(["tests/fixtures/carddav_tng*/**/*.vcf"]),
     visibility = ["//visibility:public"],
 )
 

@@ -41,6 +41,10 @@ pub mod measurements {
     include!("measurements.rs");
 }
 
+pub mod diff_status {
+    include!("diff_status.rs");
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

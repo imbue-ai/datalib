@@ -142,6 +142,11 @@ UUID_SQL_REGEX = (
     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+# The diff group run_sync_pipeline.py adds between the contacts store's
+# two commits. Not a source: it mirrors nothing and so measures nothing,
+# and its rows carry the contacts provider with `diff_status` set.
+CONTACTS_DIFF_GROUP = "tng_contacts-diff"
+
 EXPECTED_PROVIDERS = frozenset(
     {
         # File-backed, from two Pros' data folders; one page of plots.
@@ -343,8 +348,40 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "WHERE m.source_id NOT IN ("
             "  SELECT upstream_scope FROM grid_rows "
             "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
-            ") ORDER BY m.source_id;",
+            f") AND m.source_id != '{CONTACTS_DIFF_GROUP}' ORDER BY m.source_id;",
         )
+
+    def _diff_shape(self) -> dict[str, tuple[str, str]]:
+        """The contacts diff group's rows: author → (status, changed columns).
+
+        One add, one delete and one edit, which is every row of the
+        table in docs/dev/plans/diff_renderer.md; the edit names the
+        columns that moved. A real source's rows carry NULL, and the
+        diff's rows carry their own ids — the source's Picard and the
+        diff's Picard are two rows, or the index would have refused the
+        second as a duplicate claim.
+        """
+        rows = self._query(
+            self._index_db,
+            "SELECT g.author || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{CONTACTS_DIFF_GROUP}' ORDER BY g.author;",
+        )
+        out: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            author, status, changed = row.split("|", 2)
+            out[author] = (status, changed)
+        return out
+
+    def _diff_markdown(self, author: str) -> str:
+        """The diff document's markdown for one contact, off the tree."""
+        qmd_path = self._scalar(
+            self._index_db,
+            "SELECT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{CONTACTS_DIFF_GROUP}' AND g.author = '{author}';",
+        )
+        return (self.workspace / qmd_path).read_text()
 
     def _pdf_shape(self) -> dict[str, int]:
         """The `pdf` source's contribution, by grid_rows kind.
@@ -747,6 +784,33 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "every source that rendered must also have measured itself",
         )
+        self.assertEqual(
+            self._diff_shape(),
+            {
+                "Data": ("removed", ""),
+                "Jean-Luc Picard": ("modified", "modified_at|text"),
+                "Worf": ("added", ""),
+            },
+            "the contacts diff between the two fixture commits",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                "SELECT COUNT(*) FROM grid_rows g JOIN markdowns m "
+                "ON g.markdown_uuid = m.markdown_uuid WHERE g.diff_status IS NOT NULL "
+                f"AND m.source_id != '{CONTACTS_DIFF_GROUP}';",
+            ),
+            "0",
+            "diff_status is NULL on every real source's rows",
+        )
+        picard = self._diff_markdown("Jean-Luc Picard")
+        self.assertIn('<div class="diff-modified">', picard)
+        self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
+        self.assertIn(
+            "| <ins>Phone (home)</ins> | <ins>+33-555-LABARRE</ins> |", picard
+        )
+        self.assertIn('<div class="diff-removed">', self._diff_markdown("Data"))
+        self.assertIn('<div class="diff-added">', self._diff_markdown("Worf"))
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,
