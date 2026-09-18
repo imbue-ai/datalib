@@ -62,6 +62,17 @@ pub fn columns() -> Vec<ColumnSpec> {
                  for a Source Size, pages for a PDF.",
             )
             .hidden(),
+        // Set only on a diff group's rows; a real source's rows carry
+        // null in both, and the grid colours a row off the first.
+        ColumnSpec::new("diff_status", "Change", ColumnType::Text)
+            .describe(
+                "How this row differs between the two commits its diff group compares: \
+                 added, removed, modified or unchanged. Empty on every real source's rows.",
+            )
+            .hidden(),
+        ColumnSpec::new("diff_changed_columns", "Changed columns", ColumnType::Text)
+            .describe("For a modified row, the columns whose value differs.")
+            .hidden(),
     ]
 }
 
@@ -220,6 +231,8 @@ mod tests {
             upstream_entity_kind: "message".into(),
             byte_size: Some(1),
             item_count: Some(1),
+            diff_status: Some("modified".into()),
+            diff_changed_columns: Some("text".into()),
             score: Some(0.5),
         };
         Sources::read(Path::new("/nonexistent")).resolve(&mut row);

@@ -1432,6 +1432,8 @@ grid_rows
     markdown_uuid
     byte_size
     item_count
+    diff_status
+    diff_changed_columns
 markdowns
     markdown_uuid
     source_id

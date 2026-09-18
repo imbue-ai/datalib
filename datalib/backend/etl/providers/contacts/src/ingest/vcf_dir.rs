@@ -1,6 +1,6 @@
 //! Local-filesystem vCard ingest.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -37,6 +37,8 @@ pub struct FetchSummary {
     pub addressbooks: usize,
     pub contacts_new: usize,
     pub contacts_updated: usize,
+    /// Contacts a re-read `.vcf` file no longer carried, dropped.
+    pub contacts_deleted: usize,
     /// `.vcf` files whose contents matched the resume cursor and were
     /// skipped without re-parsing.
     pub files_skipped: usize,
@@ -137,6 +139,7 @@ async fn ingest_one(
     summary.addressbooks += 1;
 
     let existing = db.contact_uids(&book_id).await?;
+    let mut seen: HashSet<String> = HashSet::new();
     let mut rows: Vec<ContactRow> = Vec::new();
     // Synthesized name-based ids seen so far in *this* file, mapped to a
     // human label, so we can warn when two distinct cards collapse onto
@@ -149,6 +152,7 @@ async fn ingest_one(
             format!("{book_href}#{idx}")
         };
         let uid = contact_uid(file, &label, idx, &block, &mut synth_seen);
+        seen.insert(uid.clone());
         if existing.contains(&uid) {
             summary.contacts_updated += 1;
         } else {
@@ -165,6 +169,12 @@ async fn ingest_one(
         ));
     }
     db.upsert_contacts(&rows).await?;
+    // A `.vcf` file is the whole address book: a card it no longer
+    // carries was deleted, and the mirror says so.
+    let mut gone: Vec<String> = existing.difference(&seen).cloned().collect();
+    gone.sort();
+    summary.contacts_deleted += gone.len();
+    db.delete_contacts_by_uid(&book_id, &gone).await?;
     Ok(())
 }
 
@@ -402,6 +412,22 @@ mod tests {
         assert_eq!(second.files_skipped, 0);
         assert_eq!(second.contacts_new, 1);
         assert_eq!(second.contacts_updated, 1);
+        assert_eq!(second.contacts_deleted, 0);
+
+        // Rewrite without the first contact: the file is the whole
+        // address book, so a card it no longer carries is gone from the
+        // mirror, not left behind as if nothing happened.
+        std::fs::write(
+            &vcf,
+            "BEGIN:VCARD\nVERSION:3.0\nUID:riker\nFN:William Riker\nEND:VCARD\n",
+        )
+        .unwrap();
+        let third = fetch(opts()).await.unwrap();
+        assert_eq!(third.contacts_deleted, 1);
+        assert_eq!(third.contacts_updated, 1);
+        let book_id = addressbook_pk("local", &relative_href(dir.path(), &vcf));
+        let left = db.contact_uids(&book_id).await.unwrap();
+        assert_eq!(left, HashSet::from(["riker".to_string()]));
         db.close().await;
     }
 

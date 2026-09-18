@@ -125,7 +125,8 @@ jobs:
   # from, Bazel-only crates included — and the desktop shell). The
   # policies are datalib/backend/deny.toml and datalib/tauri/deny.toml;
   # a RustSec advisory against anything in either lock fails this job,
-  # and Dependabot (.github/dependabot.yml) is what brings the fix.
+  # and the fix is a hand repin (tools/repin_cargo.sh for the backend;
+  # Dependabot only covers the tauri lock, see .github/dependabot.yml).
   #
   # cargo-deny is a prebuilt release binary, pinned by version and
   # sha256 rather than installed through a third-party action or a
