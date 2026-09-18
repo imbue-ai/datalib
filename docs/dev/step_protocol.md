@@ -305,9 +305,15 @@ exist hashes to the distinguished version `absent`
 ## stderr: logging
 
 stderr is yours for humans: every line is captured into the event
-stream as an `info` log, and the last ~20 lines become the error
-message if you exit non-zero. So is every stdout line that is not an
-event. Each line records which pipe it came from (`stream`) and is
+stream as an `info` log. So is every stdout line that is not an
+event. If you exit non-zero, the last few lines a person could not
+find by reading "it failed" — plain lines, and the message of any
+structured `warn` or `error` line — become the error message the
+Manage row shows on hover; structured `info` lines stay in the log.
+A step that exits after a cancel (`failure: cancelled`) is recorded
+as stopped, and its message says so.
+
+Each line records which pipe it came from (`stream`) and is
 timestamped as the runner reads it, and the two pipes are read
 concurrently, so the log is in arrival order across both.
 
