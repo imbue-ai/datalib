@@ -56,16 +56,22 @@ test("a cell's right-click keeps only its value, and the query clears again", as
 
 // A header dragged into the grouping bar. The press and the release are
 // real, so the header has to be where the pointer lands; the drag events
-// between them are dispatched by hand, at whatever is under the bar's
-// centre, so the bar has to be there too. Not a real drag, because
+// between them are dispatched by hand. Not a real drag, because
 // Playwright's WebKit on macOS turns one into a native drag session and,
 // under load, loses it: the page sees dragstart and one dragenter, then
 // nothing — not even dragend on the release — and no gesture ends a
 // drag the browser has forgotten. Chromium and WebKit on Linux drive a
 // real drag fine; this is the same on all three.
+//
+// Each event goes to whatever `elementFromPoint` finds inside the bar,
+// with the bar measured at that moment rather than before the press:
+// the dialog is still settling as lines arrive, and with a box measured
+// up front the group row never came on CI's Linux runners in most runs,
+// with nothing saying why. A point that is not inside the bar fails at
+// once, naming what is there — SortableJS ignores a dragover from
+// outside its list, so the alternative is a silent five-second wait.
 async function dragHeaderInto(page: Page, header: Locator, bar: Locator) {
   const from = (await header.boundingBox())!;
-  const to = (await bar.boundingBox())!;
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
@@ -74,15 +80,21 @@ async function dragHeaderInto(page: Page, header: Locator, bar: Locator) {
   // before that is ignored.
   await expect(header).toHaveClass(/slick-header-column-active/);
   for (const type of ["dragenter", "dragover", "drop"]) {
-    await page.evaluate(
-      ([type, x, y, dataTransfer]) => {
+    await bar.evaluate(
+      (barEl, [type, dataTransfer]) => {
+        const box = barEl.getBoundingClientRect();
+        const x = box.x + 40;
+        const y = box.y + box.height / 2;
         const target = document.elementFromPoint(x, y);
-        if (!target) throw new Error(`nothing at (${x}, ${y}) to drop on`);
+        if (!target || !barEl.contains(target)) {
+          const what = target ? `<${target.tagName.toLowerCase()} class="${target.className}">` : "nothing";
+          throw new Error(`${type}: ${what} at (${x}, ${y}) instead of the grouping bar (${JSON.stringify(box)})`);
+        }
         target.dispatchEvent(
           new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer }),
         );
       },
-      [type, to.x + 40, to.y + to.height / 2, dataTransfer] as const,
+      [type, dataTransfer] as const,
     );
   }
   await page.mouse.up();
