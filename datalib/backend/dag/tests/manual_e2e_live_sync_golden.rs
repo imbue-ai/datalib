@@ -237,7 +237,7 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
-    ("sync_scope_config", &["updated_at"]),
+    ("sync_scope_config", &["updated_at_utc"]),
     // A store's size on disk wobbles run-to-run at equal row counts
     // (page layout, chunk ordering), the same way the extract-metrics
     // `bytes_*` did; `items` carries the signal.
@@ -260,6 +260,31 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
 const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp"];
+
+/// Tables dumped as a row count inside an otherwise full dump, as
+/// `(stanza, table)`; `"*"` is every stanza. Three reasons a table is
+/// here, none of them "it is big":
+///
+/// - Slack's `channels` and `users` are the workspace-wide listings —
+///   every channel and every member — that `SKIP_PATH_SEGMENTS` keeps
+///   out of the golden as files; the tables must not let them back in.
+/// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
+///   of rows whose values the provider's own fixtures pin; here the
+///   count says the step read the files, and the rendered plots say
+///   what it made of them.
+/// - `render_inputs` and claude_code's `records` repeat, row by row,
+///   what the `.md` files and `grid_rows` beside them already show.
+const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
+    ("tiny-slack", "channels"),
+    ("tiny-slack", "channels_bookkeeping"),
+    ("tiny-slack", "users"),
+    ("tiny-slack", "users_bookkeeping"),
+    ("airvisual", "airvisual_samples"),
+    ("garmin", "garmin_daily"),
+    ("garmin", "garmin_daily_bookkeeping"),
+    ("claude_code", "records"),
+    ("*", "render_inputs"),
+];
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {
@@ -1249,12 +1274,17 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
         .collect();
 
-    let counts_only =
-        stanza_of(path).is_some_and(|stanza| ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str()));
+    let stanza = stanza_of(path).unwrap_or_default();
+    let store_counts_only = ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str());
+    let table_counts_only = |t: &str| {
+        ROW_COUNT_ONLY_TABLES
+            .iter()
+            .any(|(s, table)| *table == t && (*s == "*" || *s == stanza))
+    };
 
     let mut out = serde_json::Map::new();
     for t in tables {
-        if counts_only {
+        if store_counts_only || table_counts_only(&t) {
             // Golden-test dump: `t` is a table name this test just read out
             // of the store's own `sqlite_master`.
             let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\"")))
