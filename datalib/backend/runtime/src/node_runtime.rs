@@ -42,7 +42,7 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// `scripts/stage_runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.11.0";
+pub const LATCHKEY_VERSION: &str = "3.12.0";
 
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the

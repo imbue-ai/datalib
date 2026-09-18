@@ -142,10 +142,13 @@ UUID_SQL_REGEX = (
     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-# The diff group run_sync_pipeline.py adds between the contacts store's
-# two commits. Not a source: it mirrors nothing and so measures nothing,
-# and its rows carry the contacts provider with `diff_status` set.
+# The diff groups run_sync_pipeline.py adds between each of two stores'
+# first and second commits. Not sources: they mirror nothing and so
+# measure nothing, and their rows carry the underlying provider with
+# `diff_status` set.
 CONTACTS_DIFF_GROUP = "tng_contacts-diff"
+SLACK_DIFF_GROUP = "slack-diff"
+DIFF_GROUPS = (CONTACTS_DIFF_GROUP, SLACK_DIFF_GROUP)
 
 EXPECTED_PROVIDERS = frozenset(
     {
@@ -348,24 +351,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "WHERE m.source_id NOT IN ("
             "  SELECT upstream_scope FROM grid_rows "
             "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
-            f") AND m.source_id != '{CONTACTS_DIFF_GROUP}' ORDER BY m.source_id;",
+            f") AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)}) ORDER BY m.source_id;",
         )
 
-    def _diff_shape(self) -> dict[str, tuple[str, str]]:
-        """The contacts diff group's rows: author → (status, changed columns).
+    def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
+        """A diff group's rows: author → (status, changed columns), for a
+        group whose rows have one author each.
 
-        One add, one delete and one edit, which is every row of the
-        table in docs/dev/plans/diff_renderer.md; the edit names the
-        columns that moved. A real source's rows carry NULL, and the
-        diff's rows carry their own ids — the source's Picard and the
-        diff's Picard are two rows, or the index would have refused the
-        second as a duplicate claim.
+        The contacts diff is one add, one delete and one edit, which is
+        every row of the table in docs/dev/plans/diff_renderer.md; the
+        edit names the columns that moved. A real source's rows carry
+        NULL, and the diff's rows carry their own ids — the source's
+        Picard and the diff's Picard are two rows, or the index would
+        have refused the second as a duplicate claim.
         """
         rows = self._query(
             self._index_db,
             "SELECT g.author || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
             "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{CONTACTS_DIFF_GROUP}' ORDER BY g.author;",
+            f"WHERE m.source_id = '{group}' ORDER BY g.author;",
         )
         out: dict[str, tuple[str, str]] = {}
         for row in rows:
@@ -373,13 +377,35 @@ class IngestedTngPipelineTest(unittest.TestCase):
             out[author] = (status, changed)
         return out
 
-    def _diff_markdown(self, author: str) -> str:
-        """The diff document's markdown for one contact, off the tree."""
+    def _diff_fates(self, group: str) -> dict[str, int]:
+        """A diff group's rows counted by `diff_status`."""
+        rows = self._query(
+            self._index_db,
+            "SELECT g.diff_status || '|' || COUNT(*) FROM grid_rows g "
+            "JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' GROUP BY g.diff_status ORDER BY g.diff_status;",
+        )
+        return {status: int(n) for status, n in (r.split("|") for r in rows)}
+
+    def _diff_rows_by_text(self, group: str, needle: str) -> list[tuple[str, str, str]]:
+        """A diff group's rows whose text contains `needle`:
+        (kind, status, changed columns)."""
+        rows = self._query(
+            self._index_db,
+            "SELECT g.kind || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
+            "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
+            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%' ORDER BY g.kind;",
+        )
+        return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
+
+    def _diff_markdown(self, group: str, needle: str) -> str:
+        """A diff group's one document whose rows' text carries `needle`,
+        off the tree."""
         qmd_path = self._scalar(
             self._index_db,
-            "SELECT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{CONTACTS_DIFF_GROUP}' AND g.author = '{author}';",
+            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%';",
         )
         return (self.workspace / qmd_path).read_text()
 
@@ -503,6 +529,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         would not produce this row — and the round-trip back to the
         upstream API is broken in a way nothing else would notice,
         because both columns still look perfectly plausible.
+
+        A diff group's rows are left out: they carry the source's
+        provider and its `upstream_id` — the backpointer to the real
+        thing — but their uuid is minted under the diff group
+        (`docs/dev/entity_ids.md` §"Rows datalib itself mints"), so the
+        source's recipe is not meant to regenerate it.
         """
         rows = self._query(
             self._index_db,
@@ -510,6 +542,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
             "FROM grid_rows "
             f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            "  AND diff_status IS NULL "
             "ORDER BY uuid;",
         )
         failures = []
@@ -615,11 +648,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     missing.append(f"{md.name} -> blobs/{target}")
         return linked, missing, placeholders
 
-    def _render_problems(self) -> dict[str, list[str]]:
-        """Per-source `render_problems` rows, as `source -> [summary…]`.
+    def _problems(self) -> dict[str, list[str]]:
+        """Per-source `problems` rows, as `source -> [summary…]`.
 
-        Each entry is `<outcome>|<uuid>|<problems-json>` so a failure
-        message names what was dropped rather than only how many.
+        Each entry names the severity, the scope, the field and the
+        reason, so a failure message says what was dropped rather than
+        only how many.
         """
         out: dict[str, list[str]] = {}
         for store in sorted(
@@ -627,7 +661,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         ):
             rows = self._query(
                 store,
-                "SELECT outcome, uuid, problems FROM render_problems ORDER BY uuid;",
+                "SELECT severity, scope_key, item_uuid, field, reason, sample "
+                "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
                 out[store.parent.parent.name] = rows
@@ -783,7 +818,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         self.assertEqual(
-            self._diff_shape(),
+            self._diff_shape(CONTACTS_DIFF_GROUP),
             {
                 "Data": ("removed", ""),
                 "Jean-Luc Picard": ("modified", "modified_at|text"),
@@ -796,19 +831,68 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._index_db,
                 "SELECT COUNT(*) FROM grid_rows g JOIN markdowns m "
                 "ON g.markdown_uuid = m.markdown_uuid WHERE g.diff_status IS NOT NULL "
-                f"AND m.source_id != '{CONTACTS_DIFF_GROUP}';",
+                f"AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)});",
             ),
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._diff_markdown("Jean-Luc Picard")
+        picard = self._diff_markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
             "| <ins>Phone (home)</ins> | <ins>+33-555-LABARRE</ins> |", picard
         )
-        self.assertIn('<div class="diff-removed">', self._diff_markdown("Data"))
-        self.assertIn('<div class="diff-added">', self._diff_markdown("Worf"))
+        self.assertIn(
+            '<div class="diff-removed">',
+            self._diff_markdown(CONTACTS_DIFF_GROUP, "Data"),
+        )
+        self.assertIn(
+            '<div class="diff-added">', self._diff_markdown(CONTACTS_DIFF_GROUP, "Worf")
+        )
+
+        # The Slack diff, which is chat-common under a diff: three #bridge
+        # threads moved between the two captures. A new thread (its chat
+        # row and message added); the "status report" thread grown by a
+        # reply (the reply added, the chat row modified, its three
+        # messages and three reactions unchanged); Worf's one-message
+        # thread edited (the message and chat row modified, the new
+        # reaction added). Nothing removed: an incremental sync cannot
+        # carry a deletion, which is the contacts diff's job.
+        self.assertEqual(
+            self._diff_fates(SLACK_DIFF_GROUP),
+            {"added": 4, "modified": 3, "unchanged": 6},
+            "the slack diff between the two captures",
+        )
+        self.assertEqual(
+            self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
+            [
+                ("Slack Message", "modified", "byte_size|text"),
+                ("Slack Thread", "modified", "byte_size|text"),
+            ],
+            "the edited message names its text (and its length), and its thread follows",
+        )
+        self.assertEqual(
+            self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
+            [
+                ("Slack Message", "added", ""),
+                ("Slack Thread", "modified", "byte_size|item_count|modified_at|text"),
+            ],
+            "the reply added to the grown thread, whose own row grew with it",
+        )
+        status_report = self._diff_markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
+        self.assertEqual(
+            status_report.count('<div class="diff-added">'),
+            1,
+            "one added section in the grown thread, the rest verbatim",
+        )
+        self.assertNotIn("<ins>", status_report.split('<div class="diff-added">')[0])
+        worf = self._diff_markdown(SLACK_DIFF_GROUP, "raising shields")
+        self.assertIn(
+            "raising <del>shields,</del><ins>shields **now**,</ins> Captain.",
+            worf,
+            "a word edit inside a chat message",
+        )
+        self.assertIn("<ins>🛡️ Jean-Luc Picard</ins>", worf, "the reaction added")
 
         # PDFs specifically: 4 renderable documents, 5 pages between
         # them (the scanned blueprints are recorded but not rendered,
@@ -915,10 +999,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # source — but the same change means a projection that quietly
         # started dropping rows would no longer show up as a failure
         # anywhere. Here it does: the fixture is known-good, so any
-        # `render_problems` row is a regression, and the message names
+        # `problems` row is a regression, and the message names
         # the row and the reason rather than just a count.
         self.assertEqual(
-            self._render_problems(),
+            self._problems(),
             {},
             "the TNG fixture must render clean; a row here means a "
             "projection started dropping or nulling data",

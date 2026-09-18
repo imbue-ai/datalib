@@ -179,7 +179,7 @@ document with no rows. The units, per step:
 | API ingest (claude, chatgpt, slack, email, github, gitlab, notion, …) | one page: its entity rows, edge rows, bookkeeping | already a transaction (`bulk_upsert_in_tx`; #7's "per-page transaction discipline") |
 | mirror ingest (lightroom, apple_photos, whatsapp) | one table: upsert from the source, prune not-in-source | **not**: drop-all is its own transaction, then create+copy per table |
 | scan ingest (pdf, fsindex, media) | one file's rows | reset before the walk is its own transaction |
-| render | one document: `markdowns`, `grid_rows`, `edges`, `render_problems`, `render_inputs` | **not**: bare statements under the write lock |
+| render | one document: `markdowns`, `grid_rows`, `edges`, `problems`, `render_inputs` | **not**: bare statements under the write lock |
 | render, end of run | the prune and the cursor | the prune is bare statements; the cursor is a file |
 | grid_index | the whole load, prune, cursors | already one transaction |
 
@@ -187,7 +187,7 @@ A run that spans tables leaves a cross-table partial state visible to
 a consumer pinned mid-run: this run's messages against last run's
 chats, a thread whose replies are not in yet. That is already true of
 per-page ingest today, renderers already tolerate a dangling reference
-(`render_problems` records it), and "what the step believes so far" is
+(`problems` records it), and "what the step believes so far" is
 a truthful description of it. Accepted, and said here so nobody
 re-litigates it as a bug.
 
@@ -323,7 +323,7 @@ change the answer:
 > the last run is the same as one cold render of the raw store at cₙ.
 
 "The same" means the logical content: `markdowns` without
-`rendered_at`, `grid_rows`, `edges`, `render_problems` without its two
+`rendered_at`, `grid_rows`, `edges`, `problems` without its two
 timestamps, and the bytes of every `.md` file. Not the doltlite file
 and not its commit hashes, which chain off a wall-clock initial commit
 (`tests/fixtures/README.md`, "byte-stable?").

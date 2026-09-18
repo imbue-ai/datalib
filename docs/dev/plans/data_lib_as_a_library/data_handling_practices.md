@@ -204,7 +204,7 @@ date. Not issues-only: the value is being able to see the whole surface
 at once, and an issue tracker cannot show you that. File issues for the
 *fixes*, link them from the table.
 
-**First run:** done; its findings that still hold are in `data_architecture_parse_and_render.md`, and the sink it designed is `render_problems`.
+**First run:** done; its findings that still hold are in `data_architecture_parse_and_render.md`, and the sink it designed is the `problems` table (`datalib_problems`).
 
 ## 4. Retrofit
 

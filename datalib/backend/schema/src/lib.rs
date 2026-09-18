@@ -19,8 +19,10 @@ pub mod markdowns {
     include!("markdowns.rs");
 }
 
-pub mod render_problems {
-    include!("render_problems.rs");
+/// The `problems` table is a leaf crate of its own so the ingest side
+/// can write it too; render crates reach it from here.
+pub mod problems {
+    pub use datalib_problems::*;
 }
 
 pub mod source_cursors {
@@ -72,11 +74,17 @@ mod tests {
     }
 
     #[test]
-    fn render_problems_table_present() {
-        assert_eq!(super::render_problems::TABLES.len(), 1);
-        assert_eq!(super::render_problems::DDL.len(), 1);
-        let (_, cols) = super::render_problems::COLUMNS[0];
-        for want in ["uuid", "scope_key", "scope_kind", "outcome", "problems"] {
+    fn problems_table_present() {
+        assert_eq!(super::problems::TABLES.len(), 1);
+        assert_eq!(super::problems::DDL.len(), 1);
+        let (_, cols) = super::problems::COLUMNS[0];
+        for want in [
+            "problem_uuid",
+            "scope_key",
+            "scope_kind",
+            "severity",
+            "outcome",
+        ] {
             assert!(cols.contains(&want), "missing {want}: {cols:?}");
         }
     }

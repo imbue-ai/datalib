@@ -3,6 +3,12 @@
 //! sha256, fetch what is missing or wrong from the pinned revision, and
 //! leave the files under the names node-llama-cpp looks for — so qmd
 //! finds every model already in place and never talks to HuggingFace.
+//!
+//! A root where something else staged the models sets
+//! `DATALIB_QMD_MODELS_NO_FETCH=1` (`Fetch::from_env`), and an absent
+//! model is then reported rather than downloaded. The e2e fixture is
+//! the case: it stages the embedding model alone, because that is all
+//! the suite loads, and the other two are 1.8 GB.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +33,30 @@ pub enum Outcome {
     Downloaded,
     /// Present but its sha256 did not match the pin; replaced.
     Replaced,
+    /// Absent, or present and hashing wrong, with fetching off
+    /// (`Fetch::Never`). Nothing was written or removed.
+    Missing,
+}
+
+/// Whether `ensure_models` may go to the network for a model that is
+/// absent or hashes wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetch {
+    Allowed,
+    Never,
+}
+
+pub const NO_FETCH_ENV: &str = "DATALIB_QMD_MODELS_NO_FETCH";
+
+impl Fetch {
+    /// `Never` when `DATALIB_QMD_MODELS_NO_FETCH` is set to anything but
+    /// empty or `0`.
+    pub fn from_env() -> Self {
+        match std::env::var(NO_FETCH_ENV) {
+            Ok(v) if !v.is_empty() && v != "0" => Fetch::Never,
+            _ => Fetch::Allowed,
+        }
+    }
 }
 
 /// Where a data root's qmd actually reads its models: the target of the
@@ -42,26 +72,55 @@ pub fn effective_models_dir(qmd_state_dir: &Path, default: &Path) -> PathBuf {
 }
 
 /// Every model in `models` is in `models_dir` under its cache name with
-/// the pinned sha256 when this returns `Ok`. A file that hashes wrong is
-/// said so on stderr and re-fetched; a fetch that hashes wrong is an
-/// error, never a file left behind.
-pub fn ensure_models(models_dir: &Path, models: &[PinnedModel]) -> Result<Vec<Outcome>> {
+/// the pinned sha256 when this returns `Ok` — unless `fetch` is `Never`,
+/// in which case the ones that are not come back as `Outcome::Missing`
+/// and the caller decides. A file that hashes wrong is said so on
+/// stderr and re-fetched; a fetch that hashes wrong is an error, never
+/// a file left behind.
+pub fn ensure_models(
+    models_dir: &Path,
+    models: &[PinnedModel],
+    fetch: Fetch,
+) -> Result<Vec<Outcome>> {
     fs::create_dir_all(models_dir)
         .with_context(|| format!("create models dir {}", models_dir.display()))?;
     let mut out = Vec::with_capacity(models.len());
     for model in models {
-        out.push(ensure_one(models_dir, model)?);
+        out.push(ensure_one(models_dir, model, fetch)?);
     }
     Ok(out)
 }
 
-fn ensure_one(models_dir: &Path, model: &PinnedModel) -> Result<Outcome> {
+/// The cache names of the models `outcomes` reported `Missing`, for a
+/// log line.
+pub fn missing<'a>(models: &'a [PinnedModel], outcomes: &[Outcome]) -> Vec<&'a str> {
+    models
+        .iter()
+        .zip(outcomes)
+        .filter(|(_, o)| **o == Outcome::Missing)
+        .map(|(m, _)| m.file)
+        .collect()
+}
+
+fn ensure_one(models_dir: &Path, model: &PinnedModel, fetch: Fetch) -> Result<Outcome> {
     let path = models_dir.join(model.cache_name());
     let present = fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false);
+    if present && verified(&path, model.sha256)? {
+        return Ok(Outcome::Verified);
+    }
+    if fetch == Fetch::Never {
+        status_line!(
+            "[qmd-models] {} is {} and fetching is off ({NO_FETCH_ENV}); leaving it",
+            path.display(),
+            if present {
+                "not the pinned bytes"
+            } else {
+                "absent"
+            }
+        );
+        return Ok(Outcome::Missing);
+    }
     if present {
-        if verified(&path, model.sha256)? {
-            return Ok(Outcome::Verified);
-        }
         status_line!(
             "{TAG} {} does not match the pinned sha256 for {}@{} — replacing it",
             path.display(),
@@ -171,6 +230,33 @@ mod tests {
         fs::write(&path, b"hello").unwrap();
         assert!(verified(&path, HELLO_SHA).unwrap());
         assert!(!stamp_matches(&path, &"0".repeat(64)).unwrap());
+    }
+
+    /// With fetching off, an absent model is reported, not downloaded,
+    /// and a present one is still verified — the e2e fixture relies on
+    /// both halves.
+    #[test]
+    fn no_fetch_reports_absent_and_verifies_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = [
+            PinnedModel {
+                repo: "o/present",
+                revision: "r",
+                file: "present.gguf",
+                sha256: HELLO_SHA,
+            },
+            PinnedModel {
+                repo: "o/absent",
+                revision: "r",
+                file: "absent.gguf",
+                sha256: HELLO_SHA,
+            },
+        ];
+        fs::write(dir.path().join(models[0].cache_name()), b"hello").unwrap();
+        let outcomes = ensure_models(dir.path(), &models, Fetch::Never).unwrap();
+        assert_eq!(outcomes, [Outcome::Verified, Outcome::Missing]);
+        assert_eq!(missing(&models, &outcomes), ["absent.gguf"]);
+        assert!(!dir.path().join(models[1].cache_name()).exists());
     }
 
     #[test]

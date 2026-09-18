@@ -550,7 +550,7 @@ pub struct RenderedMarkdown {
     /// dropped, fields nulled, lossy rules that fired. Travels with the
     /// document so the rows and the record of what was lost commit together.
     /// Empty when read back from the store, where they are already rows.
-    pub problems: Vec<datalib_schema::render_problems::RenderProblemRow>,
+    pub problems: Vec<datalib_schema::problems::ProblemRow>,
 }
 
 /// Write one rendered document into the index unconditionally. `out_dir`
@@ -893,7 +893,7 @@ pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Res
 }
 
 /// The rows a document owns: its grid rows, its outgoing edges and its
-/// `markdowns` row. Not its `render_problems`, which say why a document
+/// `markdowns` row. Not its `problems`, which say why a document
 /// is the way it is and outlive one that ends with nothing.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
