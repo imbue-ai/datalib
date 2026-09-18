@@ -243,6 +243,18 @@
   --slick-header-column-name-margin-right: 18px;
   --slick-cell-border-right: 1px solid var(--datalib-border);
   --slick-header-column-border-right: 1px solid var(--datalib-border);
+  /* No banding: the theme's odd-row tint sits between the plain and the
+     selected row, and a selected row beside it stops reading as
+     selected. One background, so a highlight is the only tint. */
+  --slick-cell-odd-background-color: var(--slick-cell-even-background-color, #fff);
+}
+/* An unchecked box is an empty square, not the same check drawn faint:
+   at a glance faint and full are one mark. */
+.grid-pane :is(.slick-cell-checkboxsel, .slick-column-name, .slick-headerrow-column.checkbox-header)
+  .icon-checkbox-container div.sgi.sgi-icon-uncheck {
+  --slick-checkbox-icon-unchecked-svg: url('data:image/svg+xml;utf8,%3Csvg viewBox="0 0 24 24" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"%3E%3Cpath fill="currentColor" d="M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3M19,5V19H5V5H19Z"/%3E%3C/svg%3E');
+  opacity: 0.6;
+  color: var(--datalib-muted);
 }
 .grid-pane .slick-header-column {
   display: flex;
