@@ -122,9 +122,11 @@ chokepoint; when that gives up, `api::ChatGPTClient::get` maps the
 `HttpError::GaveUp` to `ChatGPTError::RateLimited` and the run stops
 cleanly, to resume from the same store next time.
 
-`--reset-and-redownload` truncates the entity and bookkeeping tables
-before the run so the next doltlite commit's diff is exactly what
-upstream changed (`docs/dev/data_architecture_ingestion.md`).
+`--reset-and-redownload` truncates all three tables and their
+bookkeeping before the run, so the next doltlite commit's diff is
+exactly what upstream changed. The CAS bytes survive, but with the
+edge rows gone every attachment is fetched over the wire again and
+lands on the hash it already had.
 
 ## Auth + Cloudflare
 
