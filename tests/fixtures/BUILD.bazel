@@ -27,8 +27,8 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# qmd's three GGUF models, pinned in MODULE.bazel and fetched by bazel
-# rather than downloaded by qmd at run time. Only the materialize path
+# qmd's three GGUF models, fetched by bazel (//third-party/qmd_models)
+# rather than downloaded by qmd at run time. Only `:materialize_tng_root`
 # takes all three: `:ingested_tng_qmd` embeds and nothing else, so it
 # names the embedding model alone rather than dragging 1.8 GB of inputs
 # it never opens through every action key.
@@ -39,34 +39,49 @@ filegroup(
 )
 
 # Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
-# into a caller-provided directory. Used by both `//datalib:dev_tng`
-# (interactive eyeballing) and the UI e2e test (fixture setup) so the two
-# paths can't drift apart.
-sh_binary(
-    name = "materialize_tng_root",
-    srcs = ["materialize_tng_root.sh"],
-    data = [
-        ":ingested_tng",
-        ":ingested_tng_qmd",
-        # The models the materialized root's `unified_index/qmd/models`
-        # points at. Before this they came from the developer's
-        # `~/.cache/qmd/models`, and the script refused to run when that
-        # was empty — which made "have you run qmd once?" a prerequisite
-        # for `bazelisk run //datalib:dev_tng` and for the e2e suite.
-        ":qmd_models",
-        # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
-        # directory the `fsindex` (Unison-style) scanner can index. It's not
-        # rendered (fsindex is extract-only), so it just sits in the root.
-        "//datalib/backend/etl/providers/fsindex:tng_fixture",
-        # The generated config declares the `unified_index` applet, and
-        # the gateway spawns it by the command written there. Naming the
-        # binary's runfiles path keeps that resolvable without a
-        # `binary_dir` or a PATH assumption.
-        "//datalib/backend/applets:datalib_applet",
-    ],
-    visibility = ["//visibility:public"],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
-)
+# into a caller-provided directory. One script, two targets that differ
+# only in which models ride in the runfiles, so `//datalib:dev_tng`
+# (interactive eyeballing) and the UI e2e test (fixture setup) can't
+# drift apart:
+#
+#   materialize_tng_root             all three models — a root that
+#                                    holds what a real one does.
+#   materialize_tng_root_embed_only  the embedding model alone, for the
+#                                    e2e suite. The suite runs on the CI
+#                                    runner itself, so every runfile is
+#                                    downloaded from the remote cache
+#                                    before it starts, serially, after
+#                                    every other test has finished; the
+#                                    two models it never loads were
+#                                    1.8 GB of that. The suite sets
+#                                    DATALIB_QMD_MODELS_NO_FETCH so the
+#                                    applet reports them absent rather
+#                                    than fetching them.
+[
+    sh_binary(
+        name = name,
+        srcs = ["materialize_tng_root.sh"],
+        data = [
+            ":ingested_tng",
+            ":ingested_tng_qmd",
+            # TNG-themed scan tree dropped into the root as `fsindex_scan/` — a
+            # directory the `fsindex` (Unison-style) scanner can index. It's not
+            # rendered (fsindex is extract-only), so it just sits in the root.
+            "//datalib/backend/etl/providers/fsindex:tng_fixture",
+            # The generated config declares the `unified_index` applet, and
+            # the gateway spawns it by the command written there. Naming the
+            # binary's runfiles path keeps that resolvable without a
+            # `binary_dir` or a PATH assumption.
+            "//datalib/backend/applets:datalib_applet",
+        ] + models,
+        visibility = ["//visibility:public"],
+        deps = ["@bazel_tools//tools/bash/runfiles"],
+    )
+    for name, models in [
+        ("materialize_tng_root", [":qmd_models"]),
+        ("materialize_tng_root_embed_only", ["//third-party/qmd_models:embeddinggemma"]),
+    ]
+]
 
 # Cacheable, ingested-fixture artifact.
 #

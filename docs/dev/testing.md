@@ -122,12 +122,18 @@ things the note never mentioned.
   `materialize_tng_root.sh` used to require that directory to hold them
   — `exit 3` if not, deliberately, so a multi-GB HuggingFace download
   could not masquerade as a hang. CI filled it with a `qmd pull` behind
-  an `actions/cache`. Both halves are gone now: the three GGUFs are
-  fetched by a build action (`//third-party/qmd_models`) and reach the
+  an `actions/cache`. Both halves are gone now: the GGUFs are fetched
+  by a build action (`//third-party/qmd_models`) and reach the
   materializer (and the fixture's index genrule) as bazel inputs. The
   action's outputs live in the remote cache, so a run that does not
   need the bytes never moves them, and one that does takes them from
   BuildBuddy rather than HuggingFace unless the cache has lost them.
+  The e2e suite runs on the runner itself, so its runfiles *are*
+  downloaded before it starts — which is why it uses
+  `materialize_tng_root_embed_only`: the embedding model is all it
+  loads, and the other two are 1.8 GB. The suite sets
+  `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them absent
+  instead of fetching them into the fixture root.
 * **`HOME=/github/home`.** GitHub forces that for container steps, while
   the image bakes its caches under `/root`, so every lookup landed in an
   empty directory. One `--test_env` flag still redirects the lookup that

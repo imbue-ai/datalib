@@ -153,14 +153,29 @@ fn ensure_models(root: &std::path::Path) {
     // the first semantic query.
     let effective = datalib_qmd_models::effective_models_dir(&qmd_dir, &models_dir);
     std::thread::spawn(move || {
-        if let Err(e) =
-            datalib_qmd_models::ensure_models(&effective, datalib_qmd_models::PINNED_MODELS)
-        {
-            eprintln!(
+        let models = datalib_qmd_models::PINNED_MODELS;
+        match datalib_qmd_models::ensure_models(
+            &effective,
+            models,
+            datalib_qmd_models::Fetch::from_env(),
+        ) {
+            Ok(outcomes) => {
+                let missing = datalib_qmd_models::missing(models, &outcomes);
+                if !missing.is_empty() {
+                    eprintln!(
+                        "datalib-applet unified_index: not fetching {} into {} \
+                         ({} is set); whatever needs them will fail",
+                        missing.join(", "),
+                        effective.display(),
+                        datalib_qmd_models::NO_FETCH_ENV
+                    );
+                }
+            }
+            Err(e) => eprintln!(
                 "datalib-applet unified_index: could not provision qmd's models in {} ({e:#}); \
                  semantic search will fail until `datalib-step pull-models` succeeds",
                 effective.display()
-            );
+            ),
         }
     });
 }
