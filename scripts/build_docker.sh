@@ -21,11 +21,13 @@
 #     individual images in one invocation.
 #
 # --tarball-dir DIR
-#     Skip the GitHub download step and use locally-built tarballs from
-#     DIR (expected layout: $DIR/datalib-x86_64-unknown-linux-gnu.tar.gz
-#     + $DIR/datalib-aarch64-unknown-linux-gnu.tar.gz). Useful when
+#     Skip the GitHub download step and use locally-built assets from
+#     DIR: for each of x86_64-unknown-linux-gnu and
+#     aarch64-unknown-linux-gnu, `datalib-<triple>.tar.gz` and
+#     `runtime-<triple>.tar.gz` with its `.sha256` sidecar. Useful when
 #     iterating against a tarball you just produced via `bazel build
-#     //datalib/backend:dist`.
+#     //datalib/backend:dist` (and `scripts/stage_runtime.sh` for the
+#     runtime).
 #
 # Environment:
 #   REPO          owner/name on GitHub (default imbue-ai/datalib)
@@ -81,27 +83,33 @@ cp datalib/docker/entrypoint.sh "${ctx}/entrypoint.sh"
 datalib/docker/stage_demo.sh "${ctx}"
 mkdir -p "${ctx}/dist/amd64" "${ctx}/dist/arm64"
 
+# The binaries tarball, and the CPU runtime asset the Dockerfile unpacks
+# beside the binaries (with the `.sha256` it checks first).
 fetch_tarball() {
     local triple="$1" arch_dir="$2"
-    local name="datalib-${triple}.tar.gz"
     local dest_dir="${ctx}/dist/${arch_dir}"
-    if [[ -n "${TARBALL_DIR}" ]]; then
-        if [[ ! -f "${TARBALL_DIR}/${name}" ]]; then
-            echo "error: ${TARBALL_DIR}/${name} not found" >&2
-            exit 1
+    local name
+    for name in "datalib-${triple}.tar.gz" \
+                "runtime-${triple}.tar.gz" \
+                "runtime-${triple}.tar.gz.sha256"; do
+        if [[ -n "${TARBALL_DIR}" ]]; then
+            if [[ ! -f "${TARBALL_DIR}/${name}" ]]; then
+                echo "error: ${TARBALL_DIR}/${name} not found" >&2
+                exit 1
+            fi
+            cp "${TARBALL_DIR}/${name}" "${dest_dir}/${name}"
+        else
+            # `gh release download` rather than curl, so a fork's private
+            # releases work too; `gh` handles auth via the host config from
+            # `gh auth login`.
+            echo "build_docker: gh release download v${VERSION} ${name} (repo ${REPO})"
+            gh release download "v${VERSION}" \
+                --repo "${REPO}" \
+                --pattern "${name}" \
+                --clobber \
+                --dir "${dest_dir}"
         fi
-        cp "${TARBALL_DIR}/${name}" "${dest_dir}/${name}"
-    else
-        # `gh release download` rather than curl, so a fork's private
-        # releases work too; `gh` handles auth via the host config from
-        # `gh auth login`.
-        echo "build_docker: gh release download v${VERSION} ${name} (repo ${REPO})"
-        gh release download "v${VERSION}" \
-            --repo "${REPO}" \
-            --pattern "${name}" \
-            --clobber \
-            --dir "${dest_dir}"
-    fi
+    done
 }
 
 if [[ -z "${TARBALL_DIR}" ]]; then

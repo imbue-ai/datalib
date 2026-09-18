@@ -47,9 +47,11 @@ release job — the previous publish, a job at the end of `release.yml`
 behind the prod image's doc check, was skipped for four releases and
 CI ran on a two-week-old image (#500).
 
-**`release.yml`** runs on a `v*` tag: the six tarballs, the notarized
-macOS app, and the prod docker image with its doc test (#469). It does
-not build the CI image.
+**`release.yml`** runs on a `v*` tag: the three runtime assets first
+(the Node runtime `qmd` and `latchkey` run from, one per platform, which
+the binaries fetch on first use — `runtime_fetch.md`), then the six
+tarballs, the notarized macOS app, and the prod docker image with its
+doc test (#469). It does not build the CI image.
 
 **BuildBuddy** (`imbue.buildbuddy.io`) is the action cache, the build
 event stream and the remote downloader for both `test.yml` bazel jobs.

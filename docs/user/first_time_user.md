@@ -44,11 +44,16 @@ The sections on credentials (step 2) and on getting your data back out
 
 ## 0. Prerequisites
 
-None. The release tarball carries everything a sync runs, including
-its own Node runtime and the two Node programs the tools shell out to
-— `latchkey`, which holds your credentials, and `qmd`, which builds the
-semantic search index — at the exact versions datalib was built and
-tested with. You do not need `node`, `npm` or `npx` installed.
+None. The release tarball carries the binaries, and the first sync
+fetches the one other thing a sync runs: a Node runtime with the two
+Node programs the tools shell out to — `latchkey`, which holds your
+credentials, and `qmd`, which builds the semantic search index — at
+the exact versions datalib was built and tested with, published beside
+the tarball on the same release and checked against the sha256 the
+tarball carries for it. It lands in `~/.cache/datalib/runtime`, about
+100 MB, once per release. You do not need `node`, `npm` or `npx`
+installed. To fetch it ahead of the first sync (an offline laptop, say),
+run `datalib-step pull-runtime` while online.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 
@@ -464,13 +469,13 @@ corpus is a fast no-op.
 ## 7. Querying the search index directly with qmd
 
 You can also query the semantic index from the command line, by
-pointing the bundled `qmd` at the sqlite file under your data root via
+pointing the fetched `qmd` at the sqlite file under your data root via
 the `INDEX_PATH` env var:
 
 ```sh
-lib=~/.local/lib/datalib
+rt=$(echo ~/.cache/datalib/runtime/*/)
 INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
-    "$lib/runtime/node/bin/node" "$lib"/runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
+    "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 
 `qmd status` against the same `INDEX_PATH` shows collections and

@@ -14,6 +14,7 @@ path = "src/main.rs"
 datalib-schema = { path = "../schema" }
 datalib-problems = { path = "../problems" }
 datalib-core = { path = "../core" }
+datalib-fetch = { path = "../fetch" }
 datalib-qmd-indexer = { path = "../qmd_indexer" }
 datalib-qmd-models = { path = "../qmd_models" }
 datalib-unified-index = { path = "../unified_index" }

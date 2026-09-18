@@ -36,6 +36,9 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let root = args.data_root;
+    // The connect flow runs `latchkey`; from a release tarball that
+    // ships no `runtime/`, the first one fetches the manifest's.
+    datalib_fetch::enable_runtime_fetch();
 
     // First, so a spawner that asked for the watch and forgot the pipe is
     // refused before anything under the root is touched.

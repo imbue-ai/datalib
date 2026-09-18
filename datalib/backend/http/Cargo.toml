@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 app-schema = { path = "../app_schema" }
 datalib-core = { path = "../core" }
+datalib-fetch = { path = "../fetch" }
 datalib-dag = { path = "../dag" }
 datalib-problems = { path = "../problems" }
 datalib-time = { path = "../time" }

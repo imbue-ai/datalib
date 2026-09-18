@@ -4,6 +4,11 @@
 # per-triple tarball to a GitHub Release. The `x86_64-apple-darwin`
 # leg is curl-only: it publishes just the `curl-<triple>.tar.gz`
 # tarball (see the matrix `curl-only` flag below).
+# The `runtime` job publishes the Node runtime the binaries run `qmd`
+# and `latchkey` from as its own asset per platform
+# (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
+# from the `runtime.manifest` the `build` job writes beside them — see
+# docs/dev/runtime_fetch.md.
 # The `macos-app` job additionally builds, signs, and notarizes the
 # Datalib desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
@@ -35,9 +40,141 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
+  # and `latchkey` trees, only this platform's CPU binding of
+  # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
+  # platform. Its own job rather than a step of `build` so that the
+  # musl legs (whose glibc host runs the same runtime as their gnu
+  # sibling) can name an asset that already exists, with its sha256:
+  # the `build` legs read the `.sha256` sidecars published here when
+  # they write `runtime.manifest`. The tarball no longer carries the
+  # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
+  #
+  # `stage_runtime.sh` is a `bazel build` of three fetch-and-extract
+  # targets and an rsync: a few minutes, most of it runner setup.
+  runtime:
+    name: runtime (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `cuda`: also publish `runtime-<triple>-cuda.tar.gz`, the two
+        # CUDA packages the resolver overlays where an NVIDIA driver is
+        # present. Only Linux x86_64 has prebuilt CUDA bindings.
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-14  # Apple Silicon
+            cuda: false
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            cuda: true
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+            cuda: false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same cache layering as the build job below; see its comment.
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: true
+          external-cache: false
+
+      # See the build job's identically-named step for the full story:
+      # the release group's key, and no uploads.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy-release-readonly
+          EOF
+              echo "BuildBuddy release cache enabled for this job (read-only)."
+          else
+              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
+          fi
+
+      # The trees come out of Bazel; the script prunes the bindings this
+      # platform cannot use and proves the one it keeps loads. The
+      # archive holds the tree's contents at its top (`node/`, `qmd/`,
+      # `latchkey/`), which is how the resolver unpacks it into
+      # `~/.cache/datalib/runtime/<sha12>/`.
+      - name: Stage the runtime
+        id: stage
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          CUDA: ${{ matrix.cuda }}
+        run: |
+          set -euo pipefail
+          checksum() {
+              if command -v sha256sum >/dev/null; then
+                  sha256sum "$1" > "$1.sha256"
+              else
+                  shasum -a 256 "$1" > "$1.sha256"
+              fi
+          }
+          cuda_flag=()
+          if [[ "${CUDA}" == "true" ]]; then
+              cuda_flag=(--cuda runtime-cuda)
+          fi
+          scripts/stage_runtime.sh runtime "${cuda_flag[@]}"
+          # Smoke the staged tree on the runner (same triple as the
+          # asset): the Node runs, and qmd loads from it. latchkey is
+          # left out — its `--version` initializes a keyring, which a
+          # bare runner has none of.
+          runtime/node/bin/node --version
+          runtime/node/bin/node runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
+
+          tarball="runtime-${TRIPLE}.tar.gz"
+          tar -czf "${tarball}" -C runtime .
+          checksum "${tarball}"
+          ls -la "${tarball}"
+          files="${tarball} ${tarball}.sha256"
+          if [[ "${CUDA}" == "true" ]]; then
+              cuda_tarball="runtime-${TRIPLE}-cuda.tar.gz"
+              tar -czf "${cuda_tarball}" -C runtime-cuda .
+              checksum "${cuda_tarball}"
+              ls -la "${cuda_tarball}"
+              files="${files} ${cuda_tarball} ${cuda_tarball}.sha256"
+          fi
+          echo "files=${files}" >> "$GITHUB_OUTPUT"
+
+      # Plain `gh`, create-if-missing, retry once: see the build job's
+      # publish step.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          FILES: ${{ steps.stage.outputs.files }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
+              gh release create "$REF_NAME" --verify-tag --notes "" || true
+          fi
+          # shellcheck disable=SC2086
+          for attempt in 1 2; do
+              if gh release upload "$REF_NAME" --clobber $FILES; then
+                  break
+              fi
+              [[ "$attempt" == 2 ]] && exit 1
+              sleep 30
+          done
+
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
+    # After the runtime assets, whose sha256s the manifest below
+    # carries. `!cancelled()` rather than the default `success()`: a
+    # runtime leg that failed costs the tarballs that name it (their
+    # manifest step fails), not every tarball.
+    needs: runtime
+    if: ${{ !cancelled() }}
     strategy:
       # One platform failing shouldn't cancel the others: a successful
       # build's tarball can still be published to the release while we
@@ -299,6 +436,7 @@ jobs:
       - name: Stage tarball
         id: stage
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
           CURL_ONLY: ${{ matrix.curl-only }}
@@ -317,12 +455,6 @@ jobs:
               fi
           }
 
-          # Every copy out of bazel-bin happens before the runtime is
-          # staged: `scripts/stage_runtime.sh` runs a `bazel build` of
-          # its own, in the default configuration, and `bazel-bin` is a
-          # convenience symlink to the *last* build's output tree. The
-          # curl tarball's copies used to come after it and found nothing
-          # (v0.34.0's glibc and macOS-arm legs).
           curl_stage="curl-${version}-${TRIPLE}"
           mkdir -p "${curl_stage}"
           cp bazel-bin/datalib/backend/etl/latchkey_curl_dispatch "${curl_stage}/latchkey-curl-dispatch"
@@ -361,27 +493,42 @@ jobs:
               cp bazel-bin/datalib/backend/etl/latchkey_curl_impersonate "${stage}/latchkey-curl-impersonate"
               chmod +x "${stage}"/*
 
-              # The bundled Node + qmd + latchkey trees, beside the
-              # binaries: `runtime/` is where the resolver looks first,
-              # so a tarball user runs both tools without Node, npm or
-              # npx on the host — the same trees the .app ships,
-              # lockfile-pinned by Bazel. The `latchkey` launcher runs
-              # the bundled one with the dispatch curl beside it.
-              #
-              # Not on the musl legs: the Bazel Node is a glibc build
-              # (nodejs.org ships no musl one), and a "fully static"
-              # tarball must not carry a binary that needs a libc.
-              if [[ "${TRIPLE}" != *musl* ]]; then
-                  scripts/stage_runtime.sh "${stage}/runtime"
-                  install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
-                  # Smoke the staged tree on the runner (same triple as
-                  # the artifact): the Node runs, and qmd loads from it.
-                  # latchkey is left out — its `--version` initializes
-                  # a keyring, which a bare runner has none of.
-                  "${stage}/runtime/node/bin/node" --version
-                  "${stage}/runtime/node/bin/node" \
-                      "${stage}"/runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
-              fi
+              # The `latchkey` launcher: runs the bundled latchkey with
+              # the dispatch curl beside it, from `runtime/` when one
+              # is staged beside it (the docker image) and else from
+              # the fetched tree in the user's cache.
+              install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
+
+              # `runtime.manifest`: which runtime asset of THIS release
+              # the binaries fetch on first use, with its sha256 and
+              # size read back from what the `runtime` job published.
+              # The musl legs name their gnu sibling's asset: the Node
+              # in it is a glibc build (nodejs.org ships no musl one),
+              # and a musl datalib on a glibc host — the common case —
+              # runs it fine; a musl host is refused by the resolver
+              # with the reason named. The format is
+              # datalib/backend/runtime/src/runtime_manifest.rs's.
+              runtime_triple="${TRIPLE/-musl/-gnu}"
+              manifest="${stage}/runtime.manifest"
+              base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${REF_NAME}"
+              manifest_line() { # kind, asset name
+                  local kind="$1" name="$2" sha bytes
+                  gh release download "${REF_NAME}" --pattern "${name}.sha256" --clobber --dir manifest-src
+                  sha="$(cut -d' ' -f1 "manifest-src/${name}.sha256")"
+                  bytes="$(gh release view "${REF_NAME}" --json assets \
+                      --jq ".assets[] | select(.name == \"${name}\") | .size")"
+                  [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 for ${name}: ${sha}" >&2; exit 1; }
+                  [[ "${bytes}" =~ ^[0-9]+$ ]] || { echo "no size for ${name} on the release" >&2; exit 1; }
+                  echo "${kind} ${name} ${sha} ${bytes} ${base_url}/${name}"
+              }
+              {
+                  echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
+                  manifest_line cpu "runtime-${runtime_triple}.tar.gz"
+                  if [[ "${runtime_triple}" == "x86_64-unknown-linux-gnu" ]]; then
+                      manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
+                  fi
+              } > "${manifest}"
+              cat "${manifest}"
 
               tarball="datalib-${TRIPLE}.tar.gz"
               tar -czf "${tarball}" "${stage}"
@@ -661,7 +808,7 @@ jobs:
   # shouldn't block publishing the Linux image.
   docker-publish:
     name: docker-publish (ghcr.io)
-    needs: build
+    needs: [runtime, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -701,8 +848,11 @@ jobs:
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout datalib/docker/Dockerfile
       # expects (`dist/<arch>/<tarball>`), via `gh release download`
-      # with the workflow's GITHUB_TOKEN. The demo library's inputs
-      # come from the checkout (datalib/docker/stage_demo.sh).
+      # with the workflow's GITHUB_TOKEN: the binaries, and the CPU
+      # runtime asset with its `.sha256` sidecar, which the Dockerfile
+      # checks before unpacking it beside the binaries — an image is a
+      # bundle, so it does not fetch at run time. The demo library's
+      # inputs come from the checkout (datalib/docker/stage_demo.sh).
       - name: Stage tarballs and the demo into docker build context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -713,14 +863,20 @@ jobs:
           cp datalib/docker/Dockerfile ctx/Dockerfile
           cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
           datalib/docker/stage_demo.sh ctx
-          gh release download "${REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
-              --clobber --dir ctx/dist/amd64
-          gh release download "${REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
-              --clobber --dir ctx/dist/arm64
+          for pattern in 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
+                         'runtime-x86_64-unknown-linux-gnu.tar.gz*'; do
+              gh release download "${REF_NAME}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --pattern "${pattern}" \
+                  --clobber --dir ctx/dist/amd64
+          done
+          for pattern in 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
+                         'runtime-aarch64-unknown-linux-gnu.tar.gz*'; do
+              gh release download "${REF_NAME}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --pattern "${pattern}" \
+                  --clobber --dir ctx/dist/arm64
+          done
           ls -la ctx/dist/amd64 ctx/dist/arm64
 
       - name: Set up QEMU

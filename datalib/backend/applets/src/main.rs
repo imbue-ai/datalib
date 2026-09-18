@@ -62,6 +62,9 @@ fn main() {
         eprintln!("datalib-applet: {e}");
         std::process::exit(2);
     }
+    // The unified_index applet runs qmd; from a release tarball that
+    // ships no `runtime/`, the first search fetches the manifest's.
+    datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run() {
         eprintln!("datalib-applet: {e:#}");
         std::process::exit(1);
