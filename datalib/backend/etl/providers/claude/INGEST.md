@@ -37,6 +37,18 @@ to coerce it into the export format:
   * Restores `flags: null` on every content block.
   * Adds `_source: { via: "claude.ai/api", org_uuid }` provenance.
 
+That runs at render time, on the way out of the store. What goes *in*
+is the API response with every null-valued object key dropped
+(`canonicalize_conversation_payload`). claude.ai's replicas do not agree
+on whether a field with no value is sent as `null` or left out — the
+same untouched conversation came back both ways five minutes apart on
+the 2026-09-18 bake, on `chat_messages[].content[]` down to
+`display_content.link.*` — and either spelling reads the same
+everywhere here, so storing one of them is what keeps a no-change
+refetch from counting as `modified` and re-rendering. Null array
+elements stay; they are positional. The export ingest stores its file
+as written: one export comes from one serializer.
+
 ## Auth + Cloudflare
 
 The downloader does not handle claude.ai cookies directly. It shells
