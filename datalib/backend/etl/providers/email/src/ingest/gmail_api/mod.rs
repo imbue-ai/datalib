@@ -24,7 +24,7 @@ use datalib_etl_email_config::EmailGmailApi;
 use super::db::RawDb;
 use super::schema_raw::{EmlBlobRow, GmailMessageRow, ThreadRow};
 use super::K_ONLY_EXTRACT_LABELS;
-use api::QuotaThrottle;
+use api::{Client, QuotaThrottle};
 use ingest::LabelIndex;
 
 /// `messages.list` page size. Google's maximum is 500; ids are tiny, so
@@ -194,12 +194,13 @@ async fn run_sync(
     let user_id = cfg.user_id().to_string();
 
     let mut throttle = QuotaThrottle::new(cfg.quota_units_per_minute());
+    let client = throttle.client(opts.latchkey.clone());
     let mut summary = FetchSummary::default();
     let now = IsoOffsetTimestamp::now_local();
 
     // ── account ─────────────────────────────────────────────────────
     throttle.acquire(api::UNITS_GET_PROFILE).await;
-    let profile = api::get_profile(&user_id, &opts.latchkey)
+    let profile = api::get_profile(&user_id, &client)
         .await
         .context("users.getProfile — is `latchkey auth browser google-gmail` done?")?;
     let account_id = cfg
@@ -230,7 +231,7 @@ async fn run_sync(
 
     // ── labels → mailboxes ──────────────────────────────────────────
     throttle.acquire(api::UNITS_LABELS_LIST).await;
-    let index = LabelIndex::new(api::list_labels(&user_id, &opts.latchkey).await?);
+    let index = LabelIndex::new(api::list_labels(&user_id, &client).await?);
     let mailbox_payloads: Vec<Value> = index
         .mailboxes(&account_id)
         .into_iter()
@@ -273,7 +274,7 @@ async fn run_sync(
         None => None,
         Some(cursor) => {
             throttle.acquire(api::UNITS_HISTORY_LIST).await;
-            match collect_history(&user_id, &opts.latchkey, cursor, &mut throttle).await {
+            match collect_history(&user_id, &client, cursor, &mut throttle).await {
                 Ok(changes) => Some(changes),
                 // Only `history.list` reads a 404 this way.
                 Err(e) if is_not_found(&e) => {
@@ -314,7 +315,7 @@ async fn run_sync(
         index: &index,
         account_id: &account_id,
         user_id: &user_id,
-        latchkey: &opts.latchkey,
+        client: &client,
         now: &now,
         only_labels: opts.only_labels.iter().cloned().collect(),
         blob_size_limit_bytes: opts.blob_size_limit_bytes,
@@ -540,14 +541,14 @@ fn is_not_found(e: &anyhow::Error) -> bool {
 
 async fn collect_history(
     user_id: &str,
-    latchkey: &LatchkeySettings,
+    client: &Client,
     cursor: &str,
     throttle: &mut QuotaThrottle,
 ) -> Result<Changes> {
     let mut out = Changes::default();
     let mut token: Option<String> = None;
     loop {
-        let page = api::list_history(user_id, latchkey, cursor, token.as_deref()).await?;
+        let page = api::list_history(user_id, client, cursor, token.as_deref()).await?;
         out.added.extend(page.added);
         out.relabeled.extend(page.relabeled);
         out.deleted.extend(page.deleted);
@@ -583,7 +584,7 @@ struct RunState<'a> {
     index: &'a LabelIndex,
     account_id: &'a str,
     user_id: &'a str,
-    latchkey: &'a LatchkeySettings,
+    client: &'a Client,
     now: &'a IsoOffsetTimestamp,
     /// Belt-and-braces client-side label check. The enumeration is
     /// already narrowed server-side; this catches the case where a
@@ -637,7 +638,7 @@ async fn full_sync(
             throttle.acquire(api::UNITS_MESSAGES_LIST).await;
             let page = api::list_messages(
                 state.user_id,
-                state.latchkey,
+                state.client,
                 token.as_deref(),
                 LIST_PAGE_SIZE,
                 label_id,
@@ -717,18 +718,26 @@ async fn fetch_ids(
             info!(
                 event = "gmail_budget_exhausted",
                 fetched = state.fetched,
-                "stopping early with a partial result; the cursor is committed",
+                "stopping early with a partial result; the cursor is held so the next run resumes",
             );
             return Ok(());
         }
         throttle.acquire(api::UNITS_MESSAGES_GET).await;
-        let msg = match api::get_message_raw(state.user_id, state.latchkey, id).await {
+        let msg = match api::get_message_raw(state.user_id, state.client, id).await {
             Ok(m) => m,
             Err(e) if is_not_found(&e) => {
                 // Deleted between the list and the get: normal on a busy
                 // mailbox, and nothing to come back for.
                 info!(event = "gmail_message_deleted_before_fetch", id = %id);
                 continue;
+            }
+            // The retry loop backed off for as long as the run's give-up
+            // bounds allow and Google still would not serve. Walking on
+            // would fail every remaining id the same way, one attempt
+            // each; stopping keeps what the sealed batches already
+            // committed, and the held cursor makes the next run resume.
+            Err(e) if api::is_gave_up(&e) => {
+                return Err(e.context(format!("fetching message {id}")));
             }
             Err(e) => {
                 // Not a deletion, so this message still exists and we

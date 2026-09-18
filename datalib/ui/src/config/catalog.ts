@@ -444,16 +444,6 @@ export const CATALOG: CatalogEntry[] = [
           "it later backfills the labels you added.",
       },
       {
-        kind: "int",
-        target: "gmail.message_budget",
-        label: "Stop after this many messages each run",
-        help:
-          "Gmail's quota allows about 300 messages a minute, so a 100k-message account is " +
-          "roughly six hours of downloading. A budget makes that a series of runs that each " +
-          "finish successfully and resume where they stopped, instead of one long run that " +
-          "fails and poisons everything downstream. Leave empty for no limit.",
-      },
-      {
         kind: "bytes",
         target: "common.blob_size_limit_bytes",
         label: "Skip messages larger than",
