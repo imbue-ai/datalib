@@ -50,7 +50,7 @@ jobs:
   # they write `runtime.manifest`. The tarball no longer carries the
   # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
   #
-  # `stage_runtime.sh` is a `bazel build` of three fetch-and-extract
+  # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
   # targets and an rsync: a few minutes, most of it runner setup.
   runtime:
     name: runtime (${{ matrix.triple }})
@@ -557,11 +557,10 @@ jobs:
               } > "${manifest}"
               cat "${manifest}"
 
-              # Third-party notices beside the binaries, on every leg —
-              # the musl ones too, which skip the runtime but still ship
-              # the crates and DoltLite. Runs a default-config bazel build
-              # of its own, like stage_runtime.sh; every bazel-bin copy
-              # above is already done.
+              # Third-party notices beside the binaries. Runs a
+              # default-config bazel build of its own, which repoints
+              # bazel-bin; every copy out of bazel-bin above is already
+              # done.
               scripts/third_party_notices.sh "${stage}/licenses"
 
               tarball="datalib-${TRIPLE}.tar.gz"

@@ -20,15 +20,16 @@
 #                           by the vite build (datalib/ui/tools/thirdPartyNotices.ts)
 #   curl-impersonate/       the notices packed with the impersonating curl
 #   doltlite/               DoltLite's Apache-2.0 notice and license text
-#   node/LICENSE            the bundled Node runtime's notice
+#   node/LICENSE            the notice of the Node runtime the binaries
+#                           fetch on first use (runtime.manifest)
 #
 # The last four come out of Bazel (//third-party:bundled_licenses and
 # //datalib/ui:dist). cargo-about is the one tool this needs on PATH
 # beyond bazel: `brew install cargo-about`, or the pinned download in
 # release.yml. It fetches crate sources itself, so it needs the network
-# on a cold machine. The qmd and latchkey trees under runtime/ keep each
-# package's own LICENSE file inside node_modules and are not repeated
-# here.
+# on a cold machine. The qmd and latchkey trees in the runtime asset keep
+# each package's own LICENSE file inside node_modules and are not
+# repeated here.
 
 set -euo pipefail
 
@@ -84,9 +85,10 @@ directory is those notices.
 | `ui-bundle.md` | every npm package bundled into the web UI that `datalib-http` serves |
 | `curl-impersonate/` | `latchkey-curl-impersonate`: curl-impersonate, curl, BoringSSL, nghttp2, nghttp3, ngtcp2, brotli, zstd, zlib |
 | `doltlite/` | DoltLite (Apache-2.0), the SQLite fork linked into every binary; SQLite itself is public domain |
-| `node/LICENSE` | the bundled Node.js runtime under `runtime/node/` |
+| `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 
-The `qmd` and `latchkey` package trees under `runtime/` carry each
+The runtime asset itself carries the same Node notice beside its
+binary, and the `qmd` and `latchkey` package trees in it carry each
 package's own license file inside `node_modules/`.
 EOF
 
