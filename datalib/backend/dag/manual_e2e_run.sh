@@ -43,8 +43,8 @@
 #                                        the provider's DOWNLOAD.md.
 #   "Credentials for X are expired."   → the TOKEN needs reissuing.
 #
-# This script builds and exports LATCHKEY_CURL for you — see the block below
-# for why that is not optional.
+# This script builds and exports LATCHKEY_CURL and DATALIB_RUNTIME_DIR for
+# you — see the two blocks below for why neither is optional.
 set -euo pipefail
 
 # External private data dir (dag.toml + sources/ + snapshots/). Honor an
@@ -111,6 +111,25 @@ if [[ -z "${LATCHKEY_CURL:-}" ]]; then
   export LATCHKEY_CURL
 fi
 echo "[manual-e2e] LATCHKEY_CURL=$LATCHKEY_CURL" >&2
+
+# ── The Node runtime latchkey runs from ─────────────────────────────────
+#
+# The binaries spawn `latchkey` (and `qmd`) from a `runtime/` tree of
+# pinned Node plus the package trees, found beside themselves or through
+# DATALIB_RUNTIME_DIR (docs/dev/runtime_fetch.md). A checkout build has
+# neither a tree beside the binaries nor the manifest a release uses to
+# fetch one, and the `npx` fallback is opt-in — so without this every
+# latchkey-backed source fails at its first request with "spawn latchkey
+# failed: no bundled runtime", before any credential is looked at. Stage
+# one out of Bazel the way first_time_dev.md says to for a hand-run
+# binary; rsync makes a re-stage cheap.
+if [[ -z "${DATALIB_RUNTIME_DIR:-}" ]]; then
+  DATALIB_RUNTIME_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/datalib/staged-runtime"
+  echo "[manual-e2e] staging the Node runtime into $DATALIB_RUNTIME_DIR…" >&2
+  ../../../scripts/stage_runtime.sh "$DATALIB_RUNTIME_DIR" >&2
+  export DATALIB_RUNTIME_DIR
+fi
+echo "[manual-e2e] DATALIB_RUNTIME_DIR=$DATALIB_RUNTIME_DIR" >&2
 
 case "${1:-}" in
   --config)

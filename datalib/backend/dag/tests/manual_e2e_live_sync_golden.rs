@@ -52,8 +52,35 @@ fn scrub_presigned(s: &str) -> String {
     out
 }
 
+/// Blank the `Size` cell of a storage table row (`| 658.4 KiB |`): a
+/// store's size on disk wobbles run-to-run at equal row counts, which is
+/// why `source_measurements.bytes` is redacted too. The row's `Count`
+/// cell (`16 rows`, `4 files`) is the signal and stays.
+fn scrub_sizes(s: &str) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let is_size = |cell: &str| {
+        let cell = cell.trim();
+        UNITS.iter().any(|u| {
+            cell.strip_suffix(u)
+                .is_some_and(|n| !n.is_empty() && n.trim_end().parse::<f64>().is_ok())
+        })
+    };
+    s.lines()
+        .map(|line| {
+            if !line.starts_with('|') || !line.split('|').any(is_size) {
+                return line.to_string();
+            }
+            line.split('|')
+                .map(|cell| if is_size(cell) { " <size> " } else { cell })
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn normalize_str(s: &str) -> String {
-    scrub_presigned(&norm_data_root(s))
+    scrub_sizes(&scrub_presigned(&norm_data_root(s)))
 }
 
 /// Redact dolt `commit=<hash>` substrings embedded in a human-readable string.
@@ -175,6 +202,14 @@ const VOLATILE_KEYS: &[&str] = &[
     "dev",
     "last_scan_at_utc",
     "scanner_version",
+    // The offset the clock was in when a stamp above was minted (AGENTS.md
+    // "Timestamp convention"): a property of the machine that baked, not
+    // of the data, and it rides beside stamps that are already redacted.
+    "tz_offset",
+    // The raw-store commit a render store's `render_cursor` row was
+    // rendered from: a dolt hash, so it moves on every run like
+    // `commit_hash`.
+    "raw_commit",
 ];
 
 /// Live counters on an embedded GitHub *repo* object (a PR payload carries the
@@ -201,7 +236,13 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
-const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[("sync_scope_config", &["updated_at"])];
+const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
+    ("sync_scope_config", &["updated_at"]),
+    // A store's size on disk wobbles run-to-run at equal row counts
+    // (page layout, chunk ordering), the same way the extract-metrics
+    // `bytes_*` did; `items` carries the signal.
+    ("source_measurements", &["bytes"]),
+];
 
 /// Stores dumped as one row count per table instead of row by row. A
 /// mirror source's store is every table of an application's own
@@ -501,6 +542,20 @@ fn manual_e2e_live_sync_golden() {
         prepend_module_to_snapshot => false,
     }, {
         assert_snapshot!("manifest", manifest.join("\n"));
+    });
+
+    // The index is where a problem ends up: a fetch-stage row is copied
+    // raw → render → index, so this one table shows every problem the
+    // run left visible to the grid, under the id it was first minted
+    // with. The rest of the index is the union of the render stores
+    // snapshotted above and is deliberately not dumped again.
+    insta::with_settings!({
+        snapshot_path => snap_base().join("unified_index").display().to_string(),
+        prepend_module_to_snapshot => false,
+        sort_maps => true,
+        description => "unified_index/grid_index/db.doltlite_db#problems",
+    }, {
+        assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
     // ── Second run: incrementality check ──────────────────────────────
@@ -845,6 +900,21 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
+/// The unified index's `problems` table, volatile stamps redacted, ordered
+/// by `problem_uuid` like every dumped table.
+fn index_problems(data_root: &Path) -> Value {
+    let db = data_root.join("unified_index/grid_index/db.doltlite_db");
+    let mut dump = dump_doltlite_db(&db);
+    let mut rows = match &mut dump {
+        Value::Object(map) => map
+            .remove("problems")
+            .unwrap_or_else(|| panic!("{}: no `problems` table", db.display())),
+        other => panic!("{}: dump is not an object: {other}", db.display()),
+    };
+    strip_volatile(&mut rows);
+    rows
+}
+
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison:
 const NON_CONTENT_TABLES: &[&str] = &[
@@ -889,13 +959,14 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         {
             continue;
         }
-        // Doltlite's sidecar `-lock` files are ephemeral and
+        // Doltlite's `-lock` sidecars and our own per-file `.lock`s
+        // (etl README § "Connection pools") are ephemeral and
         // content-free; `CACHEDIR.TAG` is a backup hint asserted
-        // separately. Neither belongs in a golden.
+        // separately. None belongs in a golden.
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock") || n == "CACHEDIR.TAG")
+            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock") || n == "CACHEDIR.TAG")
         {
             continue;
         }
@@ -1416,6 +1487,8 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // wall-clock timestamps. The content-equality is already
         // covered by `deltas` showing few/no rows changed.
         "commit_hash",
+        "raw_commit",
+        "tz_offset",
         // `load.write_lock` timings + the extract-metrics per-db byte sizes
         // are wall-clock / layout jitter; row counts carry the real signal.
         "avg_hold_ms",
