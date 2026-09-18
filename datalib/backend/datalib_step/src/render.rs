@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor};
+use datalib_schema::problems::{ProblemRow, Severity, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -282,6 +282,22 @@ pub fn render_source(
         buckets.insert(bucket.to_string());
         Ok(())
     };
+    // Entity-scoped problems land in the open batch beside the
+    // documents, so a checkpoint carries them and a failed processor's
+    // rollback takes them with it.
+    let mut on_problems = |scope: &ReadScope, rows: &[ProblemRow]| -> Result<()> {
+        match scope {
+            ReadScope::Whole(tables) => store
+                .put_entity_problems(tables, rows)
+                .context("record the parse's entity problems"),
+            ReadScope::Partial => store
+                .put_entity_problems(&[], rows)
+                .context("record the parse's entity problems"),
+            ReadScope::Document(markdown_uuid) => store
+                .put_document_problems(markdown_uuid, rows)
+                .with_context(|| format!("record problems of document {markdown_uuid}")),
+        }
+    };
     // The raw commit each processor rendered from, or `None` for one
     // that read no store.
     let mut consumed: Vec<Option<String>> = Vec::with_capacity(processors.len());
@@ -297,6 +313,7 @@ pub fn render_source(
                 stale_buckets.as_ref(),
                 &mut on_doc,
                 &mut on_declare,
+                &mut on_problems,
             );
             futures::executor::block_on(proc.run(&ctx))
                 .with_context(|| format!("processor {}", proc.id()))?;

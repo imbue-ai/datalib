@@ -384,6 +384,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: Vec::new(),
             }
         }
         // sms / mms
@@ -447,6 +448,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: Vec::new(),
             }
         }
     }

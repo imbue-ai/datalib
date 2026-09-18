@@ -125,6 +125,7 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         },
         owner,
     )
@@ -186,6 +187,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         },
         owner,
     )

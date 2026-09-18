@@ -559,6 +559,12 @@ fn collect(
         side.buckets.insert(bucket.to_string(), inputs.to_vec());
         Ok(())
     };
+    // A diff compares documents; what a side could not parse is not
+    // part of the comparison and has its own home in the source's
+    // render store.
+    let mut on_problems =
+        |_: &datalib_etl_render::processor::ReadScope,
+         _: &[datalib_schema::problems::ProblemRow]| Ok(());
     for proc in processors {
         let ctx = RenderCtx::new(
             name,
@@ -570,6 +576,7 @@ fn collect(
             Some(stale),
             &mut on_doc,
             &mut on_declare,
+            &mut on_problems,
         );
         futures::executor::block_on(proc.run(&ctx))
             .with_context(|| format!("processor {} at {pin}", proc.id()))?;

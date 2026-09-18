@@ -327,11 +327,23 @@ the screen in a test.
 banner above the body, a line about a surviving record jumps to its
 section in place. Requirement 4.
 
-**PR 4 — the parse stage.** `RenderCtx::problem`, the five silent
-`continue`s converted, `poison` extended with an undeserializable
-payload. Then `Problem::lossy` gets its first callers — the truncation
-and chrome-stripping rules the practices doc lists — so R3's table can
-be generated from the grid (`rule:*`) instead of maintained by hand.
+**PR 4 — the parse stage.** Done, minus R3.
+`NormalizedChatItem::problems` and `own_stamp_ms` carry what a
+provider could not do with an item into a document-scoped row keyed to
+the item; every `TODO(problem-sink)` stamp site (slack, claude, chatgpt,
+email, google_takeout, linkedin) is on it. `RenderCtx::report_unparsed`
+takes the five silent `continue`s (slack users and messages, chatgpt
+conversations, email accounts/mailboxes/threads) with a `ReadScope`
+saying which tables the parse read whole — the rule that lets an
+entity-scoped row clear when its row reads cleanly again, and keeps it
+when the row was not looked at. `RenderCtx::report_document_failed`
+takes `pdf_render`'s per-document conversion failure
+(`Reason::RenderFailed`). The TNG fixture carries a `Poisoned:`
+conversation whose reply's `created_at` is `stardate 47988.1`, and
+`ingested_tng_test` pins its one row — id included — through the
+store, the index, a steady-state re-run and a from-scratch rebuild.
+Still open: `Problem::lossy` has no callers, so R3's table cannot be
+generated yet.
 
 **PR 5 — the fetch stage.** `record_object_attempt` writes and clears
 per §D5; the raw → render copy; then the provider migrations, one

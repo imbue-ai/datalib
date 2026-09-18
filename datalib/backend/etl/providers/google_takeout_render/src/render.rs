@@ -12,10 +12,11 @@ use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_schema::problems::Problem;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -351,13 +352,18 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     .unwrap_or(name);
                 let id = m.get("message_id").and_then(Value::as_str).unwrap_or("");
                 let text = m.get("text").and_then(Value::as_str);
+                let mut problems = Vec::new();
+                let date_ms = own_stamp_ms(
+                    m.get("created_date").and_then(Value::as_str),
+                    "created_date",
+                    parse_date_ms,
+                    &mut problems,
+                );
                 NormalizedChatItem {
                     message_uuid: uuid5(&format!("msg:{id}")),
                     author_id: email.to_string(),
                     author_display: name.to_string(),
-                    date_ms: parse_date_ms(
-                        m.get("created_date").and_then(Value::as_str).unwrap_or(""),
-                    ),
+                    date_ms,
                     text: text.filter(|s| !s.is_empty()).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
@@ -367,6 +373,7 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    problems,
                 }
             })
             .collect();
@@ -441,15 +448,9 @@ fn space_of_dir(dir: &str) -> String {
         .to_string()
 }
 
-/// TODO(problem-sink): a shape we don't recognize is dropped silently.
-/// `None` is the right *value* for `created_at`, but nothing anywhere
-/// records that we discarded something upstream actually sent — that is
-/// only half of R1 ("drop, count, log; never abort, never hide"). The
-/// problem sink is `problems` (`datalib_schema::problems`);
-/// report `{field, reason: CoercionFailed, sample}` there as well as
-/// returning `None`. Grep `TODO(problem-sink)` for every such site.
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
-/// timestamp to unix millis, or `None` on any shape we don't recognize.
+/// timestamp to unix millis, or `None` on any shape we don't recognize —
+/// which the caller records through `own_stamp_ms`.
 fn parse_date_ms(s: &str) -> Option<i64> {
     let s = s.trim().replace(['\u{202f}', '\u{00a0}'], " ");
     const FMTS: [&str; 2] = [
@@ -565,7 +566,8 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| uuid5(&m.to_string()));
-    let date_ms = voice_date_ms(m);
+    let mut problems = Vec::new();
+    let date_ms = voice_date_ms(m, &mut problems);
 
     let attachments: Vec<NormalizedAttachment> = voice_attachment_refs(m)
         .into_iter()
@@ -620,6 +622,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
         "voicemail" | "recorded" => {
@@ -650,6 +653,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
         // missed / placed / received — a call with no media: a system note.
@@ -675,6 +679,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: None,
                 is_aside: false,
+                problems: problems.clone(),
             }
         }
     }
@@ -696,22 +701,25 @@ fn party_id(party: Option<&Value>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// TODO(problem-sink): an unrecognized shape is dropped silently. `None`
-/// is the right value for `created_at`, but nothing records that upstream
-/// sent something we could not read — half of R1. See the note on
-/// `datalib_time::record_stamp_from_unix_millis`; grep `TODO(problem-sink)`.
 /// Unix millis from the canonical `when` (RFC 3339), falling back to the
-/// raw value, then to `None`.
-fn voice_date_ms(m: &Value) -> Option<i64> {
+/// raw value, then to `None` — recorded when there was a value and it
+/// would not parse.
+fn voice_date_ms(m: &Value, problems: &mut Vec<Problem>) -> Option<i64> {
     let ts = m
         .get("when")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .or_else(|| m.get("when_raw").and_then(Value::as_str))
-        .unwrap_or("");
-    datalib_time::parse_strict(ts)
-        .ok()
-        .map(|t| t.to_unix_millis())
+        .or_else(|| m.get("when_raw").and_then(Value::as_str));
+    own_stamp_ms(
+        ts,
+        "when",
+        |s| {
+            datalib_time::parse_strict(s)
+                .ok()
+                .map(|t| t.to_unix_millis())
+        },
+        problems,
+    )
 }
 
 fn month_of(ms: Option<i64>) -> String {
@@ -852,11 +860,17 @@ mod tests {
 
     #[test]
     fn voice_date_ms_yields_none_when_undated() {
-        assert_eq!(voice_date_ms(&json!({})), None);
-        assert_eq!(voice_date_ms(&json!({"when": ""})), None);
-        assert_eq!(voice_date_ms(&json!({"when": "yesterday"})), None);
+        assert_eq!(voice_date_ms(&json!({}), &mut Vec::new()), None);
+        assert_eq!(voice_date_ms(&json!({"when": ""}), &mut Vec::new()), None);
         assert_eq!(
-            voice_date_ms(&json!({"when": "2019-08-01T14:49:00.742-07:00"})),
+            voice_date_ms(&json!({"when": "yesterday"}), &mut Vec::new()),
+            None
+        );
+        assert_eq!(
+            voice_date_ms(
+                &json!({"when": "2019-08-01T14:49:00.742-07:00"}),
+                &mut Vec::new()
+            ),
             Some(1_564_696_140_742),
         );
     }

@@ -50,7 +50,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open, Section};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::problems::ProblemRow;
+use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 
 use crate::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
@@ -653,6 +653,20 @@ fn build_grid_rows(
     let _ = chat_title; // reserved for future per-message title context
 
     for (idx, (item, text)) in doc.items.iter().zip(bodies).enumerate() {
+        // What the provider could not do with the item while
+        // normalizing it: a document-scoped row per problem, keyed to
+        // the item, swept with the document like the builder's own.
+        problems.extend(item.problems.iter().map(|p| {
+            ProblemRow::new(
+                source_id,
+                Stage::Parse,
+                Scope::Markdown(&doc.markdown_uuid),
+                Some(&item.message_uuid),
+                Outcome::Nulled,
+                p.clone(),
+                Some(profile.render_version),
+            )
+        }));
         rows.extend(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
@@ -888,6 +902,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    problems: Vec::new(),
                 }],
             }],
         }
@@ -951,6 +966,59 @@ mod tests {
         assert!(p.first_seen_at_utc.is_empty() && p.last_seen_at_utc.is_empty());
     }
 
+    /// A problem the provider found while normalizing an item — a
+    /// stamp that would not parse — reaches the store as a parse-stage
+    /// row on the document, keyed to the item, beside the builder's
+    /// own rows.
+    #[test]
+    fn an_items_own_problems_become_document_rows_keyed_to_it() {
+        use crate::types::own_stamp_ms;
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        let ms = own_stamp_ms(
+            Some("stardate 47988.1"),
+            "created_at",
+            |_| None,
+            &mut item.problems,
+        );
+        assert_eq!(ms, None);
+        assert_eq!(item.problems.len(), 1);
+        let mut problems = Vec::new();
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "x.md",
+            "test_source",
+            &mut problems,
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        let p = &problems[0];
+        assert_eq!(p.stage, Stage::Parse);
+        assert_eq!(p.severity, Severity::Warning);
+        assert_eq!(p.reason, Reason::CoercionFailed);
+        assert_eq!(p.field.as_deref(), Some("created_at"));
+        assert_eq!(p.sample, "stardate 47988.1");
+        assert_eq!(p.scope_key, chat.buckets[0].markdown_uuid);
+        assert_eq!(
+            p.item_uuid.as_deref(),
+            Some(chat.buckets[0].items[0].message_uuid.as_str())
+        );
+        // An absent stamp is an absence, not a problem.
+        let mut none = Vec::new();
+        assert_eq!(
+            own_stamp_ms(None, "created_at", |_| Some(1), &mut none),
+            None
+        );
+        assert_eq!(
+            own_stamp_ms(Some("  "), "created_at", |_| Some(1), &mut none),
+            None
+        );
+        assert!(none.is_empty());
+    }
+
     /// The id is minted from the scope and the field, so a record that
     /// stays broken keeps one row across runs rather than growing one per run.
     #[test]
@@ -1002,6 +1070,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         });
         let rows = rows_of(&profile, &chat);
 
@@ -1154,6 +1223,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            problems: Vec::new(),
         }
     }
 

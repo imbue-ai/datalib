@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::processor::Unparsed;
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -158,6 +159,10 @@ pub struct ParsedChatGPTApi {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
+    /// Conversations whose stored payload would not read, or would
+    /// not build a conversation, dropped — reported by the processor
+    /// rather than skipped in silence.
+    pub unparsed: Vec<Unparsed>,
 }
 
 impl ParsedChatGPTApi {
@@ -522,7 +527,8 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     // Load `me` + `conversations` payloads (filtered if Phase 1
     // narrowed the set).
     let (me_row_id, me) = load_me_payload(&pool).await?;
-    let all_convs = load_conversations(&pool).await?;
+    let mut unparsed: Vec<Unparsed> = Vec::new();
+    let all_convs = load_conversations(&pool, &mut unparsed).await?;
     let total_convs = all_convs.len();
     let scan = scan_diff(&pool, range, &pin, &all_convs).await?;
 
@@ -546,6 +552,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     let mut parsed = parse_loaded(raw);
     parsed.docs_skipped = docs_skipped;
     parsed.scan = scan;
+    parsed.unparsed.append(&mut unparsed);
 
     // Per-doc BlobBundle: walk each conversation's payload to collect
     // the attachment file_ids it references, then bulk-load that set
@@ -652,7 +659,10 @@ async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Va
     Ok((id, s.and_then(|t| serde_json::from_str::<Value>(&t).ok())))
 }
 
-async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
+async fn load_conversations(
+    pool: &SqlitePool,
+    unparsed: &mut Vec<Unparsed>,
+) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
         "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
            FROM pinned_conversations c
@@ -666,10 +676,15 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
         let id: String = r.try_get("id").unwrap_or_default();
-        let Ok(payload_str) = r.try_get::<String, _>("payload") else {
-            continue;
+        let payload_str = match r.try_get::<String, _>("payload") {
+            Ok(s) => s,
+            Err(e) => {
+                unparsed.push(Unparsed::new("conversations", &id, &e.to_string()));
+                continue;
+            }
         };
         let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            unparsed.push(Unparsed::new("conversations", &id, &payload_str));
             continue;
         };
         let fetched_at_utc: Option<String> = r.try_get("fetched_at_utc").ok();
@@ -753,6 +768,10 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
     };
     for LoadedConversation { id, payload, .. } in raw.conversations {
         let Some(conv) = build_conv_row(&payload, None, &account_id) else {
+            // Valid JSON that is not a conversation we can read: the
+            // same loss as unreadable JSON, recorded the same way.
+            out.unparsed
+                .push(Unparsed::new("conversations", &id, &payload.to_string()));
             continue;
         };
         let inputs = Inputs::default();

@@ -50,6 +50,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         });
     }
     for (i, photo) in photos.iter().enumerate() {
@@ -71,6 +72,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: Some("Facebook Photo".to_string()),
             source_ref: None,
             is_aside: false,
+            problems: Vec::new(),
         });
     }
     items.sort_by_key(|i| i.date_ms);

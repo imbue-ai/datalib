@@ -1229,6 +1229,18 @@ expression: snapshot
       "title": "Klingon Diplomatic Greeting Drafting"
     },
     {
+      "bucket_key": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "created_at": "2369-04-17T10:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "md_path": "claude-api/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md",
+      "modified_at": "2369-04-17T10:00:00+00:00",
+      "provider": "claude",
+      "renderer_version": "rust-v1.7",
+      "source_id": "claude-api",
+      "title": "Poisoned: a message with an unreadable stamp"
+    },
+    {
       "bucket_key": "fc358ba4-b6be-5ed7-98e4-cc9dd07265d7",
       "created_at": "2369-03-16T10:00:00+00:00",
       "kind": "chat",
@@ -1261,7 +1273,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=106 markdowns_read=106 markdowns_removed=1 rows_inserted=463"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=107 markdowns_read=107 markdowns_removed=1 rows_inserted=466"
     }
   ],
   "grid_rows": [
@@ -3837,6 +3849,37 @@ expression: snapshot
       "upstream_id": null,
       "upstream_scope": null,
       "uuid": "4b17d732-6667-5cd8-8071-7629ed2fa75b"
+    },
+    {
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "Human",
+      "byte_size": 30,
+      "channel": "Poisoned: a message with an unreadable stamp",
+      "conversation_name": "Poisoned: a message with an unreadable stamp",
+      "conversation_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "created_at": "2369-04-17T10:00:00+00:00",
+      "entire_chat": "/chat/fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "User Input",
+      "markdown_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": null,
+      "provider": "claude",
+      "qmd_path": "claude-api/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": null,
+      "text_len": 30,
+      "text_sha": "sha256:0b44442f2c8986d1e2f522bf0091bd556cccf842c0e8ed6364e9d35271523497",
+      "upstream_entity_kind": "message",
+      "upstream_id": "60000001-1701-4d00-8000-000000060001",
+      "upstream_scope": null,
+      "uuid": "4bfa3277-ca76-5472-9181-d964975c6943"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -8520,6 +8563,37 @@ expression: snapshot
       "uuid": "db076984-1c8c-5f9c-95f3-49aff0ea4480"
     },
     {
+      "account": "jlpicard@enterprise.starfleet.test",
+      "author": "claude-opus-4-7",
+      "byte_size": 52,
+      "channel": "Poisoned: a message with an unreadable stamp",
+      "conversation_name": "Poisoned: a message with an unreadable stamp",
+      "conversation_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "created_at": "2369-04-17T10:00:00+00:00",
+      "entire_chat": "/chat/fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "git_sha": null,
+      "item_count": 1,
+      "kind": "LLM Response",
+      "markdown_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": null,
+      "provider": "claude",
+      "qmd_path": "claude-api/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": null,
+      "text_len": 52,
+      "text_sha": "sha256:9c80c152728782210fd6923434438ea8c7539b5637d5781c38335a10c64945a5",
+      "upstream_entity_kind": "message",
+      "upstream_id": "60000002-1701-4d00-8000-000000060002",
+      "upstream_scope": null,
+      "uuid": "dcce3451-eb4f-53dd-bce7-7e0b22d3af16"
+    },
+    {
       "account": "picard@enterprise.starfleet",
       "author": null,
       "byte_size": 78,
@@ -9544,6 +9618,37 @@ expression: snapshot
     },
     {
       "account": "jlpicard@enterprise.starfleet.test",
+      "author": null,
+      "byte_size": 82,
+      "channel": "Poisoned: a message with an unreadable stamp",
+      "conversation_name": "Poisoned: a message with an unreadable stamp",
+      "conversation_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "created_at": "2369-04-17T10:00:00+00:00",
+      "entire_chat": "/chat/fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "git_sha": null,
+      "item_count": 2,
+      "kind": "Chat",
+      "markdown_uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": "USS Enterprise",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa",
+      "project": null,
+      "provider": "claude",
+      "qmd_path": "claude-api/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md",
+      "slack_link": null,
+      "source_label": "Claude",
+      "source_url": "https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006",
+      "text_len": 83,
+      "text_sha": "sha256:6f1e5fa238dd09144d8569483e3983797e2683f8741596e83fd6a59bcc45609c",
+      "upstream_entity_kind": "conversation",
+      "upstream_id": "c0000006-1701-4d00-8000-00000000c006",
+      "upstream_scope": null,
+      "uuid": "fb0232cd-d04b-5372-b44e-148a47ada7a2"
+    },
+    {
+      "account": "jlpicard@enterprise.starfleet.test",
       "author": "claude-opus-4-7",
       "byte_size": 243,
       "channel": "Klingon Diplomatic Greeting Drafting",
@@ -9780,7 +9885,7 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:29cea1a5886f291a7f9419db7864bd4f4f6c8bf008c8c498ea7b2461d84e9507",
+      "members_sha": "sha256:5b094f4eca6d1576ebbc18940202481321ce38a36272a4b3445c4b8b8c930901",
       "rows": 7,
       "source": "claude-api"
     },
@@ -10092,9 +10197,9 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 104,
+    "documents_count": 105,
     "dolt_log_count": 3,
-    "grid_rows_count": 273,
+    "grid_rows_count": 276,
     "storage_rows_count": 188
   }
 }

@@ -706,32 +706,78 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// A document's problems without the document: what a run records
+    /// for one it tried to produce and could not. Same sweep as
+    /// [`put_document`](Self::put_document)'s, so producing it next
+    /// time clears these.
+    pub fn put_document_problems(&self, markdown_uuid: &str, rows: &[ProblemRow]) -> Result<()> {
+        blocking(self.sweep_problems(markdown_uuid, rows))
+    }
+
     /// Problems not attached to any document — a payload that would not
-    /// deserialize has no `markdown_uuid` to hang off. Swept by the
-    /// raw-store entity id instead, so they clear when that entity is
-    /// next parsed successfully.
-    pub fn put_entity_problems(&self, entity_id: &str, problems: &[ProblemRow]) -> Result<()> {
+    /// deserialize has no `markdown_uuid` to hang off. Keyed by the
+    /// raw-store entity id, `<table>:<id>`. `whole_tables` names the
+    /// tables the caller read every row of: their entity-scoped
+    /// problems are replaced by `problems`, so an entity that reads
+    /// cleanly now is cleared. An entity in `problems` from any other
+    /// table is replaced by name and its neighbours are left alone.
+    pub fn put_entity_problems(
+        &self,
+        whole_tables: &[&str],
+        problems: &[ProblemRow],
+    ) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            let seen: HashMap<String, String> = sqlx::query(
-                "SELECT problem_uuid, first_seen_at_utc FROM problems \
-                 WHERE scope_kind = ? AND scope_key = ?",
-            )
-            .bind(ScopeKind::Entity.as_str())
-            .bind(entity_id)
-            .fetch_all(&mut **conn)
-            .await
-            .context("read prior first_seen_at_utc")?
-            .into_iter()
-            .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
-            .collect::<Result<_>>()?;
-            sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
-                .bind(ScopeKind::Entity.as_str())
-                .bind(entity_id)
-                .execute(&mut **conn)
-                .await
-                .context("clear prior problems for this entity")?;
+            let mut seen: HashMap<String, String> = HashMap::new();
+            // `INSTR(x, ?) = 1` rather than `LIKE 'table:%'`: a table
+            // name may hold `_`, which LIKE reads as a wildcard.
+            let prefixes: Vec<String> = whole_tables.iter().map(|t| format!("{t}:")).collect();
+            let mut entities: Vec<&str> = problems.iter().map(|p| p.scope_key.as_str()).collect();
+            entities.sort_unstable();
+            entities.dedup();
+            let clears: Vec<(&'static str, &str)> = prefixes
+                .iter()
+                .map(|p| {
+                    (
+                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                     WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1",
+                        p.as_str(),
+                    )
+                })
+                .chain(entities.iter().map(|e| {
+                    (
+                        "SELECT problem_uuid, first_seen_at_utc FROM problems \
+                     WHERE scope_kind = ? AND scope_key = ?",
+                        *e,
+                    )
+                }))
+                .collect();
+            for (select, key) in clears {
+                let delete = if select.contains("INSTR") {
+                    "DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
+                } else {
+                    "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
+                };
+                for (uuid, first) in sqlx::query(select)
+                    .bind(ScopeKind::Entity.as_str())
+                    .bind(key)
+                    .fetch_all(&mut **conn)
+                    .await
+                    .context("read prior first_seen_at_utc")?
+                    .into_iter()
+                    .map(|r| Ok((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?)))
+                    .collect::<Result<Vec<_>>>()?
+                {
+                    seen.insert(uuid, first);
+                }
+                sqlx::query(delete)
+                    .bind(ScopeKind::Entity.as_str())
+                    .bind(key)
+                    .execute(&mut **conn)
+                    .await
+                    .context("clear prior entity problems")?;
+            }
             self.insert_problems(conn, problems, &seen).await
         })
     }
@@ -1491,6 +1537,94 @@ mod tests {
             s.problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
         );
+    }
+
+    /// A document the run could not produce at all — a PDF whose
+    /// conversion failed — carries its problem on its own scope with no
+    /// document behind it, and the run that does produce it sweeps the
+    /// problem like any other. Reported twice, it is one row with its
+    /// first-seen stamp kept.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_document_that_failed_to_render_keeps_its_problem_until_it_renders() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let failed = ProblemRow::new(
+            "src",
+            Stage::Render,
+            Scope::Markdown("md-1"),
+            Some("md-1"),
+            Outcome::Dropped,
+            Problem::record(Reason::RenderFailed, "pdftotext: exit 1"),
+            Some(7),
+        );
+        s.put_document_problems("md-1", std::slice::from_ref(&failed))
+            .unwrap();
+        s.put_document_problems("md-1", &[failed]).unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(1),
+            "the same failure twice is one row"
+        );
+        assert!(
+            s.all_document_uuids().unwrap().is_empty(),
+            "no document behind it"
+        );
+
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        assert!(
+            s.problem_counts().unwrap().is_empty(),
+            "the run that produced the document swept its failure"
+        );
+    }
+
+    /// Entity-scoped problems clear by what the parse read: a table it
+    /// read whole is replaced by the report, a table it read in part
+    /// keeps what it had, and an entity named in the report is always
+    /// replaced by name.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn entity_problems_clear_by_what_the_parse_read() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        let unreadable = |entity: &str| {
+            ProblemRow::new(
+                "src",
+                Stage::Parse,
+                Scope::Entity(entity),
+                None,
+                Outcome::Dropped,
+                Problem::record(Reason::Undeserializable, "{"),
+                Some(7),
+            )
+        };
+        s.put_entity_problems(
+            &["users", "messages"],
+            &[unreadable("users:u1"), unreadable("messages:m1")],
+        )
+        .unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(2)
+        );
+        // A narrowed run read users whole and no messages: u1 reads
+        // cleanly now and goes; m1 was not looked at and stays.
+        s.put_entity_problems(&["users"], &[]).unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(1),
+            "the table not read keeps its rows"
+        );
+        // A partial read that names m1 again replaces it by name and
+        // adds m2, without claiming anything about the rest.
+        s.put_entity_problems(&[], &[unreadable("messages:m1"), unreadable("messages:m2")])
+            .unwrap();
+        assert_eq!(
+            s.problem_counts().unwrap().get(&Severity::Error).copied(),
+            Some(2)
+        );
+        s.put_entity_problems(&["messages"], &[]).unwrap();
+        assert!(s.problem_counts().unwrap().is_empty());
     }
 
     /// A bucket that declared a whole table is stale when any row of it

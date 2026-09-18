@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -70,6 +71,9 @@ pub struct ParsedSlack {
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
+    /// Rows whose stored payload would not read as JSON, dropped —
+    /// reported by the processor rather than skipped in silence.
+    pub unparsed: Vec<Unparsed>,
 }
 
 impl ParsedSlack {
@@ -147,17 +151,18 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     let scan = scan_diff(&pool, range, &pin).await?;
 
     // Workspace + users + channels are cheap and shared across threads.
+    let mut unparsed: Vec<Unparsed> = Vec::new();
     let workspace = load_workspace(&pool).await?;
-    let users = load_users(&pool).await?;
+    let users = load_users(&pool, &mut unparsed).await?;
     let channels = load_channels(&pool).await?;
 
     // Load messages. When the scan narrowed the set, load only those
     // threads' messages; otherwise load everything.
     let total_threads = thread_count(&pool).await?;
     let (messages, docs_skipped) = match &scan.render {
-        None => (load_all_messages(&pool).await?, 0usize),
+        None => (load_all_messages(&pool, &mut unparsed).await?, 0usize),
         Some(changed) => {
-            let kept = load_messages_for_threads(&pool, changed).await?;
+            let kept = load_messages_for_threads(&pool, changed, &mut unparsed).await?;
             let touched_threads: HashSet<&str> =
                 kept.iter().map(|m| m.thread_root_uuid.as_str()).collect();
             let skipped = total_threads.saturating_sub(touched_threads.len());
@@ -224,6 +229,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
         threads,
         docs_skipped,
         scan,
+        unparsed,
     })
 }
 
@@ -292,7 +298,10 @@ async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
     }))
 }
 
-async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
+async fn load_users(
+    pool: &SqlitePool,
+    unparsed: &mut Vec<Unparsed>,
+) -> Result<BTreeMap<String, User>> {
     let rows = sqlx::query("SELECT id, team_id, json(payload) AS payload FROM pinned_users")
         .fetch_all(pool)
         .await
@@ -309,9 +318,13 @@ async fn load_users(pool: &SqlitePool) -> Result<BTreeMap<String, User>> {
             .unwrap_or_default();
         let payload_str: String = match r.try_get("payload") {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => {
+                unparsed.push(Unparsed::new("users", &id, &e.to_string()));
+                continue;
+            }
         };
         let Ok(v) = serde_json::from_str::<Value>(&payload_str) else {
+            unparsed.push(Unparsed::new("users", &id, &payload_str));
             continue;
         };
         let profile = v.get("profile");
@@ -400,7 +413,10 @@ async fn thread_count(pool: &SqlitePool) -> Result<usize> {
     Ok(row as usize)
 }
 
-async fn load_all_messages(pool: &SqlitePool) -> Result<Vec<LoadedMessageWithThread>> {
+async fn load_all_messages(
+    pool: &SqlitePool,
+    unparsed: &mut Vec<Unparsed>,
+) -> Result<Vec<LoadedMessageWithThread>> {
     let rows = sqlx::query(
         "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
@@ -411,12 +427,13 @@ async fn load_all_messages(pool: &SqlitePool) -> Result<Vec<LoadedMessageWithThr
     .fetch_all(pool)
     .await
     .context("select all messages")?;
-    Ok(rows_to_loaded(rows))
+    Ok(rows_to_loaded(rows, unparsed))
 }
 
 async fn load_messages_for_threads(
     pool: &SqlitePool,
     thread_uuids: &HashSet<String>,
+    unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<LoadedMessageWithThread>> {
     if thread_uuids.is_empty() {
         return Ok(Vec::new());
@@ -445,19 +462,27 @@ async fn load_messages_for_threads(
             .fetch_all(pool)
             .await
             .context("select messages for threads")?;
-        out.extend(rows_to_loaded(rows));
+        out.extend(rows_to_loaded(rows, unparsed));
     }
     Ok(out)
 }
 
-fn rows_to_loaded(rows: Vec<sqlx::sqlite::SqliteRow>) -> Vec<LoadedMessageWithThread> {
+fn rows_to_loaded(
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+    unparsed: &mut Vec<Unparsed>,
+) -> Vec<LoadedMessageWithThread> {
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
         let payload_str: String = match r.try_get("payload") {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => {
+                unparsed.push(Unparsed::new("messages", &id, &e.to_string()));
+                continue;
+            }
         };
         let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            unparsed.push(Unparsed::new("messages", &id, &payload_str));
             continue;
         };
         let is_root_int: Option<i64> = r.try_get("is_thread_root").unwrap_or(None);
@@ -656,6 +681,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         threads,
         docs_skipped: 0,
         scan: ScanResult::default(),
+        unparsed: Vec::new(),
     })
 }
 

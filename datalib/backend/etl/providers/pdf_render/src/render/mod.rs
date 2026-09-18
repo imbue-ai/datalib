@@ -34,6 +34,9 @@ pub struct RenderSummary {
     /// The documents whose conversion failed, by blake3. Their pages are
     /// stale rather than gone, so the processor leaves them undeclared.
     pub failed_blake3s: std::collections::HashSet<String>,
+    /// `(document uuid, error)` for each failure, for the processor to
+    /// record as the document's problem.
+    pub failures: Vec<(String, String)>,
 }
 
 /// Load the work list. Split from [`render_targets`] so the async
@@ -130,6 +133,7 @@ pub fn render_targets(
         converted: 0,
         failed: 0,
         failed_blake3s: Default::default(),
+        failures: Vec::new(),
     };
     if targets.is_empty() {
         return Ok(summary);
@@ -148,9 +152,12 @@ pub fn render_targets(
                 on_doc_complete(rendered)?;
             }
             Err(e) => {
-                // One malformed document must not abort a corpus scan.
+                // One malformed document must not abort a corpus scan;
+                // the failure is the document's problem, recorded by
+                // the processor, and a log line beside it.
                 summary.failed += 1;
                 summary.failed_blake3s.insert(t.blake3.clone());
+                summary.failures.push((doc_uuid.clone(), format!("{e:#}")));
                 tracing::warn!(
                     path = %t.rel_path, blake3 = %t.blake3, error = %e,
                     "pdf_render_failed"
