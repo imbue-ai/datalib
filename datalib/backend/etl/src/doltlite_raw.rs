@@ -564,13 +564,20 @@ async fn open_inner(
     }
     // Add columns an older store predates, or drop+recreate when ADD
     // can't express the change.
+    let mut recreated = Vec::new();
     for stmt in ddl() {
-        reconcile_table_schema(&pool, stmt).await.with_context(|| {
+        let outcome = reconcile_table_schema(&pool, stmt).await.with_context(|| {
             format!(
                 "reconcile schema: {}",
                 stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
             )
         })?;
+        if let Reconciled::Recreated(table) = outcome {
+            recreated.push(table);
+        }
+    }
+    if !recreated.is_empty() {
+        forget_cursors_after_recreate(&pool, &recreated).await?;
     }
     // Indexes last, so they see the reconciled columns — and so reconcile's
     // drop+recreate path costs no index.
@@ -767,13 +774,19 @@ pub fn parse_create_table_name(sql: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+enum Reconciled {
+    Kept,
+    /// The table was dropped and recreated empty; its name.
+    Recreated(String),
+}
+
 /// Add missing non-generated columns via `ALTER TABLE … ADD COLUMN`;
 /// otherwise drop and recreate from the DDL. See the README for why the drop
 /// is safe for raw stores and why `open` runs this between the table and
 /// index halves of the DDL.
-async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<()> {
+async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<Reconciled> {
     let Some(table) = parse_create_table_name(create_sql) else {
-        return Ok(());
+        return Ok(Reconciled::Kept);
     };
 
     // Desired columns, via a probe built from this exact DDL.
@@ -787,7 +800,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
             .execute(pool)
             .await
             .with_context(|| format!("create missing table {table}"))?;
-        return Ok(());
+        return Ok(Reconciled::Kept);
     }
 
     let actual_names: std::collections::HashSet<&str> =
@@ -801,7 +814,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         .collect();
 
     if !has_extra && missing.is_empty() {
-        return Ok(());
+        return Ok(Reconciled::Kept);
     }
 
     // Additive-only, no generated columns missing → ALTER ADD.
@@ -829,7 +842,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
             }
         }
         if added_all {
-            return Ok(());
+            return Ok(Reconciled::Kept);
         }
     }
 
@@ -848,6 +861,47 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<(
         .execute(pool)
         .await
         .with_context(|| format!("recreate {table}"))?;
+    Ok(Reconciled::Recreated(table))
+}
+
+/// The tables a resume cursor can live in, store-wide. Per-row cursors
+/// (a sidecar's `last_ts_ms`, an address book's `ctag`) go with the
+/// table that holds them; these three outlive any one table.
+const CURSOR_TABLES: &[&str] = &[
+    "sync_scope_state",
+    "sync_scope_config",
+    crate::file_checkpoint::INGESTED_FILES_TABLE,
+];
+
+/// A cursor is only valid under the schema that set it. A recreated
+/// table is empty, and a cursor that says "read through here" would let
+/// the next run resume past rows the table no longer has — a store that
+/// stays empty until upstream changes, with nothing saying why. So a
+/// recreate forgets every cursor in the store, and the next run walks
+/// from the start into every table, which the unchanged ones absorb as
+/// no-op upserts.
+async fn forget_cursors_after_recreate(pool: &SqlitePool, recreated: &[String]) -> Result<()> {
+    let mut cleared = Vec::new();
+    for table in CURSOR_TABLES {
+        if table_columns(pool, table).await?.is_empty() {
+            continue;
+        }
+        // Audited: `table` is one of the `&'static str` names above.
+        let n = sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
+            .execute(pool)
+            .await
+            .with_context(|| format!("clear {table} after schema recreate"))?
+            .rows_affected();
+        if n > 0 {
+            cleared.push(format!("{table}={n}"));
+        }
+    }
+    tracing::warn!(
+        recreated = %recreated.join(","),
+        cursors_cleared = %cleared.join(","),
+        "doltlite_raw: a table was recreated empty, so the store's resume cursors \
+         were cleared; the next run walks from the start"
+    );
     Ok(())
 }
 
@@ -2364,6 +2418,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    const STALE_WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (
+            id TEXT PRIMARY KEY,
+            name TEXT NULL,
+            payload TEXT NULL,
+            legacy_col TEXT NULL
+        )";
+
+    /// A store with every kind of resume cursor a provider keeps: a scope
+    /// cursor, the scope's config record, and a file checkpoint.
+    async fn store_with_cursors(p: &Path, ddl: &[&str]) {
+        let pool = open(p, ddl).await.unwrap();
+        crate::file_checkpoint::ensure_schema(&pool).await.unwrap();
+        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        upsert_scope_state(&pool, "widgets/walk", "2026-09-18T10:00:00+00:00")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO sync_scope_config (scope, config, updated_at_utc, tz_offset) \
+             VALUES ('widgets', '{}', '2026-09-18T10:00:00+00:00', '+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
+             VALUES ('widgets/files', 'a.json', 'aa', 1, '2026-09-18T10:00:00+00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    async fn cursor_counts(pool: &SqlitePool) -> (i64, i64, i64) {
+        let n = |sql: &'static str| async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        (
+            n("SELECT COUNT(*) FROM sync_scope_state").await,
+            n("SELECT COUNT(*) FROM sync_scope_config").await,
+            n("SELECT COUNT(*) FROM ingested_files").await,
+        )
+    }
+
+    /// A recreated table is empty, and a cursor that survived it would
+    /// let the next run resume past rows the table no longer has: the
+    /// store then stays empty until upstream changes, with nothing saying
+    /// why. Recreating forgets every cursor in the store.
+    #[tokio::test]
+    async fn a_recreate_forgets_the_stores_cursors() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("recreate_cursors.doltlite_db");
+        store_with_cursors(&p, &[STALE_WIDGETS_DDL]).await;
+
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "the column removal recreated the table");
+        assert_eq!(
+            cursor_counts(&pool).await,
+            (0, 0, 0),
+            "every cursor must go with the rows it pointed past"
+        );
+        pool.close().await;
+    }
+
+    /// The other reconcile path, pinned so the two cannot drift: an added
+    /// column keeps the rows, so it keeps the cursors too.
+    #[tokio::test]
+    async fn an_added_column_keeps_the_stores_cursors() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("add_keeps_cursors.doltlite_db");
+        store_with_cursors(&p, &[WIDGETS_DDL]).await;
+
+        let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "ADD COLUMN keeps the row");
+        assert_eq!(cursor_counts(&pool).await, (1, 1, 1));
+        pool.close().await;
     }
 
     #[tokio::test]
