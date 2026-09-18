@@ -533,6 +533,32 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     );
 }
 
+async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let all = log_query(
+            root,
+            &LogQuery {
+                run: None,
+                step: None,
+                q: "",
+                after_seq: 0,
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap_or_default();
+        if all.iter().any(|l| l.msg == msg) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "log line {msg:?} never reached the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 /// The server's lines share the table with the runs': no `run_id`, the
 /// process that wrote them, and the same tail cursor. Both writers hold
 /// the file at once, which on plain SQLite is ordinary.
@@ -552,9 +578,12 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         msg: "ready".into(),
         ..Default::default()
     });
-    // Past the flush interval, so the line is in the file before the
-    // run's are and `seq` reads in the order things happened.
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // The line has to be in the file before the runs' are, or `seq`
+    // does not read in the order things happened. The server writer
+    // flushes on a timer after opening the store, and on a loaded CI
+    // runner that can take longer than any sleep chosen here, so wait
+    // for the row itself.
+    wait_for_log_line(td.path(), "ready").await;
     {
         let w = RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", keep).unwrap();
         w.log(line("a", "warn", "from the run"));

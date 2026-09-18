@@ -125,7 +125,8 @@ jobs:
   # from, Bazel-only crates included — and the desktop shell). The
   # policies are datalib/backend/deny.toml and datalib/tauri/deny.toml;
   # a RustSec advisory against anything in either lock fails this job,
-  # and Dependabot (.github/dependabot.yml) is what brings the fix.
+  # and the fix is a hand repin (tools/repin_cargo.sh for the backend;
+  # Dependabot only covers the tauri lock, see .github/dependabot.yml).
   #
   # cargo-deny is a prebuilt release binary, pinned by version and
   # sha256 rather than installed through a third-party action or a
@@ -291,11 +292,11 @@ jobs:
           # steps that used to arrange it are gone. The GGUFs are
           # fetched by `//third-party/qmd_models` and reach their two
           # consumers as bazel inputs: the
-          # `//tests/fixtures:ingested_tng_qmd` genrule (embedding model
-          # only) and `tests/fixtures/materialize_tng_root.sh`, which the
-          # e2e suite runs (all three). Neither reads a host cache, so
-          # neither cares that the devcontainer image carries no
-          # `/root/.cache/qmd/models`.
+          # `//tests/fixtures:ingested_tng_qmd` genrule and
+          # `//tests/fixtures:materialize_tng_root_embed_only`, which
+          # the e2e suite runs — the embedding model only, in both
+          # cases. Neither reads a host cache, so neither cares that
+          # the devcontainer image carries no `/root/.cache/qmd/models`.
           #
           # What this replaced: a `Cache the qmd models` + `Populate the
           # qmd models` pair of steps that filled that directory from the
@@ -304,10 +305,12 @@ jobs:
           # themselves, and on 2026-09-03 one of those downloads drew a
           # 429 from HuggingFace and failed a merge-gating build.
           #
-          # The fetch is a remote-cached build action, so a warm run
-          # never moves the bytes at all, and a cold one takes them from
-          # BuildBuddy's action cache; HuggingFace is reached only when
-          # that cache has lost them, with retries on a 429.
+          # The fetch is a remote-cached build action. A run whose e2e
+          # test is a cache hit never moves the bytes; one that executes
+          # it downloads the test's runfiles here, from BuildBuddy's
+          # action cache, before it can start — the reason the suite
+          # carries one model and not three. HuggingFace is reached
+          # only when that cache has lost them, with retries on a 429.
           #
           # Three flags went with those steps:
           # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,

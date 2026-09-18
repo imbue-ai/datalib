@@ -1,7 +1,9 @@
 # Diff groups: a source's changes as a first-class thing in the app
 
-**Status: steps 1–5 of "Order of work" are built (2026-09-17); the
-Slack fixture (step 6) is not.** The contacts diff
+**Status: built (2026-09-18) — every step of "Order of work".** Kept as
+the record of what was decided and why; the reference for how a diff
+group works is [`config_model.md`](../config_model.md) and the code it
+names. The contacts diff
 group in the TNG fixture is the working example
 (`tests/fixtures/run_sync_pipeline.py`, `ingested_tng_test`'s
 `_diff_shape`). This replaces an earlier proposal of the same name
@@ -348,16 +350,30 @@ commit. Extend `tests/fixtures/run_sync_pipeline.py`:
   removal to exist at all — it was upsert-only. Contacts first because
   one document is one contact, so a field edit is one yellow cell and
   the shape of every rule is visible in a screen of output.
-- **Slack** (HTTP playback): a second playback tape from a
-  `slack_api_v2/` fixture dir — one new message, one deleted, one
-  edited, one reaction added — so `chat-common`'s aside runs,
-  reactions and the `##` header all get exercised. Slack second, and
-  through it every `chat-common` provider.
+- **Slack** (built; HTTP playback): `slack_api_v2/` is the captured
+  API as the second sync sees it — the incremental
+  `conversations.history` at the `oldest` the resume scan computes,
+  carrying a new message, an edited one with a reaction, and the
+  "status report" thread root with `reply_count` advanced so the thread
+  is re-walked through a `conversations.replies` tape with one more
+  reply. A tape is keyed by its request, so the second capture is
+  synthesized into its own playback tree (`playback_v2/`) and the
+  second sync run with `DATALIB_HTTP_PLAYBACK` pointed there. What a
+  re-sync cannot carry is a deletion — an incremental history returns
+  only what is newer than `oldest` — so that fate is the contacts
+  fixture's. Through Slack, `chat-common` under a diff: a grown thread
+  keeps its sections verbatim with the new reply in an added band, an
+  edited message gets the word diff inside its band, and a reaction
+  added to it is a marked line.
 
-Goldens: the diff tree's `.md` files are in the render-preview golden
-and its rows in the fixture-DB snapshot, so the highlighting and the
-status columns are pinned; `ingested_tng_test::_diff_shape` asserts
-the three fates and the changed columns. A unit test on the subtraction
+Goldens: both diff trees' `.md` files are in the render-preview golden
+and their rows in the fixture-DB snapshot and the grid's Playwright
+golden, so the highlighting and the status columns are pinned;
+`ingested_tng_test` asserts the contacts diff's three fates and changed
+columns (`_diff_shape`), the Slack diff's counts by fate
+(`_diff_fates`), and the markup of the grown thread and the edited
+message. The id round-trip check there skips diff rows: their uuid is
+minted under the diff group, their `upstream_id` is the source's. A unit test on the subtraction
 covers the table above (added / removed / modified with the right
 column list / unchanged, and a document present on one side only).
 `schema_inventory` regenerates for the two columns. The step opens the
@@ -380,8 +396,8 @@ it anyway.
 5. *(built)* UI: colouring rules, the `change:` filter and the diff
    Browse preset, diff CSS, the icon and label, "Compare two syncs…",
    the sanitizer test.
-6. Slack's second tape and diff group; whatever `chat-common` needs
-   that contacts did not show.
+6. *(built)* Slack's second capture and diff group. `chat-common`
+   needed nothing that contacts did not show.
 
 Each is a PR that leaves the tree green on its own.
 

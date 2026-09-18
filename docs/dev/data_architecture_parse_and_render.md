@@ -783,6 +783,32 @@ removes.
    same as a store with no commit to pin (case 3): nothing to read,
    cursor untouched.
 
+### Rendering the delta itself
+
+If you can render a collection of things, consider rendering the
+difference between two versions of it. A **diff group** does that with
+no second renderer: the source's render processors run at two raw
+commits into a collecting sink — each pass the incremental render the
+sync step already does, so the cost tracks the buckets that moved, not
+the store — and the two sides are subtracted per document
+(`datalib_etl_render::diff`): rows keyed by `uuid` become `added`,
+`removed`, `modified` (naming the columns that moved) or `unchanged`;
+sections keyed by their `data-section-uuid` are wrapped in
+`diff-added` / `diff-removed` / `diff-modified` bands, with a
+line-then-word diff inside a modified one. The result is written as an
+ordinary render tree, every uuid re-minted under the diff group so it
+never claims a source row's id.
+
+What this asks of a renderer is nothing beyond the contract above: a
+render must be a pure function of the raw rows at a pin (no per-run
+stamp in a row), every row and section must carry a stable uuid, and
+the renderer must say what its sections are (`RenderedMarkdown.sections`,
+concatenated they are the `.md`) rather than leaving the driver to
+parse them back — the one thing a renderer written before diff groups
+may lack, and the degradation is documented: its documents diff as one
+block. [`plans/diff_renderer.md`](plans/diff_renderer.md) is the
+design record.
+
 ### Render-side partial-progress visibility
 
 **Desired principle**: a long-running render pass — first run after
