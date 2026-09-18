@@ -9,22 +9,11 @@
 // A value the probe has never heard of is kept rather than unchecked
 // away: it is how a hand-typed label survives touching this grid, and
 // the field says separately that the account does not have it.
-import { computed, ref, watch } from "vue";
-import { AgGridVue } from "ag-grid-vue3";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  colorSchemeVariable,
-  themeQuartz,
-  type ColDef,
-  type GridApi,
-  type GridReadyEvent,
-  type ValueGetterParams,
-} from "ag-grid-community";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
+import type { Column, GridOption, OnSelectedRowsChangedEventArgs, SlickEventData } from "@slickgrid-universal/common";
 import type { ProbeItem, ProbeItemKind } from "@/api";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
-const gridTheme = themeQuartz.withPart(colorSchemeVariable);
+import { stampRowKeys } from "@/grid/rowKeys";
 
 const props = defineProps<{
   items: ProbeItem[];
@@ -33,18 +22,24 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", value: string[]): void }>();
 
-const api = ref<GridApi<ProbeItem> | null>(null);
 const query = ref("");
+const boxEl = ref<HTMLDivElement | null>(null);
+type Grid = SlickVanillaGridBundle<ProbeItem> & {
+  dataView: NonNullable<SlickVanillaGridBundle<ProbeItem>["dataView"]>;
+  slickGrid: NonNullable<SlickVanillaGridBundle<ProbeItem>["slickGrid"]>;
+};
+let bundle: Grid | null = null;
 
 /// The item's name as a person reads it: the title where the path is
 /// an opaque id, the path itself where it is its own name.
-const byTitle = (p: ValueGetterParams<ProbeItem>) => p.data?.title || p.data?.path || "";
+const byTitle = (item: ProbeItem) => item.title || item.path || "";
 /// The date the source stamped, not one re-derived in this browser's
 /// zone — see AGENTS.md's timestamp convention.
-const byDate = (p: ValueGetterParams<ProbeItem>) => p.data?.updated_at?.slice(0, 10) ?? "";
-const idTooltip = (p: { data?: ProbeItem }) => p.data?.path ?? "";
+const byDate = (item: ProbeItem) => item.updated_at?.slice(0, 10) ?? "";
 
-type Layout = { placeholder: string; columns: ColDef<ProbeItem>[] };
+const text = (v: unknown) => ({ text: v == null ? "" : String(v) });
+
+type Layout = { placeholder: string; columns: Column<ProbeItem>[] };
 
 /// A mailbox is named by the very string the filter matches, so it
 /// needs no second column for it. A keyword sits in the same list — a
@@ -52,9 +47,9 @@ type Layout = { placeholder: string; columns: ColDef<ProbeItem>[] };
 const LABELS: Layout = {
   placeholder: "Search these labels…",
   columns: [
-    { headerName: "Label", field: "path", flex: 1, minWidth: 200 },
-    { headerName: "Role", field: "role", width: 110 },
-    { headerName: "Messages", field: "messages", width: 110, type: "numericColumn" },
+    { id: "path", name: "Label", field: "path", width: 260, minWidth: 200, formatter: (_r, _c, v) => text(v) },
+    { id: "role", name: "Role", field: "role", width: 110, formatter: (_r, _c, v) => text(v) },
+    { id: "messages", name: "Messages", field: "messages", width: 110, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
   ],
 };
 
@@ -67,30 +62,39 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
     placeholder: "Search these conversations…",
     columns: [
       {
-        headerName: "Conversation",
-        flex: 1,
+        id: "title",
+        name: "Conversation",
+        field: "path",
+        width: 280,
         minWidth: 220,
-        tooltipValueGetter: idTooltip,
-        valueGetter: byTitle,
+        formatter: (_r, _c, _v, _col, item) => ({ text: byTitle(item), toolTip: item.path ?? "" }),
       },
       // A Slack DM carries a `group` tag and a head-count, a Claude
       // chat a date; whichever a source leaves empty is pruned below.
-      { headerName: "", field: "role", width: 80 },
-      { headerName: "People", field: "members", width: 90, type: "numericColumn" },
-      { headerName: "Updated", field: "updated_at", width: 118, valueGetter: byDate },
+      { id: "role", name: "", field: "role", width: 80, formatter: (_r, _c, v) => text(v) },
+      { id: "members", name: "People", field: "members", width: 90, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
+      {
+        id: "updated_at",
+        name: "Updated",
+        field: "updated_at",
+        width: 118,
+        formatter: (_r, _c, _v, _col, item) => ({ text: byDate(item) }),
+      },
     ],
   },
   channel: {
     placeholder: "Search these channels…",
     columns: [
       {
-        headerName: "Channel",
-        flex: 1,
+        id: "path",
+        name: "Channel",
+        field: "path",
+        width: 260,
         minWidth: 200,
-        valueGetter: (p: ValueGetterParams<ProbeItem>) => (p.data ? `#${p.data.path}` : ""),
+        formatter: (_r, _c, _v, _col, item) => ({ text: item ? `#${item.path}` : "" }),
       },
-      { headerName: "Notes", field: "role", width: 180 },
-      { headerName: "Members", field: "members", width: 110, type: "numericColumn" },
+      { id: "role", name: "Notes", field: "role", width: 180, formatter: (_r, _c, v) => text(v) },
+      { id: "members", name: "Members", field: "members", width: 110, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
     ],
   },
 };
@@ -106,8 +110,20 @@ const layout = computed(() => {
     props.items.some((i) => i[field] !== null && i[field] !== undefined);
   return {
     placeholder,
-    columns: columns.filter((c) => !c.field || filled(c.field as keyof ProbeItem)),
+    columns: columns
+      .filter((c) => c.id === "title" || filled(String(c.field) as keyof ProbeItem))
+      .map((c) => ({ ...c, sortable: true, cellAttrs: { "col-id": String(c.id) } })),
   };
+});
+
+/// The rows on screen: the items whose visible text has the query in
+/// it. The field's value is never narrowed by this; only the list is.
+const shown = computed(() => {
+  const q = query.value.trim().toLowerCase();
+  if (!q) return props.items;
+  return props.items.filter((i) =>
+    [i.path, i.title, i.role].some((v) => v && String(v).toLowerCase().includes(q)),
+  );
 });
 
 /// Set while this component is writing the grid's selection from
@@ -115,30 +131,98 @@ const layout = computed(() => {
 let applying = false;
 
 function applySelection() {
-  const grid = api.value;
-  if (!grid) return;
+  if (!bundle) return;
   const chosen = new Set(props.modelValue);
+  const rows = bundle.dataView
+    .getItems()
+    .filter((i) => chosen.has(i.path))
+    .map((i) => bundle!.dataView.getRowById(i.path))
+    .filter((r): r is number => r != null);
   applying = true;
-  grid.forEachNode((node) => node.setSelected(!!node.data && chosen.has(node.data.path)));
+  bundle.slickGrid.setSelectedRows(rows);
   applying = false;
 }
 
-function onSelectionChanged() {
-  const grid = api.value;
-  if (!grid || applying) return;
-  const listed = new Set(props.items.map((i) => i.path));
-  const picked = grid.getSelectedRows().map((r) => r.path);
-  // Values from outside this list ride along untouched.
-  const kept = props.modelValue.filter((v) => !listed.has(v));
-  emit("update:modelValue", [...picked, ...kept]);
+function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
+  if (!bundle || applying) return;
+  // Rows the query has hidden keep their choice: only what is listed
+  // right now is read off the grid.
+  const listed = new Set(shown.value.map((i) => i.path));
+  const picked = new Set(
+    args.rows
+      .map((r) => (bundle!.dataView.getItem(r) as ProbeItem | undefined)?.path)
+      .filter((p): p is string => !!p),
+  );
+  // In the order they were chosen, the grid's row order notwithstanding:
+  // what was already in the value stays where it was, a new tick goes
+  // on the end. Values from outside this list ride along untouched.
+  const kept = props.modelValue.filter((v) => !listed.has(v) || picked.has(v));
+  const added = [...picked].filter((p) => !props.modelValue.includes(p));
+  emit("update:modelValue", [...kept, ...added]);
 }
 
-function onGridReady(e: GridReadyEvent<ProbeItem>) {
-  api.value = e.api;
+function options(): GridOption {
+  return {
+    datasetIdPropertyName: "path",
+    enableHtmlRendering: false,
+    enableEmptyDataWarningMessage: false,
+    darkMode: document.documentElement.dataset.theme === "dark",
+    enableAutoResize: true,
+    autoResize: {
+      container: boxEl.value!.parentElement!,
+      calculateAvailableSizeBy: "container",
+      resizeDetection: "container",
+      autoHeight: false,
+      bottomPadding: 0,
+      minHeight: 100,
+    },
+    rowHeight: 28,
+    enableCellNavigation: true,
+    enableSelection: true,
+    multiSelect: true,
+    enableCheckboxSelector: true,
+    checkboxSelector: { hideInFilterHeaderRow: true, width: 36 },
+    selectionOptions: { selectActiveRow: false },
+    enableSorting: true,
+    enableColumnReorder: false,
+    enableHeaderMenu: false,
+    enableGridMenu: false,
+    enableColumnPicker: false,
+    enableContextMenu: false,
+  };
+}
+
+function createGrid() {
+  if (bundle || !boxEl.value) return;
+  const opts = options();
+  const root = boxEl.value.getRootNode();
+  if (root instanceof ShadowRoot) opts.shadowRoot = root;
+  bundle = new SlickVanillaGridBundle<ProbeItem>(
+    boxEl.value,
+    layout.value.columns,
+    opts,
+    shown.value,
+  ) as Grid;
+  bundle.slickGrid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
+  stampRowKeys(bundle.slickGrid, bundle.dataView, (item) => (item as ProbeItem).path);
   applySelection();
 }
 
-watch(() => [props.items, props.modelValue], applySelection, { deep: true });
+onMounted(createGrid);
+onBeforeUnmount(() => {
+  bundle?.dispose();
+  bundle = null;
+});
+
+watch(layout, (l) => {
+  if (bundle) bundle.columnDefinitions = l.columns;
+});
+watch(shown, (rows) => {
+  if (!bundle) return;
+  bundle.dataset = rows;
+  applySelection();
+});
+watch(() => props.modelValue, applySelection, { deep: true });
 </script>
 
 <template>
@@ -149,20 +233,9 @@ watch(() => [props.items, props.modelValue], applySelection, { deep: true });
       type="search"
       :placeholder="layout.placeholder"
     />
-    <AgGridVue
-      class="pick-grid"
-      :theme="gridTheme"
-      :columnDefs="layout.columns"
-      :rowData="items"
-      :getRowId="(p: { data: ProbeItem }) => p.data.path"
-      :quickFilterText="query"
-      :rowSelection="{ mode: 'multiRow', checkboxes: true, headerCheckbox: true }"
-      :rowHeight="28"
-      :headerHeight="30"
-      :suppressCellFocus="true"
-      @grid-ready="onGridReady"
-      @selection-changed="onSelectionChanged"
-    />
+    <div class="pick-grid">
+      <div ref="boxEl" class="pick-box" />
+    </div>
   </div>
 </template>
 
@@ -181,5 +254,6 @@ watch(() => [props.items, props.modelValue], applySelection, { deep: true });
 /* Tall enough to show that the account really is being read, short
    enough that the rest of the form stays on screen. The grid scrolls
    inside it. */
-.pick-grid { height: 260px; width: 100%; }
+.pick-grid { height: 260px; width: 100%; position: relative; }
+.pick-box { position: absolute; inset: 0; }
 </style>

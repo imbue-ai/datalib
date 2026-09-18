@@ -6,10 +6,11 @@
 import SourcesCard from "../SourcesCard.ce.vue";
 import sourcesCardCss from "../sourcesCard.css?inline";
 import tableGridCss from "../tableGrid.css?inline";
+import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
 import "../sourcesCard.css";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
 export function sourcesView(): CardRender {
-  return vueCard(SourcesCard, {}, { styleSources: [tableGridCss, sourcesCardCss] });
+  return vueCard(SourcesCard, {}, { styleSources: [slickCss, tableGridCss, sourcesCardCss] });
 }

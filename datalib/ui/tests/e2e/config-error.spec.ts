@@ -10,7 +10,7 @@
 // no reload. `watch.rs` reports the write as `config_changed`; `App.vue`
 // re-checks on it.
 import { test, expect, type Page } from "@playwright/test";
-import { rowMenuEntry } from "./grid-helpers";
+import { MENU_DISABLED, rowMenuEntry } from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -88,7 +88,7 @@ test("a broken entry costs that entry, and nothing else", async ({
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.ag-row[row-id="broken/ingest"]');
+  const row = page.locator('.tg-grid .slick-row[data-key="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
@@ -110,12 +110,14 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
-    page.locator('.ag-row[row-id="ghost/ingest"]'),
+    page.locator('.tg-grid .slick-row[data-key="ghost/ingest"]'),
     "Edit settings…",
   ).open();
-  await expect(edit).toHaveClass(/ag-menu-option-disabled/);
-  await edit.hover();
-  await expect(page.getByText(/names a group the config doesn't declare/)).toBeVisible();
+  await expect(edit).toHaveClass(MENU_DISABLED);
+  await expect(edit.locator(".slick-menu-content")).toHaveAttribute(
+    "title",
+    /names a group the config doesn't declare/,
+  );
 });
 
 test("a file that is not a config blocks the app, and unblocks it live", async ({

@@ -55,7 +55,7 @@ test.describe("new-card gallery (non-dev mode)", () => {
     await page.locator(".miller-add").click();
     await page.locator(".gv-row", { hasText: "Search" }).first().click();
     // Two grid columns now: the default one and the freshly picked one.
-    await expect(page.locator(".ag-root-wrapper")).toHaveCount(2, {
+    await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,
     });
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(

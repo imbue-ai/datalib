@@ -86,7 +86,7 @@ test("row clicks highlight and scroll to the right message", async ({
 
   await page.goto("/");
   await page
-    .locator('.ag-grid-scrolling-rows [role="row"]')
+    .locator(".grid-box .slick-row")
     .first()
     .waitFor({ timeout: 10_000 });
 

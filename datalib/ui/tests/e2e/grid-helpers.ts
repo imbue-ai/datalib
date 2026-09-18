@@ -1,19 +1,60 @@
-// AG Grid 36 renamed the DOM this file selects on. v35 split body rows
-// horizontally into `.ag-center-cols-container` plus a pinned container per
-// side; v36 has one element per vertical section
-// (`.ag-grid-scrolling-rows`) with pinned cells held by sticky positioning.
-// `.ag-body-viewport` likewise became `.ag-grid-viewport`, which is the
-// element carrying `overflow: auto`.
+// Every grid is a SlickGrid inside a card's shadow root (Playwright's
+// locators pierce that). The search grid's rows carry `data-row` — the
+// index the grid renders them at — and nothing naming the record, so a
+// row is found by asking the card's grid api (`window.__fwGridApi`,
+// see cards/GridCard.ce.vue) where a uuid's row is. The typed table
+// viewer's rows (the Manage tree, the commit history) carry their key
+// as `data-key`; those helpers are further down.
 
 import { expect, type Locator, type Page } from "@playwright/test";
+
+/// The search grid's rows, wherever it is on the page.
+export const SEARCH_ROWS = ".grid-box .slick-row";
+/// One of its column headers.
+export const searchHeader = (page: Page, colId: string) =>
+  page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
+/// The grid itself, for a "did it paint" check.
+export const searchGrid = (page: Page) => page.locator(".grid-box .slickgrid-container");
+/// The right-click menu the grid appends to <body>.
+export const SEARCH_MENU = ".slick-context-menu";
+/// One of its entries, by its text — the text beside the icon slot,
+/// which reads as a bullet when the entry has no icon.
+export const searchMenuItem = (page: Page, name: string | RegExp) =>
+  page.locator(`${SEARCH_MENU} .slick-menu-content`).filter({ hasText: name });
+
+/// The card's grid api on `window.__fwGridApi`, for `page.evaluate`.
+export type GridApi = {
+  rowIndexOf: (uuid: string) => number | null;
+  uuidAt: (row: number) => string | null;
+  rows: () => Record<string, unknown>[];
+  filteredRows: () => Record<string, unknown>[];
+  scrollToRow: (row: number) => void;
+  scrollToColumn: (id: string) => void;
+  isSelected: (uuid: string) => boolean;
+  hiddenColumns: () => string[];
+  showColumns: (ids: string[]) => void;
+  groupBy: (ids: string[]) => void;
+};
+
+/// The uuid of the first row the grid has, whatever is at the top of
+/// the viewport — a stable handle for a row that a scroll or a sort
+/// would otherwise move out from under `.first()`.
+export async function firstRowUuid(page: Page): Promise<string> {
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
+  const uuid = await page.evaluate(
+    () => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
+  );
+  expect(uuid, "the grid must have a first row").toBeTruthy();
+  return uuid!;
+}
 
 // The DOM node for a row index. One definition, so the wait and the
 // click can never drift onto different selectors.
 const rowLocator = (page: Page, rowIndex: number): Locator =>
-  page.locator(`.ag-grid-scrolling-rows [role="row"][row-index="${rowIndex}"]`);
+  page.locator(`${SEARCH_ROWS}[data-row="${rowIndex}"]`);
 
-// Ask the grid to put `uuid`'s row in the middle of the viewport, and
-// report the index it lives at (null if no node carries that uuid).
+// Ask the grid to put `uuid`'s row in view, and report the index it
+// lives at (null if no row carries that uuid).
 //
 // `colId` nudges the horizontal axis too. The grid virtualizes both, so
 // a caller that wants to read one particular cell has to name its
@@ -25,27 +66,11 @@ const nudgeRowIntoView = (
 ): Promise<number | null> =>
   page.evaluate(
     ({ uuid, colId }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
-          ensureColumnVisible: (col: string) => void;
-        };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      if (colId) api.ensureColumnVisible(colId);
-      return found;
+      const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
+      const row = a.rowIndexOf(uuid);
+      if (row != null) a.scrollToRow(row);
+      if (colId) a.scrollToColumn(colId);
+      return row;
     },
     { uuid, colId },
   );
@@ -54,26 +79,19 @@ const nudgeRowIntoView = (
 // the GridCard exposes on window, and return its row index once the DOM
 // node for it actually exists.
 //
-// This is a race the suite could always lose and mostly didn't; it
-// surfaced when the specs started running four at a time and rendering
-// got slower relative to the scroll.
-//
-// The scroll and the wait cannot be one step. `ensureNodeVisible` moves
-// the viewport, but AG Grid renders the newly-visible window on its own
-// schedule, so the node at that index may not be in the DOM yet when
-// `evaluate` returns. A plain locator wait on the index is not enough
-// either: if the viewport did not end up where the call asked (a
-// re-layout, a grid that has just been resized), waiting alone never
-// converges and the click fails at its 30s default having never
-// re-asked. So the nudge is inside the poll, and gets repeated until
-// the row is there.
+// The scroll and the wait cannot be one step: the grid renders the
+// newly-visible window on its own schedule, so the node at that index
+// may not be in the DOM yet when `evaluate` returns, and if the
+// viewport did not end up where the call asked (a re-layout, a grid
+// that has just been resized), waiting alone never converges. So the
+// nudge is inside the poll, and gets repeated until the row is there.
 async function scrollRowIntoView(
   page: Page,
   uuid: string,
   colId?: string,
 ): Promise<number> {
   const rowIndex = await nudgeRowIntoView(page, uuid, colId);
-  expect(rowIndex, `node for uuid=${uuid} found in grid`).not.toBeNull();
+  expect(rowIndex, `row for uuid=${uuid} found in grid`).not.toBeNull();
   await expect
     .poll(
       async () => {
@@ -92,15 +110,12 @@ async function scrollRowIntoView(
 
 // Scroll a row into view and act on it, retrying the *pair*.
 //
-// `scrollRowIntoView` returning means the row was rendered **then**. AG
-// Grid can virtualize it away again before the action re-resolves the
-// locator, and once the node is gone only another nudge brings it back
-// — so retrying the action alone spins against a DOM that will never
-// contain it, and retrying without a per-attempt timeout never gets to
-// a second attempt at all. Playwright's default click timeout is the
-// whole 30s test budget, so the first click consumed it waiting for a
-// node that was already gone. Both halves are load-bearing; either one
-// alone leaves the race in place.
+// `scrollRowIntoView` returning means the row was rendered **then**.
+// The grid can virtualize it away again before the action re-resolves
+// the locator, and once the node is gone only another nudge brings it
+// back — so retrying the action alone spins against a DOM that will
+// never contain it, and retrying without a per-attempt timeout never
+// gets to a second attempt at all. Both halves are load-bearing.
 export async function actOnRowByUuid<T>(
   page: Page,
   uuid: string,
@@ -124,24 +139,23 @@ export async function clickRowByUuid(page: Page, uuid: string) {
   await actOnRowByUuid(page, uuid, (row) => row.click({ timeout: 3_000 }));
 }
 
-// Select a row and confirm the grid agrees that it is selected.
+// Select a row and confirm the grid agrees that it is selected — asked
+// of the grid's own selection model, not read off a styling class.
 export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator> {
-  const row = page.locator(`.ag-grid-scrolling-rows [role="row"][row-id="${uuid}"]`);
-  // `aria-selected`, not the `ag-row-selected` class: the attribute is
-  // AG Grid reporting the node's selection state, while the class is the
-  // styling hook that follows from it. Asserting the semantic one means
-  // a re-theme cannot break this and a half-applied render cannot pass
-  // it.
+  const selected = () =>
+    page.evaluate(
+      (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.isSelected(u),
+      uuid,
+    );
   await expect(async () => {
-    if ((await row.getAttribute("aria-selected")) !== "true") {
-      await clickRowByUuid(page, uuid);
-    }
-    await expect(row).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
+    if (!(await selected())) await clickRowByUuid(page, uuid);
+    await expect.poll(selected, { timeout: 1_000 }).toBe(true);
   }, `row ${uuid} never became selected`).toPass({
     timeout: 15_000,
     intervals: [100, 250, 500],
   });
-  return row;
+  const rowIndex = await scrollRowIntoView(page, uuid);
+  return rowLocator(page, rowIndex);
 }
 
 // Right-click a row located by uuid. Same virtualization dance as
@@ -152,7 +166,7 @@ export async function contextMenuRowByUuid(page: Page, uuid: string) {
   await actOnRowByUuid(page, uuid, (row) =>
     row.click({ button: "right", timeout: 3_000 }),
   );
-  await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator(SEARCH_MENU)).toBeVisible({ timeout: 5_000 });
 }
 
 // Replace `navigator.clipboard.writeText` with a recorder, so a copy
@@ -180,7 +194,7 @@ export async function stubClipboard(page: Page) {
     );
 }
 
-// Assert that an AG Grid actually *painted*, not merely mounted.
+// Assert that a grid actually *painted*, not merely mounted.
 export async function expectGridPainted(
   grid: Locator,
   what: string,
@@ -189,7 +203,7 @@ export async function expectGridPainted(
   await expect(grid).toBeVisible({ timeout });
   await expect
     .poll(async () => (await grid.boundingBox())?.height ?? 0, {
-      message: `${what}: .ag-root-wrapper must have real height, not a collapsed box`,
+      message: `${what}: the grid must have real height, not a collapsed box`,
       timeout,
     })
     .toBeGreaterThan(100);
@@ -212,18 +226,35 @@ export async function searchAndSettle(
   });
 }
 
-// ── The Pipeline table's rows ────────────────────────────────────────
+// ── The typed table viewer's rows ─────────────────────────────────────
 
-/// A Pipeline row, by the step id `getRowId` keys on. A step under a
+/// The rows of any `TableGrid` on the page — the Manage tree, the
+/// commit history — scoped by a caller that has more than one open.
+export const TABLE_ROWS = ".tg-grid .slick-row";
+/// The right-click menu the grid appends to <body>, and its entries.
+export const TABLE_MENU = ".slick-context-menu";
+/// An entry by its text — the text beside the icon slot, which reads as
+/// a bullet when the entry has no icon, so the whole item never matches
+/// an anchored pattern.
+export const menuEntry = (page: Page, entry: string | RegExp) =>
+  page
+    .locator(`${TABLE_MENU} .slick-menu-item`)
+    .filter({ has: page.locator(".slick-menu-content").filter({ hasText: entry }) });
+/// The class an entry carries when it cannot be taken.
+export const MENU_DISABLED = /slick-menu-item-disabled/;
+/// A row the grid has selected: its cells carry the class.
+export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
+
+/// A Pipeline row, by the key its record carries. A step under a
 /// group has a row only while the group is open — see `expandGroup`.
 export const pipelineRow = (page: Page, id: string) =>
-  page.locator(`.ag-row[row-id="${id}"]`);
+  page.locator(`${TABLE_ROWS}[data-key="${id}"]`);
 
 /// A group's row. Keyed `group:<id>` because an applet may share the
 /// group's id (`unified_index` does) and both are rows.
 export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
 
-/// Open a group so the steps under it have rows. Idempotent, and the
+/// Open a tree row so the rows under it exist. Idempotent, and the
 /// grid remembers what was opened across a remount — which `settle`
 /// does — so one call per group per test is enough.
 ///
@@ -231,16 +262,17 @@ export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${i
 /// table, and a click that lands on the chevron of a row the grid is
 /// about to replace opens nothing; the row that takes its place is
 /// folded again, and a check on its own would wait on it forever.
-export async function expandGroup(page: Page, id: string): Promise<void> {
-  const row = groupRow(page, id);
-  await expect(row, `group ${id} should have a row`).toBeVisible();
+export async function expandRow(row: Locator, what: string): Promise<void> {
+  await expect(row, `${what} should have a row`).toBeVisible();
   await expect(async () => {
-    const closed = row.locator(".ag-group-contracted:not(.ag-hidden)");
+    const closed = row.locator(".slick-tree-toggle.collapsed");
     if ((await closed.count()) > 0) await closed.click({ timeout: 1_000 });
-    await expect(row.locator(".ag-group-expanded:not(.ag-hidden)")).toBeVisible({
-      timeout: 1_000,
-    });
-  }, `group ${id} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
+    await expect(row.locator(".slick-tree-toggle.expanded")).toBeVisible({ timeout: 1_000 });
+  }, `${what} never opened`).toPass({ timeout: 15_000, intervals: [100, 250, 500] });
+}
+
+export async function expandGroup(page: Page, id: string): Promise<void> {
+  await expandRow(groupRow(page, id), `group ${id}`);
 }
 
 /// One entry of a Manage row's right-click menu, opened on its Status
@@ -250,7 +282,7 @@ export function rowMenuEntry(page: Page, row: Locator, entry: string | RegExp) {
   return {
     open: async () => {
       await row.locator('[col-id="status"]').click({ button: "right" });
-      const option = page.locator(".ag-menu-option", { hasText: entry });
+      const option = menuEntry(page, entry);
       await expect(option).toBeVisible({ timeout: 2_000 });
       return option;
     },
@@ -338,7 +370,7 @@ export async function recordStatuses(page: Page, ids: readonly string[]) {
     const sample = () => {
       for (const id of ids) {
         const el = deepQuery(
-          `.ag-row[row-id="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
+          `.slick-row[data-key="${CSS.escape(id)}"] [col-id="status"] [role="img"]`,
         );
         const s = el?.getAttribute("aria-label");
         const seen = (log[id] ??= []);
