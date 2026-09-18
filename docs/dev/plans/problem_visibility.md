@@ -1,9 +1,11 @@
 # Problem visibility: every error and warning a step meets, shown to the user
 
-**Status: proposal (2026-09-18). Nothing in §3 onward is built.**
-§1 is an audit checked against `137cb5c1` (the tree after #502
-landed); every "we have" claim names the file it was read in. Where
-this doc and the tree disagree, the tree wins.
+**Status: built through PR 5 (2026-09-18), with a tail.** §1 is the
+audit as it stood at `137cb5c1`, before any of this landed — read it
+as the record of what was true then, not as a description of the
+tree. §3 says per PR what landed and what is still open: the
+per-provider fetch migration, R3's lossy-rules table, R4's drop
+budget. Where this doc and the tree disagree, the tree wins.
 
 ## 0. What we want
 
