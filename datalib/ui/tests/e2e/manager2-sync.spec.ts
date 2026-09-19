@@ -31,6 +31,7 @@ import {
   statusOf,
   TERMINAL,
   TABLE_ROWS,
+  MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -54,7 +55,7 @@ const syncBtn = (page: Page, id: string) =>
   row(page, id).getByRole("button", { name: "Sync now" });
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
