@@ -472,8 +472,20 @@ pub fn step_status(args: StatusArgs<'_>) -> StatusView {
                 .clone()
                 .unwrap_or_else(|| last.started_at.clone()),
         ),
-        last.error.clone(),
+        finish_detail(&last.status),
     )
+}
+
+/// What the hover says about a step that ended badly. Not the error
+/// itself: that is a log line, and the log is where a person reads it
+/// with everything that led up to it — a double-click on the cell
+/// opens the log there.
+fn finish_detail(status: &str) -> Option<String> {
+    match status {
+        "failed" => Some("double-click to open the log at the error".into()),
+        "stopped" => Some("double-click to open the log where it stopped".into()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

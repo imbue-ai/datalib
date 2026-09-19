@@ -219,16 +219,14 @@ pub(crate) async fn run_subprocess(
     let stderr_sink = sink.clone();
     let stderr_step = ctx.step_id.clone();
     let stderr_task = tokio::spawn(async move {
-        let mut tail: Vec<String> = Vec::new();
+        let mut tail = ErrorTail::default();
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            stderr_sink.emit(&unwrap_line(&stderr_step, Stream::Stderr, &line));
-            tail.push(line);
-            if tail.len() > 20 {
-                tail.remove(0);
-            }
+            let event = unwrap_line(&stderr_step, Stream::Stderr, &line);
+            tail.consider(&event, &line);
+            stderr_sink.emit(&event);
         }
-        tail.join("\n")
+        tail.join()
     });
 
     let mut outcome: Option<WireOutcome> = None;
@@ -300,16 +298,53 @@ pub(crate) async fn run_subprocess(
         let w = outcome.unwrap_or_default();
         let failure = w.failure.unwrap_or(FailureKind::Data);
         let outputs = w.into_outputs(sink, &ctx.step_id);
+        let what = if failure == FailureKind::Cancelled {
+            format!("step {} stopped when asked to", ctx.step_id)
+        } else {
+            format!("step {} exited with {status}", ctx.step_id)
+        };
         Err(StepError::new(
             failure,
             anyhow::anyhow!(
-                "step {} exited with {status}{}{}",
-                ctx.step_id,
+                "{what}{}{}",
                 if stderr_tail.is_empty() { "" } else { ": " },
                 stderr_tail
             ),
         )
         .with_outputs(outputs))
+    }
+}
+
+/// The part of a step's stderr that belongs in its error message. Every
+/// line is already in the run store; the message is what a person reads
+/// on the Manage row's hover, so it keeps only what they could not guess
+/// from "it failed": plain lines (a panic, a shell's complaint) and the
+/// message of a structured warn/error line. A structured info line — the
+/// bulk of a tracing stream — is dropped, JSON envelope and all.
+#[derive(Default)]
+struct ErrorTail {
+    lines: Vec<String>,
+}
+
+impl ErrorTail {
+    const KEEP: usize = 8;
+
+    fn consider(&mut self, event: &Event, raw: &str) {
+        let Event::Log { level, msg, .. } = event else {
+            return;
+        };
+        let structured = msg != raw;
+        if structured && *level == LogLevel::Info {
+            return;
+        }
+        if self.lines.len() == Self::KEEP {
+            self.lines.remove(0);
+        }
+        self.lines.push(msg.clone());
+    }
+
+    fn join(&self) -> String {
+        self.lines.join("\n")
     }
 }
 
@@ -890,6 +925,64 @@ mod tests {
             std::fs::read_to_string(root.path().join("env/out/probe.txt")).unwrap(),
             "2026-07-21T00:00:00Z/step\n",
             "run-wide env is visible; the step's own env wins on collision"
+        );
+    }
+
+    /// The error message a stopped or failed step leaves behind is what
+    /// the Manage row shows on hover. Structured info lines — the
+    /// tracing stream a step writes as JSON — stay in the run store and
+    /// out of the message; a warning's text and a plain line stay in.
+    #[test]
+    fn error_tail_keeps_prose_and_drops_structured_info() {
+        let mut tail = ErrorTail::default();
+        let lines = [
+            r#"{"timestamp":"2026-09-18T20:16:06Z","level":"INFO","fields":{"message":"walked one messages.list page","page":2},"target":"gmail"}"#,
+            r#"{"timestamp":"2026-09-18T20:24:07Z","level":"WARN","fields":{"message":"interrupt checkpoint: store busy"},"target":"datalib_step"}"#,
+            "429 too many requests",
+        ];
+        for line in lines {
+            tail.consider(&unwrap_line("s", Stream::Stderr, line), line);
+        }
+        assert_eq!(
+            tail.join(),
+            "interrupt checkpoint: store busy\n429 too many requests"
+        );
+
+        let mut tail = ErrorTail::default();
+        for i in 0..(ErrorTail::KEEP * 2) {
+            let line = format!("line {i}");
+            tail.consider(&unwrap_line("s", Stream::Stderr, &line), &line);
+        }
+        assert_eq!(tail.lines.len(), ErrorTail::KEEP);
+        assert_eq!(tail.lines.last().map(String::as_str), Some("line 15"));
+    }
+
+    /// A step that answers SIGINT with a `cancelled` outcome is told
+    /// apart from one that fell over: its message says it stopped, not
+    /// that it exited with 130.
+    #[tokio::test]
+    async fn a_cancelled_subprocess_says_it_stopped() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "gmail/ingest",
+            sh(r#"
+                echo '{"level":"INFO","fields":{"message":"interrupt checkpoint: ok"}}' >&2
+                echo '{"event":"outcome","failure":"cancelled"}'
+                exit 130
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        let step = rep.step("gmail/ingest");
+        assert_eq!(
+            step.status,
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled
+            }
+        );
+        assert_eq!(
+            step.error.as_deref(),
+            Some("step gmail/ingest stopped when asked to")
         );
     }
 
