@@ -111,9 +111,11 @@ comes for free. What you owe it:
   (`["lrcat"]`). Keep them broad enough not to hide a legitimate file —
   the typed input is the escape hatch, but only if the user thinks to
   use it.
-- **Keep the `placeholder`** example path. Paste is a legitimate way in
-  — over ssh, from a note, from a colleague — and the browser-served
-  case has nothing else.
+- **An example path in the `help`**, where the location is
+  predictable (`~/Library/Messages`). Paste is a legitimate way in —
+  over ssh, from a note, from a colleague — and the browser-served case
+  has nothing else. Not a `placeholder`: text inside the box reads as a
+  value someone already typed, so no wizard field has one.
 
 Two behaviors the shared code already handles, worth not breaking:
 cancel is a no-op on the field, and the dialog opens at the field's
