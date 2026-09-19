@@ -259,7 +259,13 @@ async fn main() -> Result<()> {
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
         let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
-        match RunStoreSink::start(&data_root, &run_id, &now, retention) {
+        match RunStoreSink::start(
+            &data_root,
+            &run_id,
+            &now,
+            datalib_runs::git_hash(),
+            retention,
+        ) {
             Some(store) => {
                 // The runner's own `tracing` lines go to the store too,
                 // as the run's lines with no step — and only there:

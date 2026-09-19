@@ -18,6 +18,20 @@
 # rule to carry `_DEV_RUNTIME_DATA` / `_DEV_RUNTIME_ENV` from
 # datalib/BUILD.bazel; a missing input is fatal rather than a silent
 # fall-through, for the same reason run_e2e.sh makes it fatal.
+#
+# Also names the checkout's commit for the binaries (`DATALIB_GIT_HASH`,
+# read by `datalib_runs::git_hash`), so the log view can link a line to
+# its source. A dev build is never stamped, and uncommitted edits make
+# the link approximate — which is still better than none.
+
+if [[ -z "${DATALIB_GIT_HASH:-}" && -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+  if DATALIB_GIT_HASH="$(git -C "$BUILD_WORKSPACE_DIRECTORY" rev-parse HEAD 2>/dev/null)"; then
+    export DATALIB_GIT_HASH
+    echo "git hash: $DATALIB_GIT_HASH"
+  else
+    unset DATALIB_GIT_HASH
+  fi
+fi
 
 if [[ -n "${DATALIB_RUNTIME_DIR:-}" ]]; then
   echo "runtime dir: $DATALIB_RUNTIME_DIR (caller-supplied)"

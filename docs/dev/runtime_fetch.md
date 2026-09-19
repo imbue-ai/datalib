@@ -70,6 +70,10 @@ named, which is the same outcome as before with a better message.
 
 ## The manifest
 
+(`git-hash`, the other file beside the binaries, is not the runtime's:
+it is the commit they came from, for the log view's source links —
+`docs/dev/step_protocol.md` § "Where a line came from".)
+
 The `build` job writes `runtime.manifest` beside the binaries, reading
 each asset's sha256 back from the sidecar the `runtime` job published
 and its size from the release. One asset per line:

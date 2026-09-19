@@ -18,7 +18,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// the store could not be opened, in which case stderr still gets
 /// every line.
 pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
-    let writer = ProcessLogWriter::start(root, Process::Http, retention_of(root)).map(Arc::new);
+    let writer = ProcessLogWriter::start(
+        root,
+        Process::Http,
+        datalib_runs::git_hash(),
+        retention_of(root),
+    )
+    .map(Arc::new);
     let store = writer.as_ref().map(|w| StoreLayer::new(Arc::downgrade(w)));
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));

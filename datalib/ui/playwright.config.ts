@@ -247,6 +247,12 @@ type Pending = { name: string; child: ChildProcess; urlFile: string; log: string
 
 const ANNOUNCE_TIMEOUT_MS = 30_000;
 
+// A made-up commit for the backends, so the log panel's source links
+// have one to point at (run-log.spec.ts reads it back from the
+// environment); a bazel test has no checkout. Pinned in env so worker
+// subprocesses see the same one.
+process.env.DATALIB_GIT_HASH ??= "e2e0000e2e0000e2e0000e2e0000e2e0000e2e00";
+
 // Playwright's config module can't be async, so the wait for the
 // announcements below is a blocking one.
 function sleepSync(ms: number): void {

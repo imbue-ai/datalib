@@ -33,6 +33,7 @@ import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
+import { sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -193,6 +194,10 @@ function onQueryInput(ev: Event) {
 async function loadRuns() {
   try {
     runs.value = await fetchRuns({ step: props.step ?? undefined, limit: 30 });
+    // A run's lines link to source at the run's commit, which arrives
+    // here; lines drawn before it did are drawn again.
+    bundle?.slickGrid.invalidateAllRows();
+    bundle?.slickGrid.render();
   } catch {
     // The picker is a convenience; the opened run still shows.
   }
@@ -250,6 +255,34 @@ const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
   text: shortRunId(String(value ?? "")),
   toolTip: String(value ?? ""),
 });
+
+/// The commit a line's source is relative to: the line's own for a
+/// process's line, the run's for a run's, when either was known.
+function commitOf(line: RunLogLine): string | null {
+  if (line.git_hash) return line.git_hash;
+  if (line.run_id) return runs.value.find((r) => r.run_id === line.run_id)?.git_hash ?? null;
+  return null;
+}
+
+/// `file:line`, as a link to that line on GitHub at the right commit
+/// when one is known, else as text. Clipped from the left like Time:
+/// the file's name and the line tell the lines apart, the directories
+/// are the same for most.
+const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
+  const src = sourceOf(line?.fields);
+  if (!src) return { text: "", toolTip: "", addClasses: levelClass(line) };
+  const shown = sourceLabel(src);
+  const commit = line ? commitOf(line) : null;
+  const href = commit && sourceUrl(commit, src);
+  if (!commit || !href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
+  const a = document.createElement("a");
+  a.className = "rl-source";
+  a.textContent = shown;
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  return { html: a, toolTip: `${shown} at ${commit.slice(0, 10)}`, addClasses: levelClass(line) };
+};
 
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
@@ -389,6 +422,17 @@ function columnSet(): Column<RunLogLine>[] {
     formatter: plain,
     sortable: true,
     ...groupable("Message", "msg"),
+  },
+  {
+    id: "source",
+    name: "Source",
+    // The value is read out of `fields`; the column has no field of its
+    // own, and the id is what the header and the test find it by.
+    field: "fields",
+    ...fixed(180),
+    cssClass: "rl-clip-left",
+    formatter: source,
+    sortable: false,
   },
   {
     id: "fields",
@@ -704,6 +748,10 @@ onUnmounted(() => {
 }
 .rl-grid .rl-group-count {
   color: var(--datalib-muted);
+}
+.rl-grid .rl-source {
+  color: inherit;
+  text-decoration: underline dotted;
 }
 .rl-grid .slick-cell {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

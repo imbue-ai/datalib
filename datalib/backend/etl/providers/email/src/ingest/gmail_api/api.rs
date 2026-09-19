@@ -139,7 +139,12 @@ impl QuotaThrottle {
             rate_limit_responses = hits,
             units_per_minute = self.units_per_minute,
             configured = self.configured_units_per_minute,
-            "Google rate-limited us; lowering the client-side ceiling for the rest of the run",
+            floor = floor.round() as u32,
+            "Google rate-limited {hits} request(s); the client-side ceiling is now {} units/min \
+             for the rest of the run (configured {}, floor {}), and the bucket is empty",
+            self.units_per_minute,
+            self.configured_units_per_minute,
+            floor.round() as u32,
         );
     }
 

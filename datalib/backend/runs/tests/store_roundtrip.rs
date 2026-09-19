@@ -10,7 +10,7 @@ use datalib_runs::{
 const T0: &str = "2026-08-31T10:00:00+01:00";
 
 fn start(root: &std::path::Path, run_id: &str) -> RunWriter {
-    RunWriter::start(root, run_id, run_id, Retention::default()).expect("start the store")
+    RunWriter::start(root, run_id, run_id, None, Retention::default()).expect("start the store")
 }
 
 fn at(step: &str, state: &str, msg: &str) -> StepRunRow {
@@ -209,7 +209,7 @@ async fn log_query_spans_runs_and_reads_terms() {
         ..Retention::default()
     };
     for (run, msg) in [("run-1", "first"), ("run-2", "second")] {
-        let w = RunWriter::start(td.path(), run, run, keep).unwrap();
+        let w = RunWriter::start(td.path(), run, run, None, keep).unwrap();
         w.log(line("a", "info", msg));
         w.log(line("b", "info", "other step"));
     }
@@ -284,13 +284,13 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
     };
     {
         let id = "2026-01-01T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("gone/raw", "succeeded", "old"));
         w.log(line("gone/raw", "info", "from run 1"));
     }
     {
         let id = "2026-01-02T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("slack/raw", "running", "new"));
     }
     let snap = snapshot(td.path()).await;
@@ -316,7 +316,7 @@ async fn runs_can_be_listed_by_step_and_read_by_id() {
     };
     {
         let id = "2026-01-01T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("a", "succeeded", "ok"));
         w.log(line("a", "warn", "hmm"));
         w.log(line("a", "error", "no"));
@@ -324,7 +324,7 @@ async fn runs_can_be_listed_by_step_and_read_by_id() {
     }
     {
         let id = "2026-01-02T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, keep).unwrap();
+        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("b", "succeeded", "ok"));
     }
     let all = runs(td.path(), None, 10).await;
@@ -355,7 +355,7 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     };
     for day in 1..=4 {
         let id = format!("2026-01-0{day}T00:00:00+00:00");
-        let w = RunWriter::start(td.path(), &id, &id, keep_two).unwrap();
+        let w = RunWriter::start(td.path(), &id, &id, None, keep_two).unwrap();
         w.step(at("a", "succeeded", "ok"));
         w.log(line("a", "info", &id));
         w.metric(metric("a", "done", day));
@@ -397,12 +397,13 @@ async fn retention_drops_runs_older_than_the_window() {
         ..Retention::default()
     };
     {
-        let w = RunWriter::start(td.path(), "old", "2000-01-01T00:00:00+00:00", a_day).unwrap();
+        let w =
+            RunWriter::start(td.path(), "old", "2000-01-01T00:00:00+00:00", None, a_day).unwrap();
         w.log(line("a", "info", "ancient"));
     }
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     {
-        let _w = RunWriter::start(td.path(), "new", &now, a_day).unwrap();
+        let _w = RunWriter::start(td.path(), "new", &now, None, a_day).unwrap();
     }
     assert!(log_after(td.path(), "old", None, 0, 10).await.is_empty());
     assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("new"));
@@ -573,7 +574,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         process_log_days: 36500,
         ..Retention::default()
     };
-    let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
+    let server =
+        ProcessLogWriter::start(td.path(), Process::Http, Some("ae2d52f0".into()), keep).unwrap();
     server.log(LogRow {
         ts_utc: "2026-09-15T10:00:00.000000+00:00".into(),
         level: "info".into(),
@@ -588,13 +590,15 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     // for the row itself.
     wait_for_log_line(td.path(), "ready").await;
     {
-        let w = RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", keep).unwrap();
+        let w =
+            RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", None, keep).unwrap();
         w.log(line("a", "warn", "from the run"));
     }
     // A second run under `max_runs: 1` sweeps run-1's rows; the
     // server's must stay, since they belong to no run.
     {
-        let w = RunWriter::start(td.path(), "run-2", "2026-09-15T10:00:02+00:00", keep).unwrap();
+        let w =
+            RunWriter::start(td.path(), "run-2", "2026-09-15T10:00:02+00:00", None, keep).unwrap();
         w.log(line("a", "info", "from run 2"));
     }
     server.log(LogRow {
@@ -617,16 +621,26 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     )
     .await
     .unwrap();
-    let seen: Vec<(Option<&str>, &str, &str)> = all
+    // A process's line carries the commit of the process that wrote it
+    // (the next server may be another build); a run's carries none, the
+    // run's row does.
+    let seen: Vec<(Option<&str>, &str, &str, Option<&str>)> = all
         .iter()
-        .map(|l| (l.run_id.as_deref(), l.process.as_str(), l.msg.as_str()))
+        .map(|l| {
+            (
+                l.run_id.as_deref(),
+                l.process.as_str(),
+                l.msg.as_str(),
+                l.git_hash.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         seen,
         [
-            (None, "http", "ready"),
-            (Some("run-2"), "dag", "from run 2"),
-            (None, "http", "still here"),
+            (None, "http", "ready", Some("ae2d52f0")),
+            (Some("run-2"), "dag", "from run 2", None),
+            (None, "http", "still here", Some("ae2d52f0")),
         ]
     );
 
@@ -660,7 +674,7 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         ..Retention::default()
     };
     {
-        let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
+        let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap();
         server.log(LogRow {
             ts_utc: "2020-01-01T00:00:00.000000+00:00".into(),
             level: "info".into(),
@@ -675,7 +689,7 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         });
     }
     {
-        let _w = RunWriter::start(td.path(), "run-1", &recent(1), keep).unwrap();
+        let _w = RunWriter::start(td.path(), "run-1", &recent(1), None, keep).unwrap();
     }
     let all = log_query(
         td.path(),
@@ -707,7 +721,7 @@ async fn process_lines_past_the_cap_go_oldest_first() {
         ..Retention::default()
     };
     {
-        let server = ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap();
+        let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap();
         for (i, msg) in ["one", "two", "three"].iter().enumerate() {
             server.log(LogRow {
                 ts_utc: recent(30 - i as i64),
@@ -718,7 +732,7 @@ async fn process_lines_past_the_cap_go_oldest_first() {
         }
     }
     // The cap is applied when a writer opens; a second one does it.
-    drop(ProcessLogWriter::start(td.path(), Process::Http, keep).unwrap());
+    drop(ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap());
     let all = log_query(
         td.path(),
         &LogQuery {
@@ -776,7 +790,7 @@ async fn each_part_of_the_store_counts_its_own_writes() {
 
     {
         let server =
-            ProcessLogWriter::start(td.path(), Process::Http, Retention::default()).unwrap();
+            ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).unwrap();
         server.log(LogRow {
             level: "debug".into(),
             msg: "served".into(),

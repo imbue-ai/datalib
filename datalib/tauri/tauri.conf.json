@@ -26,6 +26,7 @@
       "binaries/latchkey-curl-router",
       "binaries/curl-impersonate",
       "binaries/latchkey",
+      "binaries/git-hash",
       "runtime",
       "licenses"
     ],
