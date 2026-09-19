@@ -7,7 +7,7 @@
 // with that type's columns. Every link is in a different file.
 
 import { test, expect, type Page } from "@playwright/test";
-import { searchAndSettle, SEARCH_ROWS, TABLE_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import { searchAndSettle, SEARCH_ROWS, TABLE_ROWS, searchHeader, type GridApi, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
 const SEARCH = '[data-testid="search-input"]';
@@ -41,7 +41,7 @@ function columnValues(page: Page, colId: string) {
 }
 
 async function openManage(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await page.locator(ROWS).first().waitFor({ timeout: 10_000 });
 }

@@ -84,7 +84,9 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let base_url = format!("http://{}", listener.local_addr()?);
-    let url = format!("{base_url}/?token={}", api_token.value());
+    // The app opens on Manager2 (`/sources2`, see `ui/src/router`):
+    // what a person does first is add a source or sync one, not search.
+    let url = format!("{base_url}/sources2?token={}", api_token.value());
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
     root_lock.announce(&base_url);

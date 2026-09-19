@@ -29,6 +29,7 @@ import {
   settleRunner,
   stampsBefore,
   statusOf,
+  MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -74,7 +75,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 }
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
