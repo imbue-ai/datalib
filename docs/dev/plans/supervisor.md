@@ -273,12 +273,23 @@ recoverability on the others, because the only reader was the next run
 of the same step. Here every commit has readers at once. Two places
 the tree has to change to honour it:
 
-- **The rescue commit is on the wrong side of the line.** A writer's
-  `open` that finds a crashed predecessor's dirty rows *seals them into
-  a rescue commit* (etl README § One writer per file). Under this rule
-  that is a torn state committed for everyone to read; the rescue has
-  to discard the dirty working set instead, and the next invocation
-  refetches from its cursor — which is what idempotency promises.
+- **The rescue commit goes.** A writer's `open` that finds a crashed
+  predecessor's dirty rows *seals them into a rescue commit*
+  (`doltlite_raw.rs::rescue_dirty_working_tree`, etl README § One
+  writer per file). That is a torn state committed for everyone to
+  read, and its own fallback says the rest: "the next ETL commit will
+  fold the dirty rows in implicitly", because every commit is `-Am`.
+  So not just the rescue but the sweep behind it: a writer's `open`
+  **discards** the working set (`dolt_reset --hard`, or doltlite's
+  equivalent) before it does anything else. With seals, what a crash
+  loses is the delta since the last checkpoint, and refetching it from
+  the cursor is what idempotency promises. The interrupt path has the
+  same rule: a SIGINT commits only at a boundary the provider chose
+  (the `Checkpointer` seal); a hook that commits whatever is in flight
+  is a rescue by another name and goes with it. This one does not wait
+  for the supervisor — it is a change to `RawDb::open` and lands on
+  its own (§5, slice 0).
+
 - **Truncation is never an implementation detail of an incremental
   step.** The truncate-before-refill shape is the one the streaming
   plan fenced with `Policy::Never`, because a store mid-wipe is a gap.
@@ -489,6 +500,12 @@ already pretending the batch runner was.
 
 Each slice lands green and the app works after each.
 
+0. **The rescue commit goes** (§2.5). `RawDb::open` discards a dirty
+   working set instead of sealing it; the interrupt hooks are audited
+   for a commit outside a seal boundary. `doltlite_raw.rs`'s "phase 2"
+   test, which today asserts the rescue swept the orphaned writes,
+   asserts they are gone and the store is at its last commit. Lands
+   before anything else and under either plan.
 1. **Sinks in the graph.** `writes`/`reads` in the config with the
    defaults above; `Graph` bipartite; the loader allows a shared sink.
    No scheduler change yet: the current runner treats a shared sink as
