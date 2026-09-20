@@ -25,7 +25,9 @@ async function overlaps(a: Locator, b: Locator): Promise<boolean> {
 
 test("an error toast over the wizard does not eat clicks on its buttons", async ({ page }) => {
   // The failure that produced the toast: the applet gateway answering
-  // the grid's first search with a 502.
+  // the grid's first search with a 502. A grid card sits beside the
+  // sources card so there is a search to fail; the sources card alone
+  // searches nothing.
   await page.route("**/applet/unified_index/search**", (route) =>
     route.fulfill({
       status: 502,
@@ -33,7 +35,7 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
       body: JSON.stringify({ error: 'applet "unified_index": it is not running' }),
     }),
   );
-  await page.goto("/sources2");
+  await page.goto("/sourcesView():1.6/gridView()");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   const toast = page.locator(".datalib-toast--error", { hasText: "unified_index/search" });
   await expect(toast).toContainText("→ 502");
