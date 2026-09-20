@@ -62,6 +62,6 @@ impl DataProcessor for FacebookIngest {
             "files={} rows={} parse_errors={} media_stored={} media_known={} media_missing={}",
             s.files, s.rows, s.parse_errors, s.media_stored, s.media_known, s.media_missing,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

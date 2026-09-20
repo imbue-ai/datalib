@@ -188,7 +188,7 @@ Pick the surface that fits the question:
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
-  doltlite recipes (history, diffs, rescue):
+  doltlite recipes (history, diffs, a crashed writer):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **Markdown** — `<name>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve

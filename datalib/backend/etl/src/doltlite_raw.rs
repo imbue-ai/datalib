@@ -432,15 +432,11 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
 /// Open a store to read data somebody else owns.
 ///
 /// **[`open`] writes on the way in, and that is fine for the process that owns
-/// the store and wrong for everyone else.** It seals a dirty working tree into
-/// a rescue commit, reconciles the schema, and then commits — with `-Am`, so
-/// that last commit takes whatever else was dirty along with it. For the owner
-/// those are three useful things. For a reader they are three ways to write to
-/// a file it does not own, and under streaming the damage is specific: the
-/// reader's own open turns the producer's half-written batch into a real
-/// commit, which the reader then pins to and reads as though it were finished.
-/// Pinning cannot save you from that, because by then the torn rows *are*
-/// committed.
+/// the store and wrong for everyone else.** It discards a dirty working tree,
+/// reconciles the schema, and then commits. For the owner those are three
+/// useful things. For a reader they are three ways to write to a file it does
+/// not own, and under streaming the damage is specific: the reader's own open
+/// throws away the producer's half-written batch.
 ///
 /// So this does none of it: connect read-only, and hand back the pool. The
 /// connection is opened `read_only`, so "a reader must not write" is enforced
@@ -540,9 +536,10 @@ async fn open_inner(
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
     let pool = connect_pool(db_path, Access::ReadWrite).await?;
-    // Seal anything a crashed prior run left dirty into its own commit, so
-    // this run's `dolt_log` entry describes only this run.
-    rescue_dirty_working_tree(&pool, db_path).await;
+    // A store starts at its last commit. Whatever a crashed or interrupted
+    // writer left in the working set was never at a seal boundary, and every
+    // reader pins commits, so nobody was promised it.
+    discard_dirty_working_tree(&pool, db_path).await?;
     // Tables, then the reconcile, then indexes — see the README for why the
     // order is load-bearing. `parse_create_table_name` returns `None` for
     // exactly the statements that must wait.
@@ -911,7 +908,13 @@ async fn forget_cursors_after_recreate(pool: &SqlitePool, recreated: &[String]) 
 ///
 /// Errors are swallowed: a stock-libsqlite3 build (CI, no doltlite
 /// extensions) has no `dolt_status` at all.
-async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
+/// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
+/// --hard`, it restores tracked tables and ignores an untracked one, and a
+/// writer that died after `CREATE TABLE` and before its first commit leaves
+/// exactly that. Every commit here is `-Am`, so anything still dirty after
+/// this rides into the schema commit a few lines later — which is why the
+/// untracked tables are dropped rather than left for the DDL pass to adopt.
+async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
         sqlx::query_scalar("SELECT count(*) FROM dolt_status")
@@ -919,43 +922,47 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
             .await;
     let count = match dirty {
         Ok(n) => n,
-        Err(e) => {
-            // "no doltlite extensions" is expected and silent; anything else
-            // is worth a warning.
-            let msg = e.to_string();
-            if !msg.contains("no such table") {
-                tracing::warn!(
-                    path = %db_path.display(),
-                    error = %e,
-                    "rescue_dirty_working_tree: probe failed"
-                );
-            }
-            return;
-        }
+        Err(e) if e.to_string().contains("no such table") => return Ok(()),
+        Err(e) => return Err(anyhow::Error::new(e).context("probe dolt_status")),
     };
     if count == 0 {
-        return;
+        return Ok(());
     }
-    let msg = format!(
-        "rescue: pre-run snapshot of orphaned working tree ({count} dirty entries) at {}",
-        datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339()
-    );
     tracing::warn!(
         path = %db_path.display(),
         dirty_entries = count,
-        "rescue_dirty_working_tree: prior run left {count} dirty entries; sealing into its own commit",
+        "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
+         starting from the last commit"
     );
-    if let Err(e) = sqlx::query("SELECT dolt_commit('-Am', ?)")
-        .bind(&msg)
+    sqlx::query("SELECT dolt_reset('--hard')")
         .execute(pool)
         .await
-    {
-        tracing::warn!(
-            path = %db_path.display(),
-            error = %e,
-            "rescue_dirty_working_tree: dolt_commit failed; the next ETL commit will fold the dirty rows in implicitly"
+        .context("dolt_reset --hard")?;
+    let untracked: Vec<String> =
+        sqlx::query_scalar("SELECT table_name FROM dolt_status WHERE status = 'new table'")
+            .fetch_all(pool)
+            .await
+            .context("list untracked tables")?;
+    for table in &untracked {
+        // The name comes from doltlite's own status table, not from data;
+        // quoted anyway, since a provider may mirror upstream table names.
+        let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {quoted}")))
+            .execute(pool)
+            .await
+            .with_context(|| format!("drop untracked table {table}"))?;
+    }
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+        .fetch_one(pool)
+        .await
+        .context("re-probe dolt_status")?;
+    if left != 0 {
+        bail!(
+            "{left} entries still dirty after dolt_reset --hard and dropping {} untracked table(s)",
+            untracked.len()
         );
     }
+    Ok(())
 }
 
 // ── sync_runs ───────────────────────────────────────────────────────
@@ -1013,17 +1020,6 @@ pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
     matches!(res, Ok(n) if n > 0)
 }
 
-pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<String>> {
-    let db_path = db_path_for(out_dir);
-    if !db_path.exists() {
-        return Ok(None);
-    }
-    let pool = open(&db_path, &[]).await.context("open for commit")?;
-    let hash = commit_run(&pool, msg).await?;
-    pool.close().await;
-    Ok(hash)
-}
-
 /// The run a step belongs to, from the runner's environment
 /// (`docs/dev/step_protocol.md`), or `None` outside a run.
 pub const RUN_ID_ENV: &str = "DATALIB_DAG_RUN_ID";
@@ -1060,8 +1056,8 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     }
     let started = std::time::Instant::now();
     let store = store_label(pool);
-    // "nothing to commit" is a legitimate outcome: the rescue commit in
-    // `open` may already have swept everything up.
+    // "nothing to commit" is a legitimate outcome: a pass that fetched
+    // nothing new leaves the working set clean.
     let hash = match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(stamp_run(msg))
         .fetch_optional(pool)
@@ -2341,6 +2337,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
+            commit_run(&pool, "setup").await.unwrap();
             pool.close().await;
         }
 
@@ -2382,6 +2379,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
+            commit_run(&pool, "setup").await.unwrap();
             pool.close().await;
         }
 
@@ -2486,6 +2484,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        commit_run(&pool, "setup").await.unwrap();
         pool.close().await;
     }
 
@@ -2660,89 +2659,6 @@ mod tests {
                 .await
                 .expect("dolt_log lookup");
         assert_eq!(logged_msg, msg, "dolt_log message mismatch");
-    }
-
-    /// The per-source download commit path end to end: stage a row and drop
-    /// the pool as a download does, then reopen through `commit_run_at_path`
-    /// as the step does, and check the commit lands in `dolt_log`.
-    ///
-    /// Also covers the no-op for a path that was never created —
-    /// `interrupt_commit_all` walks every enabled source, and some have no
-    /// file yet.
-    #[tokio::test]
-    async fn commit_run_at_path_persists_across_pool_lifetimes() {
-        let d = tempdir().unwrap();
-        let db = d.path().join("source.doltlite_db");
-
-        // Phase 1: simulate a download — open, write, close.
-        {
-            let pool = open_test(&db).await;
-            if !has_dolt_extensions(&pool).await {
-                eprintln!("[commit_run_at_path test] stock libsqlite3 — full assertion skipped");
-                // The no-op-on-missing-file path shouldn't depend on doltlite.
-                let missing = d.path().join("never_created.doltlite_db");
-                let hash = commit_run_at_path(&missing, "ignored")
-                    .await
-                    .expect("missing-path open should succeed");
-                assert!(hash.is_none(), "expected None on missing path");
-                return;
-            }
-            // Per-session committer identity (doltlite requires this).
-            sqlx::query("SELECT dolt_config('user.name', 'datalib-download-test')")
-                .execute(&pool)
-                .await
-                .unwrap();
-            sqlx::query("SELECT dolt_config('user.email', 'download@datalib.local')")
-                .execute(&pool)
-                .await
-                .unwrap();
-
-            let run_id = start_run(&pool, &json!({"source": "test"})).await.unwrap();
-            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w-download', 'staged')")
-                .execute(&pool)
-                .await
-                .unwrap();
-            finish_run(&pool, run_id, "ok", &json!({"rows": 1}))
-                .await
-                .unwrap();
-            pool.close().await;
-        }
-
-        // Phase 2: the orchestrator's hook. `open`'s rescue commit has already
-        // sealed phase 1's orphaned writes, so this trailing commit finds
-        // nothing dirty and returns None — the documented post-condition.
-        let msg = "download source: rows=1 commit_run_at_path test";
-        let trailing = commit_run_at_path(&db, msg)
-            .await
-            .expect("commit_run_at_path ok");
-        assert!(
-            trailing.is_none(),
-            "trailing commit should be a no-op after rescue swept the orphaned writes; got {trailing:?}"
-        );
-
-        // Reopening a third time proves the orphaned writes were sealed by the
-        // rescue at phase 2's open, not lost.
-        let verify = open_test(&db).await;
-        let logged: Vec<String> =
-            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC")
-                .fetch_all(&verify)
-                .await
-                .expect("dolt_log lookup after reopen");
-        assert!(
-            logged.iter().any(|m| m.starts_with("rescue: ")),
-            "expected a rescue commit in dolt_log; got {logged:?}"
-        );
-
-        // Pointing at a never-created file must neither create one nor error.
-        let missing = d.path().join("never_created.doltlite_db");
-        let h2 = commit_run_at_path(&missing, "ignored")
-            .await
-            .expect("missing-path open should succeed");
-        assert!(h2.is_none(), "expected None on missing path");
-        assert!(
-            !missing.exists(),
-            "missing-path call must not create the file"
-        );
     }
 
     #[tokio::test]
@@ -3126,30 +3042,49 @@ mod tests {
         assert!(open_reader(&empty, None).await.unwrap().is_none());
     }
 
-    /// Opening a store *commits* whatever it finds dirty. Harmless when the
-    /// prior writer is gone — that is what the rescue is for — and a hazard
-    /// the moment a writer is still running: the reader's own open seals the
-    /// producer's half-written batch into a commit, which is both a write by
-    /// a reader and a way for torn rows to become legitimately committed.
+    /// Opening a store *discards* whatever it finds dirty: a writer that died
+    /// between seals left rows no reader was ever promised, and sealing them
+    /// would commit a torn state — a conversation without its blobs, half a
+    /// channel. The store starts at its last commit, and an untracked table
+    /// the dead writer created goes too, because `dolt_reset --hard` leaves
+    /// it and the schema commit that follows would otherwise adopt it.
     #[tokio::test]
-    async fn opening_a_store_commits_whatever_was_left_dirty() {
+    async fn opening_a_store_discards_whatever_was_left_dirty() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("rescue.doltlite_db");
+        let path = tmp.path().join("crashed.doltlite_db");
         let a = open(
             &path,
-            &["CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)"],
+            &["CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)"],
         )
         .await
         .unwrap();
         if !has_dolt_extensions(&a).await {
             return;
         }
+        sqlx::query("INSERT INTO t VALUES (1, 'sealed')")
+            .execute(&a)
+            .await
+            .unwrap();
         commit_run(&a, "baseline").await.unwrap();
         let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
             .fetch_one(&a)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO t VALUES (1)")
+        // The crash: an insert, an update, and a table created but never
+        // committed.
+        sqlx::query("INSERT INTO t VALUES (2, 'torn')")
+            .execute(&a)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE t SET v = 'rewritten' WHERE id = 1")
+            .execute(&a)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE half_made (id INTEGER PRIMARY KEY)")
+            .execute(&a)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO half_made VALUES (9)")
             .execute(&a)
             .await
             .unwrap();
@@ -3160,16 +3095,34 @@ mod tests {
             .fetch_one(&b)
             .await
             .unwrap();
+        assert_eq!(after, before, "open() must not commit what it found dirty");
+        let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, v FROM t ORDER BY id")
+            .fetch_all(&b)
+            .await
+            .unwrap();
         assert_eq!(
-            after,
-            before + 1,
-            "open() sealed the dirty row into a rescue commit"
+            rows,
+            vec![(1, "sealed".to_string())],
+            "the working set is the last commit again"
         );
-        let at_head: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_t('HEAD')")
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'half_made'",
+        )
+        .fetch_all(&b)
+        .await
+        .unwrap();
+        assert!(
+            tables.is_empty(),
+            "an untracked table the crash left is dropped"
+        );
+        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
             .fetch_one(&b)
             .await
             .unwrap();
-        assert_eq!(at_head, 1, "and the row is now committed state");
+        assert_eq!(
+            dirty, 0,
+            "and nothing is left for the schema commit to sweep"
+        );
         b.close().await;
     }
 

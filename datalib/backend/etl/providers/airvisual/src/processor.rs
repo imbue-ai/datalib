@@ -56,6 +56,6 @@ impl DataProcessor for AirvisualIngest {
             "devices={} files={} files_skipped={} lines={} samples={} sentinels={} clock_unset={} bad_lines={} errors={}",
             s.devices, s.files, s.files_skipped, s.lines, s.samples, s.sentinels, s.clock_unset, s.bad_lines, s.errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

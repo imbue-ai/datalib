@@ -85,6 +85,6 @@ impl DataProcessor for GitlabIngest {
             "mrs(new={} skipped_unchanged={}) discussions(new={}) pruned={} requests={}",
             s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.pruned, s.requests,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

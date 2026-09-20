@@ -3,7 +3,7 @@
 //! `datalib_etl_render::processor`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -61,51 +61,6 @@ pub struct PlanContext {
     pub playback_root: Option<std::path::PathBuf>,
 }
 
-/// An opaque "persist what you have" hook. A processor that buffers work into
-/// a store registers one of these at the moment it opens the store; the
-/// orchestrator holds the registered hooks and fires them on SIGINT.
-#[async_trait]
-pub trait Checkpoint: Send + Sync {
-    async fn checkpoint(&self) -> Result<()>;
-}
-
-/// One registered interrupt-commit hook, paired with its source name for
-/// logging on the SIGINT path.
-#[derive(Clone)]
-pub struct RegisteredCheckpoint {
-    pub name: String,
-    pub hook: Arc<dyn Checkpoint>,
-}
-
-/// Thread-safe collector of interrupt-commit hooks, owned by the orchestrator
-/// and shared into every download [`RunCtx`]. Download processors push their
-/// hooks as they open their stores; the orchestrator's Ctrl-C path snapshots
-/// and fires them.
-#[derive(Default)]
-pub struct CheckpointSink {
-    inner: Mutex<Vec<RegisteredCheckpoint>>,
-}
-
-impl CheckpointSink {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(&self, name: &str, hook: Arc<dyn Checkpoint>) {
-        self.inner.lock().unwrap().push(RegisteredCheckpoint {
-            name: name.to_string(),
-            hook,
-        });
-    }
-
-    /// A clone of every hook registered so far. Used by the orchestrator's
-    /// interrupt path; cloning (rather than draining) lets registration keep
-    /// running concurrently with an in-flight SIGINT flush.
-    pub fn snapshot(&self) -> Vec<RegisteredCheckpoint> {
-        self.inner.lock().unwrap().clone()
-    }
-}
-
 /// Orchestrator-owned context handed to every [`DataProcessor::run`]. Carries
 /// only storage-agnostic concerns; anything about *how* a source persists
 /// stays inside the source.
@@ -121,8 +76,6 @@ pub struct RunCtx<'a> {
     pub progress: &'a Progress,
     /// Cross-provider download knobs (`--reset-and-redownload`, …).
     pub control: &'a DownloadControl,
-    /// Where download processors register their interrupt-commit hooks.
-    checkpoints: &'a CheckpointSink,
     /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
     /// observability the orchestrator installs as scopes.
     metrics: Arc<DownloadMetrics>,
@@ -137,7 +90,6 @@ impl<'a> RunCtx<'a> {
         now: &'a str,
         progress: &'a Progress,
         control: &'a DownloadControl,
-        checkpoints: &'a CheckpointSink,
         metrics: Arc<DownloadMetrics>,
         diagnostics: Arc<Diagnostics>,
     ) -> Self {
@@ -147,7 +99,6 @@ impl<'a> RunCtx<'a> {
             now,
             progress,
             control,
-            checkpoints,
             metrics,
             diagnostics,
         }
@@ -172,13 +123,8 @@ impl<'a> RunCtx<'a> {
         crate::checkpointer::Policy::Every(self.control.checkpoint_cadence.unwrap_or_default())
     }
 
-    pub fn register_checkpoint(&self, name: &str, hook: Arc<dyn Checkpoint>) {
-        self.checkpoints.register(name, hook);
-    }
-
     /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)
-    /// over a source's write `pool` and register the session's
-    /// interrupt-commit `Checkpoint`. The processor calls
+    /// over a source's write `pool`. The processor calls
     /// `session.finish(self, summary)` after the fetch. This is the uniform
     /// "doltlite-backed source" entry point — the commit machinery lives in
     /// `etl`, not here and not in the orchestrator.

@@ -94,6 +94,6 @@ impl DataProcessor for MediaIngest {
             s.removed,
             s.errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

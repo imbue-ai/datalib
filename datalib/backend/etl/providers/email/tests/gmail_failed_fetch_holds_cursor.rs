@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
 use datalib_etl::retry::{self, RetryGuard};
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
@@ -106,6 +107,7 @@ async fn run_with_bad_status(bad_status: u16) -> (anyhow::Result<FetchSummary>, 
     std::env::set_var(PLAYBACK_ENV, &playback);
     let db = RawDb::open(&db_path_for(&root)).await.expect("open raw db");
     let summary = gmail_api::fetch(FetchOptions::new(db.clone())).await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
 
@@ -120,6 +122,7 @@ async fn run_with_bad_status(bad_status: u16) -> (anyhow::Result<FetchSummary>, 
             .fetch_optional(db.pool())
             .await
             .expect("read the cursor");
+    db.commit_all("test").await.unwrap();
     db.close().await;
     (summary, cursor)
 }

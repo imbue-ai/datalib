@@ -401,11 +401,10 @@ fn a_second_read_write_pool_in_one_process_is_refused() {
     );
 }
 
-/// The atomicity boundary `docs/dev/plans/one_mode.md` rests on: a SQL
-/// transaction that never reached `COMMIT` leaves nothing behind. A writer
-/// is `kill -9`ed with rows inserted inside an open transaction; the next
-/// writer to open the store must find the working set clean — nothing to
-/// rescue-commit, the seed rows and only the seed rows.
+/// A SQL transaction that never reached `COMMIT` leaves nothing behind. A
+/// writer is `kill -9`ed with rows inserted inside an open transaction; the
+/// next writer to open the store finds the working set clean — the seed
+/// rows and only the seed rows, and nothing for `open` to discard.
 #[test]
 fn a_transaction_a_killed_writer_never_committed_leaves_no_rows_behind() {
     let t = Scratch::new();
@@ -435,18 +434,19 @@ fn a_transaction_a_killed_writer_never_committed_leaves_no_rows_behind() {
     );
     assert_eq!(r["committed_rows"].as_i64(), Some(SEED_ROWS), "{r:?}");
     assert!(
-        !rescued(&r),
-        "there was nothing to rescue, yet `open` sealed a rescue commit: {r:?}"
+        !committed_a_rescue(&r),
+        "there was nothing dirty, yet `open` committed something: {r:?}"
     );
 }
 
 /// The other half of the same boundary: a SQL `COMMIT` puts rows in the
-/// working set, and the working set lives in the file. The rows outlive the
-/// process that wrote them, and the next `open` seals them as a rescue
-/// commit — which is the behaviour the one-mode rules make safe, and the
-/// reason every unit of work has to be one transaction.
+/// working set, and the working set lives in the file, so they outlive the
+/// process that wrote them. They were never at a seal — the writer died
+/// before its `dolt_commit` — so the next `open` discards them and the
+/// store starts at its last commit. A SQL commit is durability, not
+/// consistency; the dolt commit is the boundary readers are promised.
 #[test]
-fn rows_a_killed_writer_committed_at_the_sql_level_are_rescued_by_the_next_open() {
+fn rows_a_killed_writer_committed_at_the_sql_level_are_discarded_by_the_next_open() {
     let t = Scratch::new();
     let mut writer = t.spawn(&[
         "hang",
@@ -472,15 +472,18 @@ fn rows_a_killed_writer_committed_at_the_sql_level_are_rescued_by_the_next_open(
     let r = t.reopen();
     assert_eq!(
         r["working_set_rows"].as_i64(),
-        Some(SEED_ROWS + 5),
-        "the working set is in the file and survives the process: {r:?}"
+        Some(SEED_ROWS),
+        "the next open discards what the dead writer left in the working set: {r:?}"
     );
     assert_eq!(
         r["committed_rows"].as_i64(),
-        Some(SEED_ROWS + 5),
-        "the next open seals what it found: {r:?}"
+        Some(SEED_ROWS),
+        "and HEAD is where the last dolt_commit left it: {r:?}"
     );
-    assert!(rescued(&r), "expected a rescue commit in the log: {r:?}");
+    assert!(
+        !committed_a_rescue(&r),
+        "open must not seal what it found: {r:?}"
+    );
 }
 
 /// The rows `grid_index` loads on a pass, as a reader in another process
@@ -655,7 +658,7 @@ fn seen_by_phase(reader: &Value) -> Vec<Seen> {
 /// The phase label while the writer is taking a step.
 const TRANSITION: &str = "transition";
 
-fn rescued(reopen: &Value) -> bool {
+fn committed_a_rescue(reopen: &Value) -> bool {
     reopen["commit_messages"]
         .as_array()
         .expect("commit_messages")

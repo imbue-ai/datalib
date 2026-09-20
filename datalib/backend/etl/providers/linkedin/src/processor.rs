@@ -75,6 +75,6 @@ impl DataProcessor for LinkedinIngest {
             "files={} rows={} parse_errors={}",
             s.files, s.rows, s.parse_errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

@@ -5,6 +5,7 @@ use std::fs;
 use std::time::Duration;
 
 use datalib_etl::http::PLAYBACK_ENV;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_chatgpt::ingest::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions, RawDb,
@@ -60,6 +61,7 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
         ..FetchOptions::new(db.clone())
     })
     .await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();
     assert_eq!(summary.fetched, 2);
