@@ -312,6 +312,19 @@ The test makes three pipeline runs, each asserting something different:
    per-fetch field leaking into a content payload (it belongs in the
    `volatile_payload` sidecar instead).
 
+The bake leaves its data root behind under `$TMPDIR/datalib-e2e-runs/run-<millis>/data`
+(the newest three runs are kept; the test prints the path as `[test]
+data_root = …`). The config is written inside it, so it is a complete
+root the app can serve as it stands:
+
+```bash
+bazel-bin/datalib/backend/bin/datalib-http "$TMPDIR/datalib-e2e-runs/run-<millis>/data"
+```
+
+The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
+Semantic search is empty there: the golden config carries no `qmd_index`
+step, by design.
+
 This test was ported from the pre-DAG `frankweiler/backend/sync` crate, which
 was deleted in e905d252. The normalization machinery — roughly fifty volatile
 keys, each commented with why it's redacted — carried over verbatim, because it

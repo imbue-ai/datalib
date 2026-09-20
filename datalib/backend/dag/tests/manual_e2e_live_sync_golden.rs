@@ -469,8 +469,12 @@ fn manual_e2e_live_sync_golden() {
     // prefix out of every embedded path (see `norm_data_root`).
     DATA_ROOT.set(data_root.to_string_lossy().into_owned()).ok();
 
-    let cfg_out = rewrite_config(&cfg_text, &data_root);
-    let cfg_path = run_root.join("config.toml");
+    // The config lives inside the data root, where `datalib-http` looks
+    // for it, and names no `data_root` (the loader defaults to the
+    // config's directory). That makes `data/` a complete root the app
+    // can be pointed at after the bake — and one that can be moved.
+    let cfg_out = rewrite_config(&cfg_text);
+    let cfg_path = data_root.join("config.toml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
     // `//datalib/backend:bin` stages datalib-dag and datalib-step side by
@@ -479,9 +483,13 @@ fn manual_e2e_live_sync_golden() {
     let bin = bin_dir().join("datalib-dag");
     eprintln!("[test] dag bin = {}", bin.display());
     eprintln!("[test] data_root = {}", data_root.display());
+    eprintln!(
+        "[test] after the bake: datalib-http {}",
+        data_root.display()
+    );
 
     let now = "2026-05-21T18:00:00Z";
-    let run1 = run_pipeline(&bin, &cfg_path, now, &[]);
+    let run1 = run_pipeline(&bin, &cfg_path, &run_root, now, &[]);
     assert!(
         run1.status.success(),
         "pipeline run 1 failed (exit {:?}). Last stderr:\n{}",
@@ -592,7 +600,7 @@ fn manual_e2e_live_sync_golden() {
 
     // ── Second run: incrementality check ──────────────────────────────
     let now2 = "2026-05-21T18:05:00Z";
-    let run2 = run_pipeline(&bin, &cfg_path, now2, &[]);
+    let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
     assert!(
         run2.status.success(),
         "pipeline run 2 failed (exit {:?}). Last stderr:\n{}",
@@ -637,7 +645,13 @@ fn manual_e2e_live_sync_golden() {
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
-    let run3 = run_pipeline(&bin, &cfg_path, now3, &["--reset-and-redownload"]);
+    let run3 = run_pipeline(
+        &bin,
+        &cfg_path,
+        &run_root,
+        now3,
+        &["--reset-and-redownload"],
+    );
     assert!(
         run3.status.success(),
         "pipeline run 3 (reset) failed (exit {:?}). Last stderr:\n{}",
@@ -798,7 +812,13 @@ impl PipelineRun {
     }
 }
 
-fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> PipelineRun {
+fn run_pipeline(
+    bin: &Path,
+    cfg_path: &Path,
+    log_dir: &Path,
+    now: &str,
+    extra_args: &[&str],
+) -> PipelineRun {
     eprintln!("[test] run: {} --now {now} {extra_args:?}", bin.display());
     let out = Command::new(bin)
         .arg(cfg_path)
@@ -814,11 +834,9 @@ fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> 
     // rather than inheriting it (that's where the NDJSON run record is), so
     // without this the whole event stream is discarded on a *successful*
     // run and only the last 40 lines survive a failure — which is precisely
-    // when you want to ask "why did that take 18 minutes?".
-    let log = cfg_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{}.ndjson", now.replace(':', "-")));
+    // when you want to ask "why did that take 18 minutes?". It goes
+    // beside the data root, not in it: the root is what the app serves.
+    let log = log_dir.join(format!("{}.ndjson", now.replace(':', "-")));
     if let Err(e) = std::fs::write(&log, &stderr) {
         eprintln!("[test] WARNING: could not write {}: {e}", log.display());
     } else {
@@ -1146,12 +1164,9 @@ fn summarize_file(path: &Path) -> SnapValue {
     }
 }
 
-fn rewrite_config(text: &str, data_root: &Path) -> String {
+fn rewrite_config(text: &str) -> String {
     let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
-    doc.insert(
-        "data_root".into(),
-        toml::Value::String(data_root.display().to_string()),
-    );
+    doc.remove("data_root");
 
     // A step is `group` + `function`; its provider is the group's `type`.
     let slack_groups: Vec<String> = doc
