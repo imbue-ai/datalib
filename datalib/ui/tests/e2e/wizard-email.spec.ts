@@ -1,7 +1,7 @@
 // Gmail and Fastmail: two wizard forms over one step type, and the
 // Connection block that fills their label pickers from the live account.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, pickRowMenu } from "./grid-helpers";
+import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 /// A field's own input. Descendant rather than direct child: a
@@ -110,7 +110,7 @@ async function stubBackend(page: Page) {
 }
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 

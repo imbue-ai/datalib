@@ -4,13 +4,13 @@
 // sandbox root of its own — see `config-mutating.ts`.
 
 import { test, expect, type Page } from "@playwright/test";
-import { MENU_DISABLED, SELECTED_ROWS, expandGroup, groupRow, menuEntry, pipelineRow } from "./grid-helpers";
+import { MENU_DISABLED, SELECTED_ROWS, expandGroup, groupRow, menuEntry, pipelineRow, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
 const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-menu-content");
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 

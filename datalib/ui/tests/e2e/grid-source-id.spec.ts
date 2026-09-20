@@ -10,7 +10,7 @@
 // crosses the backend, the config file and the grid, and it is the
 // reason renaming a source never needs a re-index.
 import { test, expect, type Page } from "@playwright/test";
-import { actOnRowByUuid, searchAndSettle } from "./grid-helpers";
+import { actOnRowByUuid, searchAndSettle, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
 
@@ -31,7 +31,7 @@ async function openGrid(page: Page) {
 /// Replace config.toml through the Manage screen's Advanced editor,
 /// which PUTs through the same validating endpoint everything else uses.
 async function writeConfig(page: Page, text: string): Promise<void> {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await page.locator(".m2-editor").fill(text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -45,7 +45,7 @@ async function writeConfig(page: Page, text: string): Promise<void> {
 let original = "";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   original = await page.locator(".m2-editor").inputValue();
 });
