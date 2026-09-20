@@ -290,7 +290,11 @@ the tree has to change to honour it:
   `always_clear_before_ingest` is this case, not a user wipe: it is
   how a source fed by a complete snapshot gets its deletions
   ("the snapshot is the enumeration", `data_architecture_ingestion.md`),
-  and it becomes wipe-and-refill in one commit, invisible between.
+  and it becomes wipe-and-refill in one commit, invisible between:
+  **don't commit until it's done.** That forgoes checkpoints and makes
+  a crash lose the pass, which costs nothing for the inputs that use
+  it — a Lightroom catalog, a Takeout export, a phone backup, a
+  directory of `.vcf` files — all local and fast to read.
   A wipe a *person* asks for is a different thing and gets its own
   operation (§2.10); `--reset-and-redownload` retires in its favour.
 
