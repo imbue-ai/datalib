@@ -287,17 +287,16 @@ the tree has to change to honour it:
   are one commit, or the step uses the deletion shape the four
   streaming providers already have — prune to an enumeration walked to
   completion, so between commits the store is a superset, never a gap.
-  The exception is the one where a person *asked* for the wipe:
-  `--reset-and-redownload`, or a source configured
-  `always_clear_before_ingest`. There the empty store is itself the
-  requested state, committing it is correct, and its being visible
-  downstream — the render empties, the index drops the rows, then both
-  refill — is the truth of what was asked for, not a torn tree.
+  `always_clear_before_ingest` is this case, not a user wipe: it is
+  how a source fed by a complete snapshot gets its deletions
+  ("the snapshot is the enumeration", `data_architecture_ingestion.md`),
+  and it becomes wipe-and-refill in one commit, invisible between.
+  A wipe a *person* asks for is a different thing and gets its own
+  operation (§2.10); `--reset-and-redownload` retires in its favour.
 
 `step_protocol.md`'s rules paragraph is rewritten to say this, and the
 lint that watches render reads for a pin gains a sibling that watches
-for a commit between a truncate and its refill in a step that was not
-asked to reset.
+for a commit between a truncate and its refill in any step.
 
 ### 2.6 What a step sees
 
@@ -363,13 +362,14 @@ wave. The GUI reads
 the same tables through `table_changed` frames. Nothing the screen
 shows is computed in the browser from something the shell cannot see.
 
-**Steer.** Four verbs, one per button: `request <roots…>` and
+**Steer.** Five verbs, one per button: `request <roots…>` and
 `stop <request>` on requests, `pause <step>` and `resume <step>` on
-steps — exposed identically as `POST /api/requests` and
-`/api/requests/<id>/stop`, `POST /api/steps/<id>/{pause,resume}`, and
+steps, `clear <sink>` on sinks (§2.10) — exposed identically as
+`POST /api/requests` and `/api/requests/<id>/stop`,
+`POST /api/steps/<id>/{pause,resume}`, `POST /api/sinks/<path>/clear`, and
 as `datalib-dag <verb> …` (the CLI forwards to the server that holds
-the root, and acts directly when none does). Every request and every
-pause records `by` — `ui`, `cli`, or a name an agent passes
+the root, and acts directly when none does). Every request, pause and
+clear records `by` — `ui`, `cli`, or a name an agent passes
 (`--by claude`) — so each operator sees the other's hand on the wheel:
 a source paused by an agent reads "paused by claude" on the screen,
 and an agent that finds a source paused can read who did it before
@@ -384,6 +384,35 @@ that wants one chain synced and to know when it settled runs
 request's row and exits with its outcome. No agent should ever
 have to `sleep` and re-check, which is the AGENTS.md rule for tests
 applied to operators.
+
+### 2.10 Clear is its own operation
+
+Emptying a sink is something a person asks for, on purpose, and it
+deserves its own verb and its own button rather than a flag on a
+download. **`clear <sink>`** is a framework step, not a provider's: it
+takes the sink's writer lock like any writer, empties every table in
+the store — entities, sidecars, cursors, because the etl README keeps a
+store's bookkeeping *in* the store — and commits once. In the doltlite
+sense nothing is gone: the commit before it is still there, the
+history panel shows it, and a wrong click is a revert, which is why
+this can be a button at all. The UI says exactly that: "Clear Work
+Gmail — every row goes, the history keeps them, the next Sync
+re-downloads from nothing."
+
+A clear opens a request rooted at the sink (a sink can be a root: its
+scope is its readers' closure), so the emptiness propagates the way any
+change does — the render's diff sees every bucket deleted and removes
+its documents, the index drops the rows — and stops there. Refilling
+is not part of it; that is the next Sync, which finds no cursor and
+starts from the beginning. `--reset-and-redownload` becomes
+`clear` followed by `request`, and the ingest code loses its
+`reset_and_redownload` branch: a download never wipes, it only
+downloads.
+
+Two sinks need a word. A render store is doltlite and clears the same
+way. The qmd index is a plain SQLite file with no history; clearing it
+is deleting it, and the UI's wording for that sink is different
+because the promise is different.
 
 ## 3. Hazards
 
@@ -440,6 +469,7 @@ applied to operators.
 | Pause a source | no | yes, sticky, across restarts |
 | several syncs open at once, each stoppable | no | yes: requests |
 | two steps into one store | no | yes, one at a time |
+| clear a store | a flag on the download | its own verb, its own button, reverted from the history |
 | streaming | the existing special cases | the ordinary rule |
 | "queued" on screen | inferred from jobs + state file + timestamps | a column the supervisor wrote |
 | an agent steering it | `POST /api/sync/jobs`, then read three stores | the same four verbs the buttons use; one plain-SQLite store, with `by` |
@@ -477,7 +507,9 @@ Each slice lands green and the app works after each.
    `sync_jobs` and `dag_state.json` go; `status.rs` shrinks to a read
    of `steps.state`.
 5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
-   request and the wave under each, the schedule field. The help text is rewritten around rows, not runs.
+   request and the wave under each, the schedule field, and Clear on
+   a sink with the wording of §2.10. `--reset-and-redownload` and the
+   ingest's wipe branch go in the same slice. The help text is rewritten around rows, not runs.
 6. **A shared-sink provider**: the email import beside the live pull.
    The reason §2.1 exists, landed last because everything before it is
    needed for it to be safe.
