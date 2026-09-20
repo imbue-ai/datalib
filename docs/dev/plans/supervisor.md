@@ -252,15 +252,45 @@ slot; it does not stop a render.
 ### 2.5 Failure is a state on the row, not a fence across the graph
 
 Today a failed step blocks its dependents for the run. In a loop with
-no run boundary the natural rule is the streaming one: a consumer reads
-its sink at a *committed* version, and a producer that failed midway
-has committed what it committed. The consumer runs against that and is
-right for that state. The failure is on the producer's row — the retry
+no run boundary the rule is the streaming one: a consumer reads its
+sink at a *committed* version, and whatever is committed is right for
+that version. A producer that failed midway has committed what it
+committed and the consumer indexes that; a producer that failed before
+committing anything has not moved its sink, and the consumer is fresh
+and does nothing. The failure is on the producer's row — the retry
 policy exhausts, the row reads `failed` with its `FailureKind` and
-error, **Retry** opens a request rooted at it — and its `problems` rows travel down
-with the data as they do now. A consumer never reads a torn store,
-because a step commits atomically or the next writer's open seals its
-dirty rows into a rescue commit (etl README § One writer per file).
+error, **Retry** opens a request rooted at it — and its `problems`
+rows travel down with the data as they do now.
+
+That rests on one rule, and it is stricter than the one
+`step_protocol.md` states today:
+
+> **A commit is a correct state. Never leave a torn tree on *any*
+> path** — success, failure, interrupt, or crash.
+
+The protocol today asks for atomicity on the success path and
+recoverability on the others, because the only reader was the next run
+of the same step. Here every commit has readers at once. Two places
+the tree has to change to honour it:
+
+- **The rescue commit is on the wrong side of the line.** A writer's
+  `open` that finds a crashed predecessor's dirty rows *seals them into
+  a rescue commit* (etl README § One writer per file). Under this rule
+  that is a torn state committed for everyone to read; the rescue has
+  to discard the dirty working set instead, and the next invocation
+  refetches from its cursor — which is what idempotency promises.
+- **A wipe and its refill are one commit.** The truncate-before-refill
+  shape (`--reset-and-redownload`, `always_clear_before_ingest`) is the
+  one the streaming plan already fenced with `Policy::Never`, because a
+  store mid-wipe is a gap. Under this rule it is not a scheduling
+  policy but a protocol violation to commit between the two, and the
+  four providers that stream already have the safe deletion shape —
+  prune to an enumeration walked to completion, so between seals the
+  store is a superset, never a gap.
+
+`step_protocol.md`'s rules paragraph is rewritten to say this, and the
+lint that watches render reads for a pin gains a sibling that watches
+for a commit between a truncate and its refill.
 
 ### 2.6 What a step sees
 
