@@ -279,18 +279,25 @@ the tree has to change to honour it:
   that is a torn state committed for everyone to read; the rescue has
   to discard the dirty working set instead, and the next invocation
   refetches from its cursor — which is what idempotency promises.
-- **A wipe and its refill are one commit.** The truncate-before-refill
-  shape (`--reset-and-redownload`, `always_clear_before_ingest`) is the
-  one the streaming plan already fenced with `Policy::Never`, because a
-  store mid-wipe is a gap. Under this rule it is not a scheduling
-  policy but a protocol violation to commit between the two, and the
-  four providers that stream already have the safe deletion shape —
-  prune to an enumeration walked to completion, so between seals the
-  store is a superset, never a gap.
+- **Truncation is never an implementation detail of an incremental
+  step.** The truncate-before-refill shape is the one the streaming
+  plan fenced with `Policy::Never`, because a store mid-wipe is a gap.
+  Under this rule an incremental step that empties a table on its way
+  to refilling it may not commit in between: the wipe and the refill
+  are one commit, or the step uses the deletion shape the four
+  streaming providers already have — prune to an enumeration walked to
+  completion, so between commits the store is a superset, never a gap.
+  The exception is the one where a person *asked* for the wipe:
+  `--reset-and-redownload`, or a source configured
+  `always_clear_before_ingest`. There the empty store is itself the
+  requested state, committing it is correct, and its being visible
+  downstream — the render empties, the index drops the rows, then both
+  refill — is the truth of what was asked for, not a torn tree.
 
 `step_protocol.md`'s rules paragraph is rewritten to say this, and the
 lint that watches render reads for a pin gains a sibling that watches
-for a commit between a truncate and its refill.
+for a commit between a truncate and its refill in a step that was not
+asked to reset.
 
 ### 2.6 What a step sees
 
