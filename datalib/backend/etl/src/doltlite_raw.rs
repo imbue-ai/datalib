@@ -3126,6 +3126,66 @@ mod tests {
         b.close().await;
     }
 
+    /// A schema commit carries schema and nothing else. `open` commits its
+    /// DDL with `-Am`, which stages whatever is dirty; the only thing that
+    /// keeps a crashed writer's rows out of that commit is the discard that
+    /// runs first. So: leave a row uncommitted, reopen with a DDL that adds
+    /// a column, and read the schema commit's row diff — it must be empty,
+    /// and the table at HEAD must hold exactly what was committed before.
+    #[tokio::test]
+    async fn a_schema_commit_touches_no_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("schema_only.doltlite_db");
+        const V1: &str = "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, name TEXT)";
+        const V2: &str =
+            "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, name TEXT, colour TEXT)";
+        {
+            let pool = open(&path, &[V1]).await.unwrap();
+            if !has_dolt_extensions(&pool).await {
+                return;
+            }
+            sqlx::query("INSERT INTO widgets VALUES ('w1', 'gadget'), ('w2', 'widget')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            commit_run(&pool, "data").await.unwrap();
+            // The crash: a row written after the last commit.
+            sqlx::query("INSERT INTO widgets VALUES ('w3', 'torn')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let pool = open(&path, &[V2]).await.unwrap();
+        let (head, message): (String, String) = sqlx::query_as(
+            "SELECT commit_hash, message FROM dolt_log() ORDER BY date DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            message.starts_with("schema: apply DDL"),
+            "the newest commit is the schema commit, got {message:?}"
+        );
+        let rows_in_diff: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM dolt_diff_widgets WHERE to_commit = ?")
+                .bind(&head)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows_in_diff, 0, "a schema commit's row diff is empty");
+        // Audited: the hash came from dolt_log a moment ago; the table is a literal.
+        let at_head: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT id FROM dolt_at_widgets('{head}') ORDER BY id"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(at_head, vec!["w1".to_string(), "w2".to_string()]);
+        pool.close().await;
+    }
+
     #[tokio::test]
     async fn a_fresh_connection_starts_on_main() {
         let tmp = tempfile::tempdir().unwrap();
