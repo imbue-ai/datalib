@@ -118,8 +118,9 @@ what the commit added, deleted and modified (`datalib/backend/history/`).
 Each row is one `dolt_commit()` call from the ETL — e.g.
 `download slack: msgs=29 replies=51 media[...]` for a successful Slack
 sync, or `checkpoint slack: entities` for a seal partway through one.
-A cancelled run commits nothing: its last seal stands, and whatever it
-wrote after that is discarded by the next writer's `open`.
+A cancelled download stops at its next consistent point and commits
+there under the same `download …` message; whatever a *killed* run
+wrote after its last commit is discarded by the next writer's `open`.
 `dolt_log()` walks back from `HEAD` on the active branch
 (use `active_branch()` to check which one that is).
 

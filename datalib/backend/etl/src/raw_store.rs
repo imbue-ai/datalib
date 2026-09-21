@@ -13,9 +13,10 @@ use crate::store_handle::RawStoreHandle;
 
 /// A doltlite raw-store session owned by a single download processor. Seals
 /// on the [`Checkpointer`](crate::checkpointer::Checkpointer)'s cadence and
-/// commits at [`finish`](RawStoreSession::finish) — both source-side. Nothing
-/// commits on Ctrl-C: the last seal stands and the next `open` discards the
-/// rest.
+/// commits at [`finish`](RawStoreSession::finish) — both source-side. A stop
+/// (Ctrl-C) makes the next consistent point a seal and `finish` commits
+/// there; nothing commits from the signal handler, and what a killed run
+/// wrote after its last commit the next `open` discards.
 pub struct RawStoreSession {
     state: Arc<SealState>,
 }

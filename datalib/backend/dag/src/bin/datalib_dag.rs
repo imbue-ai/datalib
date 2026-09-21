@@ -226,8 +226,9 @@ async fn main() -> Result<()> {
     }
 
     // Cancellation: forward the first SIGINT/SIGTERM to running steps
-    // as SIGINT so each can exit with a `cancelled` outcome (committing
-    // nothing: `step_protocol.md` § Signals); the scheduler drains normally. A second
+    // as SIGINT so each can stop at its next consistent point, commit
+    // there and exit `cancelled` (`step_protocol.md` § Signals); the
+    // scheduler drains normally. A second
     // signal gives up waiting and exits hard, taking the steps with it.
     tokio::spawn(async {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

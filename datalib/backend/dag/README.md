@@ -213,7 +213,8 @@ lock would deadlock the server against its own child.
 The runner also exits with the server: the worker spawns it on a parent
 pipe (`datalib_parent_watch`, `DATALIB_PARENT_PIPE`), and when the pipe
 closes — the server exited, or the desktop shell SIGKILLed it — the
-runner SIGINTs its steps so they stop cleanly, gives them fifteen seconds,
+runner SIGINTs its steps so they stop at their next consistent point,
+gives them fifteen seconds,
 then kills what is left and exits. A run that outlived its server would
 have nobody to record how it ended: the job row stays `running` and the
 next boot cannot tell a run still going from one that died. That boot
