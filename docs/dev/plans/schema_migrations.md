@@ -1,9 +1,10 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21); §3.1 is built, the rest is
-not.** §1 and §2 describe what the tree did at `a5f04141`, checked by
-reading the code, not the prose; §3.1 says what landed. Where this doc
-and the tree disagree, the tree wins.
+**Status: audit and proposal (2026-09-21); §3.1, §3.2 and §3.4 are
+built, §3.3 and §3.5 are not.** §1 and §2 describe what the tree did at
+`a5f04141`, checked by reading the code, not the prose; each built
+section says what landed. Where this doc and the tree disagree, the
+tree wins.
 
 ## 0. Why now
 
@@ -367,7 +368,32 @@ uses.
 
 ### 3.2 PR 2 — the reconcile compares shape, refuses by class, and reaches the render cursor
 
-Three changes to `doltlite_raw`:
+**Built**, with two departures from the text below, both deliberate:
+
+- Orphans are not reported. The SQLite-mirror providers write tables no
+  DDL declares, so "undeclared" is normal in a raw store and cannot be
+  a warning. The rename hazard (§1.2(c)) is closed the other way: a
+  table that *appears* in a store that already had others clears the
+  cursors, the same as a recreate, so the new empty table is refilled
+  rather than skipped past.
+- The render cursor is not added to the forget list. Instead the
+  render store's DDL hash is a render param (`_store_schema`, §3.6's
+  suggestion), so any change to a render-store table — additive or not
+  — re-renders every source. That closes both halves of §1.2(d) at once
+  and needs no bump. The grid index already rebuilt on drift; it now
+  compares full shape too.
+
+As landed: `open` plans every table against the file before touching
+it, on the whole column shape (name, type, nullability, default, key
+position, generated); additive changes are applied by `ADD COLUMN` with
+the clause verbatim from the DDL (a VIRTUAL generated column included);
+anything else is a `SchemaBreak` under `OnSchemaBreak::Refuse`, which
+names every such table and leaves the file as it was, or a drop-and-
+recreate under `Rebuild`. Raw stores refuse unless `datalib-step` is a
+`--reset-and-redownload` run; derived stores rebuild. `etl/README.md`
+§"Schema self-healing" is the reference.
+
+The text as planned:
 
 - **Compare the full column shape.** `ColumnInfo` already carries
   `decl_type`, `not_null`, `default` and `generated`; the comparison
@@ -455,22 +481,39 @@ and for the same reason: the failure mode is forgetting.
 
 ### 3.4 PR 4 — the downgrade guard, and a root-level check
 
-- `open` (raw) and `AppStore::open` compare `_datalib_meta.datalib_version`
-  to their own. Newer by a *minor* or more: refuse with "this store
-  was written by datalib X; you are running Y". Same minor, newer
-  patch: allow (patch releases do not move schemas — make that a
-  release rule and write it in `release_steps.md`). `schema_version`
-  above our ladder's top: refuse regardless.
-- Rebuildable stores keep rebuilding on a newer schema; that is
-  correct and already what they do. The run store's "delete and
-  remake" stays.
-- `datalib-http` runs the check across the root at startup and on
-  every config reload, the way it already produces `app_ready:
-  false` for a config it cannot serve. A refused store becomes a
-  Manage-row problem, not a 500 on first query. The Minds case
-  (§1.2(f)) becomes a sentence on screen.
-- `datalib-dag --check` reports it too, so an agent at a shell sees
-  it before a sync does.
+**Built**, ahead of §3.2 and §3.3 because it needs only §3.1. As
+landed (`datalib_store_meta::guard`):
+
+- Every owner refuses before it writes: `doltlite_raw::open` and
+  `open_derived` (so every raw, blob, render and index store — the
+  rebuildable ones too, since until §3.2 lands the render store's
+  "rebuild" is the half-rendered store of §1.2(d)) and
+  `AppStore::open`. The check is `_datalib_meta.datalib_version`
+  against `DATALIB_VERSION` by `major.minor`: a newer line refuses,
+  naming both versions and the store; a newer *patch* opens, which is
+  the release rule in `release_steps.md` — a patch release never
+  changes a store's shape. A store with no meta passes: it predates
+  every build that can ask. The run store keeps its delete-and-remake.
+- `datalib-dag` inspects the whole root (`inspect_root`: every
+  `*.doltlite_db` to three levels down, plus `system/runs.sqlite`)
+  right after the config loads and before the runner lock or
+  `dag_state.json` — an older build rewriting that file drops the
+  fields it does not know. Both `--check` and a run fail with the
+  list; no step starts.
+- `datalib-http` inspects the root at boot, before the app stores
+  are opened. A refused root still boots — to say so: the repo behind
+  `AppState.app` fails every call with the refusal, no worker and no
+  usage sampler run, no applet starts, and `GET /api/config` carries
+  `newer_root` (the stores and both versions) with
+  `app_ready: false`. The UI gates on it ahead of first-run and
+  config-error, with a screen of its own (`NewerRootView`), since
+  there is nothing to edit. The Minds case (§1.2(f)) is that screen.
+  Checked at boot only: the fix is to run another datalib, which is
+  a restart either way.
+- Not guarded: readers. A pinned reader on a newer store fails at
+  prepare time on a column it does not know, which is loud enough,
+  and the http gate covers the applet. `schema_version` above the
+  ladder's top is not checked yet; there is no ladder (§3.3).
 
 ### 3.5 PR 5 — a source says whether it can be fetched again
 

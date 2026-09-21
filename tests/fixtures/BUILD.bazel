@@ -331,10 +331,13 @@ py_test(
 # The provider contract (one_mode.md, "Layer 2"): for every render
 # provider and every table of its raw store, mutate the table, render
 # incrementally and cold, and compare. Same pipeline, same args and
-# data as `ingested_tng_test`; a separate target so its runtime — one
-# pipeline run plus two renders per table per mutation — stays its own.
+# data as `ingested_tng_test`; a separate target so its runtime — two
+# renders per mutation, ~500 mutations — stays its own. Sharded by
+# source: each shard reruns the pipeline (seconds) and sweeps a quarter
+# of the sources, dealt out by table count so the shards finish together.
 py_test(
     name = "render_contract_test",
+    shard_count = 4,
     srcs = ["render_contract_test.py"],
     args = [
         "$(rootpath run_sync_pipeline.py)",

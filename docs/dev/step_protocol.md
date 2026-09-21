@@ -183,8 +183,8 @@ also just flows through).
 Everything above lands in `<data_root>/system/runs/runs.sqlite` — plain
 SQLite, one row per log line, the newest value per metric, every
 step's state — for this run and the ones before it, which is what the
-Manage screen reads. `[run_history]` in the config sets how many runs
-are kept.
+Manage screen reads. The store, its retention and how to read it:
+[`logging.md`](logging.md).
 
 ### The outcome line
 
@@ -346,42 +346,15 @@ upserted, a request being retried, each with its numbers in the
 sentence — and the runner stores a `DEBUG` envelope as a `debug` row
 rather than rounding it up to `info`.
 
-**Every process is a row.** `processes` has one row per process that
-took part: a run of the runner, each attempt of each step it spawned,
-each launch of the app server, and each page of the app open in a
-browser tab (the server records it; `docs/dev/app_stores.md`) — with
-when it started and ended, and, for a step attempt, how: the
-`exit_code` it exited with, or the `signal` that ended it, as the
-runner saw in `wait(2)`. (The runner and the server record themselves,
-and a process cannot see its own end; a page says when it is going.)
-Every log line names the process that wrote it: a step attempt's for
-what came out of the step's pipes, the runner's for its own lines —
-including what it says *about* a step, which is why a line also keeps
-its subject, `step` and `attempt`. A process records the commit it was
-built from, once, so a line's `filename` (the repo-relative path rustc
-saw) and `line_number` can be shown as `file:line` and linked to
-GitHub at that commit; a step attempt that runs the built-in step
-program shares the runner's, a custom command has none. The commit is
-resolved at run time, never compiled in (a build stamp costs a rebuild
-of everything downstream on every commit): `datalib_runs::git_hash`
-reads `DATALIB_GIT_HASH` from the environment — the dev launchers set
-it from the checkout — else a `git-hash` file beside the binaries,
-which the release tarball and the .app carry the way they carry
-`runtime.manifest`. A binary that can say neither records nothing, and
-the view shows `file:line` as text. Lines from different builds sit in
-one store — the server restarts between versions — which is why the
-commit belongs to the process and not to the store.
-
-**Reading the log.** The log card's unit is a process: it opens on a
-step's newest attempt (its own output and what the runner said about
-it), on the runner, on the launch of the server serving the page, or
-on a whole run; `GET /api/processes` lists them and `GET /api/log`
-takes `run`, `step` + `attempt`, or `process`. A selected line opens
-in full in the card beside it (`GET /api/log/{seq}`). The search bar's keys
-are the columns — `run`, `process`, `commit`, `step`, `level`,
-`stream`, `target`, `thread`, `msg` — plus `min_level:info`, this level
-and above, which is where the panel starts so `debug` is there when
-asked for and not otherwise.
+**Your attempt is a process.** Every line names the process that
+wrote it, and each attempt of a step is one: the runner records it at
+spawn and again at `wait(2)` with the `exit_code` or `signal` that
+ended it, and its commit — the runner's own when the step is the
+built-in program, none for a custom command — which is what a
+structured line's `filename` and `line_number` are relative to. What
+the runner itself says *about* your step is the runner's line, with
+your step as its subject. The model, the other kinds of process and
+the log card that reads them: [`logging.md`](logging.md).
 
 ## Signals: graceful cancellation (optional)
 

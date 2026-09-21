@@ -15,6 +15,9 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
+pub mod guard;
+pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
+
 pub const TABLE: &str = "_datalib_meta";
 
 pub const DDL: &str = "CREATE TABLE IF NOT EXISTS _datalib_meta (

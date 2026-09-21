@@ -41,8 +41,15 @@ import sys
 import tomllib
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 
 _BAZEL_WORKSPACE_DIR = "_main"
+
+# No spawn here should take more than a second or two; one that takes
+# this long has hung, and the failure names it. The test has three
+# times reached bazel's 900 s ceiling on CI with nothing written, which
+# is the one outcome this test must never produce again.
+_SPAWN_TIMEOUT_SECS = 120
 
 # Bookkeeping the ingest side owns and render never reads. Mutating it
 # proves nothing, and deleting `sync_runs` would only exercise the
@@ -102,6 +109,9 @@ class RenderContractTest(unittest.TestCase):
         )
         cls.workspace = cls.tmp / "sync_workspace"
         cls.workspace.mkdir(parents=True, exist_ok=True)
+        # Bazel fails a sharded test whose runner never touched this.
+        if status := os.environ.get("TEST_SHARD_STATUS_FILE"):
+            Path(status).touch()
         cls._run_pipeline()
         cls.config = tomllib.loads(
             (cls.workspace / "dag.toml").read_text(encoding="utf-8")
@@ -123,7 +133,12 @@ class RenderContractTest(unittest.TestCase):
             *cls.fixture_paths,
         ]
         result = subprocess.run(
-            argv, check=False, cwd=str(cls.cwd), capture_output=True, text=True
+            argv,
+            check=False,
+            cwd=str(cls.cwd),
+            capture_output=True,
+            text=True,
+            timeout=_SPAWN_TIMEOUT_SECS * 5,
         )
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
@@ -135,12 +150,18 @@ class RenderContractTest(unittest.TestCase):
     ) -> list[str] | None:
         """One statement (or a `;`-joined few) against a store; the rows,
         or `None` when it failed and the caller said that may happen."""
-        result = subprocess.run(
-            [str(self.cwd / self.doltlite_bin), str(db), sql],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [str(self.cwd / self.doltlite_bin), str(db), sql],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_SPAWN_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                f"doltlite hung for {_SPAWN_TIMEOUT_SECS}s on {db}:\n  {sql[:300]}"
+            )
         if result.returncode != 0:
             if not must_succeed:
                 self.last_refusal = result.stderr.strip().splitlines()[-1:]
@@ -181,14 +202,21 @@ class RenderContractTest(unittest.TestCase):
             params_file = data_root / f"{group}.render.params.json"
             params_file.write_text(json.dumps(step["params"]))
             argv += ["--params-file", str(params_file)]
-        result = subprocess.run(
-            argv,
-            check=False,
-            cwd=str(self.cwd),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                argv,
+                check=False,
+                cwd=str(self.cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=_SPAWN_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                f"datalib-step render_markdown for {group} hung for "
+                f"{_SPAWN_TIMEOUT_SECS}s in {data_root}"
+            )
         if result.returncode == 0:
             return None
         causes = [
@@ -208,16 +236,30 @@ class RenderContractTest(unittest.TestCase):
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name NOT LIKE 'dolt_%' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
         )
+        candidates = [
+            t for t in names if t not in _SKIP_TABLES and not t.endswith(_SKIP_SUFFIXES)
+        ]
+        if not candidates:
+            return []
+        # The count and the columns of every table in one spawn; the
+        # first row under each sentinel is the count.
+        by_table = self._split_by_sentinel(
+            self._rows(
+                db,
+                " ".join(
+                    f"SELECT '#{t}'; SELECT COUNT(*) FROM {t}; "
+                    f"SELECT name, type, pk FROM pragma_table_info('{t}');"
+                    for t in candidates
+                ),
+            )
+        )
         out = []
-        for t in names:
-            if t in _SKIP_TABLES or t.endswith(_SKIP_SUFFIXES):
-                continue
-            if self._rows(db, f"SELECT COUNT(*) FROM {t};")[0] == "0":
+        for t in candidates:
+            count, *pragma = by_table[t]
+            if count == "0":
                 continue
             cols = []
-            for line in self._rows(
-                db, f"SELECT name, type, pk FROM pragma_table_info('{t}');"
-            ):
+            for line in pragma:
                 name, typ, pk = line.split("|")
                 cols.append((name, typ.upper(), pk != "0"))
             out.append((t, cols))
@@ -549,6 +591,23 @@ class RenderContractTest(unittest.TestCase):
             if (self.workspace / g / "ingest" / "entities.doltlite_db").is_file()
         )
 
+    def _this_shards_sources(self, tables: dict[str, list]) -> list[str]:
+        """The sources this bazel shard sweeps. Every shard runs the
+        pipeline and lists every source's tables (cheap), then the
+        sources are dealt out largest-first to the emptiest shard, so
+        the shards finish together; the deal is deterministic, so the
+        shards partition the sources."""
+        index = int(os.environ.get("TEST_SHARD_INDEX", "0"))
+        total = int(os.environ.get("TEST_TOTAL_SHARDS", "1"))
+        load = [0] * total
+        mine = []
+        for source in sorted(tables, key=lambda s: (-len(tables[s]), s)):
+            shard = load.index(min(load))
+            load[shard] += len(tables[source])
+            if shard == index:
+                mine.append(source)
+        return sorted(mine)
+
     def _scratch(
         self, tag: str, source: str, ingest_from: Path, *, with_render_store: bool
     ) -> Path:
@@ -567,45 +626,42 @@ class RenderContractTest(unittest.TestCase):
             )
         return root
 
-    def _rendered(self, source_dir: Path) -> int | None:
-        """How many documents the last render of this store wrote, off
-        its commit message — the only trace, since an unchanged rewrite
-        leaves no diff."""
-        db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
-        rows = self._rows(
-            db, "SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1;"
-        )
-        m = re.match(r"render \S+: (\d+) document\(s\)", rows[0]) if rows else None
-        return int(m.group(1)) if m else None
+    class Readers(NamedTuple):
+        """What the render store declares about one raw row: the buckets
+        that read it (`None` when the provider has declared nothing for
+        the table — its scan is on its own then), how many documents
+        those buckets hold, and how many documents the last render
+        wrote, off its commit message — the only trace, since an
+        unchanged rewrite leaves no diff."""
 
-    def _readers_of(
-        self, source_dir: Path, table: str, row_id: str
-    ) -> list[str] | None:
-        """The buckets the store says read `(table, row_id)` — what a
-        change to that row should re-render, and nothing else. `None`
-        when the provider has declared nothing for the table: its scan is
-        on its own then."""
+        buckets: list[str] | None
+        documents: int
+        rendered: int | None
+
+    def _readers_of(self, source_dir: Path, table: str, row_id: str) -> Readers:
+        """One spawn for all three: this runs twice per one-row mutation."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
-        declared = self._rows(
-            db, f"SELECT COUNT(*) FROM render_inputs WHERE input_table = '{table}';"
-        )[0]
-        if declared == "0":
-            return None
-        return self._rows(
-            db,
+        buckets_sql = (
             "SELECT DISTINCT bucket_key FROM render_inputs "
-            f"WHERE input_table = '{table}' AND input_id IN ('{row_id}', '*');",
+            f"WHERE input_table = '{table}' AND input_id IN ('{row_id}', '*')"
         )
-
-    def _documents_under(self, source_dir: Path, buckets: list[str]) -> int:
-        if not buckets:
-            return 0
-        db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
-        keys = ", ".join(f"'{b}'" for b in buckets)
-        return int(
+        got = self._split_by_sentinel(
             self._rows(
-                db, f"SELECT COUNT(*) FROM markdowns WHERE bucket_key IN ({keys});"
-            )[0]
+                db,
+                f"SELECT '#declared'; SELECT COUNT(*) FROM render_inputs "
+                f"WHERE input_table = '{table}'; "
+                f"SELECT '#buckets'; {buckets_sql}; "
+                f"SELECT '#documents'; SELECT COUNT(*) FROM markdowns "
+                f"WHERE bucket_key IN ({buckets_sql}); "
+                "SELECT '#log'; SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1;",
+            )
+        )
+        log = got["log"]
+        m = re.match(r"render \S+: (\d+) document\(s\)", log[0]) if log else None
+        return self.Readers(
+            buckets=None if got["declared"][0] == "0" else got["buckets"],
+            documents=int(got["documents"][0]),
+            rendered=int(m.group(1)) if m else None,
         )
 
     def _check(
@@ -638,9 +694,12 @@ class RenderContractTest(unittest.TestCase):
         applied = False
         self.last_refusal: list[str] = []
         for sql in sqls:
-            if self._doltlite(db, sql, must_succeed=False) is None:
-                continue
-            if self._rows(db, "SELECT COUNT(*) FROM dolt_status;")[0] != "0":
+            # A refused statement fails the whole invocation, so the
+            # count only comes back when the mutation went in.
+            changed = self._doltlite(
+                db, f"{sql} SELECT COUNT(*) FROM dolt_status;", must_succeed=False
+            )
+            if changed is not None and changed[-1] != "0":
                 applied = True
                 break
         if not applied:
@@ -649,20 +708,16 @@ class RenderContractTest(unittest.TestCase):
             shutil.rmtree(inc)
             return False
         self._rows(db, f"SELECT dolt_commit('-Am', 'contract: {kind} {table}');")
-        readers = (
-            self._readers_of(inc / source, table, one_row)
-            if one_row is not None
-            else None
-        )
-        # The documents under those buckets before the run; the edit may
-        # move a message into another period, and an inserted row has
-        # readers only afterwards, so the count after the run — under
-        # whichever buckets declare the row then — is the other bound.
-        before = (
-            self._documents_under(inc / source, readers)
-            if readers is not None
-            else None
-        )
+        # The buckets declared for the row and the documents under them
+        # before the run; the edit may move a message into another
+        # period, and an inserted row has readers only afterwards, so
+        # the count after the run — under whichever buckets declare the
+        # row then — is the other bound.
+        readers = before = None
+        if one_row is not None:
+            declared = self._readers_of(inc / source, table, one_row)
+            if declared.buckets is not None:
+                readers, before = declared.buckets, declared.documents
         # What the store held before this run, for the insert: a copied
         # row that changes nothing in the output — an attachment edge no
         # payload points at, a reaction with no emoji row — was read by
@@ -695,9 +750,9 @@ class RenderContractTest(unittest.TestCase):
                 if no_effect is not None:
                     no_effect.append(f"{source}: {table}")
             elif readers is not None and before is not None and one_row is not None:
-                readers_after = self._readers_of(inc / source, table, one_row) or []
-                after = self._documents_under(inc / source, readers_after)
-                rendered = self._rendered(inc / source)
+                declared = self._readers_of(inc / source, table, one_row)
+                readers_after = declared.buckets or []
+                after, rendered = declared.documents, declared.rendered
                 lo, hi = min(before, after), max(before, after)
                 if rendered is None or not lo <= rendered <= hi:
                     failures.append(
@@ -725,11 +780,22 @@ class RenderContractTest(unittest.TestCase):
         checked = 0
         # `RENDER_CONTRACT_ONLY=<source>` narrows a debugging run.
         only = os.environ.get("RENDER_CONTRACT_ONLY")
-        for source in self._sources():
-            if only and source != only:
-                continue
+        tables = {
+            source: self._entity_tables(
+                self.workspace / source / "ingest" / "entities.doltlite_db"
+            )
+            for source in self._sources()
+            if not only or source == only
+        }
+        sources = self._this_shards_sources(tables)
+        for source in sources:
+            # Written as it goes, so a shard killed at bazel's ceiling
+            # still says how far it got.
+            sys.stderr.write(
+                f"[render contract] {source}: {len(tables[source])} table(s)\n"
+            )
             db = self.workspace / source / "ingest" / "entities.doltlite_db"
-            for table, cols in self._entity_tables(db):
+            for table, cols in tables[source]:
                 checked += self._check(
                     source,
                     table,
@@ -797,7 +863,8 @@ class RenderContractTest(unittest.TestCase):
                         source, table, "swap blobs", [swap], failures, skipped
                     )
         sys.stderr.write(
-            f"[render contract] {checked} mutation(s) checked, {len(skipped)} skipped\n"
+            f"[render contract] {checked} mutation(s) checked, {len(skipped)} skipped "
+            f"over {', '.join(sources)}\n"
         )
         for line in skipped:
             sys.stderr.write(f"[render contract]   skipped {line}\n")
@@ -805,7 +872,8 @@ class RenderContractTest(unittest.TestCase):
             sys.stderr.write(
                 f"[render contract]   an inserted copy changed no output: {line}\n"
             )
-        self.assertGreater(checked, 0, "no source had a table to mutate")
+        if sources:
+            self.assertGreater(checked, 0, "no source had a table to mutate")
 
         # A gap under the whole-table edit covers its one-row form: the
         # same rows went unread either way.
@@ -814,7 +882,12 @@ class RenderContractTest(unittest.TestCase):
 
         failed = {gap_key(f) for f in failures}
         new = [f for f in failures if gap_key(f) not in KNOWN_GAPS]
-        fixed = sorted(k for k in KNOWN_GAPS if k not in failed and only is None)
+        # Only the gaps of this shard's sources can be seen to have closed.
+        fixed = sorted(
+            k
+            for k in KNOWN_GAPS
+            if k not in failed and only is None and k.split(":", 1)[0] in sources
+        )
         self.assertEqual(
             new,
             [],

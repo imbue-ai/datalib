@@ -321,6 +321,12 @@ async fn main() {
         checkpoint_cadence: checkpoint_cadence(),
         stop: stop.clone(),
     };
+    // A reset run empties and refills every raw table, so a table whose
+    // stored shape the DDL cannot be reached from is rebuilt rather than
+    // refused — the one way out the refusal names.
+    if control.reset_and_redownload {
+        datalib_etl::doltlite_raw::rebuild_raw_stores_on_schema_break();
+    }
 
     match run(cli, &data_root, &now, &control, &emitter).await {
         // A run that ended because it was asked to is not a success, even

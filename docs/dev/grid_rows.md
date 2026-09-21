@@ -91,6 +91,11 @@ translates each row into a `SearchRow` for the HTTP API.
    goes in `GridCard`'s `columnOverrides`.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
+Nothing to bump for an existing root: the render store's DDL hash is
+one of the render params (`_store_schema`), so a new column re-renders
+every source on the next run rather than sitting `NULL` on every row
+rendered before it, and the grid index rebuilds itself on any drift.
+
 ## Adding a provider
 
 1. Land a new crate under `datalib/backend/etl/providers/<p>/`

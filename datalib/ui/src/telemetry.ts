@@ -1,13 +1,6 @@
-// The page's own record in the server's log.
-//
-// One load of the app in one tab is a `ui` process in
-// `system/runs/runs.sqlite`, the way a launch of the server is one (see
-// `docs/dev/app_stores.md`). What happens on it — a navigation, an
-// error nobody caught, whatever a component chooses to `track` — is
-// posted to `POST /api/ui/events` in batches and lands as that
-// process's lines, under the page's own clock. The same id rides every
-// request the page makes (`X-Datalib-Page`), so a request in the
-// server's log can be joined back to the action behind it.
+// The page's own record in the server's log: one load of the app in
+// one tab is a `ui` process, and what happens on it is `track`ed and
+// posted to `POST /api/ui/events` in batches (`docs/dev/logging.md`).
 //
 // Reporting must never get in the way: a batch that fails to send is
 // dropped, with one warning in the console, and nothing here throws.

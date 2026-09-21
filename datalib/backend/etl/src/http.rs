@@ -303,9 +303,23 @@ pub const PLAYBACK_ENV: &str = "DATALIB_HTTP_PLAYBACK";
 /// last long enough to watch.
 pub const PLAYBACK_DELAY_ENV: &str = "DATALIB_HTTP_PLAYBACK_DELAY_MS";
 
+/// A file whose presence holds every replayed request: while it exists
+/// the request waits, and the moment it is gone the request is answered.
+/// Playback only. A test that has to act on a download in flight — add a
+/// source beside it, stop it — holds the tape, acts, and releases it,
+/// instead of picking a delay and hoping the window is wide enough on a
+/// slow runner. A stop ends the wait as `Interrupted`, like a backoff.
+pub const PLAYBACK_HOLD_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD";
+
+const HOLD_POLL: Duration = Duration::from_millis(50);
+
 enum Mode {
     Live,
-    Playback { root: PathBuf, delay: Duration },
+    Playback {
+        root: PathBuf,
+        delay: Duration,
+        hold: Option<PathBuf>,
+    },
 }
 
 impl Mode {
@@ -314,10 +328,24 @@ impl Mode {
             Some(v) if !v.is_empty() => Mode::Playback {
                 root: PathBuf::from(v),
                 delay: playback_delay(),
+                hold: std::env::var_os(PLAYBACK_HOLD_ENV)
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from),
             },
             _ => Mode::Live,
         }
     }
+}
+
+/// Waits while `hold` exists; `true` when a stop ended the wait instead.
+async fn held(stop: &crate::stop::StopFlag, hold: &Path) -> bool {
+    while hold.exists() {
+        if stop.requested() {
+            return true;
+        }
+        tokio::time::sleep(HOLD_POLL).await;
+    }
+    false
 }
 
 fn playback_delay() -> Duration {
@@ -466,9 +494,17 @@ where
         crate::download_metrics::record_api_request();
         let outcome = match Mode::current() {
             Mode::Live => live::send(req).await,
-            Mode::Playback { root, delay } => {
+            Mode::Playback { root, delay, hold } => {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
+                }
+                if let Some(hold) = hold {
+                    if held(guard.stop(), &hold).await {
+                        return Err(HttpError::Interrupted {
+                            service: req.service,
+                            url: req.url.clone(),
+                        });
+                    }
                 }
                 playback::lookup(req, &root).await
             }
@@ -1145,6 +1181,98 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(30),
             "the backoff must end on the stop, not run its course"
+        );
+    }
+
+    fn ok_fixture(dir: &std::path::Path, req: &HttpRequest) {
+        let provider_dir = dir.join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: b"{}".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A held tape answers nothing until the hold file is gone, then
+    /// answers at once.
+    #[tokio::test]
+    async fn a_hold_file_parks_a_replayed_request_until_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            crate::stop::StopFlag::default(),
+        );
+        let releaser = hold.clone();
+        let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stamp = released_at.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *stamp.lock().unwrap() = Some(std::time::Instant::now());
+            std::fs::remove_file(&releaser).unwrap();
+        });
+        let resp = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_ENV);
+            out
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        let released = released_at.lock().unwrap().expect("the release ran first");
+        assert!(
+            released.elapsed() < Duration::from_secs(5),
+            "the answer must follow the release, not a timer"
+        );
+    }
+
+    /// A stop while the tape is held ends the wait as `Interrupted`, so a
+    /// held step still stops in its grace.
+    #[tokio::test]
+    async fn a_stop_ends_a_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+
+        let stop = crate::stop::StopFlag::new();
+        let fast = Duration::from_millis(1);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop.clone());
+        let stopper = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            stopper.request();
+        });
+        let err = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_ENV);
+            out
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
+        assert!(
+            hold.exists(),
+            "the hold was never released; only the stop ended the wait"
         );
     }
 

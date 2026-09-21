@@ -26,7 +26,10 @@ git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
 and committed with the schema (`datalib_store_meta`;
 `docs/dev/plans/schema_migrations.md` §3.1). A reader that wants to
-know what it is looking at reads that before its first query.
+know what it is looking at reads that before its first query — and
+every owner does, refusing a store a newer `major.minor` of datalib
+wrote (`datalib_store_meta::guard`; the app server then boots only to
+show the screen that says so, and `datalib-dag` refuses the root).
 
 One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
@@ -39,24 +42,8 @@ is never served. `runs.sqlite` is the exception because it is not doltlite: plai
 SQLite in WAL mode, written by both the runner (its runs) and the server
 (its own log), which SQLite's own locking makes ordinary.
 
-The server's log includes one line per request it answered — method,
-path, query, status and milliseconds, under the tracing target
-`http.request` (`datalib/backend/http/src/request_log.rs`) — so
-`target:http.request` in the log panel is the record of what the app
-asked for. A read of the log itself is the one request that leaves no
-line: the panel refetches whenever the log moves, and a line per
-refetch would keep it moving.
-
-A page of the app — one load in one browser tab — is a `ui` process
-of its own, and what happened on it is its lines: `ui.page_load`,
-`ui.navigate` (the path, which is the open card stack, so a search
-typed into a grid is in it), `ui.error` for an exception nobody
-caught, `ui.page_hide`. The page posts them in batches to
-`POST /api/ui/events` (`datalib/ui/src/telemetry.ts` on one side,
-`datalib/backend/http/src/ui_events.rs` on the other) and sends its
-process id on every request as `X-Datalib-Page`, which the request
-log keeps as `page` — the join from an action to what the server did
-for it. The log panel lists pages beside the server's launches.
+Who writes which line of it, how to add one, and how to read it is
+[`logging.md`](logging.md).
 
 ## The three stores `datalib-http` owns
 

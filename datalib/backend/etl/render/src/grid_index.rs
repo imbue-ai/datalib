@@ -385,28 +385,12 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
         let Some(table) = datalib_etl::doltlite_raw::parse_create_table_name(ddl) else {
             continue;
         };
-        let declared = datalib_etl::doltlite_raw::declared_column_names(ddl, &table)
+        if let Some(what) = datalib_etl::doltlite_raw::table_drift(pool, ddl, &table)
             .await
-            .with_context(|| format!("declared columns for {table}"))?;
-        let actual = datalib_etl::doltlite_raw::actual_column_names(pool, &table)
-            .await
-            .with_context(|| format!("actual columns for {table}"))?;
-        if declared == actual {
-            continue;
+            .with_context(|| format!("compare {table} to its DDL"))?
+        {
+            drift.push(format!("{table} ({what})"));
         }
-        let missing: Vec<&str> = declared
-            .difference(&actual)
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        let extra: Vec<&str> = actual
-            .difference(&declared)
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        drift.push(format!(
-            "{table} (missing: [{}], unexpected: [{}])",
-            missing.join(", "),
-            extra.join(", ")
-        ));
     }
     if drift.is_empty() {
         return Ok(());
@@ -1846,7 +1830,6 @@ mod schema_reconcile_tests {
     use tempfile::tempdir;
 
     use crate::grid_index::{init_schema, EDGES_DDL, MARKDOWNS_DDL};
-    use datalib_etl::doltlite_raw::actual_column_names;
 
     /// `grid_rows` exactly as data roots created before #216 have it on disk.
     /// Written out longhand rather than derived from the current DDL: the
@@ -1944,12 +1927,19 @@ mod schema_reconcile_tests {
 
         init_schema(&pool).await.expect("init_schema");
 
-        let cols = actual_column_names(&pool, "grid_rows").await.unwrap();
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('grid_rows')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         for added in ["upstream_id", "upstream_entity_kind", "upstream_scope"] {
-            assert!(cols.contains(added), "grid_rows must have gained {added}");
+            assert!(
+                cols.iter().any(|c| c == added),
+                "grid_rows must have gained {added}"
+            );
         }
         assert!(
-            !cols.contains("external_id"),
+            !cols.iter().any(|c| c == "external_id"),
             "the column upstream_id replaced must be gone"
         );
         assert_eq!(

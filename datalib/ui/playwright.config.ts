@@ -180,14 +180,26 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
     ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "1500" }
     : {},
   // The control spec starts, stops and restarts those same downloads
-  // from the table, so each has to last long enough to be acted on
-  // partway through: slower still. A tape of five requests at 2.5 s
-  // was ~12 s, and a config save with its remount ate most of that on
-  // a CI runner; at 5 s the window is ~25 s.
+  // from the table, so each has to stay in flight until the spec has
+  // acted on it. Not a delay: while the hold file exists every replayed
+  // request waits, and the spec removes it when it is done acting. A
+  // delay was a window — 2.5 s per request was eaten by a config save's
+  // remount on a CI runner, 5 s made two tapes 75 s of sleeping.
   "manager2-control": PLAYBACK_DIR
-    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "5000" }
+    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_HOLD: playbackHold() }
     : {},
 };
+
+// Where the control spec holds and releases its tapes. Cached in env
+// like the roots: the workers re-import this file and must name the
+// same file the backend was told about.
+function playbackHold(): string {
+  const existing = process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD;
+  if (existing) return existing;
+  const hold = path.join(mintRoot("datalib-e2e-hold-"), "hold");
+  process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD = hold;
+  return hold;
+}
 
 /// Cached in env like the fixture root: worker subprocesses re-import
 /// this config and must attach to what the parent materialized rather

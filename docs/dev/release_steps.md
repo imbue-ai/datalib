@@ -15,6 +15,17 @@ tarballs to three bugs in the `runtime` job, v0.35.1 to one in the
 only that block called in that way. This page says what now runs
 before a tag and what still cannot.
 
+## A patch release never changes a store's shape
+
+The downgrade guard (`datalib_store_meta::guard`,
+[`plans/schema_migrations.md`](plans/schema_migrations.md) §3.4)
+compares versions by `major.minor`: a build refuses a store a newer
+*minor* wrote and opens one a newer *patch* wrote. That is only safe if
+a patch release never adds, renames or drops a column, table, cursor
+shape or `RENDER_VERSION`. So: a change that moves the
+`schema_inventory` golden, a `RENDER_VERSION`, `LAYOUT_VERSION` or
+`datalib_runs::SCHEMA_VERSION` is a minor bump, whatever else is in it.
+
 ## The steps are scripts
 
 The two steps that assemble what a release ships are scripts, and the

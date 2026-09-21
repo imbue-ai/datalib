@@ -399,16 +399,26 @@ export type ConfigResponse = {
   // Whether the app can serve its own views at all. False when the
   // file is not a config, or when it loads without a usable
   // `unified_index` applet — that applet serves the grid, search and
-  // the document view, so without it every view is a 502. A root with
-  // no config is `exists: false` and the first-run screen's business,
-  // not this flag's.
+  // the document view, so without it every view is a 502 — or when
+  // the root was written by a newer datalib (`newer_root`). A root
+  // with no config is `exists: false` and the first-run screen's
+  // business, not this flag's.
   app_ready: boolean;
+  // Set when this build refuses the root: the stores a newer datalib
+  // wrote, and the version running. Its own screen, since there is
+  // nothing to edit.
+  newer_root: NewerRoot | null;
   source_count: number;
   // How to invoke the latchkey CLI on this install: the app-bundled
   // launcher's absolute path when running from the packaged app, else
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
+};
+
+export type NewerRoot = {
+  running: string;
+  stores: { store: string; wrote: string }[];
 };
 
 export type SaveConfigResponse = {

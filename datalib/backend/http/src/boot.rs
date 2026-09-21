@@ -34,6 +34,36 @@ pub async fn build_state(
     // terminal) reads it from here instead of scraping our stderr.
     api_token.write_token_file()?;
 
+    // A root a newer line of datalib wrote is not opened at all: this
+    // server then boots only to show the gate that says so, with a repo
+    // that refuses every call, no worker and no sampler. Checked before
+    // the app stores because opening them is the first write.
+    let newer_root = datalib_store_meta::inspect_root(&root).await;
+    if !newer_root.is_empty() {
+        for n in &newer_root {
+            tracing::error!("{n}");
+        }
+        let (progress_tx, _) = tokio::sync::broadcast::channel(512);
+        let (root_tx, _) = tokio::sync::broadcast::channel(64);
+        crate::watch::spawn((*root).clone(), root_tx.clone());
+        return Ok(AppState {
+            root: root.clone(),
+            app: Arc::new(NewerRootRepo(newer_root.clone())),
+            progress_tx,
+            root_tx,
+            // No entries: nothing starts, and the unified_index applet
+            // never opens the index this build must not read as its own.
+            applets: Arc::new(crate::applets::AppletRegistry::build(
+                Vec::new(),
+                (*root).clone(),
+                None,
+            )),
+            api_token,
+            usage: Arc::new(usage::UsageMonitor::new()),
+            newer_root,
+        });
+    }
+
     tracing::info!(
         "stores: {}, {}",
         datalib_core::layout::feedback_db(&root).display(),
@@ -112,7 +142,66 @@ pub async fn build_state(
         applets,
         api_token,
         usage: monitor,
+        newer_root: Vec::new(),
     })
+}
+
+/// The repo a refused root gets: every call fails with the refusal, so
+/// a caller that reaches past the gate — a curl, an agent — is told why
+/// rather than handed an empty answer.
+struct NewerRootRepo(Vec<datalib_store_meta::NewerBuild>);
+
+impl NewerRootRepo {
+    fn refuse<T>(&self) -> Result<T, datalib_core::repo::RepoError> {
+        Err(datalib_core::repo::RepoError::Internal(
+            self.0
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl datalib_core::repo::AppRepo for NewerRootRepo {
+    async fn insert_feedback(
+        &self,
+        _row: app_schema::feedback::FeedbackRow,
+    ) -> Result<(), datalib_core::repo::RepoError> {
+        self.refuse()
+    }
+    async fn list_jobs(
+        &self,
+        _only_active: bool,
+        _limit: usize,
+    ) -> Result<Vec<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
+        self.refuse()
+    }
+    async fn get_job(
+        &self,
+        _job_id: &str,
+    ) -> Result<Option<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
+        self.refuse()
+    }
+    async fn enqueue_job(
+        &self,
+        _kind: app_schema::sync_jobs::JobKind,
+        _source_ids: Option<&str>,
+    ) -> Result<app_schema::sync_jobs::SyncJobRow, datalib_core::repo::RepoError> {
+        self.refuse()
+    }
+    async fn claim_next_job(
+        &self,
+    ) -> Result<Option<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
+        self.refuse()
+    }
+    async fn recent_disk_usage(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<app_schema::disk_usage::DiskUsageRow>, datalib_core::repo::RepoError> {
+        self.refuse()
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +226,76 @@ mod tests {
             assert!(p.is_file(), "expected {} to be created", p.display());
         }
         assert_eq!(state.root.as_path(), root.path());
+        assert!(state.newer_root.is_empty());
+    }
+
+    /// A root a newer datalib wrote still boots — to say so. The app
+    /// stores are not opened (their meta is untouched), the repo refuses
+    /// with the reason, and `GET /api/config` reports `app_ready: false`
+    /// with the stores and both versions for the screen.
+    #[tokio::test]
+    async fn a_root_a_newer_build_wrote_boots_only_to_say_so() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let token = ApiToken::from_value("boot-test-token", root.path());
+        // A first boot writes the stores; a "newer release" then marks one.
+        drop(
+            build_state(root.path().to_path_buf(), None, None, token.clone())
+                .await
+                .unwrap(),
+        );
+        let feedback = datalib_core::layout::feedback_db(root.path());
+        {
+            let pool = datalib_core::store::open_pool(&feedback).await.unwrap();
+            sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let state = build_state(root.path().to_path_buf(), None, None, token.clone())
+            .await
+            .expect("boots to show the gate");
+        assert_eq!(state.newer_root.len(), 1);
+        assert_eq!(state.newer_root[0].wrote, "99.0.0");
+        let err = state.app.list_jobs(false, 1).await.unwrap_err().to_string();
+        assert!(err.contains("written by datalib 99.0.0"), "{err}");
+        // Not opened: still says what the newer release wrote.
+        let meta = datalib_store_meta::guard::read_at(&feedback)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.datalib_version, "99.0.0");
+
+        let app = crate::router(state);
+        let resp = app
+            .oneshot(
+                Request::get("/api/config")
+                    .header("authorization", format!("Bearer {}", token.value()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["app_ready"], false);
+        assert_eq!(v["newer_root"]["stores"][0]["wrote"], "99.0.0");
+        assert_eq!(
+            v["newer_root"]["stores"][0]["store"],
+            "system/feedback.doltlite_db"
+        );
+        assert_eq!(
+            v["newer_root"]["running"],
+            datalib_runtime::build_id::DATALIB_VERSION
+        );
     }
 
     /// The server does not touch the search indexes.

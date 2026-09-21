@@ -6,18 +6,22 @@ import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
+import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import { newCard, showDataSources } from "@/surface";
 
-// The gate in front of the whole app, for the two states where showing
+// The gate in front of the whole app, for the three states where showing
 // the app would be a lie.
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-const gate = computed<"first-run" | "config-error" | null>(() => {
+const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => {
   const c = config.value;
   if (!c) return null;
+  // A refused root comes first: with no store open, "no config" and
+  // "not ready" are both consequences of it, not states of their own.
+  if (c.newer_root) return "newer-root";
   if (!c.exists) return "first-run";
   return c.app_ready ? null : "config-error";
 });
@@ -72,6 +76,7 @@ onUnmounted(() => stop?.());
       :config="config"
       @initialized="onInitialized"
     />
+    <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
     <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
     <RouterView v-else-if="checked" />
     <ToastStack />

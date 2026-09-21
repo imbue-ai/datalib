@@ -43,6 +43,23 @@ impl AppStore {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
         let usage_pool = open_pool(&crate::layout::usage_db(root)).await?;
+        // Before the migration and the DDL: a store a newer line of
+        // datalib wrote is refused whole (`datalib_store_meta::guard`).
+        for (pool, path) in [
+            (&feedback_pool, crate::layout::feedback_db(root)),
+            (&jobs_pool, crate::layout::jobs_db(root)),
+            (&usage_pool, crate::layout::usage_db(root)),
+        ] {
+            let written_by = datalib_store_meta::read(pool)
+                .await
+                .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+            if let Err(newer) = datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
+                for p in [&feedback_pool, &jobs_pool, &usage_pool] {
+                    p.close().await;
+                }
+                return Err(sqlx::Error::Configuration(Box::new(newer)));
+            }
+        }
         let has_dolt = probe_dolt_extensions(&feedback_pool).await;
         let store = Self {
             feedback_pool,
@@ -715,6 +732,25 @@ mod tests {
             first,
             "the same build opening again has nothing to commit"
         );
+    }
+
+    /// A root whose app stores a newer line of datalib wrote is refused
+    /// before the migration or the DDL runs, naming both versions.
+    #[tokio::test]
+    async fn app_stores_a_newer_build_wrote_are_refused() {
+        let td = tempfile::tempdir().unwrap();
+        drop(AppStore::open(td.path()).await.unwrap());
+        let jobs = open_pool(&crate::layout::jobs_db(td.path())).await.unwrap();
+        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            .execute(&jobs)
+            .await
+            .unwrap();
+        jobs.close().await;
+        let err = match AppStore::open(td.path()).await {
+            Ok(_) => panic!("an older build opened a newer root"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("was written by datalib 99.0.0"), "{err}");
     }
 
     /// Re-recording the same (series, instant) overwrites rather than

@@ -3,8 +3,11 @@
 // it, start it again — the way a person actually sets a data root up,
 // one source at a time, with the earlier ones still syncing.
 //
-// The sources replay playback tapes with a delay on every request, so a
-// download lasts tens of seconds and there is time to act on it.
+// The sources replay playback tapes behind a hold: while the hold file
+// exists no replayed request is answered, so a started download stays
+// in flight for exactly as long as the test needs to act on it, and
+// finishes at once when the test lets go. No window to miss on a slow
+// runner, and no sleeping on a fast one.
 //
 // Two groups of tests. The first is the workflow as the tree supports it
 // today — every sync is its own job and the worker runs them one at a
@@ -20,7 +23,7 @@
 // test writes.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
@@ -39,6 +42,16 @@ declare const process: { env: Record<string, string | undefined> };
 const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
 const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 const PDF_DIR = process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR;
+const HOLD = process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD;
+
+/// Park every replayed request of this spec's backend until `release`.
+function hold() {
+  writeFileSync(HOLD!, "");
+}
+/// Let the held downloads run to their end at fixture speed.
+function release() {
+  rmSync(HOLD!, { force: true });
+}
 
 /// The sources this file starts and stops. Each replays one tape, and
 /// the two tapes are the two API-backed providers the harness
@@ -126,22 +139,6 @@ async function start(page: Page, s: Source) {
   await expect(page.getByText(/Queued a sync for/)).toBeVisible();
 }
 
-/// The row of a download that another action must not have disturbed:
-/// still in flight, or over on its own terms. A replayed tape lasts a
-/// known number of seconds, and a config save with its remount can take
-/// most of that on a slow runner, so "still Running" is a race the spec
-/// cannot win every time; "not Failed, not Stopped" is the claim.
-const UNDISTURBED = /^(Running|Succeeded)$/;
-async function untilUndisturbed(page: Page, id: string, timeout = 10_000) {
-  await expect
-    .poll(() => statusOf(page, id), {
-      timeout,
-      intervals: [200],
-      message: `${id} was disturbed`,
-    })
-    .toMatch(UNDISTURBED);
-}
-
 /// Wait until the runner has this source's download in flight, as the
 /// row paints it.
 async function untilRunning(page: Page, id: string, timeout = 45_000) {
@@ -223,19 +220,21 @@ async function drainQueue(page: Page) {
 let original = "";
 
 test.beforeEach(async ({ page, request }) => {
+  hold();
   dataRoot = await resolveDataRoot(request);
   await openManager(page);
   original = await page.locator(".m2-editor").inputValue();
 });
 
 test.afterEach(async ({ page }) => {
+  release();
   await drainQueue(page);
   if (original) await writeConfig(page, original);
 });
 
 test.skip(
-  !STEP_BIN || !PLAYBACK || !PDF_DIR,
-  "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR + DATALIB_TEST_E2E_PDF_FIXTURE_DIR from run_e2e.sh",
+  !STEP_BIN || !PLAYBACK || !PDF_DIR || !HOLD,
+  "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR + DATALIB_TEST_E2E_PDF_FIXTURE_DIR + DATALIB_TEST_E2E_PLAYBACK_HOLD from run_e2e.sh",
 );
 
 // Carry the `[[applets]]` stanza forward from whatever was there.
@@ -288,8 +287,8 @@ async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<
 }
 
 test.describe("sources run independently, one job at a time", () => {
-  // Three replayed downloads at 5 s per request, run one after another
-  // by the worker, plus a stop and a restart.
+  // Three replayed downloads, held while the spec acts and run one after
+  // another by the worker once released, plus a stop and a restart.
   test.setTimeout(300_000);
 
   test("sources are added and started one at a time, each while the earlier ones still run", async ({
@@ -307,9 +306,10 @@ test.describe("sources run independently, one job at a time", () => {
     // ── 2. add a second source while the first is still going ─────────
     // Saving the config rewrites the file under a live runner. The
     // runner read it at start and must not notice; the row must still
-    // say Running once the table is remounted from the new config.
+    // say Running once the table is remounted from the new config — and
+    // with the tape held, it can say nothing else.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
-    await untilUndisturbed(page, ingestOf(CHATGPT));
+    await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
     // The second source is taken on at once — queued behind the first
@@ -318,7 +318,7 @@ test.describe("sources run independently, one job at a time", () => {
     await expect
       .poll(() => statusOf(page, ingestOf(CLAUDE)), { timeout: 5_000 })
       .toMatch(/^(Queued|Running)$/);
-    expect(await statusOf(page, ingestOf(CHATGPT))).toMatch(UNDISTURBED);
+    expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     await expect(stopBtn(page, `group:${CLAUDE.id}`)).toBeVisible();
     console.log(
       `[e2e] with ${CHATGPT.id} running, ${CLAUDE.id} reads ${await statusOf(page, ingestOf(CLAUDE))}; ` +
@@ -327,16 +327,17 @@ test.describe("sources run independently, one job at a time", () => {
 
     // ── 3. a third, while the other two are both in flight ────────────
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE, PDFS]);
-    await untilUndisturbed(page, ingestOf(CHATGPT));
+    await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const pdfsWas = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS)]);
     await start(page, PDFS);
     await expect
       .poll(() => statusOf(page, ingestOf(PDFS)), { timeout: 5_000 })
       .toMatch(/^(Queued|Running)$/);
-    expect(await statusOf(page, ingestOf(CHATGPT))).toMatch(UNDISTURBED);
-    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running|Succeeded)$/);
+    expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
+    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running)$/);
 
     // ── every source finishes, in whatever order the worker took them ─
+    release();
     for (const [id, before] of Object.entries({ ...was, ...claudeWas, ...pdfsWas })) {
       const st = await settleRow(page, id, before, 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
@@ -377,9 +378,9 @@ test.describe("sources run independently, one job at a time", () => {
     await stopBtn(page, `group:${CHATGPT.id}`).click();
     // Between the click and the runner's exit the worker sends SIGTERM,
     // the runner forwards SIGINT, and the step stops at its next
-    // consistent point, commits and exits —
-    // up to the worker's 15 s grace, and as little as a fraction of a
-    // second when the step is between requests. The row says so for as
+    // consistent point, commits and exits — up to the worker's 15 s
+    // grace, and as little as a fraction of a second: a held request
+    // answers the stop at once, like a backoff. The row says so for as
     // long as that lasts: the button reads Stopping and takes no second
     // click. Sampled until the job is stamped, and asserted only if the
     // window was wide enough to be seen at all — on a fast host it can
@@ -459,11 +460,12 @@ test.describe("sources run independently, one job at a time", () => {
       .toBe("Stopped");
 
     // The other source's job was never touched by the stop: it is still
-    // in the queue, and it goes on to finish.
+    // in the queue, and — once let go — it goes on to finish.
     const other = await jobFor(request, CLAUDE);
     expect(other?.state, `${CLAUDE.id}'s job after stopping ${CHATGPT.id}`).toMatch(
-      /^(pending|running|done)$/,
+      /^(pending|running)$/,
     );
+    release();
     for (const id of [ingestOf(CLAUDE), renderOf(CLAUDE)]) {
       const st = await settleRow(page, id, was[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
@@ -482,7 +484,8 @@ test.describe("sources run independently, one job at a time", () => {
     await expect(groupRow(page, CHATGPT.id)).toContainText(renamed);
     const again = await stampsBefore(page, [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]);
     await start(page, CHATGPT);
-    await untilRunning(page, ingestOf(CHATGPT));
+    // Released, the restart is over in well under a second — too quick
+    // for a poll to see it Running. The stamps moving is the proof it ran.
     for (const id of [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]) {
       const st = await settleRow(page, id, again[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
@@ -514,8 +517,9 @@ test.describe("what independent control still needs", () => {
     await start(page, CHATGPT);
     await untilRunning(page, ingestOf(CHATGPT));
     await start(page, CLAUDE);
-    // Well inside the first download, which lasts tens of seconds.
-    await untilRunning(page, ingestOf(CLAUDE), 10_000);
+    // The first download is held, so there is no window to miss: the
+    // second runs beside it or not at all.
+    await untilRunning(page, ingestOf(CLAUDE), 3_000);
     const when = await currentStates(request);
     expect(when[ingestOf(CHATGPT)], `runner: ${JSON.stringify(when)}`).toBe("running");
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");

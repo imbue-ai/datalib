@@ -26,6 +26,7 @@ async fn state(root: &Path) -> AppState {
         // tree reports as absent — the state a root nobody has walked
         // is in.
         usage: Default::default(),
+        newer_root: Vec::new(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }

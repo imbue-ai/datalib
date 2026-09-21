@@ -684,12 +684,23 @@ impl RenderPlan {
     }
 }
 
-/// Every processor's params under its id, so one source's cursor carries
-/// all of them and a change to any one re-renders the source.
+/// The key the render store's own DDL hash sits under, beside the
+/// processors' params. Underscored so it cannot collide with a
+/// processor id, which is a group's function name.
+const STORE_SCHEMA_PARAM: &str = "_store_schema";
+
+/// Every processor's params under its id, plus the render store's DDL
+/// hash, so one source's cursor carries all of them and a change to any
+/// one — a processor's knob, or the shape of the store — re-renders the
+/// source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))
+        .chain(std::iter::once((
+            STORE_SCHEMA_PARAM.to_string(),
+            serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash()),
+        )))
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into()
 }
@@ -972,8 +983,8 @@ mod stale_tree_tests {
     use datalib_schema::grid_rows::GridRow;
 
     use super::{
-        declared_render_versions, every_stored_version_must_be_declared,
-        tree_is_from_an_older_renderer,
+        declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
+        tree_is_from_an_older_renderer, STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -1184,5 +1195,21 @@ mod stale_tree_tests {
         );
 
         assert_eq!(declared_render_versions(&[]), None);
+    }
+
+    /// The render store's own DDL hash rides in the params under a key
+    /// no processor can claim, so a column added to `grid_rows` is a
+    /// param change — every source re-renders, and nobody has to bump
+    /// anything.
+    #[test]
+    fn the_store_schema_is_a_render_param() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[STORE_SCHEMA_PARAM],
+            serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
+        );
+        assert!(params["stub"].is_object() || params["stub"].is_null());
+        assert_eq!(params.as_object().unwrap().len(), 2);
     }
 }
