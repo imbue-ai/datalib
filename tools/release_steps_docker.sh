@@ -17,8 +17,12 @@
 #
 # The first run pays for the image build and a cold Linux build of the
 # shipped binaries (the better part of an hour); the volumes make the
-# next one a few minutes. `--symlink_prefix=/` keeps the container's
-# bazel from repointing the host tree's bazel-* symlinks.
+# next one a few minutes. `-c opt --config=release --nostamp` is what
+# test.yml and the release build both use, and it is not optional:
+# gemm-f16 (candle-core, in datalib-step) does not compile as
+# fastbuild on linux-aarch64 ("instruction requires: fullfp16").
+# `--symlink_prefix=/` keeps the container's bazel from repointing the
+# host tree's bazel-* symlinks.
 set -euo pipefail
 
 repo="${BUILD_WORKSPACE_DIRECTORY:-}"
@@ -44,5 +48,6 @@ exec docker run --rm \
     --volume datalib-bazel-disk:/root/Library/Caches/bazel-disk-cache \
     --volume datalib-npm:/root/.npm \
     "$image" \
-    bazelisk test --symlink_prefix=/ --lockfile_mode=error --test_output=errors \
+    bazelisk test -c opt --config=release --nostamp \
+        --symlink_prefix=/ --lockfile_mode=error --test_output=errors \
         //tools:stage_runtime_test //tools:stage_tarball_test "$@"
