@@ -36,6 +36,7 @@ pub mod history;
 pub mod lock;
 pub mod logging;
 pub mod manage;
+pub mod request_log;
 pub mod usage;
 pub mod watch;
 pub mod worker;
@@ -200,6 +201,8 @@ pub fn router(state: AppState) -> Router {
             api_token,
             auth::require_token,
         ))
+        // Outside the token gate, so a refused request is logged too.
+        .layer(axum::middleware::from_fn(request_log::record))
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {

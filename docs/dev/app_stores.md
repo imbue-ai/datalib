@@ -27,6 +27,14 @@ is never served. `runs.sqlite` is the exception because it is not doltlite: plai
 SQLite in WAL mode, written by both the runner (its runs) and the server
 (its own log), which SQLite's own locking makes ordinary.
 
+The server's log includes one line per request it answered — method,
+path, query, status and milliseconds, under the tracing target
+`http.request` (`datalib/backend/http/src/request_log.rs`) — so
+`target:http.request` in the log panel is the record of what the app
+asked for. A read of the log itself is the one request that leaves no
+line: the panel refetches whenever the log moves, and a line per
+refetch would keep it moving.
+
 ## The three stores `datalib-http` owns
 
 `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
