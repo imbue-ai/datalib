@@ -1,4 +1,4 @@
-// The run store, `system/runs.sqlite`: what every run did — each step's
+// The run store, `system/runs/runs.sqlite`: what every run did — each step's
 // state, its log lines and its metrics — kept across runs, plus the
 // app server's own log between them. One table per file below. Every
 // process that took part is a row in `processes` — the runner, each

@@ -498,7 +498,7 @@ export type DagStep = {
   // scheduler hasn't reached it, which reads as queued.
   current_state: DagRunState | null;
   // What the step has reported in the current run, from the run store
-  // (system/runs.sqlite). Null when it has reported nothing — which is
+  // (system/runs/runs.sqlite). Null when it has reported nothing — which is
   // not zero, and should read as a spinner rather than an empty bar.
   progress: DagStepProgress | null;
 };
@@ -998,7 +998,7 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 
 // --- The run store -----------------------------------------------------------
 
-// The rows of `system/runs.sqlite`, mirroring `app_schema::runs` in
+// The rows of `system/runs/runs.sqlite`, mirroring `app_schema::runs` in
 // datalib/backend/app_schema/src/runs/ — hand-kept in step, like the
 // other vocabularies here. Every stamp is UTC (`…+00:00`), with the
 // offset it was written in beside it as `tz_offset` (`+02:00`).

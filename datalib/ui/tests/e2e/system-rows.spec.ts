@@ -16,7 +16,7 @@ test("System and its Logs child: sizes, a Browse that opens the log, no Sync", a
   await expect(system.getByRole("button", { name: "Sync now" })).toBeDisabled();
 
   await expandRow(system, "group system");
-  const logs = pipelineRow(page, "system/runs.sqlite");
+  const logs = pipelineRow(page, "system/runs");
   await expect(logs).toBeVisible();
   await expect(logs.locator('[col-id="name"]')).toContainText("Logs");
   // The run store exists on a served root, so both rows carry a size.

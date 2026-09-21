@@ -1,6 +1,6 @@
 //! The server's own lines reach the store and come back through the
 //! same endpoint as a step's: `tracing::warn!` in this process →
-//! `system/runs.sqlite` → `GET /api/log?q=process:http`. One test,
+//! `system/runs/runs.sqlite` → `GET /api/log?q=process:http`. One test,
 //! because the subscriber it installs is the process's only one.
 
 use axum::body::Body;

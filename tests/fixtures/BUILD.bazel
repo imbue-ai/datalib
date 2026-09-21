@@ -492,7 +492,7 @@ genrule(
 
 # The run store, end to end, read by an engine that is not ours.
 #
-# Runs the real runner and opens `system/runs.sqlite` with Python's
+# Runs the real runner and opens `system/runs/runs.sqlite` with Python's
 # stdlib sqlite3 — a separate engine in a separate process that knows
 # nothing about doltlite. Deliberately NOT folded into :ingested_tng:
 # the store carries wall-clock timestamps, and that fixture is the

@@ -429,10 +429,11 @@ impl Snapshot<'_> {
     }
 
     /// The System group and its Logs child, after everything the
-    /// config declares: `system/` as a whole, and the run log inside it.
+    /// config declares: `system/` as a whole, and the run store's
+    /// directory inside it.
     fn system_rows(&self) -> [ManageRow; 2] {
         let dir = datalib_core::layout::SYSTEM_DIR;
-        let log = datalib_runs::RUNS_REL_PATH;
+        let log = datalib_runs::RUNS_DIR_REL_PATH;
         let dir_tree = self.outputs.iter().find(|o| o.path == dir);
         let log_tree = self.outputs.iter().find(|o| o.path == log);
         let dir_disk = dir_tree.filter(|t| t.present);
@@ -525,9 +526,10 @@ impl Snapshot<'_> {
                 samples: log_tree.map(samples).unwrap_or_default(),
                 detail: Some(match log_disk {
                     None => "Nothing on disk yet \u{2014} no run has been recorded.".to_string(),
-                    Some(t) => {
-                        format!("{} in {log}, with its WAL beside it.", human_bytes(t.bytes))
-                    }
+                    Some(t) => format!(
+                        "{} in {log}/ \u{2014} the store and the WAL beside it.",
+                        human_bytes(t.bytes)
+                    ),
                 }),
             },
             browse_action("Browse the log", None),

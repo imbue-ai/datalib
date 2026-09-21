@@ -53,14 +53,14 @@ pub struct DagConfig {
     /// before the step finishes. Omitted means the step's own default.
     #[serde(default)]
     pub checkpoint_cadence: Option<CheckpointCadence>,
-    /// How much of the run store (`system/runs.sqlite`: every run's step
+    /// How much of the run store (`system/runs/runs.sqlite`: every run's step
     /// states, log lines and metrics) to keep. Omitted means the defaults
     /// in [`RunHistory`].
     #[serde(default)]
     pub run_history: Option<RunHistory>,
 }
 
-/// The retention rule for `system/runs.sqlite`, as a person writes it in
+/// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
 /// `config.toml`. Both run limits apply; the app server's own log
 /// lines, which belong to no run, have their own two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

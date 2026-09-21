@@ -235,7 +235,7 @@ invariant on it.
 
 ## Progress: the store takes positions, never deltas
 
-The run store (`system/runs.sqlite`, written through `runs_sink.rs`)
+The run store (`system/runs/runs.sqlite`, written through `runs_sink.rs`)
 coalesces — of the ticks between two flushes only the newest is written —
 and coalescing deltas silently loses work, turning "347 of 900" into
 whatever fraction of the increments happened to land on a flush boundary.
@@ -256,7 +256,7 @@ crashed one, and per-step timings.
 The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 `datalib-dag`
 mints (or takes from `--run-id`; the http worker passes its job id, so
 the job row *is* the run). The binary puts it in the child environment
-and hands the same string to the run store (`system/runs.sqlite`)
+and hands the same string to the run store (`system/runs/runs.sqlite`)
 *before* calling `run`, and `Runner` reads it back out of that
 environment, so the record, the store and every step name one run. If
 they diverge nothing errors — the store describes a run nobody is

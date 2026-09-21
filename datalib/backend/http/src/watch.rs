@@ -136,15 +136,15 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     if path.starts_with(&frontend) && path != frontend {
         return Some(Moved::Frontend);
     }
-    if path.parent() == Some(system.as_path()) {
-        if name == "dag_state.json" {
-            return Some(Moved::DagState);
-        }
-        // `runs.sqlite-wal` / `-journal` are the same write as the
-        // database itself, so match on the stem rather than equality.
-        if name.starts_with("runs.sqlite") {
-            return Some(Moved::RunStore);
-        }
+    if path.parent() == Some(system.as_path()) && name == "dag_state.json" {
+        return Some(Moved::DagState);
+    }
+    // `runs.sqlite-wal` / `-journal` are the same write as the
+    // database itself, so match on the stem rather than equality.
+    if path.parent() == Some(root.join(datalib_runs::RUNS_DIR_REL_PATH).as_path())
+        && name.starts_with("runs.sqlite")
+    {
+        return Some(Moved::RunStore);
     }
     if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
         && name.starts_with(datalib_core::layout::GRID_DB)
@@ -269,11 +269,14 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let _ = std::fs::create_dir_all(&system);
     let frontend = system.join("frontend");
     let _ = std::fs::create_dir_all(&frontend);
+    let runs = root.join(datalib_runs::RUNS_DIR_REL_PATH);
+    let _ = std::fs::create_dir_all(&runs);
 
     // Resolve symlinks once, and classify against the resolved form.
     let root = std::fs::canonicalize(&root).unwrap_or(root);
     let system = std::fs::canonicalize(&system).unwrap_or(system);
     let frontend = std::fs::canonicalize(&frontend).unwrap_or(frontend);
+    let runs = std::fs::canonicalize(&runs).unwrap_or(runs);
     // Not created here: `unified_index/` belongs to the steps and the
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
@@ -315,6 +318,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     for (dir, mode) in [
         (root.as_path(), RecursiveMode::NonRecursive),
         (system.as_path(), RecursiveMode::NonRecursive),
+        (runs.as_path(), RecursiveMode::NonRecursive),
         (frontend.as_path(), RecursiveMode::Recursive),
     ] {
         if let Err(e) = watcher.watch(dir, mode) {
@@ -383,7 +387,7 @@ mod tests {
             Some(Moved::DagState)
         );
         assert_eq!(
-            classify(root, &root.join("system/runs.sqlite-wal")),
+            classify(root, &root.join("system/runs/runs.sqlite-wal")),
             Some(Moved::RunStore)
         );
         assert_eq!(

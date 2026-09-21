@@ -13,7 +13,7 @@ use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
 /// The run this invocation belongs to — the id every row of
-/// `system/runs.sqlite` carries — and which attempt of the step this is
+/// `system/runs/runs.sqlite` carries — and which attempt of the step this is
 /// within it (1 for the first). Stamp them into anything you write that
 /// should be joinable back to the run.
 pub const ENV_RUN_ID: &str = "DATALIB_DAG_RUN_ID";

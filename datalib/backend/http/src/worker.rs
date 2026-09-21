@@ -1,7 +1,7 @@
 //! In-process sync worker: claims a job, runs `datalib-dag` with the
 //! job's id as the run id, and records how it ended. Everything the run
 //! said on the way — step states, log lines, metrics — the runner writes
-//! to `system/runs.sqlite` itself; this file never reads it.
+//! to `system/runs/runs.sqlite` itself; this file never reads it.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -19,7 +19,7 @@ use tokio::sync::broadcast;
 /// (`GET /api/sync/stream`) the instant the worker writes it — so the UI
 /// reflects a job starting or ending without polling. What the run is
 /// doing in between reaches the UI another way: the runner's writes to
-/// `system/runs.sqlite` are pushed as `table_changed` root frames naming
+/// `system/runs/runs.sqlite` are pushed as `table_changed` root frames naming
 /// the datasets they feed (`watch.rs`).
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {

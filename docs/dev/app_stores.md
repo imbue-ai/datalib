@@ -9,11 +9,13 @@
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/jobs.doltlite_db               the sync job queue
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
-<data_root>/system/runs.sqlite                    every run's step states, log lines and
+<data_root>/system/runs/runs.sqlite               every run's step states, log lines and
                                                   metrics, plus the app server's own log;
                                                   every process — runner, step attempt,
                                                   server launch — a row in `processes`
-                                                  (plain SQLite; any sqlite3 opens it)
+                                                  (plain SQLite; any sqlite3 opens it).
+                                                  Its own directory, so the WAL beside
+                                                  it counts with it on the Manage screen
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
 ```

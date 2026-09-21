@@ -146,12 +146,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(actions[0]["enabled"], false);
     assert_eq!(actions[1]["id"], "sync");
     assert_eq!(actions[1]["enabled"], false);
-    let logs = &rows["system/runs.sqlite"];
+    let logs = &rows["system/runs"];
     assert_eq!(logs["kind"], "system");
-    assert_eq!(
-        logs["path"],
-        serde_json::json!(["system", "system/runs.sqlite"])
-    );
+    assert_eq!(logs["path"], serde_json::json!(["system", "system/runs"]));
     assert_eq!(logs["name"]["label"], "Logs");
     assert_eq!(logs["actions"][0]["id"], "browse");
     assert_eq!(logs["actions"][0]["enabled"], true);
@@ -165,7 +162,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         .collect();
     assert_eq!(
         &keys[keys.len() - 2..],
-        ["system", "system/runs.sqlite"],
+        ["system", "system/runs"],
         "the system rows come after everything the config declares"
     );
 

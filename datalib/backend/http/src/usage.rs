@@ -143,31 +143,6 @@ pub fn measure(root: &Path, want: &BTreeSet<String>) -> Measurement {
         }
     })
     .bytes;
-    // A wanted path the walk never reported as a directory is a file —
-    // the run log — and counts with its WAL sidecars, which SQLite keeps
-    // beside it under the same stem.
-    for (rel, tree) in trees.iter_mut() {
-        if tree.present {
-            continue;
-        }
-        let abs = root.join(rel);
-        let Some((dir, stem)) = abs.parent().zip(abs.file_name()) else {
-            continue;
-        };
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if !name.as_encoded_bytes().starts_with(stem.as_encoded_bytes()) {
-                continue;
-            }
-            if let Some(m) = entry.metadata().ok().filter(|m| m.is_file()) {
-                tree.present = true;
-                tree.bytes += m.len();
-            }
-        }
-    }
     // One extra stat per *wanted* tree, of which there are a handful —
     // far cheaper than teaching the shared walk about a filename only
     // this caller cares about.
@@ -430,13 +405,13 @@ fn prune(history: &mut VecDeque<UsageSample>) {
 /// trees, and the walk records a subtotal at both levels, so the Manage
 /// screen's group row has a measured series of its own rather than a sum
 /// of two step functions sampled at different instants.
-/// The paths the walker records: every declared tree, and two no
-/// config names — `system/`, and the run log inside it — for the
+/// The trees the walker records: every declared one, and two no config
+/// names — `system/`, and the run store's directory inside it — for the
 /// Manage screen's System group.
 pub fn measured_trees(config_path: &Path) -> Vec<String> {
     let mut trees = declared_trees(config_path);
     trees.push(datalib_core::layout::SYSTEM_DIR.to_string());
-    trees.push(datalib_runs::RUNS_REL_PATH.to_string());
+    trees.push(datalib_runs::RUNS_DIR_REL_PATH.to_string());
     trees
 }
 
@@ -621,32 +596,6 @@ mod tests {
 
     /// The wanted set is every group's directory and every step's tree,
     /// so the Manage screen's group row measures the folder it names.
-    /// The run log is a file, not a tree: the walk never reports it, so
-    /// it is stat'ed with the WAL sidecars SQLite keeps beside it.
-    #[test]
-    fn the_run_log_counts_with_its_wal_and_only_when_present() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        std::fs::create_dir_all(root.join("system")).unwrap();
-        let want: BTreeSet<String> = ["system", "system/runs.sqlite"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-
-        let before = measure(root, &want);
-        assert!(!before.trees["system/runs.sqlite"].present);
-
-        std::fs::write(root.join("system/runs.sqlite"), vec![7u8; 100]).unwrap();
-        std::fs::write(root.join("system/runs.sqlite-wal"), vec![7u8; 40]).unwrap();
-        std::fs::write(root.join("system/runs.sqlite-shm"), vec![7u8; 8]).unwrap();
-        std::fs::write(root.join("system/jobs.doltlite_db"), vec![7u8; 30]).unwrap();
-        let m = measure(root, &want);
-        let log = &m.trees["system/runs.sqlite"];
-        assert!(log.present);
-        assert_eq!(log.bytes, 148);
-        assert_eq!(m.trees["system"].bytes, 178);
-    }
-
     #[test]
     fn declared_trees_names_each_group_directory_and_each_step() {
         let td = tempfile::tempdir().unwrap();

@@ -51,7 +51,7 @@
 # explicitly for a real run.
 data_root = "~/tmp/dr-dag"
 
-# How much of the run store (`system/runs.sqlite`: every run's step
+# How much of the run store (`system/runs/runs.sqlite`: every run's step
 # states, log lines and metrics) to keep. Both limits apply; omit the
 # table for the defaults, which are these.
 [run_history]

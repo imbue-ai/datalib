@@ -142,7 +142,7 @@ across every run, in the search bar's grammar — `level:warn
 -target:sqlx "history"` — and `process:http` narrows it to what the
 server itself said (the worker, the applets, requests that failed),
 which the Manage screen shows under **Server log**. All of it is
-`system/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
+`system/runs/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
 too.
 
 ## Reading the mirrored data
