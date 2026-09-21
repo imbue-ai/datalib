@@ -253,6 +253,18 @@ Pick the surface that fits the question:
   (and one for config-editing agents at **`GET /agent/config.md`**);
   source reference: [`docs/dev/cards.md`](dev/cards.md).
 
+## Feedback
+
+Something broken, missing, or confusing? **File an issue at
+<https://github.com/imbue-ai/datalib/issues>** — that is the preferred
+channel, and every report is welcome. Two kinds are equally wanted:
+what exists and misbehaves (a one-line "this doc is wrong", a full
+bug), and what would make datalib easier to wield for whatever you and
+the user are trying to do with it — a surface that fought you, a query
+you had to work around, a use case it doesn't serve yet. Paste the
+`datalib-dag --check` output or the failing step's `step_finish` event
+where you have one; it saves a round-trip.
+
 ## Troubleshooting quick hits
 
 - **Auth failures**: look for the `hint` event in the sync stream — it

@@ -528,3 +528,14 @@ GUI, a build of DB Browser for SQLite patched to open doltlite files is
 at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). More
 recipes, including the commit history and per-sync diffs, are in
 [`docs/dev/doltlite.md`](../dev/doltlite.md).
+
+## 9. Feedback
+
+Something broken, missing, or confusing? **File an issue at
+<https://github.com/imbue-ai/datalib/issues>** — that is the preferred
+way to reach us, and every report is welcome. Two kinds are equally
+wanted: what exists and misbehaves (a typo in this guide, a sync that
+won't finish), and what would make datalib easier to wield for whatever
+you want to do with your data — a step that was harder than it should
+be, a use case it doesn't serve yet. For a bug, a copy of the error
+message and which source it happened on is plenty.
