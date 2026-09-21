@@ -522,6 +522,62 @@ Cursor / resume is the **download-side specialization** of the [Incremental upda
 
 No checkpoint files. The dedup index is the resume cursor.
 
+### A claim of completeness is written only by a walk that completed
+
+Three things a download writes are not data but **claims about how far
+it got**: a resume cursor or state token ("everything up to here is
+mirrored"), the `scope_config` record ("the config as it stands has
+been satisfied"), and the authority a prune needs ("this enumeration
+was complete, so absence means deletion"). Each is read by the *next*
+run as permission to skip work. A claim written by a walk that did
+not finish is therefore a silent data loss: the next run believes it,
+does less, and nothing anywhere reports the gap.
+
+The trap is that a walk ends early far more often than it fails.
+Every one of these is an `Ok` return with the marker's write still
+ahead of it, or already behind it:
+
+- an error on one unit that the loop tolerated and moved past;
+- a budget (`message_budget`, `limit`, a page cap) reached;
+- a `since` cutoff or a label filter that stopped the walk server-side;
+- a listing request that failed and yielded an empty list;
+- **a stop** — Ctrl-C, or the UI's cancel — which ends the run at the
+  next unit boundary by design ([`step_protocol.md` § Signals](step_protocol.md)).
+
+So the rule has two halves:
+
+1. **Gate the write on one predicate computed at the end, from what
+   actually happened** — not on reaching the end of the function, not
+   on `result.is_ok()`. Gmail's `FetchSummary::drained()` is the
+   pattern: `!stopped_early() && messages_failed == 0`, consulted once,
+   and both the cursor and the scope record are written under it.
+   Slack's `walked_everything` is the same predicate by another name.
+2. **Take the token early, store it late.** A live state token is
+   often only available on the first response of a walk; hold it in a
+   local and write it when the walk completes. Writing it where it was
+   obtained turns "I have the token" into "I have everything the token
+   covers", which is the claim.
+
+Two bugs of exactly this shape were in the tree until #606. JMAP's full
+enumeration saved the account's state token on its *first* `Email/get`
+(the comment beside it said "use it once the enumeration finishes");
+any early end — an error, and then a stop — left a token behind, and
+the next run went incremental from it and never enumerated the rest.
+And slack and jmap recorded the scope config as satisfied on
+`result.is_ok()`, which a stopped run also returns; a widened filter
+interrupted on channel 1 of 3 would have been believed backfilled.
+
+**The test that catches it** is the same for every marker: end the run
+early on purpose — the stop flag, raised from the progress sink after
+the first unit, is the deterministic way — and assert the marker was
+*not* written (`slack/tests/interrupt.rs`). A test that only checks the
+happy path checks the write, not the gate.
+
+`scripts/lint_repo.py` check 8 catches a provider that keeps a cursor
+and never records the scope config at all. It does not catch a record
+written too early; nothing mechanical does yet, which is why the rule
+is written here.
+
 ### When the cursor swallows a config change
 
 A forward-walk cursor answers "where do I start?" from stored data
