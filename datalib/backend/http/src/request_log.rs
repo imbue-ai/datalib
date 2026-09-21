@@ -1,18 +1,9 @@
-//! One log line per request, so the server's log says what the app
-//! asked for, when, and how long it took — the record of what a person
-//! did at the screen, until the UI reports its own actions.
-//!
-//! Outermost on the router, so a refused request is a line too. The
-//! line is written when the response *headers* are ready: for a JSON
-//! handler that is the whole request; for the SSE stream and an applet
-//! proxy whose body streams, it is the open.
-//!
-//! A request from a page of the app carries the page's process id
-//! (`ui_events::PAGE_HEADER`), logged as `page`: the join between what
-//! the page reported doing and what the server did for it.
+//! One log line per request (`docs/dev/logging.md`). Outermost on the
+//! router, so a refused request is a line too; written when the
+//! response *headers* are ready, so for a stream it is the open.
 //!
 //! Two kinds of request write nothing. A read of the log itself: the
-//! log panel refetches whenever the log moves, so a line per read would
+//! log card refetches whenever the log moves, so a line per read would
 //! wake it into a loop against its own store. And the bundle's
 //! content-hashed assets and the component modules, unless they failed:
 //! a page load is dozens of them and the browser caches them forever.
