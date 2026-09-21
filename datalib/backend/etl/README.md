@@ -213,6 +213,65 @@ keeps one process-wide runtime for the no-runtime case).
 
 [`Reads::At`]: src/pin.rs
 
+## What a write costs: the transaction is the unit, and the key decides the size
+
+A doltlite file is a bag of content-addressed chunks. A table is a
+prolly tree — a B-tree whose pages are chunks named by their hash —
+and a chunk is never edited in place: a write produces a new leaf page
+holding the changed rows *and every unchanged row that shared the
+page*, plus a new copy of each page on the path to the root. The old
+pages stay in the file until `dolt_gc()` finds nothing that reaches
+them. A commit is a small chunk naming one root; it makes that root's
+pages reachable, forever, and does nothing else.
+
+Three consequences, each measured with `scripts/doltlite_commit_cost.py`
+(doltlite 0.50.3, 100k rows of ~100 bytes; the dated table is in
+`hack/doltlite_commit_cost/`):
+
+- **A SQL transaction rewrites each page it touched once, at
+  `COMMIT`.** 200 statements in 200 transactions wrote 430 MB of pages
+  for 15 MB of rows; the same 200 statements in one transaction wrote
+  24 MB. Every store here already batches — a render store's transaction
+  is one checkpoint interval, the grid index's is the whole run, a
+  SQLite mirror's is one table — so within one run the order rows
+  arrive in does not matter.
+- **The pages a transaction touches are the pages its keys fall in.**
+  The tree is sorted by primary key. 500 rows whose keys are adjacent
+  land in one or two leaves (~10 KB written); 500 rows with random keys
+  land in ~500 leaves (~2 MB written, 99% of it copies of neighbours).
+  Random keys are uuidv4s, uuidv5s and content hashes. Adjacent keys are
+  `(device_id, ts_ms)`, `"{metric}#{date}"`, a time-prefixed uuid.
+- **A commit pins whatever its transaction wrote.** Commit once at the
+  end and `dolt_gc()` reclaims every intermediate page: 430 MB → 15 MB.
+  Commit after each of 200 transactions and gc reclaims nothing
+  (→ 419 MB), because each intermediate tree is now history. With
+  adjacent keys the same 200 commits cost 1 MB, since each pinned only
+  the leaf it touched.
+
+So commit cadence is free in time (a `dolt_commit` is ~20 ms whatever it
+seals) and free on disk until two things are both true: the store's
+keys scatter, and something runs `dolt_gc()`. Without gc every store
+carries every transaction's pages regardless, and only `sqlite_mirror`
+and `fsindex` gc today. What accumulates for a scattered-key store is
+the *incremental* case: a sync that adds 50 documents rewrites ~1000
+leaves, and the run's commit keeps them. It is invisible on a fresh
+root and compounds with every sync.
+
+Two recoveries, both available:
+
+- **Squash.** `dolt_reset('--soft', <base>)` then `dolt_commit` folds
+  the intermediate commits into one; the table hash is unchanged and
+  the next gc reclaims what only they reached (419 MB → 15 MB in the
+  bench). It deletes commit hashes, so a consumer whose cursor named
+  one falls back to a full pass, and a reader pinned at one loses its
+  chunks at the next gc. Squash only commits older than every
+  consumer's cursor, with the writer lock held.
+- **Key for adjacency.** The right fix where the key is ours to
+  choose: see the practice note in
+  `docs/dev/data_architecture_ingestion_practices.md` § "Key a table for
+  what one run writes together", and `docs/dev/entity_ids.md` for the
+  time-prefixed `entity_id` proposal.
+
 ## Schema self-healing, and why the DDL runs in two passes
 
 `open` applies `CREATE TABLE`s, reconciles each table against its DDL
