@@ -81,7 +81,13 @@ async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
     // Two attempts, no wait between them: the bound, not the clock, is
     // what ends the retrying.
     let fast = Duration::from_millis(1);
-    let guard = RetryGuard::new(Duration::from_secs(3600), 2, fast, fast);
+    let guard = RetryGuard::new(
+        Duration::from_secs(3600),
+        2,
+        fast,
+        fast,
+        datalib_etl::stop::StopFlag::default(),
+    );
     let (summary, cursor) = retry::scope(guard, run_with_bad_status(500)).await;
 
     let err = summary.expect_err("a run whose retries gave up must fail");

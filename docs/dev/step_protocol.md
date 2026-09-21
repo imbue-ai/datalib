@@ -359,13 +359,25 @@ say neither records nothing, and the view shows `file:line` as text.
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, or the UI's cancel) the runner sends your
-process **SIGINT** and waits. Print a
-`{"event":"outcome","failure":"cancelled"}` line and exit 130. **Do
-not commit on the way out.** Your last seal stands; whatever you wrote
-after it is not at a boundary you chose, and the next writer's `open`
-discards it — a commit made from a signal handler would publish a
-half-written batch to every reader. If you do nothing, you'll be
-killed after a grace period, with the same result.
+process **SIGINT** and gives you fifteen seconds. The right response is
+to **stop at your next consistent point, commit there, and exit 130**
+with a `{"event":"outcome","failure":"cancelled"}` line: what you
+committed stands, and the next run resumes from your cursor. **Never
+commit from the signal handler itself** — a commit made wherever the
+signal happened to land publishes a half-written batch to every
+reader. If you do nothing, you are killed at the grace, and the next
+writer's `open` discards whatever you wrote after your last commit.
+
+`datalib-step` does this for the built-in ingests: SIGINT raises a
+stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
+the fetch loops read before starting a unit of work — a channel, a
+conversation, a batch of messages — that makes the seal path seal at
+the next consistent point whatever the cadence says, and that ends a
+backoff sleep and refuses to send a new request at the HTTP chokepoint.
+The run then returns as a shorter run, `finish` commits blobs then
+entities, and the step reports `cancelled`. A stopped run does not
+record its scope config as satisfied, so a widened filter interrupted
+part-way is backfilled by the next run rather than believed done.
 
 ## Minimal examples
 

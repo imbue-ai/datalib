@@ -36,6 +36,7 @@ struct SealState {
     /// crosses from `etl` out to whatever is driving the step, so a
     /// checkpoint rides it rather than growing a second one.
     progress: crate::progress::Progress,
+    stop: crate::stop::StopFlag,
 }
 
 /// A cheap, cloneable handle a fetch loop holds so it can seal at its own
@@ -68,6 +69,12 @@ impl Sealer {
     pub async fn wrote(&self, rows: u64) {
         self.state.wrote(rows).await
     }
+
+    /// Whether the step has been asked to stop; the same flag as
+    /// `DownloadControl::stop`, for a loop that holds only the sealer.
+    pub fn stopping(&self) -> bool {
+        self.state.stop.requested()
+    }
 }
 
 impl RawStoreSession {
@@ -93,6 +100,7 @@ impl RawStoreSession {
                     ctx.checkpoint_policy(),
                 )),
                 progress: ctx.progress.clone(),
+                stop: ctx.control.stop.clone(),
             }),
         }
     }
@@ -140,11 +148,14 @@ impl SealState {
     }
 
     fn wrote(&self, rows: u64) -> impl std::future::Future<Output = ()> + '_ {
+        // A stop makes every consistent point a seal: the caller is telling
+        // us its store is consistent right now, and there may not be a next
+        // time. The cadence is a latency dial, not a correctness one.
         let due = {
             let mut c = self.checkpointer.lock().unwrap();
             c.wrote(rows);
             c.should_seal()
-        };
+        } || self.stop.requested();
         async move {
             if !due {
                 return;
@@ -216,17 +227,69 @@ mod tests {
     }
 
     fn state(pool: SqlitePool, cas: Option<SqlitePool>, p: crate::progress::Progress) -> SealState {
+        state_with_policy(
+            pool,
+            cas,
+            p,
+            crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
+                at_most_every: std::time::Duration::ZERO,
+            }),
+        )
+    }
+
+    fn state_with_policy(
+        pool: SqlitePool,
+        cas: Option<SqlitePool>,
+        p: crate::progress::Progress,
+        policy: crate::checkpointer::Policy,
+    ) -> SealState {
         SealState {
             pool,
             source_id: "t".into(),
             cas_pool: cas,
-            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
-                crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
-                    at_most_every: std::time::Duration::ZERO,
-                }),
-            )),
+            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(policy)),
             progress: p,
+            stop: crate::stop::StopFlag::default(),
         }
+    }
+
+    /// Ctrl-C wants one last seal, and the only place a seal is safe is
+    /// where the provider says its store is consistent — its `wrote`. So a
+    /// stop makes that call seal whatever the cadence says, `Never`
+    /// included; it is the last chance, and the caller just vouched for
+    /// the state.
+    #[tokio::test]
+    async fn a_stop_seals_at_the_next_consistent_point_whatever_the_cadence() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let state = state_with_policy(
+            entities.clone(),
+            None,
+            crate::progress::Progress::noop(),
+            crate::checkpointer::Policy::Never,
+        );
+        let before = commits(&entities).await;
+        sqlx::query("INSERT INTO rows_t VALUES ('a')")
+            .execute(&entities)
+            .await
+            .unwrap();
+        state.wrote(1).await;
+        assert_eq!(
+            commits(&entities).await,
+            before,
+            "Never means never, until a stop"
+        );
+
+        state.stop.request();
+        state.wrote(1).await;
+        assert_eq!(
+            commits(&entities).await,
+            before + 1,
+            "the consistent point after a stop is the last seal"
+        );
     }
 
     /// A source whose blobs live in a sibling file must have *both* sealed.

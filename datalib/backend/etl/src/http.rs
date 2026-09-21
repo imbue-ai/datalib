@@ -283,6 +283,11 @@ pub enum HttpError {
         url: String,
         reason: String,
     },
+    /// The step was asked to stop while this request waited to retry.
+    /// Terminal for the unit of work that made the request, the same as
+    /// `GaveUp`; the fetch loop's next check of the stop flag ends the run.
+    #[error("{service}: interrupted while waiting to retry ({url})")]
+    Interrupted { service: HttpService, url: String },
 }
 
 /// Environment variable a caller (genrule, hermetic test, dev loop) can
@@ -440,6 +445,18 @@ where
     let guard = crate::retry::current_or_default();
     let mut backoff = guard.initial_backoff();
     loop {
+        // Once the step is asked to stop, no new request leaves. Every
+        // page loop in every API provider funnels through here, so this
+        // is what ends a half-walked channel or thread without each loop
+        // carrying the flag; the unit fails as `Interrupted`, the loop
+        // above it sees the flag, and the run ends at the last unit that
+        // completed.
+        if guard.stop().requested() {
+            return Err(HttpError::Interrupted {
+                service: req.service,
+                url: req.url.clone(),
+            });
+        }
         // Count every outbound *attempt* against the current source's
         // download metrics (no-op outside an download scope). This is the
         // single transport chokepoint every provider's API call funnels
@@ -535,7 +552,12 @@ where
             budget.time_without_progress.as_secs(),
             budget.max_time_without_progress.as_secs(),
         );
-        tokio::time::sleep(wait).await;
+        if guard.stop().sleep_unless_stopped(wait).await {
+            return Err(HttpError::Interrupted {
+                service: req.service,
+                url: req.url.clone(),
+            });
+        }
         backoff = next_backoff;
     }
 }
@@ -1055,7 +1077,13 @@ mod tests {
         .unwrap();
 
         let fast = Duration::from_millis(1);
-        let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            crate::stop::StopFlag::default(),
+        );
         let err = with_playback(
             dir.path(),
             crate::retry::scope(guard, async { latchkey_curl(&req).await }),
@@ -1069,5 +1097,75 @@ mod tests {
             }
             other => panic!("expected GaveUp, got {other:?}"),
         }
+    }
+
+    fn always_429(dir: &std::path::Path, req: &HttpRequest) {
+        let provider_dir = dir.join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: b"slow down".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A stop requested while a request sits in its backoff ends the wait
+    /// at once, as `Interrupted` — a rate-limited provider's minute-long
+    /// backoff is otherwise exactly what eats the step's grace.
+    #[tokio::test]
+    async fn a_stop_cuts_a_backoff_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        always_429(dir.path(), &req);
+
+        let stop = crate::stop::StopFlag::new();
+        // A backoff long enough that only the stop can end this test in time.
+        let long = Duration::from_secs(600);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 100, long, long, stop.clone());
+        let stopper = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            stopper.request();
+        });
+        let started = std::time::Instant::now();
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the backoff must end on the stop, not run its course"
+        );
+    }
+
+    /// Once stopping, no new request leaves: a page loop that does not
+    /// read the flag ends at its next request instead of walking on.
+    #[tokio::test]
+    async fn no_request_leaves_after_a_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        // No fixture written: a request that left would fail as a playback
+        // miss, not as Interrupted.
+        let stop = crate::stop::StopFlag::new();
+        stop.request();
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop);
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::Interrupted { .. }), "got {err:?}");
     }
 }

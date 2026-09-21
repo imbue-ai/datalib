@@ -38,6 +38,7 @@ pub mod raw_store;
 pub mod retry;
 pub mod scope_config;
 pub mod scope_state;
+pub mod stop;
 pub mod store_handle;
 pub mod synthesize;
 pub mod title;
