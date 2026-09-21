@@ -14,6 +14,14 @@ built. This is the design that `render_inputs`
 turned out to be reaching for: that table is the mechanism for one of
 its rules.
 
+**Revised 2026-09-20: the rescue commit and the Ctrl-C commit are
+gone.** A writer's `open` discards a dirty working set and starts from
+HEAD, and SIGINT commits nothing; the dolt commit at a seal is the only
+boundary a reader is promised, and a SQL transaction is durability, not
+consistency. Where this doc says "rescue" or "seal on Ctrl-C", read the
+tree instead (`doltlite_raw::discard_dirty_working_tree`,
+`step_protocol.md` § Signals). The rest of the design stands.
+
 ## The problem, in one paragraph
 
 The pipeline has good building blocks — doltlite commits a consumer
@@ -140,8 +148,8 @@ Every user-visible operation is the one mode with different inputs.
 | **re-verify** (today's `--reset-and-redownload`, renamed to say it does not wipe) | clear the bookkeeping that lets a walk skip — cursors, `fetched_at`, scope state — then sync | the upstream delta, and nothing else: an unchanged row upserts to itself and `dolt_diff` shows no change |
 | **start over** | in one transaction, truncate every entity and bookkeeping table; commit it as its own commit (`start over: N rows dropped`); then sync | everything removed, then everything added back as it arrives. Expensive downstream — qmd re-embeds — and honest: the user asked for the store to be empty, so the derived stores are empty until it is not |
 | **version bump / param change** (render) | every bucket goes in the re-render set; cursor kept; prune at the end | the documents that changed, and the ones the new version no longer produces |
-| **Ctrl-C** | seal the working set; report `cancelled` | a truthful partial store; the next run resumes from it |
-| **crash** | nothing; the next writer's `open` seals the working set as `rescue:` | the same |
+| **Ctrl-C** | report `cancelled`; commit nothing | the store at its last seal; the next run resumes from there |
+| **crash** | nothing; the next writer's `open` discards the working set | the same |
 
 "Start over" is the only operation that publishes an empty commit,
 and it is the only one where empty is true. It truncates rather than
@@ -218,7 +226,7 @@ Against the audit, finding by finding:
 | 2.1 Ctrl-C commits regardless of policy | *correct* — every commit is safe |
 | 2.2 rescue commits a crashed wipe | correct — there is no wipe to crash inside |
 | 2.3 hand-run render reads a torn commit | reads a truthful partial store; nothing is mass-deleted |
-| 2.4 slack applet opens the render store writably | still a bug (a reader must never rescue-commit or run `dolt_status` on a store it does not own); the damage shrinks from a torn document to lost checkpoint rows once documents are transactions |
+| 2.4 slack applet opens the render store writably | fixed in #526: the applet reads through `doltlite_raw::open_reader`, read-only and pinned, so it can neither discard the renderer's working set nor run `dolt_status` on it |
 | 2.5 wipers protected by omission | nothing to protect |
 | 2.6 streaming ingests already honour it | they are the model for everyone else |
 

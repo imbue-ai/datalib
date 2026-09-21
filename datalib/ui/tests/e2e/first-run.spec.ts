@@ -54,7 +54,11 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   // congratulations screen in between.
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expect(page.getByRole("button", { name: "+ Data Source" })).toBeVisible();
-  expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
+  // The sources card alone: the config editor is a click away from it,
+  // not open beside it.
+  const stack = decodeURIComponent(new URL(page.url()).pathname);
+  expect(stack).toContain("sourcesView()");
+  expect(stack).not.toContain("configView()");
 
   // The file is on disk and valid, and it carries the applet whose
   // absence was the original error.

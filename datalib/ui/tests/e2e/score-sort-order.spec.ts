@@ -56,6 +56,12 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
 
     const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
     await expect(scoreHeader).toBeVisible();
+    // Its filter's operator dropdown shows an operator or nothing —
+    // never the `&nbsp;` padding slickgrid writes as text when HTML
+    // rendering is off (typedColumns.FILTER_GRID_OPTIONS).
+    const operators = page.locator(".grid-box .slick-headerrow .filter-score select");
+    await expect(operators).toHaveCount(1);
+    expect(await operators.innerText()).not.toContain("&nbsp;");
     const firstRow = page
       .locator(".grid-box .slick-row")
       .first();

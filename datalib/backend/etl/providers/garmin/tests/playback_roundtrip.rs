@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
@@ -34,6 +35,7 @@ async fn run(raw: &Path, api: &GarminApi) -> FetchSummary {
         sealer: None,
     })
     .await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     summary.unwrap()
 }

@@ -60,6 +60,6 @@ impl DataProcessor for SmsIngest {
             "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
             s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

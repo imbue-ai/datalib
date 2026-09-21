@@ -48,21 +48,31 @@ fn build_export(root: &Path) -> Result<()> {
     // be null it rendered as `1970-01-01 00:00:00 UTC` in the transcript
     // and sorted to the top of the grid as a genuine-looking 1970 row.
     // No checked-in fixture had an undated record, so nothing caught it.
+    // The fourth row is how the real export quotes a comment: an embedded
+    // quote is `\"`, not `""`, and the message spans lines. Read as
+    // RFC-4180 it splits into fragment rows, one with message text in
+    // `Date`.
+    // The fifth is a second comment on the first row's post. A comment
+    // has no id of its own in the export, and keying the table on `Link`
+    // alone kept only the last comment per post.
     fs::write(
         root.join("Comments_17529409.csv"),
         "Date,Link,Message\n\
          2026-05-08 09:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Replying to my own post thread.\n\
+         2026-05-08 09:30:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,And a second reply on the same post.\n\
          2026-04-30 15:32:07,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681,\"Great point, Jean-Luc!\"\n\
-         ,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999,The export left this comment's Date blank.\n",
+         ,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567999,The export left this comment's Date blank.\n\
+         2026-06-10 18:53:49,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226568123,\"Back when I led the \\\"tea, Earl Grey\\\" replicator team,\n\nit was hot.\"\n",
     )?;
 
     // The user's own posts. The first shares a URN with a comment above
-    // (they merge into one thread); the second is a standalone post.
+    // (they merge into one thread); the second is a standalone post whose
+    // commentary quotes the other way the export does it: doubled (`""`).
     fs::write(
         root.join("Shares_17529409.csv"),
         "Date,ShareLink,ShareCommentary,SharedUrl,MediaUrl,Visibility\n\
          2026-05-07 16:41:18,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Excited to share our new treemap viz!,,,MEMBER_NETWORK\n\
-         2026-04-01 12:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A7448081445065035776,Check this out,https://example.com/article,,PUBLIC\n",
+         2026-04-01 12:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A7448081445065035776,\"Check out \"\"this\"\" article\",https://example.com/article,,PUBLIC\n",
     )?;
 
     // Primary messages feed: two conversations.
@@ -143,13 +153,43 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // Member-id suffix stripped: table is `comments`, not
         // `comments_17529409`.
-        assert_eq!(rows(&db, "comments").await.len(), 3, "comments rows");
+        let comments = rows(&db, "comments").await;
+        assert_eq!(
+            comments.len(),
+            5,
+            "comments rows: one per record, no fragments, two on one post"
+        );
         assert!(
             rows(&db, "comments_17529409").await.is_empty(),
             "no member-id-suffixed table"
         );
-        // Shares ingested under the suffix-stripped `shares` table.
-        assert_eq!(rows(&db, "shares").await.len(), 2, "shares rows");
+        // The `\"`-quoted, multi-line comment is one row, unescaped, and
+        // every `Date` is a date or blank — never a fragment of a message.
+        let quoted = comments
+            .iter()
+            .find(|c| c["Date"] == "2026-06-10 18:53:49")
+            .expect("the backslash-quoted comment landed as one row");
+        assert_eq!(
+            quoted["Message"],
+            "Back when I led the \"tea, Earl Grey\" replicator team,\n\nit was hot."
+        );
+        for c in &comments {
+            let date = c["Date"].as_str().unwrap_or_default();
+            assert!(
+                date.is_empty() || date.starts_with("2026-"),
+                "a comment's Date is a date, not message text: {c}"
+            );
+        }
+        // Shares ingested under the suffix-stripped `shares` table, and
+        // the doubled-quote dialect still unescapes.
+        let shares = rows(&db, "shares").await;
+        assert_eq!(shares.len(), 2, "shares rows");
+        assert!(
+            shares
+                .iter()
+                .any(|s| s["ShareCommentary"] == "Check out \"this\" article"),
+            "doubled quotes unescape: {shares:?}"
+        );
 
         // Notes: preamble stripped, both connection rows landed.
         assert_eq!(rows(&db, "connections").await.len(), 2, "connections rows");
@@ -225,8 +265,9 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             posts::render_posts(&source, &Progress::noop(), &mut on_doc).context("render_posts")?;
         }
         // Two shares (two URNs) + a comment that merges into the first +
-        // a comment on an external post + the undated comment = 4 threads.
-        assert_eq!(post_docs.len(), 4, "four post threads");
+        // a comment on an external post + the undated comment + the
+        // backslash-quoted comment = 5 threads.
+        assert_eq!(post_docs.len(), 5, "five post threads");
 
         // Thread A: the user's ugcPost, with their follow-up comment
         // merged into the same thread by shared URN.
@@ -243,6 +284,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(
             md_a.contains("Replying to my own post thread."),
             "comment merged into the post's thread: {md_a}"
+        );
+        assert!(
+            md_a.contains("And a second reply on the same post."),
+            "both comments on one post survive ingest and land in its thread: {md_a}"
         );
         // Message-level grid rows carry the linkout back to the post.
         assert!(
@@ -315,6 +360,36 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(
             !md_d.contains("1970-01-01"),
             "no fabricated epoch anywhere in the rendered page: {md_d}"
+        );
+
+        // Thread E: the backslash-quoted comment renders with its quotes
+        // and both lines, under its own URN — nothing minted from a
+        // fragment.
+        let quoted_urn =
+            "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226568123";
+        let thread_e = post_docs
+            .iter()
+            .find(|d| {
+                d.rows
+                    .iter()
+                    .any(|r| r.source_url.as_deref() == Some(quoted_urn))
+            })
+            .expect("backslash-quoted comment thread rendered");
+        let md_e = fs::read_to_string(&thread_e.md_path)?;
+        assert!(
+            md_e.contains("&quot;tea, Earl Grey&quot;") || md_e.contains("\"tea, Earl Grey\""),
+            "escaped quotes render as quotes: {md_e}"
+        );
+        assert!(
+            md_e.contains("it was hot."),
+            "text after the newline kept: {md_e}"
+        );
+        assert!(
+            post_docs.iter().all(|d| d.rows.iter().all(|r| r
+                .source_url
+                .as_deref()
+                .is_none_or(|u| u.starts_with("https://")))),
+            "no thread minted from a message fragment"
         );
 
         // ── connections → contacts ───────────────────────────────

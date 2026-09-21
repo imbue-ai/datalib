@@ -186,7 +186,7 @@ FAMILIES: list[Family] = [
             # Capture only the major from each, since that is the part
             # that has to agree.
             ("MODULE.bazel", r'^NODE_VERSION = "(\d+)\.'),
-            (".devcontainer/Dockerfile", r"^ARG NODE_MAJOR=(\d+)"),
+            (".devcontainer/Dockerfile", r"^ARG NODE_VERSION=(\d+)\."),
         ],
     ),
 ]

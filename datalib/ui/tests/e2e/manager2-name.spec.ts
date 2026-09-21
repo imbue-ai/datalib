@@ -1,10 +1,10 @@
 // Manager2: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, groupRow, pickRowMenu, pipelineRow as row } from "./grid-helpers";
+import { expandGroup, groupRow, pickRowMenu, pipelineRow as row, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 

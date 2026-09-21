@@ -29,6 +29,7 @@ import {
   settleRunner,
   stampsBefore,
   statusOf,
+  MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -74,7 +75,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 }
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
@@ -375,7 +376,8 @@ test.describe("sources run independently, one job at a time", () => {
     // ── 4. stop the first, from its own row ───────────────────────────
     await stopBtn(page, `group:${CHATGPT.id}`).click();
     // Between the click and the runner's exit the worker sends SIGTERM,
-    // the runner forwards SIGINT, and the step checkpoints and exits —
+    // the runner forwards SIGINT, and the step stops at its next
+    // consistent point, commits and exits —
     // up to the worker's 15 s grace, and as little as a fraction of a
     // second when the step is between requests. The row says so for as
     // long as that lasts: the button reads Stopping and takes no second

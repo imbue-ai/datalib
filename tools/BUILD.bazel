@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # This package's contribution to `//:python_sources` — see the comment
@@ -18,6 +19,85 @@ exports_files([
     "repin_cargo.sh",
     "workspace_status.sh",
 ])
+
+# --- release.yml's steps, run before a tag runs them ----------------
+#
+# The `runtime` job and the build job's "Stage tarball" step are the
+# scripts under scripts/release/, and these run them the way the
+# workflow does — from a directory that is not the repo, with relative
+# paths — against the Bazel outputs as runfiles. docs/dev/release_steps.md
+# says what they cover and what stays release-only.
+#
+# Each comes twice: once under whatever `bash` the sandbox finds, and
+# once, on a mac only, under /bin/bash — the 3.2 the macOS runner has,
+# where an empty array is "unbound variable" under -u (v0.35.0).
+STAGE_RUNTIME_DATA = [
+    "//:scripts/release/stage_runtime_asset.sh",
+    "//:scripts/stage_runtime.sh",
+    "//datalib/backend/runtime:src/node_runtime.rs",
+    "//datalib/backend/runtime:src/qmd.rs",
+    "//datalib/tauri:bundled_node",
+    "//third-party:bundled_licenses",
+    "//third-party/latchkey/runtime:latchkey_tree",
+    "//third-party/qmd/runtime:qmd_tree",
+]
+
+STAGE_TARBALL_DATA = [
+    "fake_cargo_about.sh",
+    "//:scripts/latchkey-wrapper.sh",
+    "//:scripts/release/stage_tarball.sh",
+    "//:scripts/third_party_notices.sh",
+    "//datalib/backend:bin",
+    "//datalib/ui:dist",
+    "//third-party:bundled_licenses",
+]
+
+sh_test(
+    name = "stage_runtime_test",
+    size = "large",
+    srcs = ["check_stage_runtime.sh"],
+    data = STAGE_RUNTIME_DATA,
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "stage_runtime_bash32_test",
+    size = "large",
+    srcs = ["check_stage_runtime.sh"],
+    data = STAGE_RUNTIME_DATA,
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "stage_tarball_test",
+    size = "large",
+    srcs = ["check_stage_tarball.sh"],
+    data = STAGE_TARBALL_DATA,
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "stage_tarball_bash32_test",
+    size = "large",
+    srcs = ["check_stage_tarball.sh"],
+    data = STAGE_TARBALL_DATA,
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# The tests above, run on Linux from a mac: in the devcontainer, built
+# from .devcontainer/Dockerfile for this host's arch, over the working
+# tree, with the devcontainer's own cache volumes. A `run` target, not
+# a test, because it needs the working tree and the host's docker
+# daemon, and a cold first run builds the Linux binaries from scratch:
+#   bazelisk run //tools:release_steps_docker
+sh_binary(
+    name = "release_steps_docker",
+    srcs = ["release_steps_docker.sh"],
+)
 
 # Asserts that the vendored qmd snapshot and `default_models_dir()`
 # agree on `~/.cache/qmd/models` (the upstream qmd default) — the path
@@ -124,21 +204,4 @@ py_test(
         "//datalib/tauri:deny.toml",
     ],
     main = "check_license_lists.py",
-)
-
-# The shipped-binary list lives in two places that must agree:
-# `replace_prefixes` on `//datalib/backend:bin`, and the hand-written
-# `cp` block in release.yml's stage step. Both carry a "keep in sync"
-# comment and nothing enforced it — `datalib-dirtree-diff` was added to
-# one and not the other, which would have shipped a release tarball
-# missing a binary with no failure anywhere.
-py_test(
-    name = "dist_names_test",
-    size = "small",
-    srcs = ["check_dist_names.py"],
-    data = [
-        "//.github/workflows:release.yml",
-        "//datalib/backend:BUILD.bazel",
-    ],
-    main = "check_dist_names.py",
 )

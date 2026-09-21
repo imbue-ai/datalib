@@ -184,6 +184,7 @@ pub struct Snapshot {
     pub started_at_utc: Option<String>,
     pub finished_at_utc: Option<String>,
     pub tz_offset: Option<String>,
+    pub git_hash: Option<String>,
     pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
@@ -249,7 +250,7 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
+        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset, r.git_hash FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
          ORDER BY r.started_at_utc DESC LIMIT ?",
@@ -267,6 +268,7 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
             started_at_utc: r.get("started_at_utc"),
             finished_at_utc: r.get("finished_at_utc"),
             tz_offset: r.get("tz_offset"),
+            git_hash: r.get("git_hash"),
         })
         .collect()
 }
@@ -324,7 +326,7 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
+        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, git_hash FROM runs \
          WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
     )
     .bind(run_id)
@@ -426,6 +428,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         started_at_utc: run.get("started_at_utc"),
         finished_at_utc: run.get("finished_at_utc"),
         tz_offset: run.get("tz_offset"),
+        git_hash: run.get("git_hash"),
         steps,
         metrics,
         errors,
@@ -463,7 +466,7 @@ async fn log_where(
     };
     let rows = sqlx::query(
         "SELECT seq, run_id, process, step, attempt, ts_utc, tz_offset, stream, level, target, \
-         thread, msg, fields \
+         thread, msg, fields, git_hash \
          FROM log WHERE (? IS NULL OR run_id = ?) AND seq > ? AND (? IS NULL OR step = ?) \
          ORDER BY seq LIMIT ?",
     )
@@ -495,6 +498,7 @@ pub(crate) fn log_row_from(r: &sqlx::sqlite::SqliteRow) -> LogRow {
         thread: r.get("thread"),
         msg: r.get("msg"),
         fields: r.get("fields"),
+        git_hash: r.get("git_hash"),
     }
 }
 
@@ -568,10 +572,13 @@ impl Drop for Writer {
 pub struct RunWriter(Writer);
 
 impl RunWriter {
+    /// `git_hash` is the commit the runner came from ([`crate::git_hash`]),
+    /// or `None` when a dev build cannot say.
     pub fn start(
         data_root: &Path,
         run_id: &str,
         started_at_utc: &str,
+        git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
         // The start stamp arrives as the runner wrote it, offset and
@@ -581,6 +588,7 @@ impl RunWriter {
             run_id: run_id.to_string(),
             started_at_utc,
             tz_offset,
+            git_hash,
             retention,
         };
         Writer::start(data_root, Scope::Run(run)).map(Self)
@@ -621,12 +629,28 @@ impl LogSink for RunWriter {
 
 /// Publishes the log of a process that is not a run — the app's
 /// server — to the same table, with no `run_id`. The rows it takes are
-/// bound to `process` the way a [`RunWriter`]'s are to its run.
+/// bound to `process` the way a [`RunWriter`]'s are to its run, and to
+/// `git_hash`: the commit the process came from ([`crate::git_hash`]),
+/// stamped on every line because the store outlives the process and
+/// the next one may be another build.
 pub struct ProcessLogWriter(Writer);
 
 impl ProcessLogWriter {
-    pub fn start(data_root: &Path, process: Process, retention: Retention) -> Option<Self> {
-        Writer::start(data_root, Scope::Process { process, retention }).map(Self)
+    pub fn start(
+        data_root: &Path,
+        process: Process,
+        git_hash: Option<String>,
+        retention: Retention,
+    ) -> Option<Self> {
+        Writer::start(
+            data_root,
+            Scope::Process {
+                process,
+                git_hash,
+                retention,
+            },
+        )
+        .map(Self)
     }
 
     pub fn log(&self, row: LogRow) {
@@ -644,6 +668,7 @@ struct RunInfo {
     run_id: String,
     started_at_utc: String,
     tz_offset: Option<String>,
+    git_hash: Option<String>,
     retention: Retention,
 }
 
@@ -652,6 +677,7 @@ enum Scope {
     Run(RunInfo),
     Process {
         process: Process,
+        git_hash: Option<String>,
         retention: Retention,
     },
 }
@@ -661,6 +687,15 @@ impl Scope {
         match self {
             Scope::Run(run) => Some(&run.run_id),
             Scope::Process { .. } => None,
+        }
+    }
+
+    /// What a log line records: a process's commit, and nothing for a
+    /// run, whose row carries it once.
+    fn line_git_hash(&self) -> Option<&str> {
+        match self {
+            Scope::Run(_) => None,
+            Scope::Process { git_hash, .. } => git_hash.as_deref(),
         }
     }
 
@@ -768,13 +803,14 @@ pub fn now_split() -> (String, Option<String>) {
 async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO runs (run_id, started_at_utc, tz_offset) VALUES (?, ?, ?) \
+        "INSERT INTO runs (run_id, started_at_utc, tz_offset, git_hash) VALUES (?, ?, ?, ?) \
          ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
-           tz_offset = excluded.tz_offset, finished_at_utc = NULL",
+           tz_offset = excluded.tz_offset, git_hash = excluded.git_hash, finished_at_utc = NULL",
     )
     .bind(&run.run_id)
     .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
+    .bind(&run.git_hash)
     .execute(&mut *tx)
     .await?;
     let cutoff = age_cutoff(run.retention);
@@ -884,6 +920,7 @@ async fn flush(
     }
     let run_id = scope.run_id();
     let process = scope.process().as_str();
+    let line_git_hash = scope.line_git_hash();
     let mut tx = pool.begin().await?;
     if !batch.steps.is_empty() {
         bump(&mut tx, StorePart::StepRuns).await?;
@@ -926,8 +963,8 @@ async fn flush(
     for l in &batch.logs {
         sqlx::query(
             "INSERT INTO log (run_id, process, step, attempt, ts_utc, tz_offset, stream, level, \
-                              target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                              target, thread, msg, fields, git_hash) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(process)
@@ -941,6 +978,7 @@ async fn flush(
         .bind(&l.thread)
         .bind(&l.msg)
         .bind(&l.fields)
+        .bind(line_git_hash)
         .execute(&mut *tx)
         .await?;
     }

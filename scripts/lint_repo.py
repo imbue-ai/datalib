@@ -19,6 +19,12 @@ instead from `bazel run //:precommit` and as a plain step in
      cursor was taken under, or widening that config is a silent no-op.
   9. The README's source grid and docs/user/getting_your_data.md name
      every source type, link to each other, and stay alphabetical.
+ 10. No workflow step initializes an empty bash array: expanding one
+     is "unbound variable" on the macOS runners' bash 3.2.
+ 11. No doc, config or script tells anyone to run `npx -y latchkey` or
+     `npx -y @tobilu/qmd` without a version: bare `npx -y` resolves
+     `latest` at run time, and those two commands are the ones a
+     person pastes a live session cookie into.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -325,7 +331,40 @@ def main() -> int:
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_cursor_records_its_scope(root)
     rc |= _check_source_grid(root)
+    rc |= _check_workflows_no_empty_arrays(root)
+    rc |= _check_no_floating_npx(root)
     return rc
+
+
+# --- Check 10: no empty bash arrays in workflow steps -------------------
+#
+# A `run:` step is bash with `set -e` on every runner, and the macOS
+# runners' bash is 3.2, where `"${arr[@]}"` on an empty array is an
+# "unbound variable" under `set -u` (4.4 fixed it). The idiom that
+# trips it is always the same three lines — `arr=()`, a conditional
+# append, the expansion — and the first of them is the one a regex can
+# see. v0.35.0's `runtime` job failed its mac leg on exactly this, on
+# its first run. Two branches, or a scalar, say the same thing.
+_EMPTY_ARRAY = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=\(\s*\)\s*(#.*)?$")
+
+
+def _check_workflows_no_empty_arrays(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, ".github/workflows/*.yml"):
+        for lineno, line in enumerate((root / rel).read_text().splitlines(), 1):
+            if _EMPTY_ARRAY.match(line):
+                hits.append(f"  {rel}:{lineno}: {line.strip()}")
+    if not hits:
+        print("OK: no workflow step initializes an empty bash array.")
+        return 0
+    print(
+        "ERROR: a workflow step initializes an empty bash array:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
+        "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 8: a cursor must be recorded with the config that set it ----
@@ -725,6 +764,59 @@ def _check_manual_targets_still_build(root: Path) -> int:
         '        name = "manual_targets_build",\n'
         '        targets = [":<the target>"],\n'
         "    )\n",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 11: no floating `npx -y latchkey` / `npx -y @tobilu/qmd` ----
+#
+# The code pins both (`LATCHKEY_VERSION`, `DEFAULT_QMD_VERSION` in
+# datalib/backend/runtime), the installer puts a `latchkey` launcher on
+# the PATH, and the app renders the pinned form in every hint it shows.
+# The docs were the one place the version floated (#140): `npx -y
+# latchkey auth set … $(pbpaste)` hands a session cookie to whatever npm
+# served as `latest` that minute. So the only spellings allowed in prose
+# are the bare launcher (`latchkey …`) or a pinned `npx -y latchkey@<v>`.
+#
+# The name must be followed by whitespace to count: a mention in
+# backticks (`npx -y latchkey` in a sentence about the rule) is prose
+# about the command, not the command.
+_FLOATING_NPX = re.compile(r"npx\s+(?:-y\s+)?(?:latchkey|@tobilu/qmd)(?=\s)")
+_NPX_LINT_SUFFIXES = (
+    ".md",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".sh",
+    ".py",
+    ".vue",
+    ".ts",
+    "Dockerfile",
+)
+
+
+def _check_no_floating_npx(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "."):
+        if rel.startswith("third-party/") or not rel.endswith(_NPX_LINT_SUFFIXES):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if _FLOATING_NPX.search(line):
+                hits.append(f"  {rel}:{lineno}: {line.strip()}")
+    if not hits:
+        print("OK: no floating `npx -y latchkey` / `npx -y @tobilu/qmd`.")
+        return 0
+    print(
+        "ERROR: a command that resolves `latest` from npm at run time:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
+        "  or pin it: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
+        "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
         file=sys.stderr,
     )
     return 1

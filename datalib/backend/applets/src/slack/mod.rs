@@ -219,7 +219,7 @@ fn read_rows(
     // and an ambient one under test.
     datalib_etl_render::indexed_markdown::blocking(async {
         // The render step owns this store; a reader that opened it
-        // writably would rescue-commit its in-flight rows and fail its
+        // writably would discard its in-flight rows and fail its
         // commits (datalib/backend/etl/README.md, "Connection pools").
         // And it reads at HEAD, not the working set, so a render pass in
         // flight is not half-served.

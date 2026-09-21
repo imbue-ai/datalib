@@ -31,6 +31,7 @@ import {
   statusOf,
   TERMINAL,
   TABLE_ROWS,
+  MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -54,7 +55,7 @@ const syncBtn = (page: Page, id: string) =>
   row(page, id).getByRole("button", { name: "Sync now" });
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
@@ -517,6 +518,52 @@ ${applets()}`;
         `${name}: descending should be ascending reversed, end to end`,
       ).toEqual([...set].reverse().map((r) => r.stamp));
     }
+  });
+
+  // A step that ends badly: its hover does not quote the error — that
+  // is a log line, and the log is where it reads with what led up to
+  // it — and the double-click the hover promises opens the log there.
+  test("a failed step's hover points at the log, and the double-click opens it at the error", async ({
+    page,
+  }) => {
+    const flaky = `${config()}
+
+[[groups]]
+id = "flaky"
+type = "pdf"
+
+[[steps]]
+group = "flaky"
+function = "ingest"
+command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too many requests >&2; exit 1'"
+`;
+    await writeConfig(page, flaky);
+    await expandGroup(page, "flaky");
+
+    const was = await lastSyncedOf(page, "flaky/ingest");
+    await syncBtn(page, "flaky/ingest").click();
+    expect(await settle(page, "flaky/ingest", was)).toBe("Failed");
+    await expandGroup(page, "flaky");
+
+    const cell = row(page, "flaky/ingest").locator('[col-id="status"] .tg-status');
+    await expect(cell).toHaveAttribute("title", "Failed — double-click to open the log at the error");
+    // The group reads its failed child's status, and names it.
+    await expect(
+      page.locator(`${TABLE_ROWS}[data-key="group:flaky"] [col-id="status"] .tg-status`),
+    ).toHaveAttribute("title", "Failed — flaky/ingest: double-click to open the log at the error");
+
+    await cell.dblclick();
+    const dialog = page.getByRole("dialog", { name: "Step log" });
+    await expect(dialog).toBeVisible();
+    // The line the panel opened on is the runner's word on how the step
+    // ended, marked, with the step's own last words above it.
+    const jumped = dialog.locator('.rl-grid .slick-cell.rl-jumped[col-id="msg"]');
+    await expect(jumped).toBeVisible({ timeout: 10_000 });
+    await expect(jumped).toHaveText(/^step flaky\/ingest exited with exit status: 1: /);
+    await expect(jumped).toContainText("listing failed: 429 too many requests");
+    await expect(jumped).toHaveClass(/rl-error/);
+    const messages = dialog.locator('.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]');
+    await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
   });
 
   test("a downstream step can't be synced on its own, and says what would carry it", async ({

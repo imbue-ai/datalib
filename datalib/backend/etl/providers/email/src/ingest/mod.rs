@@ -287,14 +287,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     );
 
     let result = run_sync(&db, &session, &account_id, &opts, &label_change).await;
-    // Record the config only once the run satisfied it, so a failure
+    // Record the config only once the run satisfied it, so a failure —
+    // or a run that stopped when asked, with mailboxes still unwalked —
     // leaves the previous label set in place and the next run re-plans
     // the backfill.
     datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
-        result.is_ok(),
+        result.is_ok() && !opts.control.stop.requested(),
     )
     .await;
     // On error we still serialize a partial-summary stub so the row
@@ -679,6 +680,13 @@ async fn incremental_emails(
         // Detail-fetch created + updated in batches.
         let to_fetch: Vec<String> = created.into_iter().chain(updated).collect();
         for batch in to_fetch.chunks(EMAIL_GET_BATCH) {
+            // Asked to stop: the batch that just landed sealed, and the
+            // state for this page is saved only below, so the next run
+            // takes the page again from where this one started.
+            if sealer.is_some_and(|s| s.stopping()) {
+                info!(event = "jmap_interrupted", phase = "Email/changes");
+                return Ok(());
+            }
             let resp = email_get(session, account_id, batch).await?;
             let list = resp
                 .get("list")
@@ -757,6 +765,12 @@ async fn full_enumerate_emails(
     };
 
     let mut position: i64 = 0;
+    // The account's live state token, taken from the first `Email/get` and
+    // stored only once the enumeration has walked everything: stored
+    // earlier, a walk that ends part-way — an error, a stop — leaves a
+    // token behind, and the next run goes incremental from it and never
+    // enumerates the rest.
+    let mut live_state: Option<String> = None;
     let mut query_state: Option<String> = None;
     loop {
         let mut args = json!({
@@ -805,6 +819,12 @@ async fn full_enumerate_emails(
         position += ids.len() as i64;
 
         for batch in ids.chunks(EMAIL_GET_BATCH) {
+            // Asked to stop: the batch that just landed sealed; with no
+            // state token stored, the next run enumerates again.
+            if sealer.is_some_and(|s| s.stopping()) {
+                info!(event = "jmap_interrupted", phase = "Email/query");
+                return Ok(());
+            }
             let getresp = email_get(session, account_id, batch).await?;
             let list = getresp
                 .get("list")
@@ -826,11 +846,11 @@ async fn full_enumerate_emails(
                 sealer.wrote(1).await;
             }
 
-            // The Email/get response's `state` is the live state token —
-            // grab it on the *first* successful response and use it once
-            // the full enumeration finishes.
-            if let Some(state) = getresp.get("state").and_then(|v| v.as_str()) {
-                db.save_state(account_id, "Email", state).await?;
+            if live_state.is_none() {
+                live_state = getresp
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
             }
         }
 
@@ -839,6 +859,9 @@ async fn full_enumerate_emails(
                 break;
             }
         }
+    }
+    if let Some(state) = live_state {
+        db.save_state(account_id, "Email", &state).await?;
     }
     Ok(())
 }

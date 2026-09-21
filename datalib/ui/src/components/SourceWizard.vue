@@ -119,8 +119,7 @@ const query = ref("");
 const chosen = ref<CatalogEntry | null>(props.editing?.entry ?? null);
 
 /// Blank means "no name" — a group with none is shown by its id, and
-/// clearing the box removes the key. Nothing is ever pre-filled here;
-/// see [`nameHint`] for what the box shows instead.
+/// clearing the box removes the key. Nothing is ever pre-filled here.
 const name = ref(props.editing?.group.name ?? "");
 /// What the source is to this person. Blank removes the key, like the
 /// name.
@@ -306,11 +305,10 @@ function onPickKeydown(e: KeyboardEvent) {
 const RESERVED = new Set(["system", "unified_index"]);
 const groupId = computed(() => id.value.trim());
 
-/// The example in the Name box. The id would be the tempting thing to
-/// show, since a blank name falls back to it — but the id is a path
-/// segment and the name is display text, and showing "whatsapp" there
-/// invites a name shaped like an id. The help text below carries the
-/// fallback instead.
+/// The example the Name help gives. The id would be the tempting thing
+/// to show, since a blank name falls back to it — but the id is a path
+/// segment and the name is display text, and "whatsapp" as the example
+/// invites a name shaped like an id.
 const nameHint = computed(() => chosen.value?.nameHint ?? "…");
 const idError = computed(() => {
   const n = groupId.value;
@@ -459,7 +457,7 @@ const serviceRegistered = ref(true);
 /// How to invoke latchkey on the machine running the backend. `npx`
 /// until the server says otherwise, so a command is never shown naming
 /// a binary that isn't there.
-const latchkeyCli = ref("npx -y latchkey");
+const latchkeyCli = ref("latchkey");
 /// The latchkey gateway the backend talks through, when there is one.
 /// Under a gateway the credentials and the browser that signs in to
 /// them are on the gateway's side, and latchkey refuses every command
@@ -714,15 +712,13 @@ function unknownValues(field: Field): string[] {
 }
 
 /// What a field's picker is a picker *of*, for the sentences around it.
-/// An email account has folders and labels, a Claude account has
-/// conversations, a Slack workspace has channels and DMs — and calling
-/// any of them "labels" reads as a bug.
-const PROBE_NOUNS: Record<ProbeNoun, string> = {
-  labels: "labels",
-  mailboxes: "folders",
-  conversations: "conversations",
-  channels: "channels",
-};
+/// A mailbox goes by the source's own word — Gmail's "labels", a JMAP
+/// server's "folders" — since the other word reads as a bug; a Claude
+/// account has conversations and a Slack workspace channels.
+function probeNoun(probe: ProbeNoun): string {
+  if (probe === "labels" || probe === "mailboxes") return chosen.value?.mailboxNoun ?? "folders";
+  return probe;
+}
 
 /// The noun each item kind is counted under in the "Reached …" line.
 const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
@@ -744,7 +740,7 @@ const probeSummary = computed(() => {
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }
   if (counts.size === 0) return "nothing to pick from";
-  return [...counts].map(([noun, n]) => `${n} ${PROBE_NOUNS[noun]}`).join(", ");
+  return [...counts].map(([noun, n]) => `${n} ${probeNoun(noun)}`).join(", ");
 });
 
 // Load the account list as soon as there is a service to load it for:
@@ -859,7 +855,6 @@ function submit() {
               </select>
               <input
                 class="wiz-input"
-                :placeholder="accountField.placeholder"
                 :value="values[accountField.target] as string"
                 spellcheck="false"
                 @input="values[accountField.target] = ($event.target as HTMLInputElement).value"
@@ -983,11 +978,11 @@ function submit() {
 
         <label class="wiz-field">
           <span class="wiz-label">Name</span>
-          <input v-model="name" class="wiz-input" :placeholder="nameHint" />
+          <input v-model="name" class="wiz-input" />
           <small class="wiz-help">
             What this source is called on screen — anything you like, spaces and capitals
-            included, and <b>{{ nameHint }}</b> is only an example. Change it whenever you
-            like: nothing on disk moves and no step re-runs. Leave it blank to be shown as
+            included: <b>{{ nameHint }}</b>, say. Change it whenever you like: nothing on
+            disk moves and no step re-runs. Leave it blank to be shown as
             <code>{{ groupId || "…" }}</code>.
           </small>
         </label>
@@ -1132,7 +1127,6 @@ function submit() {
             <span v-else-if="f.kind === 'path'" class="wiz-pathrow">
               <input
                 class="wiz-input wiz-path"
-                :placeholder="f.placeholder"
                 :value="values[f.target] as string"
                 spellcheck="false"
                 @input="values[f.target] = ($event.target as HTMLInputElement).value"
@@ -1149,7 +1143,6 @@ function submit() {
             <span v-else-if="f.kind === 'string_list'" class="wiz-listfield">
               <input
                 class="wiz-input"
-                :placeholder="f.placeholder"
                 :value="listText(f)"
                 spellcheck="false"
                 @input="setListText(f, ($event.target as HTMLInputElement).value)"
@@ -1171,13 +1164,12 @@ function submit() {
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
                 Run “Test connection” to pick from this account’s real
-                {{ PROBE_NOUNS[f.probe] }} instead of typing them.
+                {{ probeNoun(f.probe) }} instead of typing them.
               </small>
             </span>
             <input
               v-else
               class="wiz-input"
-              :placeholder="f.placeholder"
               :value="values[f.target] as string"
               spellcheck="false"
               @input="values[f.target] = ($event.target as HTMLInputElement).value"
@@ -1193,16 +1185,11 @@ function submit() {
 
         <label class="wiz-field">
           <span class="wiz-label">Description</span>
-          <input
-            v-model="description"
-            class="wiz-input"
-            placeholder="Work Slack, mostly the infra and on-call channels"
-          />
+          <input v-model="description" class="wiz-input" />
           <small class="wiz-help">
-            Optional. A sentence on what this source holds and what it is to you — "the
-            company Slack, mostly the on-call channels". Kept with the source's settings.
-            It could help search tell similar sources apart one day, but nothing reads it
-            yet. Change it whenever you like: nothing re-runs.
+            Optional. A sentence on what this source holds and what it is to you, for
+            telling it apart from another of the same kind. Kept with the source's
+            settings; nothing reads it yet. Change it whenever you like: nothing re-runs.
           </small>
         </label>
 

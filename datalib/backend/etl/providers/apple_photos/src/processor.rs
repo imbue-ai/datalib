@@ -70,6 +70,6 @@ impl DataProcessor for ApplePhotosIngest {
             progress: ctx.progress.clone(),
         })
         .await?;
-        Ok(session.finish(ctx, stats.summary()).await)
+        session.finish(ctx, stats.summary()).await
     }
 }

@@ -227,16 +227,20 @@ pub struct EmailGmailApi {
     #[serde(default)]
     pub request_concurrency: Option<usize>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
+    /// A starting point: the throttle lowers it on its own whenever
+    /// Google rate-limits a request.
     #[serde(default)]
     pub quota_units_per_minute: Option<u32>,
-    /// Stop after fetching this many message bodies in one run, commit
-    /// the cursor, and exit **successfully** with a partial result.
+    /// Stop after fetching this many message bodies in one run and exit
+    /// **successfully** with a partial result, the cursor held so the
+    /// next run resumes. For experiments and the live test; a large
+    /// mailbox needs no budget, the run paces itself.
     #[serde(default)]
     pub message_budget: Option<usize>,
 }
 
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
-/// retries and a little clock skew don't push us into 429s.
+/// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
 /// Quota cost of one `users.messages.get`, per Google's quota table.
 /// The dominant cost of any backfill.

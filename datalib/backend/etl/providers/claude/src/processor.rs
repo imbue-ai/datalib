@@ -113,7 +113,7 @@ impl DataProcessor for ClaudeIngest {
             s.forbidden_retry_attempts,
             s.forbidden_retry_recoveries,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }
 
@@ -151,6 +151,6 @@ impl DataProcessor for ClaudeExportIngest {
             "users={} conversations={} projects={} project_docs={} pruned={}",
             s.users, s.conversations, s.projects, s.project_docs, s.pruned,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

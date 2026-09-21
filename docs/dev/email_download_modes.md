@@ -198,11 +198,34 @@ Quota-limited rather than byte-limited:
   threshold.
 
 `QuotaThrottle` is a leaky bucket priced in **units**, not requests, so a
-mixed workload meters accurately. `message_budget` stops a run early,
-commits the cursor, and exits **successfully** with a partial result — a
-100k-message mailbox is ~6 hours of backfill, and the honest way to model
-that is a run that says how far it got rather than one that fails and
-poisons the DAG subtree.
+mixed workload meters accurately. It is the first line, not the last:
+Google is the authority on the limit, and the code is built to bump
+into it and keep going, the way the Slack provider does.
+
+- **A rate-limit response is retried with backoff** through the shared
+  HTTP chokepoint (`latchkey_curl_classified` with `gmail_retryability`).
+  Google spells the per-user limit two ways — 429 `rateLimitExceeded`
+  and **403 `userRateLimitExceeded`** — and a 403 read as an auth error
+  is the trap: it held the cursor and walked on, and the run "succeeded"
+  with every remaining message marked failed. 500 `backendError` is
+  retried too, per Google's own guidance; a 403 about scopes, or
+  `dailyLimitExceeded`, is not — nothing shorter than a person, or a
+  day, fixes those.
+- **A rate-limited request lowers the throttle's ceiling** by a fifth for
+  the rest of the run, to a floor of a quarter of the configured value,
+  and empties the bucket so the retry is not another burst. A long
+  backfill therefore settles under whatever Google actually enforces
+  instead of hitting it once a minute.
+- **When the retry loop gives up** — the run's `download` bounds, thirty
+  minutes without a successful request by default — the run stops with
+  an error rather than walking on to fail every remaining id one attempt
+  at a time. The sealed batches are already committed and the cursor is
+  held, so the next run resumes.
+
+A 100k-message mailbox is still ~6 hours of backfill; the run is
+expected to take that long. `message_budget` stops a run early with a
+partial result and is kept for experiments and the live test, which uses
+it to prove a partial run walks forward; the wizard does not offer it.
 
 **Batching was considered and skipped.** Gmail's batch endpoint saves
 round trips, not quota units, and quota is what binds — so it would add

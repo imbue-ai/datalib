@@ -1,18 +1,23 @@
 //! A message the enumeration named but `messages.get` would not return.
 //!
-//! Two outcomes that look identical at the call site and are not. A 404
+//! Three outcomes that look identical at the call site and are not. A 404
 //! means the message was deleted between the list and the get: there is
 //! nothing to come back for, so the run is complete and the cursor may
-//! advance. Any other failure means the message still exists and we
-//! still want it — and because storing the cursor makes the next run
-//! incremental, `history.list` would only name what *changed*, so a
-//! message that merely failed to fetch would never be named again.
+//! advance. Any other definitive failure means the message still exists
+//! and we still want it — and because storing the cursor makes the next
+//! run incremental, `history.list` would only name what *changed*, so a
+//! message that merely failed to fetch would never be named again. And a
+//! transient failure that outlasts the retry loop's give-up bounds ends
+//! the run: nothing after it would fare better.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl::retry::{self, RetryGuard};
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
@@ -27,15 +32,16 @@ async fn a_failure_holds_the_cursor_and_a_deletion_does_not() {
     // One test, two scenarios in sequence: `PLAYBACK_ENV` is
     // process-global, so as separate `#[tokio::test]`s they would race
     // and clear each other's fixture root mid-request.
-    a_500_holds_the_cursor().await;
+    a_definitive_failure_holds_the_cursor().await;
     a_404_is_a_deletion_and_lets_the_cursor_advance().await;
+    a_transient_failure_that_outlasts_the_retries_ends_the_run().await;
 }
 
-/// The regression this file exists for. Google returns 500s, and 500 is
-/// not in the transport's retryable set, so it reaches the fetch loop on
-/// the first attempt.
-async fn a_500_holds_the_cursor() {
-    let (summary, cursor) = run_with_bad_status(500).await;
+/// The regression this file exists for. A 400 is not in the transport's
+/// retryable set, so it reaches the fetch loop on the first attempt.
+async fn a_definitive_failure_holds_the_cursor() {
+    let (summary, cursor) = run_with_bad_status(400).await;
+    let summary = summary.expect("a failed message does not fail the run");
 
     assert_eq!(summary.emails_upserted, 1, "the good message still lands");
     assert_eq!(
@@ -53,6 +59,7 @@ async fn a_500_holds_the_cursor() {
 /// unconditional: a deleted message is not work left undone.
 async fn a_404_is_a_deletion_and_lets_the_cursor_advance() {
     let (summary, cursor) = run_with_bad_status(404).await;
+    let summary = summary.expect("a deletion does not fail the run");
 
     assert_eq!(summary.emails_upserted, 1);
     assert_eq!(
@@ -66,9 +73,37 @@ async fn a_404_is_a_deletion_and_lets_the_cursor_advance() {
     );
 }
 
+/// Google's 500 `backendError` is retried with backoff, and a message
+/// that never stops answering it exhausts the run's give-up bounds. The
+/// run must then stop rather than walk on to fail every remaining id
+/// one attempt at a time; the cursor stays held so the next run resumes.
+async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
+    // Two attempts, no wait between them: the bound, not the clock, is
+    // what ends the retrying.
+    let fast = Duration::from_millis(1);
+    let guard = RetryGuard::new(
+        Duration::from_secs(3600),
+        2,
+        fast,
+        fast,
+        datalib_etl::stop::StopFlag::default(),
+    );
+    let (summary, cursor) = retry::scope(guard, run_with_bad_status(500)).await;
+
+    let err = summary.expect_err("a run whose retries gave up must fail");
+    assert!(
+        format!("{err:#}").contains("gave up retrying"),
+        "the error must say the retry loop gave up: {err:#}",
+    );
+    assert_eq!(
+        cursor, None,
+        "a run that stopped early may not record a cursor"
+    );
+}
+
 /// Mirrors one good message and one that answers `bad_status`. Returns
-/// the summary and the stored `historyId` cursor, if any.
-async fn run_with_bad_status(bad_status: u16) -> (FetchSummary, Option<String>) {
+/// the fetch's result and the stored `historyId` cursor, if any.
+async fn run_with_bad_status(bad_status: u16) -> (anyhow::Result<FetchSummary>, Option<String>) {
     let d = tempfile::tempdir().expect("tempdir");
     let playback = d.path().join("playback");
     let root = d.path().join("store");
@@ -78,9 +113,9 @@ async fn run_with_bad_status(bad_status: u16) -> (FetchSummary, Option<String>) 
     std::env::set_var(PLAYBACK_ENV, &playback);
     let db = RawDb::open(&db_path_for(&root)).await.expect("open raw db");
     let summary = gmail_api::fetch(FetchOptions::new(db.clone())).await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
-    let summary = summary.expect("gmail fetch under playback");
 
     // Closed above, reopened here: a second live pool on one store makes
     // each other's `dolt_commit` fail.
@@ -93,6 +128,7 @@ async fn run_with_bad_status(bad_status: u16) -> (FetchSummary, Option<String>) 
             .fetch_optional(db.pool())
             .await
             .expect("read the cursor");
+    db.commit_all("test").await.unwrap();
     db.close().await;
     (summary, cursor)
 }

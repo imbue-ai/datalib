@@ -110,6 +110,6 @@ impl DataProcessor for SlackIngest {
             "msgs={} replies={} pruned={} media[{}]",
             s.messages, s.replies, s.pruned, media
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

@@ -251,6 +251,44 @@ configuration to declare the `src` scope and store the value in
 config-scoped id **declared** rather than merely detected, which is
 weaker but not nothing.
 
+## A time-prefixed recipe (proposal)
+
+A v5 uuid is a hash, so the ids one run mints scatter across the whole
+key space, and every render-store and grid-index write rewrites one
+prolly-tree leaf per row instead of one per batch. Measured on
+render-shaped writes (one transaction per conversation, 200
+conversations overlapping across a year, a commit every ten): 210 MB of
+history after gc against 25 MB with keys that sort by the record's
+time — see `datalib/backend/etl/README.md` § "What a write costs" and
+`scripts/doltlite_commit_cost.py`.
+
+The proposal keeps the recipe and changes the layout: the first 48 bits
+are the record's own `created_at` in unix milliseconds, then version
+nibble 8 (RFC 9562's custom layout — v7 would claim a generation time,
+and this is the record's), then the leading bits of the v5 hash of the
+four-part recipe. Still a pure function of upstream data, still one
+namespace; `None` for a record with no stamp (a project, a storage
+row) sorts to the left edge.
+
+What it needs, and what it risks:
+
+- **`at` must be exactly the row's `created_at`**, so the round-trip
+  check can recompute the id from stored columns by reading
+  `created_at_utc` beside the three backpointer columns. `Identity`
+  should carry it, and the row take `created_at` from `Identity`,
+  rather than the two being computed separately.
+- **Present-or-never applies to the stamp** as it does to a scope. A
+  `created_at` that is null on one fetch and set on the next re-keys
+  the row; ChatGPT's `create_time` is null on some system messages and
+  should fall back to the conversation's. A source that edits a
+  record's `created_at` re-keys it, which is a real identity change.
+- **It is a re-key**: a `RENDER_VERSION` bump on every ported provider,
+  the fixture and every uuid-bearing golden regenerated, filed feedback
+  orphaned. Sequence it against the ports in imbue-ai/datalib#601 so
+  each provider is re-keyed once.
+- The raw stores keep their upstream keys and do not benefit. The
+  time-series stores already have the property by construction.
+
 ## Porting status
 
 The providers that mint through `entity_id` are exactly the ones

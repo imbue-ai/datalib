@@ -1236,6 +1236,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
         opts.progress.set_length(Some(targets.len() as u64));
         for (cid, name) in &targets {
+            // Asked to stop: the channel that just finished sealed (a stop
+            // makes every `wrote` a seal), so end here rather than start a
+            // channel whose first request the transport would refuse.
+            if opts.control.stop.requested() {
+                info!(event = "slack_interrupted", next_channel = %name);
+                break;
+            }
             opts.progress.set_message(name);
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
@@ -1302,11 +1309,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // place and the next run retries the adjustment. Bookkeeping
     // failures are logged and swallowed: they must never mask the run's
     // own error.
+    // A run that stopped when asked did not walk every channel the config
+    // names, so it did not satisfy the config either — recording it would
+    // tell the next run a widened filter had been backfilled.
+    let walked_everything = result.is_ok() && !opts.control.stop.requested();
     scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
-        Adjustments::run_satisfied_config(result.is_ok(), channel_failures),
+        Adjustments::run_satisfied_config(walked_everything, channel_failures),
     )
     .await;
     run.finish(&result, &grand).await;

@@ -1,0 +1,14 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# One string: what every datalib process logs when `RUST_LOG` does not
+# say. Its own crate with no dependencies because both `datalib_obs`
+# (which can link nothing heavy — it is a tools input to the qmd embed)
+# and `datalib_runs` (which deliberately does not link `datalib_obs`)
+# need it, and a step and the runner that reads its lines must agree.
+rust_library(
+    name = "datalib_log_filter",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_log_filter",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)

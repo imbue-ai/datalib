@@ -336,8 +336,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
 /// for writing.
 ///
 /// Through [`datalib_etl::doltlite_raw::open_derived`] for what every
-/// writer gets there — a crashed run's dirty rows sealed into their own
-/// rescue commit, one connection never recycled — and with no DDL of
+/// writer gets there — a crashed run's dirty rows discarded, one
+/// connection never recycled — and with no DDL of
 /// its own, because the index reconciles its schema by
 /// [`init_schema`]'s all-or-nothing rule rather than `open`'s per-table
 /// one. The schema is then committed here, as `open` would have: a
@@ -701,9 +701,8 @@ pub async fn build_grid_index_for(
         stanzas.dedup();
         for (stanza, rendered_root) in stanzas {
             // Read-only: the render step owns this store, and an ordinary
-            // open would rescue-commit and schema-commit into it — writing to
-            // a file we do not own, and (once producers stream) committing
-            // the renderer's in-flight rows on its behalf.
+            // open would discard the renderer's in-flight rows and
+            // schema-commit into it — writing to a file we do not own.
             // Pinned at open: the diff below and the rows behind it name
             // one commit, and the views exist before either query runs.
             let Some(store) = crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(
@@ -1233,11 +1232,12 @@ mod open_index_tests {
 
     /// A `grid_index` pass that died after its SQL `COMMIT` and before its
     /// `dolt_commit` leaves the batch in the working set. The next
-    /// `open_index` seals it into a rescue commit — so the applet, which
-    /// reads at HEAD, sees those rows — rather than a bare pool folding
-    /// them into the next pass's commit unremarked.
+    /// `open_index` discards it: the pass's cursor went with its rows, so
+    /// the next pass reads the same render delta again and lands the rows
+    /// under a commit of its own. Sealing them instead would publish half a
+    /// pass to the applet, which reads at HEAD.
     #[tokio::test]
-    async fn rows_a_killed_pass_left_uncommitted_are_rescued_by_the_next_open() {
+    async fn rows_a_killed_pass_left_uncommitted_are_discarded_by_the_next_open() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("db.doltlite_db");
         let pool = open_index(&path).await.expect("open_index");
@@ -1259,19 +1259,22 @@ mod open_index_tests {
             .await
             .unwrap();
         assert!(
-            messages.iter().any(|m| m.starts_with("rescue:")),
-            "no rescue commit: {messages:?}"
+            !messages.iter().any(|m| m.starts_with("rescue:")),
+            "open must not commit what the dead pass left: {messages:?}"
         );
-        let head = datalib_etl::pin::head(&pool).await.unwrap().unwrap();
-        // Audited: the hash is `Pin::at`-checked and the table is a literal.
-        let at_head: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM dolt_at_markdowns('{}')",
-            head.commit()
-        )))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(at_head, 1, "the orphaned row is committed now");
+        let in_working_set: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(in_working_set, 0, "the orphaned row is gone");
+        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            dirty, 0,
+            "and nothing is left for the next pass's commit to sweep"
+        );
         pool.close().await;
     }
 }

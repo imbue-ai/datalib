@@ -37,9 +37,8 @@ pub struct FeedbackRow {
     /// recorded.
     #[col(sql = "VARCHAR(32)")]
     pub app_version: String,
-    /// Git commit SHA the binary was built from, sourced from the Bazel
-    /// `--workspace_status_command` stamp. Falls back to the literal
-    /// string "unknown" for non-Bazel builds (`cargo run`).
+    /// The commit the server was built from (`datalib_runs::git_hash`),
+    /// or the literal "unknown" when it could not say.
     #[col(sql = "VARCHAR(40)")]
     pub git_hash: String,
     /// JSON payload matching `FeedbackContext` (this same file).

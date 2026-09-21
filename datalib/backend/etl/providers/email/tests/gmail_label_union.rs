@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 
 use datalib_etl::http::{HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
@@ -38,6 +39,7 @@ async fn mirrors_the_union_of_the_configured_labels() {
     let mut opts = FetchOptions::new(db.clone());
     opts.only_labels = vec!["datalib".to_string(), "travel".to_string()];
     let summary = gmail_api::fetch(opts).await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     std::env::remove_var(PLAYBACK_ENV);
 
@@ -64,6 +66,7 @@ async fn mirrors_the_union_of_the_configured_labels() {
         .fetch_all(db.pool())
         .await
         .expect("read gmail_messages");
+    db.commit_all("test").await.unwrap();
     db.close().await;
     assert_eq!(
         gmail_ids.into_iter().collect::<BTreeSet<_>>(),

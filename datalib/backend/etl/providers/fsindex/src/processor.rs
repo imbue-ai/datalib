@@ -89,6 +89,6 @@ impl DataProcessor for FsindexIngest {
             s.cache_entries_forgotten,
             ingest::human_growth(s.cache_bytes_before, s.cache_bytes_after),
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

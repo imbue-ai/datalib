@@ -11,7 +11,7 @@
 # this and then codesigns), and a checkout can stage one anywhere and
 # point `DATALIB_RUNTIME_DIR` at it.
 #
-#   scripts/stage_runtime.sh <dest> [--cuda <cuda-dest>]
+#   scripts/stage_runtime.sh <dest> [--cuda <cuda-dest>] [--no-symlinks]
 #
 # Layout staged (and expected by the Rust resolver — keep in sync):
 #
@@ -32,6 +32,17 @@
 # qmd's own fallback exists for, throwing at init on driverless
 # machines, and nobody has asked for it.
 #
+# `--no-symlinks` rewrites each JS tree into npm's flat layout
+# (scripts/hoist_node_modules.py), which has no links at all. The .app
+# needs it: Tauri's resource bundler copies regular files only, and the
+# pnpm layout reaches every package through a link
+# (`node_modules/latchkey -> .aspect_rules_js/latchkey@<v>/…`), so a
+# tree bundled with its links dropped has every byte and no entry
+# script. Dereferencing the links is not a fix — Node finds a package's
+# dependencies beside where it really lives, and a copy lives nowhere
+# — hence the rewrite. Not combinable with `--cuda`, whose overlay is
+# laid out for the store.
+#
 # Everything staged here comes out of Bazel. That is the whole design:
 # this script downloads nothing and resolves nothing. Four targets:
 #
@@ -51,27 +62,38 @@
 # its Bazel tree is built from, so a pin that moves in one place fails
 # the build rather than staging a directory nothing will look in.
 #
-# Build-host requirements: bazelisk (or bazel) and rsync. No Node, no
-# npm, no C toolchain — the native modules arrive prebuilt inside their
+# Build-host requirements: bazelisk (or bazel) and rsync, plus python3
+# for `--no-symlinks`. No Node, no npm, no C toolchain — the native modules arrive prebuilt inside their
 # npm tarballs (see the better-sqlite3 13 note in MODULE.bazel). Trees
 # are staged for the HOST platform; cross builds are not supported.
 
 set -euo pipefail
 
+usage() { echo "usage: $0 <dest> [--cuda <cuda-dest>] [--no-symlinks]" >&2; exit 2; }
+
 runtime_dir=""
 cuda_dir=""
+no_symlinks=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cuda)
-            [[ $# -ge 2 ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            [[ $# -ge 2 ]] || usage
             cuda_dir="$2"; shift 2 ;;
-        -*) echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2 ;;
+        --no-symlinks) no_symlinks=1; shift ;;
+        -*) usage ;;
         *)
-            [[ -z "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+            [[ -z "$runtime_dir" ]] || usage
             runtime_dir="$1"; shift ;;
     esac
 done
-[[ -n "$runtime_dir" ]] || { echo "usage: $0 <dest> [--cuda <cuda-dest>]" >&2; exit 2; }
+[[ -n "$runtime_dir" ]] || usage
+[[ -z "$no_symlinks" || -z "$cuda_dir" ]] || usage
+
+# Both destinations absolute: the smoke test below runs from inside
+# the qmd package, where a relative <dest> names nothing.
+absolute_dir() { mkdir -p "$1" && (cd -- "$1" && pwd -P); }
+runtime_dir="$(absolute_dir "$runtime_dir")"
+[[ -z "$cuda_dir" ]] || cuda_dir="$(absolute_dir "$cuda_dir")"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
@@ -80,14 +102,8 @@ backend_dir="$repo_root/datalib/backend"
 log() { printf '>>> stage_runtime: %s\n' "$*" >&2; }
 fail() { printf 'stage_runtime: error: %s\n' "$*" >&2; exit 1; }
 
-if command -v bazelisk >/dev/null 2>&1; then
-    bazel=bazelisk
-elif command -v bazel >/dev/null 2>&1; then
-    bazel=bazel
-else
-    fail "neither bazelisk nor bazel found on PATH"
-fi
 command -v rsync >/dev/null 2>&1 || fail "rsync not found on PATH"
+[[ -z "$no_symlinks" ]] || command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH (--no-symlinks needs it)"
 
 # ---------------------------------------------------------------------------
 # Version pins, grepped from the Rust sources (see header).
@@ -111,29 +127,44 @@ log "pins: latchkey=$latchkey_version qmd=$qmd_version"
 # Build the three Bazel targets and locate their outputs.
 # ---------------------------------------------------------------------------
 
-log "building runtime targets"
-(cd "$repo_root" && "$bazel" build \
-    //datalib/tauri:bundled_node \
-    //third-party:bundled_licenses \
-    //third-party/qmd/runtime:qmd_tree \
-    //third-party/latchkey/runtime:latchkey_tree >&2)
-
-bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+if [[ -n "${STAGE_RUNTIME_BAZEL_BIN:-}" ]]; then
+    # //tools:stage_runtime_test hands the four targets over as
+    # runfiles, laid out the way bazel-bin lays them out.
+    bin="$STAGE_RUNTIME_BAZEL_BIN"
+else
+    if command -v bazelisk >/dev/null 2>&1; then
+        bazel=bazelisk
+    elif command -v bazel >/dev/null 2>&1; then
+        bazel=bazel
+    else
+        fail "neither bazelisk nor bazel found on PATH"
+    fi
+    log "building runtime targets"
+    (cd "$repo_root" && "$bazel" build \
+        //datalib/tauri:bundled_node \
+        //third-party:bundled_licenses \
+        //third-party/qmd/runtime:qmd_tree \
+        //third-party/latchkey/runtime:latchkey_tree >&2)
+    bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+fi
 
 # ---------------------------------------------------------------------------
 # Stage.
 # ---------------------------------------------------------------------------
 
 # rsync rather than cp: `-a` keeps the pnpm store's relative symlinks as
-# symlinks (dereferencing them would triple the bundle — every package
-# would be copied once per dependent), `--delete` clears whatever a
-# previous stage left behind, and `--chmod` makes the copy writable
-# since Bazel's outputs are read-only and codesign has to rewrite them.
+# symlinks (`--no-symlinks` rewrites the tree afterwards, once every
+# prune is done), `--delete` clears whatever a previous stage left
+# behind, and `--chmod` makes the copy writable since Bazel's outputs
+# are read-only and codesign has to rewrite them. `--copy-unsafe-links`
+# is for a runfiles tree, where every package directory is an absolute
+# link into bazel-out: those are copied for real, so the staged tree
+# is one, while bazel-bin's own links are all relative and untouched.
 stage_tree() { # kind, version, source node_modules dir
     local dest="$runtime_dir/$1/$2/node_modules"
     log "staging $1@$2"
     mkdir -p "$dest"
-    rsync -a --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
+    rsync -a --copy-unsafe-links --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
 }
 
 # Drop a package we deliberately do not ship, and any symlink left
@@ -157,10 +188,10 @@ prune_pkg() { # dest root, store glob
 
 log "staging node"
 mkdir -p "$runtime_dir/node/bin"
-rsync -a --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+rsync -aL --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
 # Node's own notice travels with the binary; the release's full set of
 # third-party notices is scripts/third_party_notices.sh's job.
-rsync -a --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
+rsync -aL --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
 
 stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
@@ -227,6 +258,15 @@ done
 # The links into the dropped store dirs now dangle; sweep them.
 find "$qmd_modules" -type l ! -exec test -e {} \; -exec rm -f {} + 2>/dev/null || true
 
+# After every prune, so a dropped package is not carried into the flat
+# tree. The smoke test below then runs against the tree that ships.
+if [[ -n "$no_symlinks" ]]; then
+    python3 "$script_dir/hoist_node_modules.py" "$qmd_modules"
+    python3 "$script_dir/hoist_node_modules.py" "$runtime_dir/latchkey/$latchkey_version/node_modules"
+    links="$(find "$runtime_dir" -type l | wc -l | tr -d ' ')"
+    [[ "$links" == 0 ]] || fail "$links symlinks survived --no-symlinks"
+fi
+
 # Assert the two entry points the Rust resolver will look for actually
 # resolve. Without this the staging can be subtly wrong — a moved entry,
 # a prune that took too much — and the only symptom is the binaries
@@ -241,16 +281,25 @@ done
 # there: `getLlama` with `build: "never"` either opens a prebuilt
 # library or throws, and never reaches for cmake. `gpu: "auto"` is what
 # qmd asks for — Metal on a mac, else the CPU binding once the pruned
-# GPU packages fail to import. Run from the real package directory so
-# the bare `node-llama-cpp` import resolves the way qmd's own does.
+# GPU packages fail to import. The script sits inside the real package
+# directory so the bare `node-llama-cpp` import resolves the way qmd's
+# own does, and it is a file rather than `node -e`: on Linux
+# node-llama-cpp probes a prebuilt binding by fork()ing a child that
+# inherits `process.execArgv`, and a child started with
+# `--input-type=module` refuses to run a file.
 qmd_pkg="$(cd -P "$qmd_modules/@tobilu/qmd" && pwd -P)"
-log "smoke: loading the $cpu_binding binding"
-(cd "$qmd_pkg" && "$runtime_dir/node/bin/node" --input-type=module -e '
+smoke="$qmd_pkg/.stage_runtime_smoke.mjs"
+cat > "$smoke" <<'EOF'
 const { getLlama } = await import("node-llama-cpp");
 const llama = await getLlama({ build: "never", gpu: "auto", progressLogs: false, logLevel: "error" });
 console.error(`>>> stage_runtime: node-llama-cpp loaded (gpu=${llama.gpu}, ${llama.cpuMathCores} math cores)`);
 await llama.dispose();
-') || fail "the staged node-llama-cpp binding does not load"
+EOF
+log "smoke: loading the $cpu_binding binding"
+smoke_ok=1
+"$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
+rm -f "$smoke"
+[[ -n "$smoke_ok" ]] || fail "the staged node-llama-cpp binding does not load"
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight.

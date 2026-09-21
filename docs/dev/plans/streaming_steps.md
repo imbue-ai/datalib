@@ -381,7 +381,13 @@ anything that looks like a general streaming framework.
   calls once, or a field in the first `outcome`. Undecided.
 - **How often should a producer checkpoint?** Too often and we thrash
   consumers; too rarely and we're back to the spinner. Probably a
-  per-step call, but a sensible default matters.
+  per-step call, but a sensible default matters. *Measured since:* a
+  commit is ~20 ms and pins only the pages its transaction rewrote, so
+  the store-side cost depends on the key, not the cadence — nothing for
+  time-clustered keys, a copy of every touched leaf for scattered ones
+  (`datalib/backend/etl/README.md` § "What a write costs"). The
+  remaining cost is the consumers woken, which `Checkpointer` already
+  rate-limits.
 - **What does the UI show** when a step is running and its consumer is
   running too? The task board currently assumes a step is either waiting
   or working.

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use datalib_etl::http::PLAYBACK_ENV;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
@@ -44,6 +45,7 @@ async fn run_fetch_since(
         ..FetchOptions::new(db.clone())
     })
     .await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     s.unwrap()
 }

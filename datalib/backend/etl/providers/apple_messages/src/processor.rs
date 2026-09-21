@@ -59,6 +59,6 @@ impl DataProcessor for AppleMessagesIngest {
         let pool = mirror::open_mirror(&entity_db).await?;
         let session = ctx.open_store(pool.clone(), entity_db).await;
         let stats = mirror::run(&pool, &self.options, ctx.progress).await?;
-        Ok(session.finish(ctx, stats.summary()).await)
+        session.finish(ctx, stats.summary()).await
     }
 }

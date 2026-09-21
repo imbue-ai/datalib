@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use datalib_etl::http::PLAYBACK_ENV;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_slack::ingest::{block_on_load_all, db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_slack::synthesize::SlackSynth;
@@ -99,6 +100,7 @@ async fn slack_synth_playback_extract_roundtrip() {
         ..FetchOptions::new(db.clone())
     })
     .await;
+    db.commit_all("test").await.unwrap();
     db.close().await;
     let summary = summary.unwrap();
     assert_eq!(summary.messages, 1);

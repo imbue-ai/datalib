@@ -256,6 +256,37 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 - **`--refetch-blobs`** clears only the `blake3` column on the edge tables, forcing the same re-download without touching the entities.
 - Pass `--reset-and-redownload` for a full reset; `--refetch-blobs` alone re-pulls the attachments of a store whose entities are fine. A reset that keeps the edge rows, so a gap check costs no blob bandwidth, would be a change to every provider's `reset()`; none makes it today.
 
+### A 200 can be wrong, and nothing in the store says so
+
+The quieter way to hold bad data is not a dropped row but a **degraded
+read**: the upstream answers `200` with a well-formed record that is
+missing something. The manual e2e bake of 2026-09-21 caught one —
+ChatGPT's `/backend-api/me` returned `first_name: null` on one fetch and
+`"Thad"` five minutes later, with every other field byte-identical. Not
+a profile change; a bad read on their side. To the pipeline the first
+response was a success: the row was written, the commit recorded it,
+and no error, no `problems` row, no sidecar field marks it as suspect,
+because there is nothing to detect it on. A partial record is
+indistinguishable from a record that really looks like that. It is not
+a one-off, either: the bake three days earlier had claude.ai return a
+conversation with `files[].size_bytes` null on one fetch and populated
+on the fetches either side of it, and that one *was* accepted into the
+goldens as a "modified" row before anyone read it as a bad read.
+
+Incrementality then preserves the mistake. A [listing-diff
+provider](#cursor--resume-strategy) re-fetches a record only when its
+listing stamp moves, and a degraded detail fetch does not move the
+stamp, so the stale field sits until the upstream edits that record for
+some other reason — possibly never. The `me` row healed on the next run
+only because it is one of the few fetched unconditionally every time.
+
+There is no signal to gate on, so the only check is to fetch again and
+let the diff say what changed: **`--reset-and-redownload`, run now and
+then rather than only when something looks wrong**. A field that
+"changes" across a reset on a record the upstream did not touch is the
+signature; the run-3 stability check in the manual e2e bake is the same
+test applied deliberately.
+
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS.
 
 `cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
@@ -465,14 +496,14 @@ Every `now()` call and every inbound RFC 3339 parse in the workspace funnels thr
 - `IsoOffsetTimestamp::bump_micros(n)` / `bump_micros_str(s, n)` — the canonical sub-item synthesized-stamp recipe.
 
 ## Commit lifecycle
-**Providers do not call `dolt_commit` or `commit_run` themselves.** The orchestrator wraps each source's download in exactly one commit at the end. A run that touches N upstream pages / windows / items produces **one** entry in `dolt_log()`, not N. The commit message is `download <name>: <stats>`.
+**Providers do not call `dolt_commit` or `commit_run` themselves.** `RawStoreSession` commits for them: a `checkpoint <name>:` seal on the `Checkpointer`'s cadence, and `finish` at the end — the blob CAS first (`download <name>: blobs`), then the entity store (`download <name>: <stats>`), because an entity names its blob by hash and a reader pinned between the two must see the bytes before the row. A run that touches N upstream pages / windows / items produces one `download` entry per store in `dolt_log()`, not N. A `finish` whose commit fails fails the step: the next `open` discards what was never committed, so "logged and returned Ok" would have been work done for nothing.
 
 Two consequences:
 
 - `dolt diff HEAD^1 HEAD` for any raw store is exactly "what this sync run pulled" — a clean unit of analysis for incremental delta UI surfaces and audits.
 - Provider authors don't have to think about commit boundaries. If you find yourself reaching for `commit_run` inside a provider, you almost certainly want UPSERT instead.
 
-The only other commits allowed in a raw store are `rescue:` commits. Anything else is a bug.
+The only other commits allowed in a raw store are the `checkpoint <name>:` seals the [`RawStoreSession`](/datalib/backend/etl/src/raw_store.rs) makes on its cadence. Anything else is a bug — and nothing ever commits what a crashed or interrupted writer left behind; the next `open` discards it.
 
 ## One writer per row
 **Each write to a raw entity row is complete as of that write.** The writer's job is to assemble everything it knows about the row — `payload` plus all writer-supplied identity columns — and emit it in one UPSERT. We do not have a notion of "partial" writes that leave NULL columns the writer chose not to populate, and we do not have multi-pass enrichment where writer A populates some columns and writer B fills in the rest. Both are anti-patterns.
@@ -521,6 +552,62 @@ Cursor / resume is the **download-side specialization** of the [Incremental upda
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
 
 No checkpoint files. The dedup index is the resume cursor.
+
+### A claim of completeness is written only by a walk that completed
+
+Three things a download writes are not data but **claims about how far
+it got**: a resume cursor or state token ("everything up to here is
+mirrored"), the `scope_config` record ("the config as it stands has
+been satisfied"), and the authority a prune needs ("this enumeration
+was complete, so absence means deletion"). Each is read by the *next*
+run as permission to skip work. A claim written by a walk that did
+not finish is therefore a silent data loss: the next run believes it,
+does less, and nothing anywhere reports the gap.
+
+The trap is that a walk ends early far more often than it fails.
+Every one of these is an `Ok` return with the marker's write still
+ahead of it, or already behind it:
+
+- an error on one unit that the loop tolerated and moved past;
+- a budget (`message_budget`, `limit`, a page cap) reached;
+- a `since` cutoff or a label filter that stopped the walk server-side;
+- a listing request that failed and yielded an empty list;
+- **a stop** — Ctrl-C, or the UI's cancel — which ends the run at the
+  next unit boundary by design ([`step_protocol.md` § Signals](step_protocol.md)).
+
+So the rule has two halves:
+
+1. **Gate the write on one predicate computed at the end, from what
+   actually happened** — not on reaching the end of the function, not
+   on `result.is_ok()`. Gmail's `FetchSummary::drained()` is the
+   pattern: `!stopped_early() && messages_failed == 0`, consulted once,
+   and both the cursor and the scope record are written under it.
+   Slack's `walked_everything` is the same predicate by another name.
+2. **Take the token early, store it late.** A live state token is
+   often only available on the first response of a walk; hold it in a
+   local and write it when the walk completes. Writing it where it was
+   obtained turns "I have the token" into "I have everything the token
+   covers", which is the claim.
+
+Two bugs of exactly this shape were in the tree until #606. JMAP's full
+enumeration saved the account's state token on its *first* `Email/get`
+(the comment beside it said "use it once the enumeration finishes");
+any early end — an error, and then a stop — left a token behind, and
+the next run went incremental from it and never enumerated the rest.
+And slack and jmap recorded the scope config as satisfied on
+`result.is_ok()`, which a stopped run also returns; a widened filter
+interrupted on channel 1 of 3 would have been believed backfilled.
+
+**The test that catches it** is the same for every marker: end the run
+early on purpose — the stop flag, raised from the progress sink after
+the first unit, is the deterministic way — and assert the marker was
+*not* written (`slack/tests/interrupt.rs`). A test that only checks the
+happy path checks the write, not the gate.
+
+`scripts/lint_repo.py` check 8 catches a provider that keeps a cursor
+and never records the scope config at all. It does not catch a record
+written too early; nothing mechanical does yet, which is why the rule
+is written here.
 
 ### When the cursor swallows a config change
 

@@ -106,7 +106,12 @@ Reach for the simplest existing provider that's shaped like yours,
 4. Implement `ingest::fetch(...)` and `<name>::render::...`. The
    render side hands each finished document to `ctx.emit_doc` as a
    [`RenderedMarkdown`](../../datalib/backend/etl/render/src/grid_index.rs);
-   the render step writes it into that source's store.
+   the render step writes it into that source's store. In `fetch`,
+   read `opts.control.stop` before starting each unit of work, and
+   write every claim of completeness — cursor, state token, scope
+   config — under one end-of-run predicate, never at the point the
+   value became available:
+   [A claim of completeness is written only by a walk that completed](data_architecture_ingestion.md#a-claim-of-completeness-is-written-only-by-a-walk-that-completed).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Wire the provider's `processor.rs` (`plan_ingest` / `plan_render`)
@@ -133,6 +138,39 @@ Grid index needs no per-provider changes — the `grid_index` step
 (the `grid_index` step, `build_grid_index` in
 `etl/render/src/grid_index.rs`) picks up the new source's store on its next
 run.
+
+### Key a table for what one run writes together
+
+A doltlite table is a tree sorted by primary key, and a write rewrites
+every leaf page its keys fall in — the changed rows and their unchanged
+neighbours together. So the cost of a run is not how many rows it
+writes but **how many leaves those rows are spread across**, and that
+is decided by the key. Rows that arrive together and sort together
+touch a leaf or two; rows that arrive together and sort randomly touch
+one leaf each. The measurement is
+[`etl/README.md` § "What a write costs"](../../datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
+
+The raw-store rule stands — the PK is the upstream id, whatever shape
+it has — so this is about the tables whose key is ours. Where you get
+to choose, put the coordinate that grows first:
+
+- **Time series**: `(device_id, ts_ms)` as a composite PK
+  (`airvisual_samples`), or the same as text, `"{device}#{ts_ms}#{metric}"`
+  (`yolink_readings`), `"{metric}#{calendar_date}"` (`garmin_daily`).
+  A sync's new samples for a device are then the largest keys in that
+  device's run and land at its edge. A 13-digit millisecond stamp sorts
+  lexically as a number until 2286, and `#` sorts below every digit and
+  letter, so the text form needs no padding.
+- **Minted uuids**: a v5 hash scatters by design. The proposal to prefix
+  `entity_id` with the record's own `created_at` is in
+  [`entity_ids.md`](entity_ids.md#a-time-prefixed-recipe-proposal).
+
+Two things this does *not* ask for. Don't sort rows before inserting:
+within one transaction the tree is built once, whichever order the
+statements ran in, and every store here batches a run into a few
+transactions. And don't touch the SQLite mirrors: a truncate-and-refill
+inside one transaction produces the same tree as before when the
+source has not changed, and the commit stores nothing new.
 
 ### Every provider documents itself, in the same place
 

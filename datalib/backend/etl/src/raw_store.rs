@@ -5,16 +5,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
-use async_trait::async_trait;
+use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 
-use crate::processor::{Checkpoint, RunCtx};
+use crate::processor::RunCtx;
 use crate::store_handle::RawStoreHandle;
 
-/// A doltlite raw-store session owned by a single download processor. Commits
-/// at [`finish`](RawStoreSession::finish) and exposes an interrupt
-/// [`Checkpoint`] that commits on Ctrl-C — both source-side.
+/// A doltlite raw-store session owned by a single download processor. Seals
+/// on the [`Checkpointer`](crate::checkpointer::Checkpointer)'s cadence and
+/// commits at [`finish`](RawStoreSession::finish) — both source-side. A stop
+/// (Ctrl-C) makes the next consistent point a seal and `finish` commits
+/// there; nothing commits from the signal handler, and what a killed run
+/// wrote after its last commit the next `open` discards.
 pub struct RawStoreSession {
     state: Arc<SealState>,
 }
@@ -35,6 +37,7 @@ struct SealState {
     /// crosses from `etl` out to whatever is driving the step, so a
     /// checkpoint rides it rather than growing a second one.
     progress: crate::progress::Progress,
+    stop: crate::stop::StopFlag,
 }
 
 /// A cheap, cloneable handle a fetch loop holds so it can seal at its own
@@ -67,6 +70,12 @@ impl Sealer {
     pub async fn wrote(&self, rows: u64) {
         self.state.wrote(rows).await
     }
+
+    /// Whether the step has been asked to stop; the same flag as
+    /// `DownloadControl::stop`, for a loop that holds only the sealer.
+    pub fn stopping(&self) -> bool {
+        self.state.stop.requested()
+    }
 }
 
 impl RawStoreSession {
@@ -83,7 +92,7 @@ impl RawStoreSession {
         _entity_path: PathBuf,
         ctx: &RunCtx<'_>,
     ) -> Self {
-        let session = Self {
+        Self {
             state: Arc::new(SealState {
                 pool,
                 source_id: ctx.name.to_string(),
@@ -92,10 +101,9 @@ impl RawStoreSession {
                     ctx.checkpoint_policy(),
                 )),
                 progress: ctx.progress.clone(),
+                stop: ctx.control.stop.clone(),
             }),
-        };
-        ctx.register_checkpoint(ctx.name, session.checkpoint_hook());
-        session
+        }
     }
 
     /// A handle the fetch loop can carry and clone.
@@ -105,35 +113,50 @@ impl RawStoreSession {
         }
     }
 
-    fn checkpoint_hook(&self) -> Arc<dyn Checkpoint> {
-        Arc::new(RawStoreCheckpoint {
-            pool: self.state.pool.clone(),
-            source_id: self.state.source_id.clone(),
-        })
-    }
-
-    /// Clean-completion finish: commit the source's `dolt_commit` (appending
-    /// the `commit=<hash>` suffix to `summary`) and `close()` every store so
-    /// render can re-open them. Best-effort commit — a failure logs and
-    /// returns the bare summary.
+    /// Clean-completion finish: the run's last seal, then `close()` every
+    /// store so render can re-open them. Blobs before entities, for the
+    /// reason on [`SealState::seal`]. The summary comes back with
+    /// `commit=<hash>` appended when the entity store moved.
     ///
-    /// `close_all` is derived from the struct's fields, so the blob CAS
-    /// goes with the entity pool without this having to name either.
-    pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> String {
-        let final_summary =
-            commit_with_suffix(&self.state.pool, &self.state.source_id, summary).await;
+    /// A commit that fails fails the step: the rows are on disk, but the
+    /// next writer's `open` discards whatever was never committed, so a
+    /// pass that logged its commit failure and returned `Ok` would have
+    /// done its work for nothing and said it succeeded. The step is
+    /// idempotent; the retry refetches.
+    pub async fn finish(self, _ctx: &RunCtx<'_>, summary: String) -> Result<String> {
+        let committed = self.state.commit_final(summary).await;
         self.state.close_all().await;
-        final_summary
+        committed
     }
 }
 
 impl SealState {
+    async fn commit_final(&self, summary: String) -> Result<String> {
+        if let Some(cas) = self.cas_pool.as_ref() {
+            let msg = format!("download {}: blobs", self.source_id);
+            crate::doltlite_raw::commit_run(cas, &msg)
+                .await
+                .with_context(|| format!("commit {}'s blob store", self.source_id))?;
+        }
+        let msg = format!("download {}: {summary}", self.source_id);
+        let hash = crate::doltlite_raw::commit_run(&self.pool, &msg)
+            .await
+            .with_context(|| format!("commit {}'s entity store", self.source_id))?;
+        Ok(match hash {
+            Some(h) => format!("{summary} commit={h}"),
+            None => summary,
+        })
+    }
+
     fn wrote(&self, rows: u64) -> impl std::future::Future<Output = ()> + '_ {
+        // A stop makes every consistent point a seal: the caller is telling
+        // us its store is consistent right now, and there may not be a next
+        // time. The cadence is a latency dial, not a correctness one.
         let due = {
             let mut c = self.checkpointer.lock().unwrap();
             c.wrote(rows);
             c.should_seal()
-        };
+        } || self.stop.requested();
         async move {
             if !due {
                 return;
@@ -184,43 +207,6 @@ impl SealState {
     }
 }
 
-/// The interrupt-commit hook a [`RawStoreSession`] registers. On Ctrl-C it
-/// commits the partial state, source-side, so the orchestrator never reads the
-/// store.
-struct RawStoreCheckpoint {
-    pool: SqlitePool,
-    source_id: String,
-}
-
-#[async_trait]
-impl Checkpoint for RawStoreCheckpoint {
-    async fn checkpoint(&self) -> Result<()> {
-        let msg = format!("download {}: interrupted (Ctrl-C)", self.source_id);
-        crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
-        Ok(())
-    }
-}
-
-/// The source's post-download commit: commit the write pool (`download <name>:
-/// <summary>`) and append the resulting `commit=<hash>` to the summary, exactly
-/// as the old orchestrator did. Best-effort — a failure logs and returns the
-/// bare summary (the data is already on disk). Does NOT close the pool.
-async fn commit_with_suffix(pool: &SqlitePool, source_id: &str, summary: String) -> String {
-    let msg = format!("download {source_id}: {summary}");
-    match crate::doltlite_raw::commit_run(pool, &msg).await {
-        Ok(Some(h)) => format!("{summary} commit={h}"),
-        Ok(None) => summary,
-        Err(e) => {
-            tracing::error!(
-                source = %source_id,
-                error = %format!("{e:#}"),
-                "download commit FAILED",
-            );
-            summary
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,17 +228,69 @@ mod tests {
     }
 
     fn state(pool: SqlitePool, cas: Option<SqlitePool>, p: crate::progress::Progress) -> SealState {
+        state_with_policy(
+            pool,
+            cas,
+            p,
+            crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
+                at_most_every: std::time::Duration::ZERO,
+            }),
+        )
+    }
+
+    fn state_with_policy(
+        pool: SqlitePool,
+        cas: Option<SqlitePool>,
+        p: crate::progress::Progress,
+        policy: crate::checkpointer::Policy,
+    ) -> SealState {
         SealState {
             pool,
             source_id: "t".into(),
             cas_pool: cas,
-            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
-                crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
-                    at_most_every: std::time::Duration::ZERO,
-                }),
-            )),
+            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(policy)),
             progress: p,
+            stop: crate::stop::StopFlag::default(),
         }
+    }
+
+    /// Ctrl-C wants one last seal, and the only place a seal is safe is
+    /// where the provider says its store is consistent — its `wrote`. So a
+    /// stop makes that call seal whatever the cadence says, `Never`
+    /// included; it is the last chance, and the caller just vouched for
+    /// the state.
+    #[tokio::test]
+    async fn a_stop_seals_at_the_next_consistent_point_whatever_the_cadence() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let state = state_with_policy(
+            entities.clone(),
+            None,
+            crate::progress::Progress::noop(),
+            crate::checkpointer::Policy::Never,
+        );
+        let before = commits(&entities).await;
+        sqlx::query("INSERT INTO rows_t VALUES ('a')")
+            .execute(&entities)
+            .await
+            .unwrap();
+        state.wrote(1).await;
+        assert_eq!(
+            commits(&entities).await,
+            before,
+            "Never means never, until a stop"
+        );
+
+        state.stop.request();
+        state.wrote(1).await;
+        assert_eq!(
+            commits(&entities).await,
+            before + 1,
+            "the consistent point after a stop is the last seal"
+        );
     }
 
     /// A source whose blobs live in a sibling file must have *both* sealed.

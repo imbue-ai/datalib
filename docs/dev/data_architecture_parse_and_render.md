@@ -133,7 +133,7 @@ somewhere downstream:
   were both bad. There is no file to fail to parse.
 - **A document lands whole or not at all.** Its rows, edges, markdown
   and problems are written inside one SQL transaction, so a commit
-  landing between two documents — a checkpoint, a Ctrl-C, a rescue —
+  landing between two documents — a checkpoint, or the end of the run —
   never publishes a fraction of one.
 - **Deletion is expressible.** A `dolt_diff` can name a row that
   *left*, which is how a document a source stops holding reaches the

@@ -25,6 +25,8 @@ pub struct RetryGuard {
     /// Instant of the last success (or guard creation). The
     /// time-without-progress budget is measured from here.
     last_progress: Mutex<Instant>,
+    /// Ends a backoff sleep early when the step is asked to stop.
+    stop: crate::stop::StopFlag,
 }
 
 /// What the guard says to do after a failure.
@@ -35,6 +37,16 @@ pub enum GuardVerdict {
     /// Stop; the string explains which bound tripped (for the error shown
     /// to the user).
     GiveUp(String),
+}
+
+/// How far into its give-up budget a source is, for the line that says
+/// a request is being retried: each count beside its limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub sequential_failures: u64,
+    pub max_sequential_failures: u64,
+    pub time_without_progress: Duration,
+    pub max_time_without_progress: Duration,
 }
 
 impl RetryGuard {
@@ -48,6 +60,7 @@ impl RetryGuard {
         max_sequential_failures: u64,
         initial_backoff: Duration,
         max_backoff: Duration,
+        stop: crate::stop::StopFlag,
     ) -> Arc<Self> {
         Arc::new(Self {
             max_time_without_progress,
@@ -56,16 +69,22 @@ impl RetryGuard {
             max_backoff,
             sequential_failures: AtomicU64::new(0),
             last_progress: Mutex::new(Instant::now()),
+            stop,
         })
     }
 
-    pub fn from_params(p: &DownloadParams) -> Arc<Self> {
+    pub fn from_params(p: &DownloadParams, stop: crate::stop::StopFlag) -> Arc<Self> {
         Self::new(
             p.max_time_without_progress(),
             p.max_sequential_failures(),
             Self::DEFAULT_INITIAL_BACKOFF,
             Self::DEFAULT_MAX_BACKOFF,
+            stop,
         )
+    }
+
+    pub fn stop(&self) -> &crate::stop::StopFlag {
+        &self.stop
     }
 
     pub fn initial_backoff(&self) -> Duration {
@@ -79,6 +98,15 @@ impl RetryGuard {
     pub fn on_progress(&self) {
         self.sequential_failures.store(0, Ordering::Relaxed);
         *self.last_progress.lock().unwrap() = Instant::now();
+    }
+
+    pub fn budget(&self) -> Budget {
+        Budget {
+            sequential_failures: self.sequential_failures.load(Ordering::Relaxed),
+            max_sequential_failures: self.max_sequential_failures,
+            time_without_progress: self.last_progress.lock().unwrap().elapsed(),
+            max_time_without_progress: self.max_time_without_progress,
+        }
     }
 
     pub fn on_failure(&self) -> GuardVerdict {
@@ -121,9 +149,9 @@ where
 /// a single chokepoint call. Either way the caller gets something that
 /// caps retries, so the chokepoint loop never spins forever.
 pub fn current_or_default() -> Arc<RetryGuard> {
-    GUARD
-        .try_with(|g| g.clone())
-        .unwrap_or_else(|_| RetryGuard::from_params(&DownloadParams::default()))
+    GUARD.try_with(|g| g.clone()).unwrap_or_else(|_| {
+        RetryGuard::from_params(&DownloadParams::default(), crate::stop::StopFlag::default())
+    })
 }
 
 #[cfg(test)]
@@ -135,7 +163,13 @@ mod tests {
     #[test]
     fn gives_up_after_sequential_failures() {
         // limit 3 → first two failures Continue, third gives up.
-        let g = RetryGuard::new(Duration::from_secs(3600), 3, FAST, FAST);
+        let g = RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            FAST,
+            FAST,
+            crate::stop::StopFlag::default(),
+        );
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         assert!(matches!(g.on_failure(), GuardVerdict::GiveUp(_)));
@@ -143,7 +177,13 @@ mod tests {
 
     #[test]
     fn progress_resets_failure_streak() {
-        let g = RetryGuard::new(Duration::from_secs(3600), 3, FAST, FAST);
+        let g = RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            FAST,
+            FAST,
+            crate::stop::StopFlag::default(),
+        );
         g.on_failure();
         g.on_failure();
         g.on_progress(); // streak back to 0
@@ -156,7 +196,13 @@ mod tests {
     fn gives_up_after_time_without_progress() {
         // Tiny time budget, generous failure count: the no-progress clock
         // is what trips.
-        let g = RetryGuard::new(Duration::from_millis(10), 1_000_000, FAST, FAST);
+        let g = RetryGuard::new(
+            Duration::from_millis(10),
+            1_000_000,
+            FAST,
+            FAST,
+            crate::stop::StopFlag::default(),
+        );
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         std::thread::sleep(Duration::from_millis(20));
         assert!(matches!(g.on_failure(), GuardVerdict::GiveUp(_)));
@@ -176,7 +222,13 @@ mod tests {
     async fn current_or_default_inside_scope_returns_the_installed_guard() {
         // limit 1 → the first failure on the installed guard gives up, and
         // `current_or_default` hands back that same shared guard.
-        let g = RetryGuard::new(Duration::from_secs(3600), 1, FAST, FAST);
+        let g = RetryGuard::new(
+            Duration::from_secs(3600),
+            1,
+            FAST,
+            FAST,
+            crate::stop::StopFlag::default(),
+        );
         let probe = g.clone();
         scope(g, async {
             let ambient = current_or_default();

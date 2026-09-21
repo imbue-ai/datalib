@@ -152,6 +152,31 @@ insta_update(
 # A release tarball with no `runtime/` fetches the runtime its manifest
 # names on first use, sha256-verified, and refuses one that hashes
 # wrong — through the real binary and the real resolver, against a
+# SIGINT ends a running ingest at a unit boundary with its final commit
+# and a `cancelled` outcome. Drives the real binary against a slowed
+# slack playback; reads the store back through the doltlite shell.
+rust_test(
+    name = "interrupt_test",
+    size = "medium",
+    srcs = ["tests/interrupt.rs"],
+    data = [
+        ":datalib_step",
+        "//third-party/doltlite:doltlite",
+    ],
+    edition = "2021",
+    env = {
+        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+        "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+    },
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/slack:datalib_etl_slack",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
 # local stand-in for the release.
 rust_test(
     name = "runtime_fetch_test",

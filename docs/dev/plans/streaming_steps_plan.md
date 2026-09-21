@@ -190,10 +190,11 @@ pins come out of *one* checkpoint string, never sampled separately.
 
 The one that would have defeated everything else, found while building
 the first edge. `doltlite_raw::open` does three things on the way in
-besides connecting: it seals a dirty working tree into a **rescue
-commit**, reconciles the schema, and then runs
-`commit_run(pool, "schema: apply DDL")` — which is `dolt_commit('-Am')`,
-so it takes whatever *else* was dirty along with it.
+besides connecting: it discards a dirty working tree (it used to seal it
+into a **rescue commit**, which is what this section found), reconciles
+the schema, and then runs `commit_run(pool, "schema: apply DDL")` —
+which is `dolt_commit('-Am')`, so it takes whatever *else* was dirty
+along with it.
 
 For the process that owns a store, all three are useful. For a consumer
 they are three writes to a file it does not own, and under streaming the

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use datalib_etl::progress::Progress;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::parse::parse;
@@ -47,6 +48,7 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
         .expect("commit the mbox fetch");
     // Closed, not dropped: the caller reopens this store, and a dropped
     // pool is still a live connection for a moment.
+    db.commit_all("test").await.unwrap();
     db.close().await;
     (tmp, db_path)
 }
@@ -121,6 +123,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert!(exists);
 
     // Re-running is idempotent: same email ids on a second pass.
+    db.commit_all("test").await.unwrap();
     db.close().await;
     let db2 = RawDb::open(&db_path).await.unwrap();
     mbox::fetch(mbox::FetchOptions {
@@ -135,6 +138,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     })
     .await
     .unwrap();
+    db2.commit_all("test").await.unwrap();
     db2.close().await;
     let db = RawDb::open(&db_path).await.unwrap();
     let emails2 = db.load_emails().await.unwrap();
@@ -166,6 +170,7 @@ async fn mbox_only_labels_filters_extraction() {
     })
     .await
     .expect("mbox download fetch with label filter");
+    db.commit_all("test").await.unwrap();
     db.close().await;
 
     let db = RawDb::open(&db_path).await.unwrap();

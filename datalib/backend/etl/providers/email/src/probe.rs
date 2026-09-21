@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
-use datalib_etl_email_config::{EmailConfig, EmailLiveMode};
+use datalib_etl_email_config::{EmailConfig, EmailLiveMode, DEFAULT_QUOTA_UNITS_PER_MINUTE};
 use datalib_probe::{ProbeAccount, ProbeItem, ProbeItemKind, ProbeReport};
 
 use crate::ingest::gmail_api::api as gmail;
@@ -35,10 +35,13 @@ async fn probe_gmail(
     user_id: &str,
     latchkey: &datalib_etl::http::LatchkeySettings,
 ) -> Result<ProbeReport> {
-    let profile = gmail::get_profile(user_id, latchkey)
+    // Two requests, so a throttle would never wait; it exists here only
+    // to mint the client every request needs.
+    let client = gmail::QuotaThrottle::new(DEFAULT_QUOTA_UNITS_PER_MINUTE).client(latchkey.clone());
+    let profile = gmail::get_profile(user_id, &client)
         .await
         .context("Gmail users.getProfile")?;
-    let raw = gmail::list_labels(user_id, latchkey)
+    let raw = gmail::list_labels(user_id, &client)
         .await
         .context("Gmail users.labels.list")?;
 

@@ -229,11 +229,22 @@ fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
     map.contains_key("full_name") && map.contains_key("default_branch")
 }
 
+/// A `grid_rows` row of the storage page whose `byte_size` is a store's
+/// size on disk — the same number `source_measurements.bytes` and the
+/// page's `Size` cell carry, redacted for the same reason. A row of any
+/// other kind keeps its `byte_size`: there it measures the content.
+fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        map.get("kind").and_then(Value::as_str),
+        Some("Source Size") | Some("Store")
+    )
+}
+
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
 /// table. Applied in [`dump_doltlite_db`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
-    ("sync_scope_config", &["updated_at"]),
+    ("sync_scope_config", &["updated_at_utc"]),
     // A store's size on disk wobbles run-to-run at equal row counts
     // (page layout, chunk ordering), the same way the extract-metrics
     // `bytes_*` did; `items` carries the signal.
@@ -256,6 +267,31 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// Keyed by stanza (the group id in dag.toml), which is also what names
 /// the snapshot directory. A store not listed is dumped in full.
 const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp"];
+
+/// Tables dumped as a row count inside an otherwise full dump, as
+/// `(stanza, table)`; `"*"` is every stanza. Three reasons a table is
+/// here, none of them "it is big":
+///
+/// - Slack's `channels` and `users` are the workspace-wide listings —
+///   every channel and every member — that `SKIP_PATH_SEGMENTS` keeps
+///   out of the golden as files; the tables must not let them back in.
+/// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
+///   of rows whose values the provider's own fixtures pin; here the
+///   count says the step read the files, and the rendered plots say
+///   what it made of them.
+/// - `render_inputs` and claude_code's `records` repeat, row by row,
+///   what the `.md` files and `grid_rows` beside them already show.
+const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
+    ("tiny-slack", "channels"),
+    ("tiny-slack", "channels_bookkeeping"),
+    ("tiny-slack", "users"),
+    ("tiny-slack", "users_bookkeeping"),
+    ("airvisual", "airvisual_samples"),
+    ("garmin", "garmin_daily"),
+    ("garmin", "garmin_daily_bookkeeping"),
+    ("claude_code", "records"),
+    ("*", "render_inputs"),
+];
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {
@@ -433,8 +469,12 @@ fn manual_e2e_live_sync_golden() {
     // prefix out of every embedded path (see `norm_data_root`).
     DATA_ROOT.set(data_root.to_string_lossy().into_owned()).ok();
 
-    let cfg_out = rewrite_config(&cfg_text, &data_root);
-    let cfg_path = run_root.join("config.toml");
+    // The config lives inside the data root, where `datalib-http` looks
+    // for it, and names no `data_root` (the loader defaults to the
+    // config's directory). That makes `data/` a complete root the app
+    // can be pointed at after the bake — and one that can be moved.
+    let cfg_out = rewrite_config(&cfg_text);
+    let cfg_path = data_root.join("config.toml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
     // `//datalib/backend:bin` stages datalib-dag and datalib-step side by
@@ -443,9 +483,13 @@ fn manual_e2e_live_sync_golden() {
     let bin = bin_dir().join("datalib-dag");
     eprintln!("[test] dag bin = {}", bin.display());
     eprintln!("[test] data_root = {}", data_root.display());
+    eprintln!(
+        "[test] after the bake: datalib-http {}",
+        data_root.display()
+    );
 
     let now = "2026-05-21T18:00:00Z";
-    let run1 = run_pipeline(&bin, &cfg_path, now, &[]);
+    let run1 = run_pipeline(&bin, &cfg_path, &run_root, now, &[]);
     assert!(
         run1.status.success(),
         "pipeline run 1 failed (exit {:?}). Last stderr:\n{}",
@@ -556,7 +600,7 @@ fn manual_e2e_live_sync_golden() {
 
     // ── Second run: incrementality check ──────────────────────────────
     let now2 = "2026-05-21T18:05:00Z";
-    let run2 = run_pipeline(&bin, &cfg_path, now2, &[]);
+    let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
     assert!(
         run2.status.success(),
         "pipeline run 2 failed (exit {:?}). Last stderr:\n{}",
@@ -601,7 +645,13 @@ fn manual_e2e_live_sync_golden() {
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
-    let run3 = run_pipeline(&bin, &cfg_path, now3, &["--reset-and-redownload"]);
+    let run3 = run_pipeline(
+        &bin,
+        &cfg_path,
+        &run_root,
+        now3,
+        &["--reset-and-redownload"],
+    );
     assert!(
         run3.status.success(),
         "pipeline run 3 (reset) failed (exit {:?}). Last stderr:\n{}",
@@ -762,7 +812,13 @@ impl PipelineRun {
     }
 }
 
-fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> PipelineRun {
+fn run_pipeline(
+    bin: &Path,
+    cfg_path: &Path,
+    log_dir: &Path,
+    now: &str,
+    extra_args: &[&str],
+) -> PipelineRun {
     eprintln!("[test] run: {} --now {now} {extra_args:?}", bin.display());
     let out = Command::new(bin)
         .arg(cfg_path)
@@ -778,11 +834,9 @@ fn run_pipeline(bin: &Path, cfg_path: &Path, now: &str, extra_args: &[&str]) -> 
     // rather than inheriting it (that's where the NDJSON run record is), so
     // without this the whole event stream is discarded on a *successful*
     // run and only the last 40 lines survive a failure — which is precisely
-    // when you want to ask "why did that take 18 minutes?".
-    let log = cfg_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{}.ndjson", now.replace(':', "-")));
+    // when you want to ask "why did that take 18 minutes?". It goes
+    // beside the data root, not in it: the root is what the app serves.
+    let log = log_dir.join(format!("{}.ndjson", now.replace(':', "-")));
     if let Err(e) = std::fs::write(&log, &stderr) {
         eprintln!("[test] WARNING: could not write {}: {e}", log.display());
     } else {
@@ -1110,12 +1164,9 @@ fn summarize_file(path: &Path) -> SnapValue {
     }
 }
 
-fn rewrite_config(text: &str, data_root: &Path) -> String {
+fn rewrite_config(text: &str) -> String {
     let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
-    doc.insert(
-        "data_root".into(),
-        toml::Value::String(data_root.display().to_string()),
-    );
+    doc.remove("data_root");
 
     // A step is `group` + `function`; its provider is the group's `type`.
     let slack_groups: Vec<String> = doc
@@ -1245,12 +1296,17 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
         .collect();
 
-    let counts_only =
-        stanza_of(path).is_some_and(|stanza| ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str()));
+    let stanza = stanza_of(path).unwrap_or_default();
+    let store_counts_only = ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str());
+    let table_counts_only = |t: &str| {
+        ROW_COUNT_ONLY_TABLES
+            .iter()
+            .any(|(s, table)| *table == t && (*s == "*" || *s == stanza))
+    };
 
     let mut out = serde_json::Map::new();
     for t in tables {
-        if counts_only {
+        if store_counts_only || table_counts_only(&t) {
             // Golden-test dump: `t` is a table name this test just read out
             // of the store's own `sqlite_master`.
             let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\"")))
@@ -1412,9 +1468,11 @@ fn strip_volatile(v: &mut Value) {
     match v {
         Value::Object(map) => {
             let repo = is_github_repo_object(map);
+            let storage = is_storage_row(map);
             for (k, child) in map.iter_mut() {
                 if VOLATILE_KEYS.contains(&k.as_str())
                     || (repo && REPO_VOLATILE_KEYS.contains(&k.as_str()))
+                    || (storage && k == "byte_size")
                 {
                     *child = Value::String(REDACTED.into());
                     continue;

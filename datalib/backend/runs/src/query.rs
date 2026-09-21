@@ -135,7 +135,7 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>
     };
     let sql = format!(
         "SELECT seq, run_id, process, step, attempt, ts_utc, tz_offset, stream, level, target, \
-         thread, msg, fields FROM log WHERE {} ORDER BY seq LIMIT ?",
+         thread, msg, fields, git_hash FROM log WHERE {} ORDER BY seq LIMIT ?",
         compiled.clauses.join(" AND ")
     );
     // Audited: every clause is assembled from the `&'static str` column

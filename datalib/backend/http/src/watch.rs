@@ -611,6 +611,7 @@ mod tests {
         let server = datalib_runs::ProcessLogWriter::start(
             td.path(),
             datalib_runs::Process::Http,
+            None,
             datalib_runs::Retention::default(),
         )
         .unwrap();

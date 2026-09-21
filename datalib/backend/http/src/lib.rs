@@ -21,7 +21,6 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_core::version::git_hash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -121,7 +120,7 @@ pub struct FeedbackRequest {
 pub struct FeedbackResponse {
     pub feedback_uuid: String,
     pub created_at_utc: String,
-    pub git_hash: &'static str,
+    pub git_hash: String,
 }
 
 pub fn user_bin_dir() -> Option<PathBuf> {
@@ -244,7 +243,7 @@ async fn submit_feedback(
     let (created_at_utc, tz_offset) =
         datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let app_version = env!("CARGO_PKG_VERSION").to_string();
-    let git_hash_str = git_hash().to_string();
+    let git_hash = datalib_runs::git_hash().unwrap_or_else(|| "unknown".into());
     let row = FeedbackRow {
         feedback_uuid: feedback_uuid.clone(),
         created_at_utc: created_at_utc.clone(),
@@ -252,7 +251,7 @@ async fn submit_feedback(
         sentiment: req.sentiment,
         comment: req.comment,
         app_version,
-        git_hash: git_hash_str,
+        git_hash: git_hash.clone(),
         context_json,
         // Resolution metadata is filled in by hand later, never at submit time.
         fixed_in_git_hash: None,
@@ -262,7 +261,7 @@ async fn submit_feedback(
         Ok(()) => Ok(Json(FeedbackResponse {
             feedback_uuid,
             created_at_utc,
-            git_hash: git_hash(),
+            git_hash,
         })),
         Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
         Err(e) => {
@@ -1627,6 +1626,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
             finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
+            git_hash: snap.git_hash,
         }),
         steps,
     })
