@@ -59,6 +59,7 @@ how the system works; when a completed plan stops being worth keeping,
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
+- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell — decisions as pure functions over values, I/O in a thin layer around them; the templates already in the tree.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
 - [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — **read before touching `release.yml`**: the steps that assemble a release are scripts under `scripts/release/`, tested on every `bazel test //...` and on Linux from a mac by `bazelisk run //tools:release_steps_docker`; what stays release-only.
@@ -73,6 +74,7 @@ how the system works; when a completed plan stops being worth keeping,
 
 - [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
 - [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
+- [`docs/dev/audit_2026-09-21_fcis.md`](docs/dev/audit_2026-09-21_fcis.md) — the tree read against `style.md`'s functional-core rule: where the split exists, where it doesn't, and the todo list. A record, not reference.
 
 **User-facing**
 
@@ -121,6 +123,18 @@ same change.
 In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
 already shares your context. Plainspoken means *clear*, not *long*.
+
+## Functional core, imperative shell
+
+**Compute a decision as a pure function over values; act on it in a
+thin layer that does nothing else.** If a function takes a `&Path`, a
+pool, a sink or `now` *and* has a branch you would want a test for,
+split it there: the branch becomes a function from values to a named
+decision (`RenderPlan::decide`, `step_status`, `Scan::changes_since`),
+tested synchronously; the I/O stays behind and stays boring. The
+supervisor's tick is this rule at its largest. The full statement,
+the templates in the tree and the one exception (throughput code) are
+in [`docs/dev/style.md`](docs/dev/style.md).
 
 ## Comments: few, short, and about *why*
 

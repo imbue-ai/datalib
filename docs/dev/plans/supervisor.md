@@ -264,6 +264,33 @@ substance: never succeeded, or some read sink's version differs from
 what its last successful invocation consumed, or its own fingerprint
 changed. For a root it is the request-relative rule of §2.2.
 
+**The tick is the functional core; everything around it is the
+shell.** That is the pattern [`style.md` § Functional core, imperative
+shell](../style.md) asks for, and this is the one place in the tree
+where it matters most. The tick takes values — the graph, the open
+requests and pauses, every sink's version, which steps are running —
+and returns values: the state each row should show, and the list of
+steps to start with the versions they consume. It calls nothing that
+touches the world. The shell around it is small and dumb: it turns an
+event (a step exited, a checkpoint line arrived, a request row was
+inserted, the config file changed) into an update to those values,
+calls the tick, and does what the tick said — spawns the subprocess,
+writes the `steps` and `invocations` rows, pushes the frame.
+
+What that buys is the thing the current runner never had: every
+scheduling claim in this document becomes a synchronous test with no
+tokio, no tempdir and no polling. "A tick with stale steps and no open
+request starts nothing", "a checkpoint mid-pass owes exactly one more
+pass", "Stop on one request leaves the fan-in in the other's scope" —
+each is a few values in, a list of starts out, and any interleaving of
+events you can think of is a test you can write in the order you
+thought of it. `scheduler.rs` today keeps the same facts as a dozen
+parallel `Vec<bool>`s mutated between `JoinSet::spawn` and
+`state.save`, and every one of its streaming tests has to run real
+tasks and wait on a flag to observe the state machine. The
+`Decision::{Run, Skip, Block}` enum there is already the shape of the
+tick's output; the supervisor finishes the thought.
+
 Everything the runner's loop needed special machinery for falls out:
 
 - **A consumer runs while its producer is still running.** A checkpoint
@@ -580,13 +607,17 @@ Each slice lands green and the app works after each.
    updates it. A plain tree keeps the tree hash, computed on writer
    completion and cached; the supervisor learns which sinks' readers do
    not pin, so it never starts a writer on one while a reader runs.
-3. **The supervisor library**, batch mode only: the tick of §2.3 with
-   one request rooted at every source, run until it closes. It passes
-   the scheduler's existing tests re-expressed against requests and
-   invocations (the semantics they pin — subset sync, not-selected
-   history, unselected trees never hashed — are exactly what scope
-   means, and hold). `datalib-dag`
-   switches to it; the fixture genrule is the proof.
+3. **The supervisor library**, batch mode only: the tick of §2.3 as a
+   pure function over values, with its tests written first and
+   synchronous — the two hazards in §3 that say "the first test
+   written" are the first two — then the thin shell that feeds it
+   events and runs its starts, with one request rooted at every
+   source, run until it closes. It passes the scheduler's existing
+   tests re-expressed against requests and invocations (the semantics
+   they pin — subset sync, not-selected history, unselected trees
+   never hashed — are exactly what scope means, and hold), and most
+   of them stop needing tokio to say so. `datalib-dag` switches to
+   it; the fixture genrule is the proof.
 4. **Resident mode in `datalib-http`**, replacing `worker.rs`: the
    `requests` and `request_steps` tables, `POST /api/requests`,
    `/api/requests/<id>/stop`, `/api/steps/<id>/{pause,resume}`, live
