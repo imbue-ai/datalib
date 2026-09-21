@@ -73,6 +73,6 @@ impl DataProcessor for BeeperIngest {
             s.events_enriched,
             s.events_orphaned,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

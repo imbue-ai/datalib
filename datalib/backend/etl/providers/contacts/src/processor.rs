@@ -130,6 +130,6 @@ impl DataProcessor for ContactsIngest {
 
         // The source's post-download commit + pool close (uniform across
         // providers); keeps the old `{stats} commit={h}` summary suffix.
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

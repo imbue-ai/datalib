@@ -1233,11 +1233,12 @@ mod open_index_tests {
 
     /// A `grid_index` pass that died after its SQL `COMMIT` and before its
     /// `dolt_commit` leaves the batch in the working set. The next
-    /// `open_index` seals it into a rescue commit — so the applet, which
-    /// reads at HEAD, sees those rows — rather than a bare pool folding
-    /// them into the next pass's commit unremarked.
+    /// `open_index` discards it: the pass's cursor went with its rows, so
+    /// the next pass reads the same render delta again and lands the rows
+    /// under a commit of its own. Sealing them instead would publish half a
+    /// pass to the applet, which reads at HEAD.
     #[tokio::test]
-    async fn rows_a_killed_pass_left_uncommitted_are_rescued_by_the_next_open() {
+    async fn rows_a_killed_pass_left_uncommitted_are_discarded_by_the_next_open() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("db.doltlite_db");
         let pool = open_index(&path).await.expect("open_index");
@@ -1259,19 +1260,22 @@ mod open_index_tests {
             .await
             .unwrap();
         assert!(
-            messages.iter().any(|m| m.starts_with("rescue:")),
-            "no rescue commit: {messages:?}"
+            !messages.iter().any(|m| m.starts_with("rescue:")),
+            "open must not commit what the dead pass left: {messages:?}"
         );
-        let head = datalib_etl::pin::head(&pool).await.unwrap().unwrap();
-        // Audited: the hash is `Pin::at`-checked and the table is a literal.
-        let at_head: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM dolt_at_markdowns('{}')",
-            head.commit()
-        )))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(at_head, 1, "the orphaned row is committed now");
+        let in_working_set: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(in_working_set, 0, "the orphaned row is gone");
+        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            dirty, 0,
+            "and nothing is left for the next pass's commit to sweep"
+        );
         pool.close().await;
     }
 }

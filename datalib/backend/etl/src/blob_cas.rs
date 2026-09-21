@@ -82,10 +82,10 @@ pub struct BlobCas {
 
 impl BlobCas {
     /// The download step's handle on its CAS: what every writer gets from
-    /// [`crate::doltlite_raw::open`] — a crashed run's dirty blobs sealed
-    /// into a rescue commit, the schema committed, one connection never
-    /// recycled — without the download bookkeeping tables, which belong
-    /// to the entity store beside it.
+    /// [`crate::doltlite_raw::open`] — a crashed run's dirty blobs
+    /// discarded, the schema committed, one connection never recycled —
+    /// without the download bookkeeping tables, which belong to the entity
+    /// store beside it.
     pub async fn open(cas_path: &Path) -> Result<Self> {
         let pool = crate::doltlite_raw::open_derived(cas_path, &[CAS_OBJECTS_DDL])
             .await
@@ -902,11 +902,12 @@ mod tests {
 
     /// A run that died between its SQL writes and its commit — a killed
     /// process, a panic — leaves its blobs in the working set. The next
-    /// open seals them into their own commit rather than folding them,
-    /// silently, into whatever this run commits next. This used to open
-    /// with a bare pool and skip that.
+    /// open discards them: nothing pinned them, and a blob's entity row
+    /// went the same way in the store beside it, so keeping the bytes
+    /// would be a blob nobody references. The CAS is content-addressed
+    /// and `INSERT OR IGNORE`, so the refetch simply puts it again.
     #[tokio::test]
-    async fn blobs_a_killed_run_left_uncommitted_are_rescued_by_the_next_open() {
+    async fn blobs_a_killed_run_left_uncommitted_are_discarded_by_the_next_open() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("blobs.doltlite_db");
         let cas = BlobCas::open(&path).await.unwrap();
@@ -923,19 +924,21 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            messages.iter().any(|m| m.starts_with("rescue:")),
-            "no rescue commit: {messages:?}"
+            !messages.iter().any(|m| m.starts_with("rescue:")),
+            "open must not commit what the dead run left: {messages:?}"
         );
-        let head = crate::pin::head(cas.pool()).await.unwrap().unwrap();
-        // Audited: the hash is `Pin::at`-checked and the table is a literal.
-        let at_head: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM dolt_at_cas_objects('{}') WHERE blake3 = '{hash}'",
-            head.commit()
-        )))
-        .fetch_one(cas.pool())
-        .await
-        .unwrap();
-        assert_eq!(at_head, 1, "the orphaned blob is committed now");
+        assert!(
+            cas.get(&hash).await.unwrap().is_none(),
+            "the orphaned blob is gone from the working set"
+        );
+        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+            .fetch_one(cas.pool())
+            .await
+            .unwrap();
+        assert_eq!(dirty, 0, "and nothing is left for the next commit to sweep");
+        // The refetch is an ordinary put.
+        let again = cas.put(b"left behind", None).await.unwrap();
+        assert_eq!(again, hash);
         cas.close().await;
     }
     use tempfile::tempdir;

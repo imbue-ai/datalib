@@ -373,8 +373,8 @@ async fn hang(args: &Args) -> Result<Value> {
 }
 
 /// The next writer's view of a store a killed process left behind: what
-/// `open` found dirty and sealed as a rescue commit, and what the working
-/// set holds afterwards.
+/// the working set holds after `open` has discarded whatever was dirty,
+/// what HEAD holds, and what the log says.
 async fn reopen(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let pool = doltlite_raw::open(&db, &[TABLE_DDL])

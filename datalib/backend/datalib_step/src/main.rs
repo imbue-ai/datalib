@@ -184,12 +184,6 @@ fn env_flag(name: &str) -> bool {
     )
 }
 
-/// Checkpoint hooks registered by the running step (today only
-/// `ingest` populates it), fired from the SIGINT handler so partial
-/// state gets a tidy commit before exit.
-static CHECKPOINTS: std::sync::OnceLock<std::sync::Arc<datalib_etl::processor::CheckpointSink>> =
-    std::sync::OnceLock::new();
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -281,24 +275,14 @@ async fn main() {
     let emitter = Emitter::new(step_id);
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel):
-    // fire any registered checkpoint hooks — each commits its store's
-    // partial state and the providers' idempotency makes the next run
-    // resume from there — then report a `cancelled` outcome and exit
-    // 130. Steps without checkpoints (render/index/qmd) just stop;
-    // their stores roll back or re-derive next run.
+    // report a `cancelled` outcome and exit 130. Nothing is committed on
+    // the way out. The last seal stands; whatever a download wrote after
+    // it is not at a boundary the provider chose — an entity row whose
+    // blobs are still in flight, half a channel — and the next writer's
+    // `open` discards it. Idempotency refetches it from the cursor.
     let sig_emitter = emitter.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            if let Some(checkpoints) = CHECKPOINTS.get() {
-                for entry in checkpoints.snapshot() {
-                    match entry.hook.checkpoint().await {
-                        Ok(_) => tracing::info!(source = %entry.name, "interrupt checkpoint: ok"),
-                        Err(e) => {
-                            tracing::warn!(source = %entry.name, "interrupt checkpoint: {e:#}")
-                        }
-                    }
-                }
-            }
             sig_emitter.outcome(&[], Some(FailureKind::Cancelled));
             std::process::exit(130);
         }

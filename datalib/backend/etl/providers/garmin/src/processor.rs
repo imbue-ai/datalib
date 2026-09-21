@@ -79,6 +79,6 @@ impl DataProcessor for GarminIngest {
             sealer: Some(session.sealer()),
         })
         .await?;
-        Ok(session.finish(ctx, s.line()).await)
+        session.finish(ctx, s.line()).await
     }
 }

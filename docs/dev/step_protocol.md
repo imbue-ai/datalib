@@ -359,11 +359,13 @@ say neither records nothing, and the view shows `file:line` as text.
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, or the UI's cancel) the runner sends your
-process **SIGINT** and waits. If you can, checkpoint-commit your
-partial state, print a `{"event":"outcome","failure":"cancelled"}`
-line, and exit 130. If you do nothing, you'll be killed after a grace
-period and the next run re-derives from whatever landed on disk —
-correct, just wasteful.
+process **SIGINT** and waits. Print a
+`{"event":"outcome","failure":"cancelled"}` line and exit 130. **Do
+not commit on the way out.** Your last seal stands; whatever you wrote
+after it is not at a boundary you chose, and the next writer's `open`
+discards it — a commit made from a signal handler would publish a
+half-written batch to every reader. If you do nothing, you'll be
+killed after a grace period, with the same result.
 
 ## Minimal examples
 

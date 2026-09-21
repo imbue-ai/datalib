@@ -81,6 +81,6 @@ impl DataProcessor for WhatsappIngest {
             ctx.progress,
         )
         .await?;
-        Ok(session.finish(ctx, summary.summary()).await)
+        session.finish(ctx, summary.summary()).await
     }
 }

@@ -135,15 +135,12 @@ doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_status;
 ```
 
 Columns are `(table_name, staged, status)`. A non-empty result used to
-mean "an ETL run died before its `commit_run` call landed, and the
-next successful run will fold the dirty rows into its own commit."
-That implicit folding mixed two runs' work under one `dolt_log` entry,
-so since the change documented in [Operational notes](#operational-notes)
-below, `doltlite_raw::open` now seals any pre-existing dirty tree into
-its own `rescue: ...` commit before doing anything else. A non-empty
+mean "a writer died between its last seal and its next one." The next
+writer's `doltlite_raw::open` discards that working set and starts from
+HEAD — see [Operational notes](#operational-notes). A non-empty
 `dolt_status` against a file you opened with the CLI just means an ETL
-run is mid-flight (or recently was) and a rescue would land on the next
-sync.
+run is mid-flight (or recently was); what you see there will be thrown
+away, not committed.
 
 Don't run it against a store a sync is writing right now, even with
 `-readonly`: `dolt_status` from a second connection fails the writer's
@@ -345,24 +342,28 @@ archive — no libsqlite3-sys, no sqlx) against the same open through
 the sqlx pool, so a future regression in either layer is easy to
 attribute.
 
-### Rescue commits on every Rust-side open
+### A writer's open discards the working set
 
-`doltlite_raw::open` now checks `dolt_status` at every open and, if
-non-empty, stamps a `rescue: pre-run snapshot of orphaned working tree`
-commit before applying any DDL. The point isn't recovery — `dolt_log`
-audit-trail hygiene is. Without it, a crashed run's uncommitted rows
-silently fold into the next successful `commit_run`, mixing two runs'
-work under one commit message. With it, each tool entry that finds a
-dirty tree gets a dedicated commit it can be traced to.
+`doltlite_raw::open` checks `dolt_status` at every open and, if
+non-empty, runs `dolt_reset --hard` and drops any table still reported
+as `new table` (reset leaves untracked tables alone, like `git reset
+--hard` leaves untracked files, and there is no `dolt_clean`) before
+applying any DDL. Every commit is `-Am`, so anything left dirty here
+would ride into the schema commit a moment later; that is why the
+untracked tables go too.
 
-`commit_run` is tolerant of "nothing to commit, working tree clean" so
-the trailing orchestrator commit can legitimately find the rescue
-already swept its work (which it will, on a successful single-process
-run where rescue is a no-op).
+The rows it throws away were written after the last seal and never
+committed, so no reader — every reader pins a commit — was ever
+promised them. Keeping them would have meant committing a state the
+writer never vouched for: an entity row whose blobs never arrived, half
+a channel. The next pass refetches from the cursor.
 
-If you see a stream of `rescue: ...` commits in `dolt_log()`, something
-is crashing mid-batch. Look upstream of the rescue for the actual cause
-(network timeout, panic, OOM, etc.).
+`commit_run` is tolerant of "nothing to commit, working tree clean": a
+pass that fetched nothing new leaves the working set clean.
+
+If the `discard_dirty_working_tree` warning shows up in the run log
+often, something is crashing between seals. Look upstream for the
+cause (network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 
@@ -372,7 +373,7 @@ is crashing mid-batch. Look upstream of the rescue for the actual cause
   Adding a second writer through the CLI defeats that.
 - **For routine reads from app code.** Open the file via `sqlx` like
   everything else in the backend; the CLI is for ad-hoc inspection.
-- **To "fix" a wedged DB.** Almost every wedge is recoverable by
-  letting the next ETL run pick up the uncommitted state. Only reach
-  for `dolt_reset` / `dolt_checkout` against a copy of the file, never
-  against the live one.
+- **To "fix" a wedged DB.** The next writer's `open` discards the
+  uncommitted state itself. Only reach for `dolt_reset` /
+  `dolt_checkout` against a copy of the file, never against the live
+  one.

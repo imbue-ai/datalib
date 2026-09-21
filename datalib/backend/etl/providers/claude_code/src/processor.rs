@@ -65,6 +65,6 @@ impl DataProcessor for ClaudeCodeIngest {
             s.not_transcripts,
             s.unreadable,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl::processor::{CheckpointSink, RunCtx};
+use datalib_etl::processor::RunCtx;
 use datalib_schema::problems::{Severity, METRIC};
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -38,11 +38,6 @@ pub async fn run(
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
-    // Shared with the SIGINT handler: providers register their commit
-    // hooks here as they open their stores, so an interrupt can seal
-    // partial state with a proper dolt commit.
-    let checkpoints = std::sync::Arc::new(CheckpointSink::new());
-    let _ = crate::CHECKPOINTS.set(checkpoints.clone());
     // `always_clear_before_ingest` is the same wipe `--reset-and-redownload`
     // performs, asked for by config rather than by a flag: every provider
     // already truncates its entity tables and clears its cursors on that
@@ -74,7 +69,6 @@ pub async fn run(
                 now,
                 &progress,
                 &control,
-                &checkpoints,
                 metrics.clone(),
                 diagnostics.clone(),
             );

@@ -88,8 +88,8 @@ async fn gitlab_synth_playback_extract_roundtrip() {
 
     // The render side of the seam, and it has to come first: render reads
     // somebody else's store at a commit, while `block_on_load_all` below
-    // opens read-write and rescue-commits on the way in — so running that
-    // first would seal the store and hide a missing seal. gitlab had no
+    // opens read-write and commits its schema on the way in — so running
+    // that first would move HEAD and hide a missing seal. gitlab had no
     // test crossing this seam at all, which is how `gitlab_live` came to
     // read an unsealed store and assert on zero rows.
     let parsed = parse_api_dir(&out_db, RawRange::cold()).expect("parse_api_dir");

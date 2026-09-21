@@ -45,10 +45,10 @@ impl RawDb {
     /// Open this store to *read* it, for the render pass.
     ///
     /// The download step owns this store; render only reads it. An ordinary
-    /// [`Self::open`] would rescue-commit, reconcile the schema and commit
-    /// again on the way in — three writes to a file this caller does not own,
-    /// and once producers commit incrementally, a way to seal the
-    /// downloader's half-written batch on its behalf. See
+    /// [`Self::open`] would discard a dirty working set, reconcile the schema
+    /// and commit on the way in — three writes to a file this caller does not
+    /// own, and with producers committing incrementally, a way to throw away
+    /// the downloader's batch in flight. See
     /// `datalib_etl::doltlite_raw::open_reader`.
     ///
     /// No DDL, so a store the current downloader has not touched keeps

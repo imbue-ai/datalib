@@ -90,6 +90,6 @@ impl DataProcessor for GoogleTakeoutIngest {
             s.blobs_stored,
             s.parse_errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

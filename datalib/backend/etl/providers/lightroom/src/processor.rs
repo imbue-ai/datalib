@@ -68,6 +68,6 @@ impl DataProcessor for LightroomIngest {
             progress: ctx.progress.clone(),
         })
         .await?;
-        Ok(session.finish(ctx, stats.summary()).await)
+        session.finish(ctx, stats.summary()).await
     }
 }

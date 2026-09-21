@@ -83,6 +83,6 @@ impl DataProcessor for GithubIngest {
              pruned={}",
             s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments, s.pruned,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

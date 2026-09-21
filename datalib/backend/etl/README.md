@@ -128,7 +128,14 @@ working set: an `-Am` commit through either pool sweeps up whatever the
 other has in flight, and two mid-write pools contend for a lock
 `dolt_commit` takes without waiting. The kernel releases the lock when
 the holder dies, so a killed run leaves no stale claim; the next `open`
-finds its dirty rows and seals them into a rescue commit.
+finds its dirty rows and **discards them** (`dolt_reset --hard`, then
+any table the dead writer created and never committed), so the store
+starts at its last commit. Those rows were never at a seal boundary — a
+row whose blobs are still in flight, half a channel — and no reader was
+promised them: readers pin commits. The delta since the last seal is
+refetched from the cursor, which is what idempotency is for. The same
+rule holds on Ctrl-C: nothing commits on the way out; the last seal
+stands.
 
 The lock lives exactly as long as the connection: `close().await` waits
 for the connection to close, and that is the moment the store is free.

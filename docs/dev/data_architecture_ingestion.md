@@ -465,14 +465,14 @@ Every `now()` call and every inbound RFC 3339 parse in the workspace funnels thr
 - `IsoOffsetTimestamp::bump_micros(n)` / `bump_micros_str(s, n)` — the canonical sub-item synthesized-stamp recipe.
 
 ## Commit lifecycle
-**Providers do not call `dolt_commit` or `commit_run` themselves.** The orchestrator wraps each source's download in exactly one commit at the end. A run that touches N upstream pages / windows / items produces **one** entry in `dolt_log()`, not N. The commit message is `download <name>: <stats>`.
+**Providers do not call `dolt_commit` or `commit_run` themselves.** `RawStoreSession` commits for them: a `checkpoint <name>:` seal on the `Checkpointer`'s cadence, and `finish` at the end — the blob CAS first (`download <name>: blobs`), then the entity store (`download <name>: <stats>`), because an entity names its blob by hash and a reader pinned between the two must see the bytes before the row. A run that touches N upstream pages / windows / items produces one `download` entry per store in `dolt_log()`, not N. A `finish` whose commit fails fails the step: the next `open` discards what was never committed, so "logged and returned Ok" would have been work done for nothing.
 
 Two consequences:
 
 - `dolt diff HEAD^1 HEAD` for any raw store is exactly "what this sync run pulled" — a clean unit of analysis for incremental delta UI surfaces and audits.
 - Provider authors don't have to think about commit boundaries. If you find yourself reaching for `commit_run` inside a provider, you almost certainly want UPSERT instead.
 
-The only other commits allowed in a raw store are `rescue:` commits. Anything else is a bug.
+The only other commits allowed in a raw store are the `checkpoint <name>:` seals the [`RawStoreSession`](/datalib/backend/etl/src/raw_store.rs) makes on its cadence. Anything else is a bug — and nothing ever commits what a crashed or interrupted writer left behind; the next `open` discards it.
 
 ## One writer per row
 **Each write to a raw entity row is complete as of that write.** The writer's job is to assemble everything it knows about the row — `payload` plus all writer-supplied identity columns — and emit it in one UPSERT. We do not have a notion of "partial" writes that leave NULL columns the writer chose not to populate, and we do not have multi-pass enrichment where writer A populates some columns and writer B fills in the rest. Both are anti-patterns.
