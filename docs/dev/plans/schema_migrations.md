@@ -236,12 +236,23 @@ conservatively.
 1. **An additive change costs nothing and asks nothing.** A new
    column, a new table, a new optional field. Today this is nearly
    true; §1.2(d) is the gap.
-2. **A non-additive change to an irreplaceable or expensive store is a
-   migration, written down, ordered, and run under a name.** Never a
-   drop-and-recreate. If no migration is written, the open **fails
-   loudly** and says which table and what changed. `--reset` (per
-   source) remains the escape hatch and remains a thing a person
-   types.
+2. **A non-additive change to any raw store is a migration, written
+   down, ordered, and run under a name.** Never a drop-and-recreate.
+   If no migration is written, the open **fails loudly** and says
+   which table and what changed. `--reset-and-redownload` remains the
+   escape hatch and remains a thing a person types.
+
+   This is strict on purpose, and it is strict for the Expensive class
+   too, not only the Irreplaceable one — decided 2026-09-21. The
+   lenient alternative (rebuild a refetchable store automatically,
+   with a warning) was weighed and turned down: its failure mode is
+   unrecoverable data on a user's machine when the class was guessed
+   wrong, and the strict rule's failure mode is a developer typing one
+   flag. What a developer iterating on a live-API provider gives up is
+   the silent re-download the tree does today; what they get is a
+   message naming the table and the change, and the same re-download
+   after one flag. Additive changes are untouched either way, and
+   most iteration is additive.
 3. **A non-additive change to a rebuildable store may rebuild — and
    must rebuild all of it.** The whole store, every cursor with it.
    (d) is a store that rebuilt half.
@@ -368,11 +379,12 @@ Three changes to `doltlite_raw`:
   `render_cursor` to the tables a rebuild forgets — closing §1.2(d)
   — or, simpler and stricter, treats a render store the way the grid
   index treats itself: any drift drops every table. The raw-store
-  `open` passes `Refuse` unless `DATALIB_DAG_RESET_AND_REDOWNLOAD`
-  (the env the runner sets for `--reset-and-redownload`) is on. The message says: the
-  store, the table, what differs, and the two ways out — a migration
-  (§3.3) or a reset of that source. Closes §1.2(a) for the
-  non-additive case; the additive case was already safe.
+  `open` passes `Refuse` — for every raw store, whatever its class —
+  unless `DATALIB_DAG_RESET_AND_REDOWNLOAD` (the env the runner sets
+  for `--reset-and-redownload`) is on. The message says: the store,
+  the table, what differs, and the two ways out — a migration (§3.3)
+  or a reset of that source. Closes §1.2(a) for the non-additive case;
+  the additive case was already safe.
 
 The test that earns this PR is the one AGENTS.md asks for on every
 silent-no-op fix: bake a store under the old DDL, open it under a
@@ -457,10 +469,21 @@ The class in §2.1 is per source. Two ways to get it:
   one-line question ("Is this export still available upstream?") for
   file-backed sources.
 
-`Refuse` in §3.2 is then the policy for `refetchable = false`, and
-`Rebuild`-after-confirmation the policy for `true` — the confirmation
-being the reset a person runs. Until this PR lands, every raw store is
-treated as irreplaceable, which is the safe side.
+The flag does not change *whether* a raw store refuses — §2.2 rule 2
+says every one does. It changes what the refusal **offers** and what
+the guard **allows**:
+
+- The refusal message, the Manage row and `datalib-dag --check` offer
+  "reset this source" as the way out only when `refetchable = true`;
+  for `false` they name the migration path and the doltlite-history
+  recovery recipe, and the reset stays a flag a person has to find.
+- The downgrade guard (§3.4) may let a *rebuild* through for a
+  refetchable store when the person has confirmed a reset; for a
+  non-refetchable one it never does.
+
+Until this PR lands every raw store is treated as `refetchable =
+false`, which is the safe side and, for the refusal itself, the same
+side.
 
 ### 3.6 Alongside, not gated
 
@@ -499,12 +522,6 @@ treated as irreplaceable, which is the safe side.
 
 ## 4. Open questions
 
-- **Is `Refuse` too strict for the Expensive class?** A Slack store a
-  developer wants to reshape costs them a re-download every time
-  they iterate. The answer is probably "yes while developing, and
-  `--reset-and-redownload` is one flag away"; if that turns out to be a
-  daily annoyance, a `refetchable = true` source could `Rebuild`
-  with a `warn!` instead. Decide after living with it.
 - **Does the ladder belong to the provider or to the framework?** A
   change to `SHARED_DDL` (`sync_runs`, `problems`, the bookkeeping
   shape) touches every raw store. Two ladders per store — one for
