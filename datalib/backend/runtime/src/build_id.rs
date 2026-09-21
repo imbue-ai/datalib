@@ -1,12 +1,19 @@
-//! Which commit the running build came from. The run store records it
-//! beside each run so the log view can link a line's file and line
-//! number back to the source that wrote it.
+//! Which build this is: the datalib version, and the commit it came
+//! from. The run store records the commit beside each run so the log
+//! view can link a line back to the source that wrote it; every store
+//! records both in `_datalib_meta` so a later build knows who wrote it.
 //!
-//! Resolved at run time, never compiled in: a stamped build costs a
-//! rebuild of everything downstream on every commit (`.bazelrc` §stamp),
-//! and this is one string.
+//! The commit is resolved at run time, never compiled in: a stamped
+//! build costs a rebuild of everything downstream on every commit
+//! (`.bazelrc` §stamp), and this is one string.
 
 use std::path::{Path, PathBuf};
+
+/// The workspace version, from this crate's `version` attr in
+/// `BUILD.bazel` — rules_rust does not read `Cargo.toml`, so the attr
+/// is a copy and `//datalib/backend:version_consistency_test` keeps it
+/// equal to `[workspace.package].version`.
+pub const DATALIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A dev launcher sets this to `git rev-parse HEAD` of the checkout it
 /// built from (`datalib/dev_runtime.sh`). Wins over the file: the

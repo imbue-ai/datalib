@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::BulkUpsertable;
+use datalib_etl::doltlite_raw::StoreKind;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
@@ -340,15 +341,24 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
 /// connection never recycled — and with no DDL of
 /// its own, because the index reconciles its schema by
 /// [`init_schema`]'s all-or-nothing rule rather than `open`'s per-table
-/// one. The schema is then committed here, as `open` would have: a
-/// reader cannot tell a table nobody committed from a source with no
-/// rows, and one build without doltlite fails loudly at this check
-/// instead of indexing nothing and reporting success.
+/// one. The schema and the `_datalib_meta` rows for it are then
+/// committed here, as `open` would have: a reader cannot tell a table
+/// nobody committed from a source with no rows, and one build without
+/// doltlite fails loudly at this check instead of indexing nothing and
+/// reporting success.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
-    let pool = datalib_etl::doltlite_raw::open_derived(db_path, &[])
+    let pool = datalib_etl::doltlite_raw::open_derived(db_path, &[], StoreKind::GridIndex)
         .await
         .with_context(|| format!("open the grid index at {}", db_path.display()))?;
     init_schema(&pool).await?;
+    datalib_store_meta::write(
+        &pool,
+        StoreKind::GridIndex,
+        &datalib_store_meta::schema_hash(index_ddl()),
+        0,
+    )
+    .await
+    .context("write _datalib_meta for the grid index")?;
     datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")
         .await
         .context("commit the grid index schema")?;

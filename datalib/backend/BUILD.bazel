@@ -25,6 +25,7 @@ sh_test(
         "Cargo.toml",
         "//datalib/backend/dag:BUILD.bazel",
         "//datalib/backend/http:BUILD.bazel",
+        "//datalib/backend/runtime:BUILD.bazel",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

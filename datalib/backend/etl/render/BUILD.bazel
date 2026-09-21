@@ -24,6 +24,7 @@ rust_library(
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",

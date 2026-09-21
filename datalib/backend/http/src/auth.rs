@@ -242,7 +242,7 @@ fn query_token(query: &str) -> Option<&str> {
         .map(|(_, v)| v)
 }
 
-fn query_without_token(query: &str) -> Option<String> {
+pub(crate) fn query_without_token(query: &str) -> Option<String> {
     let rest: Vec<&str> = query
         .split('&')
         .filter(|pair| {

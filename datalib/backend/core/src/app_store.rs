@@ -9,6 +9,7 @@ use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow, DDL as SYNC_JOBS_DDL};
 use async_trait::async_trait;
+use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -68,6 +69,29 @@ impl AppStore {
         store.init_feedback_table().await?;
         store.init_sync_jobs_table().await?;
         store.init_disk_usage_table().await?;
+        // Which build wrote each store, beside its tables. Feedback is
+        // committed per row with `-Am`, so a changed meta row is sealed
+        // here rather than left to ride into the next feedback commit;
+        // jobs and usage are never committed and their rows just land.
+        for (pool, kind, ddl) in [
+            (&store.feedback_pool, StoreKind::Feedback, FEEDBACK_DDL),
+            (&store.jobs_pool, StoreKind::Jobs, SYNC_JOBS_DDL),
+            (&store.usage_pool, StoreKind::Usage, DISK_USAGE_DDL),
+        ] {
+            let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
+            let changed = datalib_store_meta::write(pool, kind, &hash, 0)
+                .await
+                .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+            if changed && has_dolt && kind == StoreKind::Feedback {
+                sqlx::query("SELECT dolt_commit('-Am', ?)")
+                    .bind(format!(
+                        "meta: written by datalib {}",
+                        datalib_runtime::build_id::DATALIB_VERSION
+                    ))
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(store)
     }
 
@@ -636,6 +660,61 @@ mod tests {
         drop(store);
         let again = AppStore::open(td.path()).await.unwrap();
         assert_eq!(again.list_jobs(false, 10).await.unwrap().len(), 2);
+    }
+
+    /// Each of the three stores says which build wrote it, with its own
+    /// kind; feedback's rows are committed on the spot rather than left
+    /// to ride into the next filed feedback, and a second open by the
+    /// same build commits nothing more.
+    #[tokio::test]
+    async fn every_app_store_names_the_build_that_wrote_it() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        for (pool, kind) in [
+            (&store.feedback_pool, StoreKind::Feedback),
+            (&store.jobs_pool, StoreKind::Jobs),
+            (&store.usage_pool, StoreKind::Usage),
+        ] {
+            let meta = datalib_store_meta::read(pool)
+                .await
+                .unwrap()
+                .expect("written at open");
+            assert_eq!(meta.store_kind, Some(kind));
+            assert_eq!(
+                meta.datalib_version,
+                datalib_runtime::build_id::DATALIB_VERSION
+            );
+        }
+        if !store.has_dolt {
+            return;
+        }
+        let commits = |pool: &SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM dolt_log()")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let first = commits(&store.feedback_pool).await;
+        // Newest first without an ORDER BY: `date` is whole seconds and
+        // this test fits inside one.
+        let message: String = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 1")
+            .fetch_one(&store.feedback_pool)
+            .await
+            .unwrap();
+        assert!(
+            message.starts_with("meta: written by datalib "),
+            "feedback commits its meta rows on open, got {message:?}"
+        );
+        drop(store);
+        let again = AppStore::open(td.path()).await.unwrap();
+        assert_eq!(
+            commits(&again.feedback_pool).await,
+            first,
+            "the same build opening again has nothing to commit"
+        );
     }
 
     /// Re-recording the same (series, instant) overwrites rather than

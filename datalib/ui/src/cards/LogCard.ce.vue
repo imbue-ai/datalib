@@ -25,7 +25,7 @@ onUnmounted(() => unsubscribe?.());
 
 const title = computed(() => {
   const s = scope.value;
-  if (s?.kind === "launch") return "Server log";
+  if (s?.kind === "launch") return s.launch.process === "ui" ? "Page log" : "Server log";
   if (s?.kind === "run") {
     const p = s.process;
     if (p?.step) return `Log · ${p.step}`;
@@ -39,8 +39,9 @@ const title = computed(() => {
 props.ctx.setTitle(title.value);
 props.ctx.setHelp(`
 <p>The lines one process wrote — a step's attempt (its own output and
-what the runner said about it), the runner, or a launch of the server —
-or every line of a run. The two pickers move between runs, launches
+what the runner said about it), the runner, a launch of the server, or
+a page of the app (what was done there, as the page reported it) — or
+every line of a run. The two pickers move between runs, launches, pages
 and processes; the query bar narrows the lines (<code>level:warn
 -target:sqlx "a phrase"</code>, <code>min_level:info</code> for a level
 and above). Right-click a cell to keep only, or exclude, its value;

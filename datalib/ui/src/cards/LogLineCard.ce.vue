@@ -67,8 +67,8 @@ const commitHref = computed(() =>
   line.value?.git_hash ? `${SOURCE_REPO}/commit/${line.value.git_hash}` : null,
 );
 
-/// How the process reads: the runner, a step's attempt, or the server,
-/// and how it ended.
+/// How the process reads: the runner, a step's attempt, the server or
+/// a page of the app, and how it ended.
 const processLabel = computed(() => {
   const p = process.value;
   if (!p) return line.value?.process ? `${line.value.process} (no longer in the store)` : "unknown";
@@ -79,10 +79,14 @@ const processLabel = computed(() => {
         ? "the runner"
         : p.process === "http"
           ? "the server"
-          : p.process;
+          : p.process === "ui"
+            ? "a page of the app"
+            : p.process;
   const end =
     p.finished_at_utc == null
-      ? "running"
+      ? p.process === "ui"
+        ? "open"
+        : "running"
       : p.signal != null
         ? `ended by signal ${p.signal}`
         : p.exit_code != null

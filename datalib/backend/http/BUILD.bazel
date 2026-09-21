@@ -39,6 +39,8 @@ rust_library(
         "src/manage/mod.rs",
         "src/manage/problems.rs",
         "src/manage/status.rs",
+        "src/request_log.rs",
+        "src/ui_events.rs",
         "src/usage.rs",
         "src/watch.rs",
         "src/worker.rs",
@@ -255,6 +257,40 @@ rust_test(
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
         "@datalib_crates//:tracing",
+    ],
+)
+
+# One line per request in the server's log, and none for a read of the
+# log itself (the log panel would refetch on its own line forever).
+rust_test(
+    name = "request_log_test",
+    srcs = ["tests/request_log.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# A page of the app is a `ui` process; what it posts to
+# `/api/ui/events` are its lines.
+rust_test(
+    name = "ui_events_test",
+    srcs = ["tests/ui_events.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
     ],
 )
 

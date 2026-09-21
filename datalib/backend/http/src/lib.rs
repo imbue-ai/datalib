@@ -36,6 +36,8 @@ pub mod history;
 pub mod lock;
 pub mod logging;
 pub mod manage;
+pub mod request_log;
+pub mod ui_events;
 pub mod usage;
 pub mod watch;
 pub mod worker;
@@ -183,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
+        .route("/api/ui/events", post(ui_events::post_events))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
         // Component code, addressed by content. Flat across every
@@ -206,6 +209,8 @@ pub fn router(state: AppState) -> Router {
             api_token,
             auth::require_token,
         ))
+        // Outside the token gate, so a refused request is logged too.
+        .layer(axum::middleware::from_fn(request_log::record))
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {

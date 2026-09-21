@@ -2,6 +2,50 @@
 source: datalib/backend/schema_inventory/tests/inventory.rs
 expression: out
 ---
+== every store ==
+_datalib_meta
+    key
+    value
+    written_at_utc
+    tz_offset
+
+== every raw store ==
+problems
+    problem_uuid
+    source_id
+    stage
+    severity
+    outcome
+    reason
+    scope_kind
+    scope_key
+    item_uuid
+    field
+    path
+    rule
+    sample
+    first_seen_at_utc
+    last_seen_at_utc
+    tz_offset
+    render_version
+sync_runs
+    run_id
+    started_at_utc
+    finished_at_utc
+    tz_offset
+    config
+    status
+    summary
+sync_scope_config
+    scope
+    config
+    updated_at_utc
+    tz_offset
+sync_scope_state
+    scope
+    last_seen_at_utc
+    tz_offset
+
 == beeper/raw ==
 beeper_media_attachments
     id

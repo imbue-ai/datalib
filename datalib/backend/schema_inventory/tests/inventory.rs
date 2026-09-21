@@ -88,6 +88,14 @@ fn push_column(cols: &mut Vec<String>, clause: &str) {
 fn stores() -> Vec<(&'static str, Vec<String>)> {
     let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     vec![
+        // What the framework puts in a store before a provider's own
+        // tables: `_datalib_meta` in every store, the download
+        // bookkeeping in every raw one.
+        ("every store", owned(&[datalib_store_meta::DDL])),
+        (
+            "every raw store",
+            owned(datalib_etl::doltlite_raw::SHARED_DDL),
+        ),
         (
             "beeper/raw",
             datalib_etl_beeper::ingest::schema_raw::full_ddl(),

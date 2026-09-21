@@ -2,9 +2,10 @@
 # Asserts that the version declared in datalib/backend/Cargo.toml's
 # [workspace.package] section matches:
 #   * the `version = "..."` attribute in each BUILD.bazel that stamps one
-#     (dag's datalib_dag_bin rust_binary, http's rust_library — the
-#     latter feeds /api/health and, via the bundled binary, the desktop
-#     app).
+#     (dag's datalib_dag_bin rust_binary; http's rust_library, which
+#     feeds /api/health and, via the bundled binary, the desktop app;
+#     runtime's rust_library, which every store records in
+#     `_datalib_meta` as the build that wrote it).
 #
 # Why this exists: Cargo.toml is the canonical source of truth for the
 # project version (all member crates use `version.workspace = true`).
@@ -40,7 +41,7 @@ if [[ -z "$cargo_version" ]]; then
 fi
 
 status=0
-for pkg in dag http; do
+for pkg in dag http runtime; do
     build_file="$(rlocation "_main/datalib/backend/$pkg/BUILD.bazel")"
     [[ -f "$build_file" ]] || { echo "ERROR: $pkg/BUILD.bazel not found at $build_file" >&2; exit 1; }
 
@@ -64,6 +65,6 @@ EOF
         status=1
     fi
 done
-exit_msg="OK: Cargo.toml, dag/BUILD.bazel and http/BUILD.bazel all declare version $cargo_version"
+exit_msg="OK: Cargo.toml, dag/BUILD.bazel, http/BUILD.bazel and runtime/BUILD.bazel all declare version $cargo_version"
 [[ "$status" -eq 0 ]] && echo "$exit_msg"
 exit "$status"

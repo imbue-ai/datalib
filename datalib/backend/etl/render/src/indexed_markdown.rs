@@ -140,8 +140,12 @@ impl IndexedMarkdownStore {
         std::fs::create_dir_all(rendered_root)
             .with_context(|| format!("mkdir -p {}", rendered_root.display()))?;
         let path = path_for(rendered_root);
-        let pool = blocking(datalib_etl::doltlite_raw::open_derived(&path, &store_ddl()))
-            .with_context(|| format!("open indexed markdown store {}", path.display()))?;
+        let pool = blocking(datalib_etl::doltlite_raw::open_derived(
+            &path,
+            &store_ddl(),
+            datalib_etl::doltlite_raw::StoreKind::Render,
+        ))
+        .with_context(|| format!("open indexed markdown store {}", path.display()))?;
         Ok(Self {
             write_lock: WriteLock::new(pool.clone()),
             pool,

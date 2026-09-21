@@ -178,14 +178,17 @@ datalib/
     probe/         the "Test connection" report shape, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired
                    config shape into the current one.
-    runtime/       the data-root layout, the bundled-Node resolver (the
-                   `npx` fallback is opt-in and loud) and the qmd model
+    runtime/       the data-root layout, which build this is
+                   (`build_id`), the bundled-Node resolver (the `npx`
+                   fallback is opt-in and loud) and the qmd model
                    pins. Has NO dependencies, deliberately: it is a
                    `tools=` input to the fixture's ~90s embedding action,
                    so anything it links re-runs that embed on CI.
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
                    and the applet, never by the indexer (see above).
+    store_meta/    `_datalib_meta`, the table every store carries naming
+                   the build that wrote it and the shape it is in.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
     unified_index/ the grid index, the qmd index, the query language over
@@ -540,6 +543,7 @@ upstream (block types, MIME types), free-form display text
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
+| which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 
 The TypeScript side mirrors these as string-literal unions in
 `datalib/ui/src/api.ts`, hand-kept — change both halves together.

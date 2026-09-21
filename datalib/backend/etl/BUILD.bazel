@@ -26,6 +26,7 @@ rust_library(
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/source_common:datalib_source_common",
