@@ -170,11 +170,18 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
+/// A fresh load asked for while another load was in flight — a query
+/// typed while the tail was appending — runs once that one is done,
+/// instead of being lost.
+let freshPending = false;
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
 async function load(fresh: boolean) {
-  if (inflight) return;
+  if (inflight) {
+    freshPending ||= fresh;
+    return;
+  }
   inflight = true;
   if (fresh) {
     lastSeq = 0;
@@ -233,6 +240,10 @@ async function load(fresh: boolean) {
   } finally {
     busy.value = false;
     inflight = false;
+    if (freshPending) {
+      freshPending = false;
+      void load(true);
+    }
   }
 }
 

@@ -563,6 +563,18 @@ export async function settleRows(
   const out: Record<string, string> = {};
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
+  // The remount paints the shell first and the rows after it; a caller
+  // reading a settled row straight away would read it on the way to
+  // being painted, and see nothing.
+  for (const id of ids) {
+    await expect
+      .poll(() => statusOf(page, id), {
+        timeout,
+        intervals: [200],
+        message: `${id} was not painted again after the remount`,
+      })
+      .not.toBeNull();
+  }
   return out;
 }
 
