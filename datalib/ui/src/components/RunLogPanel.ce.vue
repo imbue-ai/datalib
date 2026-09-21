@@ -60,8 +60,6 @@ const props = defineProps<{
   /// A launch of the server to open on instead of a run — the one
   /// serving the page, for its own log.
   launchId?: string | null;
-  /// Whether that run may still be writing: tail while true.
-  live: boolean;
   /// What the query bar starts with — `process:http` for the server's
   /// log. Editable like anything typed there.
   initialQuery?: string;
@@ -80,6 +78,9 @@ export type LogScope =
 const emit = defineEmits<{
   /// The pickers moved, so the caller can say what is on screen.
   (e: "scope-changed", scope: LogScope): void;
+  /// A line was selected — by a click, or the arrow keys moving on —
+  /// for the caller to open in full.
+  (e: "line-selected", seq: number): void;
 }>();
 
 /// The picker's "every run" entry. Not a run id: the store's ids are
@@ -118,15 +119,16 @@ const runProcesses = ref<ProcessInfo[]>([]);
 const currentProcess = computed(
   () => runProcesses.value.find((p) => p.process_id === processId.value) ?? null,
 );
-/// Whether what is on screen may still be writing. The opened run says
-/// so by prop; anything picked by whether the store has closed it.
+/// Whether what is on screen may still be writing — tail while it
+/// may: by whether the store has closed it, and until the lists say,
+/// a run or launch is taken as still going (tailing a finished one
+/// costs nothing).
 const live = computed(() => {
   if (launchId.value) return !launch.value || launch.value.finished_at_utc == null;
-  if (allRuns.value) return props.live || runs.value.some((x) => x.finished_at_utc == null);
+  if (allRuns.value) return runs.value.some((x) => x.finished_at_utc == null);
   if (currentProcess.value) return currentProcess.value.finished_at_utc == null;
-  if (runId.value === props.runId) return props.live;
   const r = runs.value.find((x) => x.run_id === runId.value);
-  return !!r && r.finished_at_utc == null;
+  return !r || r.finished_at_utc == null;
 });
 /// The levels, quietest first — the order the picker offers and the
 /// order `min_level:` ranks.
@@ -264,6 +266,13 @@ function setQuery(q: string) {
   query.value = q;
   void load(true);
 }
+
+/// A token added from outside — the inspector's keep / exclude.
+function addToken(token: string) {
+  setQuery(withToken(query.value, token));
+}
+
+defineExpose({ addToken });
 
 /// Typing waits for a pause; a token from the menu applies at once.
 function onQueryInput(ev: Event) {
@@ -683,7 +692,12 @@ function gridOptions(): GridOption {
     datasetIdPropertyName: "seq",
     // Cells and group rows are text (see `plain`), never markup.
     enableHtmlRendering: false,
-    enableCellNavigation: false,
+    // A row selects on click and the arrow keys move the selection;
+    // the line opens in full beside the card either way.
+    enableCellNavigation: true,
+    enableSelection: true,
+    multiSelect: false,
+    selectionOptions: { selectActiveRow: true },
     enableTextSelectionOnCells: true,
     enableAutoTooltip: false,
     enableEmptyDataWarningMessage: false,
@@ -739,14 +753,27 @@ let groupingPlugin: SlickDraggableGrouping | null = null;
 
 function createGrid(first: RunLogLine[]) {
   if (bundle || !boxEl.value) return;
+  const options = gridOptions();
+  // Inside a card the grid's own stylesheet — row heights, column
+  // widths — has to land in the shadow root, or the rows have no
+  // height.
+  const root = boxEl.value.getRootNode();
+  if (root instanceof ShadowRoot) options.shadowRoot = root;
   const b = new SlickVanillaGridBundle<RunLogLine>(
     boxEl.value,
     buildColumns(),
-    gridOptions(),
+    options,
     first,
   ) as Grid;
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
+  b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
+    const row = args.rows[args.rows.length - 1];
+    if (row == null) return;
+    const line = b.dataView.getItem(row) as RunLogLine | undefined;
+    // A group row selects nothing.
+    if (line && typeof line.seq === "number") emit("line-selected", line.seq);
+  });
   // What the bar's drop does, without the mouse, for the e2e tests:
   // a drag dispatched by hand dies inside SortableJS under load, and
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.

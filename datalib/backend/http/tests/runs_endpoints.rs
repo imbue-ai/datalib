@@ -256,3 +256,33 @@ fn urlencoding(s: &str) -> String {
     }
     out
 }
+
+/// The inspector reads one line by its `seq`, with the process that
+/// wrote it beside it; a `seq` the store no longer has is a 404.
+#[tokio::test]
+async fn one_line_is_read_by_seq_with_its_process() {
+    let td = tempfile::tempdir().unwrap();
+    write_two_runs(td.path());
+
+    let warned = get(td.path(), "/api/log?q=level:warn").await;
+    let seq = warned[0]["seq"].as_i64().unwrap();
+    let one = get(td.path(), &format!("/api/log/{seq}")).await;
+    assert_eq!(one["line"]["msg"], "slow");
+    assert_eq!(one["line"]["run_id"], "run-2");
+    assert_eq!(one["process"]["process"], "dag");
+    assert_eq!(one["process"]["run_id"], "run-2");
+    assert_eq!(one["process"]["process_id"], one["line"]["process_id"]);
+
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/log/999999")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
