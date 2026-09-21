@@ -6,6 +6,7 @@ exports_files([
     "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
+    "scripts/stage_runtime.sh",  # run by //tools:stage_runtime_test
 ])
 
 # Every first-party Python file in the repo, as a single filegroup the

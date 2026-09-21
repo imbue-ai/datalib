@@ -25,6 +25,24 @@ exports_files([
 # check_qmd_model_cache_path.sh for the full rationale. Pairs with the
 # rust-side unit test
 # //datalib/backend/qmd_indexer:qmd_indexer_unittests.
+# The release's `runtime` job, minus the upload: stage with a relative
+# <dest> from a foreign directory, then run node and qmd out of it.
+sh_test(
+    name = "stage_runtime_test",
+    size = "large",
+    srcs = ["check_stage_runtime.sh"],
+    data = [
+        "//:scripts/stage_runtime.sh",
+        "//datalib/backend/runtime:src/node_runtime.rs",
+        "//datalib/backend/runtime:src/qmd.rs",
+        "//datalib/tauri:bundled_node",
+        "//third-party:bundled_licenses",
+        "//third-party/latchkey/runtime:latchkey_tree",
+        "//third-party/qmd/runtime:qmd_tree",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 sh_test(
     name = "qmd_model_cache_path_test",
     size = "small",

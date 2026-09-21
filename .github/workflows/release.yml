@@ -117,11 +117,13 @@ jobs:
                   shasum -a 256 "$1" > "$1.sha256"
               fi
           }
-          cuda_flag=()
+          # Two branches rather than an optional-args array: the mac
+          # runner's bash 3.2 treats an empty array as unbound under -u.
           if [[ "${CUDA}" == "true" ]]; then
-              cuda_flag=(--cuda runtime-cuda)
+              scripts/stage_runtime.sh runtime --cuda runtime-cuda
+          else
+              scripts/stage_runtime.sh runtime
           fi
-          scripts/stage_runtime.sh runtime "${cuda_flag[@]}"
           # Smoke the staged tree on the runner (same triple as the
           # asset): the Node runs, and qmd loads from it. latchkey is
           # left out — its `--version` initializes a keyring, which a

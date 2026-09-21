@@ -19,6 +19,8 @@ instead from `bazel run //:precommit` and as a plain step in
      cursor was taken under, or widening that config is a silent no-op.
   9. The README's source grid and docs/user/getting_your_data.md name
      every source type, link to each other, and stay alphabetical.
+ 10. No workflow step initializes an empty bash array: expanding one
+     is "unbound variable" on the macOS runners' bash 3.2.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -325,7 +327,39 @@ def main() -> int:
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_cursor_records_its_scope(root)
     rc |= _check_source_grid(root)
+    rc |= _check_workflows_no_empty_arrays(root)
     return rc
+
+
+# --- Check 10: no empty bash arrays in workflow steps -------------------
+#
+# A `run:` step is bash with `set -e` on every runner, and the macOS
+# runners' bash is 3.2, where `"${arr[@]}"` on an empty array is an
+# "unbound variable" under `set -u` (4.4 fixed it). The idiom that
+# trips it is always the same three lines — `arr=()`, a conditional
+# append, the expansion — and the first of them is the one a regex can
+# see. v0.35.0's `runtime` job failed its mac leg on exactly this, on
+# its first run. Two branches, or a scalar, say the same thing.
+_EMPTY_ARRAY = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=\(\s*\)\s*(#.*)?$")
+
+
+def _check_workflows_no_empty_arrays(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, ".github/workflows/*.yml"):
+        for lineno, line in enumerate((root / rel).read_text().splitlines(), 1):
+            if _EMPTY_ARRAY.match(line):
+                hits.append(f"  {rel}:{lineno}: {line.strip()}")
+    if not hits:
+        print("OK: no workflow step initializes an empty bash array.")
+        return 0
+    print(
+        "ERROR: a workflow step initializes an empty bash array:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
+        "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 # --- Check 8: a cursor must be recorded with the config that set it ----
