@@ -1,9 +1,9 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21); §3.1 is built, the rest is
-not.** §1 and §2 describe what the tree did at `a5f04141`, checked by
-reading the code, not the prose; §3.1 says what landed. Where this doc
-and the tree disagree, the tree wins.
+**Status: audit and proposal (2026-09-21); §3.1 and §3.4 are built,
+the rest is not.** §1 and §2 describe what the tree did at `a5f04141`,
+checked by reading the code, not the prose; §3.1 and §3.4 say what
+landed. Where this doc and the tree disagree, the tree wins.
 
 ## 0. Why now
 
@@ -455,22 +455,39 @@ and for the same reason: the failure mode is forgetting.
 
 ### 3.4 PR 4 — the downgrade guard, and a root-level check
 
-- `open` (raw) and `AppStore::open` compare `_datalib_meta.datalib_version`
-  to their own. Newer by a *minor* or more: refuse with "this store
-  was written by datalib X; you are running Y". Same minor, newer
-  patch: allow (patch releases do not move schemas — make that a
-  release rule and write it in `release_steps.md`). `schema_version`
-  above our ladder's top: refuse regardless.
-- Rebuildable stores keep rebuilding on a newer schema; that is
-  correct and already what they do. The run store's "delete and
-  remake" stays.
-- `datalib-http` runs the check across the root at startup and on
-  every config reload, the way it already produces `app_ready:
-  false` for a config it cannot serve. A refused store becomes a
-  Manage-row problem, not a 500 on first query. The Minds case
-  (§1.2(f)) becomes a sentence on screen.
-- `datalib-dag --check` reports it too, so an agent at a shell sees
-  it before a sync does.
+**Built**, ahead of §3.2 and §3.3 because it needs only §3.1. As
+landed (`datalib_store_meta::guard`):
+
+- Every owner refuses before it writes: `doltlite_raw::open` and
+  `open_derived` (so every raw, blob, render and index store — the
+  rebuildable ones too, since until §3.2 lands the render store's
+  "rebuild" is the half-rendered store of §1.2(d)) and
+  `AppStore::open`. The check is `_datalib_meta.datalib_version`
+  against `DATALIB_VERSION` by `major.minor`: a newer line refuses,
+  naming both versions and the store; a newer *patch* opens, which is
+  the release rule in `release_steps.md` — a patch release never
+  changes a store's shape. A store with no meta passes: it predates
+  every build that can ask. The run store keeps its delete-and-remake.
+- `datalib-dag` inspects the whole root (`inspect_root`: every
+  `*.doltlite_db` to three levels down, plus `system/runs.sqlite`)
+  right after the config loads and before the runner lock or
+  `dag_state.json` — an older build rewriting that file drops the
+  fields it does not know. Both `--check` and a run fail with the
+  list; no step starts.
+- `datalib-http` inspects the root at boot, before the app stores
+  are opened. A refused root still boots — to say so: the repo behind
+  `AppState.app` fails every call with the refusal, no worker and no
+  usage sampler run, no applet starts, and `GET /api/config` carries
+  `newer_root` (the stores and both versions) with
+  `app_ready: false`. The UI gates on it ahead of first-run and
+  config-error, with a screen of its own (`NewerRootView`), since
+  there is nothing to edit. The Minds case (§1.2(f)) is that screen.
+  Checked at boot only: the fix is to run another datalib, which is
+  a restart either way.
+- Not guarded: readers. A pinned reader on a newer store fails at
+  prepare time on a column it does not know, which is loud enough,
+  and the http gate covers the applet. `schema_version` above the
+  ladder's top is not checked yet; there is no ladder (§3.3).
 
 ### 3.5 PR 5 — a source says whether it can be fetched again
 

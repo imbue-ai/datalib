@@ -56,6 +56,7 @@ async fn state(root: &Path) -> AppState {
         // Deliberately no sampler task: these tests drive the walk
         // through the endpoint, which is the path under test.
         usage: Default::default(),
+        newer_root: Vec::new(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
         applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
     }

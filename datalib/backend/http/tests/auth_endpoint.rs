@@ -33,6 +33,7 @@ async fn app() -> (axum::Router, ApiToken) {
         // tree reports as absent — the state a root nobody has walked
         // is in.
         usage: Default::default(),
+        newer_root: Vec::new(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),

@@ -23,7 +23,12 @@ published from a local machine — the tag is the trigger.
   offending file on failure. If that test's `data` list has grown, bump
   every file it checks.
 - The git tag is `vX.Y.Z` with the same number. Minor bump for
-  feature releases, patch for fix-only ones.
+  feature releases, patch for fix-only ones — and **a change that
+  moves any store's shape is a minor bump** (the `schema_inventory`
+  golden, a `RENDER_VERSION`, `LAYOUT_VERSION` or
+  `datalib_runs::SCHEMA_VERSION`): the downgrade guard lets a newer
+  patch open a store and refuses a newer minor
+  (`docs/dev/release_steps.md`).
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop
   app's own version and is **not** part of this procedure.
 - One repo outside this one pins the released version:

@@ -47,6 +47,10 @@ rust_library(
     ],
     crate_name = "datalib_http",
     edition = "2021",
+    # `boot::NewerRootRepo` implements the async `AppRepo` trait.
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
     # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
     # Cargo.toml) — /api/health and the feedback cards report it, and
     # since the Tauri shell ships this bazel-built binary, it's also the
@@ -82,6 +86,8 @@ rust_library(
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
@@ -115,6 +121,7 @@ rust_test(
     deps = [
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
     ],
 )
 

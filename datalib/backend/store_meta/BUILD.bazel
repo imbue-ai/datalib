@@ -9,17 +9,19 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # docs/dev/plans/schema_migrations.md §3.1.
 rust_library(
     name = "datalib_store_meta",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "datalib_store_meta",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
+        "@datalib_crates//:tracing",
     ],
 )
 
