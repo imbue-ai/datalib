@@ -45,6 +45,12 @@ from typing import NamedTuple
 
 _BAZEL_WORKSPACE_DIR = "_main"
 
+# No spawn here should take more than a second or two; one that takes
+# this long has hung, and the failure names it. The test has three
+# times reached bazel's 900 s ceiling on CI with nothing written, which
+# is the one outcome this test must never produce again.
+_SPAWN_TIMEOUT_SECS = 120
+
 # Bookkeeping the ingest side owns and render never reads. Mutating it
 # proves nothing, and deleting `sync_runs` would only exercise the
 # framework's own skip.
@@ -121,7 +127,12 @@ class RenderContractTest(unittest.TestCase):
             *cls.fixture_paths,
         ]
         result = subprocess.run(
-            argv, check=False, cwd=str(cls.cwd), capture_output=True, text=True
+            argv,
+            check=False,
+            cwd=str(cls.cwd),
+            capture_output=True,
+            text=True,
+            timeout=_SPAWN_TIMEOUT_SECS * 5,
         )
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
@@ -133,12 +144,18 @@ class RenderContractTest(unittest.TestCase):
     ) -> list[str] | None:
         """One statement (or a `;`-joined few) against a store; the rows,
         or `None` when it failed and the caller said that may happen."""
-        result = subprocess.run(
-            [str(self.cwd / self.doltlite_bin), str(db), sql],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [str(self.cwd / self.doltlite_bin), str(db), sql],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_SPAWN_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                f"doltlite hung for {_SPAWN_TIMEOUT_SECS}s on {db}:\n  {sql[:300]}"
+            )
         if result.returncode != 0:
             if not must_succeed:
                 self.last_refusal = result.stderr.strip().splitlines()[-1:]
@@ -179,14 +196,21 @@ class RenderContractTest(unittest.TestCase):
             params_file = data_root / f"{group}.render.params.json"
             params_file.write_text(json.dumps(step["params"]))
             argv += ["--params-file", str(params_file)]
-        result = subprocess.run(
-            argv,
-            check=False,
-            cwd=str(self.cwd),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                argv,
+                check=False,
+                cwd=str(self.cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=_SPAWN_TIMEOUT_SECS,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail(
+                f"datalib-step render_markdown for {group} hung for "
+                f"{_SPAWN_TIMEOUT_SECS}s in {data_root}"
+            )
         if result.returncode == 0:
             return None
         causes = [
@@ -759,6 +783,11 @@ class RenderContractTest(unittest.TestCase):
         }
         sources = self._this_shards_sources(tables)
         for source in sources:
+            # Written as it goes, so a shard killed at bazel's ceiling
+            # still says how far it got.
+            sys.stderr.write(
+                f"[render contract] {source}: {len(tables[source])} table(s)\n"
+            )
             db = self.workspace / source / "ingest" / "entities.doltlite_db"
             for table, cols in tables[source]:
                 checked += self._check(
