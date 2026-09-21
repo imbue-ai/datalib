@@ -360,7 +360,7 @@ impl Runner {
                             .unwrap_or_else(|| UNKNOWN.to_string());
                         versions.insert(out.as_str().to_string(), v);
                         changed_now.insert(out.as_str().to_string(), false);
-                        self.finish(graph, &mut state, &mut status, i, st, None, 0);
+                        self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
                         release_dependents(graph, &mut remaining_deps, &mut ready, i);
                     }
                     Decision::Block { on } => {
@@ -370,6 +370,7 @@ impl Runner {
                             &mut status,
                             i,
                             StepStatus::Blocked { on },
+                            None,
                             None,
                             0,
                         );
@@ -594,6 +595,10 @@ impl Runner {
                 .get(&spec.id)
                 .map(|s| s.output_versions.clone())
                 .unwrap_or_default();
+            let exit = match &res {
+                Ok(outcome) => outcome.exit,
+                Err(step_err) => step_err.exit,
+            };
             let st = match res {
                 Ok(outcome) => {
                     match resolve_outputs(
@@ -753,6 +758,7 @@ impl Runner {
                 i,
                 st,
                 errors[i].clone(),
+                exit,
                 attempts,
             );
             release_dependents(graph, &mut remaining_deps, &mut ready, i);
@@ -988,6 +994,7 @@ impl Runner {
         i: usize,
         st: StepStatus,
         error: Option<String>,
+        exit: Option<crate::step::Exit>,
         attempts: u32,
     ) {
         let id = &graph.steps[i].id;
@@ -995,6 +1002,8 @@ impl Runner {
             step: id.clone(),
             status: st.state(),
             error: error.clone(),
+            exit_code: exit.and_then(|e| e.code),
+            signal: exit.and_then(|e| e.signal),
         });
         let stamp = now_stamp();
         if let Some(run) = state.current_run.as_mut() {
@@ -1337,11 +1346,18 @@ async fn invoke_with_retry(
     sink: &Arc<dyn EventSink>,
     child_env: &BTreeMap<String, String>,
 ) -> (u32, Result<StepOutcome, StepError>) {
+    let builtin = match run {
+        StepRun::Subprocess { argv, .. } => argv
+            .first()
+            .is_some_and(|prog| crate::config::is_datalib_step(prog)),
+        StepRun::InProcess(_) => false,
+    };
     let mut attempt = 1u32;
     loop {
         sink.emit(&Event::StepStart {
             step: ctx.step_id.clone(),
             attempt,
+            builtin,
         });
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
@@ -1420,6 +1436,7 @@ mod tests {
                     let version = blake3::hash(new.as_bytes()).to_hex().to_string();
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
+                        exit: None,
                     })
                 }
             }),
@@ -1580,6 +1597,7 @@ mod tests {
                     let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        exit: None,
                     })
                 }
             }),
@@ -1636,6 +1654,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
+                            exit: None,
                         })
                     }
                 }),
@@ -1777,6 +1796,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -1797,6 +1817,7 @@ mod tests {
                 let version = blake3::hash(read.as_bytes()).to_hex().to_string();
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, version)],
+                    exit: None,
                 })
             }),
         )
@@ -1842,6 +1863,7 @@ mod tests {
                 let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "final")],
+                    exit: None,
                 })
             }),
         );
@@ -1928,6 +1950,7 @@ mod tests {
                     let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
+                        exit: None,
                     })
                 }),
             )
@@ -2010,6 +2033,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2156,6 +2180,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2365,6 +2390,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2471,6 +2497,7 @@ mod tests {
                 let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                 Ok(StepOutcome {
                     outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
+                    exit: None,
                 })
             }),
         )
@@ -2499,6 +2526,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2568,6 +2596,7 @@ mod tests {
                     // Same version both runs: nothing moved.
                     Ok(StepOutcome {
                         outputs: vec![ArtifactState::versioned(&pat, "stable")],
+                        exit: None,
                     })
                 }),
             )
@@ -2651,6 +2680,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "early-final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2678,6 +2708,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "late-final")],
+                            exit: None,
                         })
                     }
                 }),
@@ -2772,6 +2803,7 @@ mod tests {
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "v-final")],
+                            exit: None,
                         })
                     }
                 }

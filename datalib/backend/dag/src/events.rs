@@ -24,6 +24,10 @@ pub enum Event {
     StepStart {
         step: StepId,
         attempt: u32,
+        /// Whether the attempt runs the built-in step program — the
+        /// same build as the runner, which is then the attempt's commit.
+        #[serde(default)]
+        builtin: bool,
     },
     /// Terminal state for the step this run.
     StepFinish {
@@ -31,6 +35,11 @@ pub enum Event {
         status: RunState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// How the attempt's process ended, when it was one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
     },
     /// What this step's *sink* can do, announced once as it starts.
     ///

@@ -293,6 +293,7 @@ pub(crate) async fn run_subprocess(
             outputs: outcome
                 .map(|w| w.into_outputs(sink, &ctx.step_id))
                 .unwrap_or_default(),
+            exit: Some(status.into()),
         })
     } else {
         let w = outcome.unwrap_or_default();
@@ -311,7 +312,8 @@ pub(crate) async fn run_subprocess(
                 stderr_tail
             ),
         )
-        .with_outputs(outputs))
+        .with_outputs(outputs)
+        .with_exit(status.into()))
     }
 }
 
@@ -431,11 +433,25 @@ fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
 fn retag(ev: Event, id: &str) -> Event {
     let id = id.to_string();
     match ev {
-        Event::StepStart { attempt, .. } => Event::StepStart { step: id, attempt },
-        Event::StepFinish { status, error, .. } => Event::StepFinish {
+        Event::StepStart {
+            attempt, builtin, ..
+        } => Event::StepStart {
+            step: id,
+            attempt,
+            builtin,
+        },
+        Event::StepFinish {
+            status,
+            error,
+            exit_code,
+            signal,
+            ..
+        } => Event::StepFinish {
             step: id,
             status,
             error,
+            exit_code,
+            signal,
         },
         Event::Checkpoint { version, rows, .. } => Event::Checkpoint {
             step: id,

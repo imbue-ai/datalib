@@ -3,8 +3,8 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, snapshot, versions, LogQuery, LogRow, MetricRow, Process,
-    ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
+    log_after, log_query, processes, runs, snapshot, versions, LogQuery, LogRow, MetricRow,
+    Process, ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -192,7 +192,9 @@ async fn log_query_spans_runs_and_reads_terms() {
                     &root,
                     &LogQuery {
                         run: None,
+                        process: None,
                         step: Some(step),
+                        attempt: None,
                         q: "",
                         after_seq,
                         limit,
@@ -228,7 +230,9 @@ async fn log_query_spans_runs_and_reads_terms() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: Some("a"),
+            attempt: None,
             q: "-run:run-1 sec",
             after_seq: 0,
             limit: 100,
@@ -242,7 +246,9 @@ async fn log_query_spans_runs_and_reads_terms() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "author:thad",
             after_seq: 0,
             limit: 100,
@@ -307,7 +313,7 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
 /// history and its E column are made of.
 #[tokio::test]
 async fn runs_can_be_listed_by_step_and_read_by_id() {
-    use datalib_runs::{runs, snapshot_of};
+    use datalib_runs::snapshot_of;
     let td = tempfile::tempdir().unwrap();
     let keep = Retention {
         max_runs: 100,
@@ -482,8 +488,14 @@ async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_tim
             ..metric("a", "stale", 100)
         });
         w.log(line("a", "info", "first"));
-        // Past the flush interval, inside the sample floor.
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        // The first value has to reach the store before the second is
+        // published, or the two coalesce in the writer's batch and the
+        // series gets one sample. Waited for, not slept for: the
+        // writer's first flush follows an open that a loaded runner can
+        // stretch past any interval chosen here.
+        wait_for_metric(td.path(), "a", "rows", 1).await;
+        // Inside the sample floor: the second value is the run's last,
+        // which the final flush samples.
         w.metric(MetricRow {
             updated_at_utc: recent(20),
             ..metric("a", "rows", 7)
@@ -541,7 +553,9 @@ async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
             root,
             &LogQuery {
                 run: None,
+                process: None,
                 step: None,
+                attempt: None,
                 q: "",
                 after_seq: 0,
                 limit: 100,
@@ -555,6 +569,25 @@ async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
         assert!(
             std::time::Instant::now() < deadline,
             "log line {msg:?} never reached the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_for_metric(root: &std::path::Path, step: &str, name: &str, value: i64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let snap = snapshot(root).await;
+        if snap
+            .metrics
+            .iter()
+            .any(|m| m.step == step && m.name == name && m.value == value)
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "metric {step}/{name}={value} never reached the store"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
@@ -597,8 +630,14 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     // A second run under `max_runs: 1` sweeps run-1's rows; the
     // server's must stay, since they belong to no run.
     {
-        let w =
-            RunWriter::start(td.path(), "run-2", "2026-09-15T10:00:02+00:00", None, keep).unwrap();
+        let w = RunWriter::start(
+            td.path(),
+            "run-2",
+            "2026-09-15T10:00:02+00:00",
+            Some("f2068bc9".into()),
+            keep,
+        )
+        .unwrap();
         w.log(line("a", "info", "from run 2"));
     }
     server.log(LogRow {
@@ -613,7 +652,9 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "",
             after_seq: 0,
             limit: 100,
@@ -621,34 +662,52 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     )
     .await
     .unwrap();
-    // A process's line carries the commit of the process that wrote it
-    // (the next server may be another build); a run's carries none, the
-    // run's row does.
-    let seen: Vec<(Option<&str>, &str, &str, Option<&str>)> = all
+    // Every line reads as its process says: which program wrote it and
+    // from which commit — the server's for the server's lines, the
+    // runner's for a run's.
+    let seen: Vec<String> = all
         .iter()
         .map(|l| {
-            (
-                l.run_id.as_deref(),
-                l.process.as_str(),
-                l.msg.as_str(),
-                l.git_hash.as_deref(),
+            format!(
+                "{} {} {} {}",
+                l.run_id.as_deref().unwrap_or("-"),
+                l.process.as_deref().unwrap_or("-"),
+                l.msg,
+                l.git_hash.as_deref().unwrap_or("-"),
             )
         })
         .collect();
     assert_eq!(
         seen,
         [
-            (None, "http", "ready", Some("ae2d52f0")),
-            (Some("run-2"), "dag", "from run 2", None),
-            (None, "http", "still here", Some("ae2d52f0")),
+            "- http ready ae2d52f0",
+            "run-2 dag from run 2 f2068bc9",
+            "- http still here ae2d52f0",
         ]
+    );
+    // The server's two lines came from one launch; the run's from the
+    // runner's, a process of that run.
+    let ids: Vec<&str> = all.iter().map(|l| l.process_id.as_str()).collect();
+    assert_eq!(ids[0], ids[2]);
+    assert_ne!(ids[0], ids[1]);
+    let runner = processes(td.path(), None, None, 10)
+        .await
+        .into_iter()
+        .find(|p| p.process_id == ids[1])
+        .unwrap();
+    assert_eq!(runner.run_id.as_deref(), Some("run-2"));
+    assert!(
+        runner.finished_at_utc.is_some(),
+        "the writer closing is the process ending"
     );
 
     let servers_only = log_query(
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,
@@ -658,6 +717,46 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     .unwrap();
     assert_eq!(servers_only.len(), 2);
     assert!(servers_only.iter().all(|l| l.run_id.is_none()));
+
+    // `min_level:` is this level and above, across every writer.
+    let loud = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            process: None,
+            step: None,
+            attempt: None,
+            q: "min_level:warn",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        loud.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["still here"]
+    );
+
+    // `commit:` finds the lines of a build by a prefix of its commit.
+    let one_build = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            process: None,
+            step: None,
+            attempt: None,
+            q: "commit:f2068",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        one_build.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["from run 2"]
+    );
 }
 
 /// A line outside any run has its own age limit, shorter than a run's,
@@ -695,7 +794,9 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,
@@ -707,6 +808,55 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         all.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
         ["fresh"]
     );
+}
+
+/// A process row goes when nothing names it any more — no run, no line
+/// — and it is past the process-log age; never before, since the
+/// process may still be alive and about to write.
+#[tokio::test]
+async fn a_process_is_pruned_only_once_nothing_names_it() {
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        process_log_days: 3,
+        ..Retention::default()
+    };
+    {
+        let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap();
+        server.log(LogRow {
+            ts_utc: "2020-01-01T00:00:00.000000+00:00".into(),
+            level: "info".into(),
+            msg: "ancient".into(),
+            ..Default::default()
+        });
+        wait_for_log_line(td.path(), "ancient").await;
+    }
+    let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
+        .await
+        .unwrap();
+    // A launch from long ago whose every line has already aged out.
+    sqlx::query(
+        "INSERT INTO processes (process_id, process, started_at_utc, tz_offset, git_hash) \
+         VALUES ('old', 'http', '2020-01-01T00:00:00.000000+00:00', '+00:00', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    // The next writer applies retention: the ancient line goes, and
+    // with it nothing names `old`; the first server's row started just
+    // now and stays, lines or no lines.
+    drop(ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap());
+    let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
+        .await
+        .unwrap();
+    let left: Vec<(String, String)> =
+        sqlx::query_as("SELECT process_id, started_at_utc FROM processes ORDER BY started_at_utc")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|(id, _)| id != "old"), "{left:?}");
 }
 
 /// The server's lines are also capped by count, newest kept, so a
@@ -737,7 +887,9 @@ async fn process_lines_past_the_cap_go_oldest_first() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,

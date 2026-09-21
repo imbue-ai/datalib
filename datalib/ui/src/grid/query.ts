@@ -25,6 +25,37 @@ export function withToken(query: string, token: string): string {
   return current.length === 0 ? token : `${current} ${token}`;
 }
 
+/// `query` with every `key:…` word taken out, and `token` (or nothing)
+/// put where the first of them was — for a key that means one thing at
+/// a time, like a minimum level, which a control sets rather than adds.
+export function replaceToken(query: string, key: string, token: string | null): string {
+  const words = query.trim().split(/\s+/).filter((w) => w.length > 0);
+  const prefix = `${key}:`;
+  let placed = false;
+  const kept: string[] = [];
+  for (const w of words) {
+    if (!w.startsWith(prefix)) {
+      kept.push(w);
+      continue;
+    }
+    if (token && !placed) kept.push(token);
+    placed = true;
+  }
+  if (token && !placed) kept.push(token);
+  return kept.join(" ");
+}
+
+/// The value of the first `key:value` word in `query`, unquoted only for
+/// a bare value — a control reading its own token back.
+export function tokenValue(query: string, key: string): string | null {
+  const prefix = `${key}:`;
+  const word = query
+    .trim()
+    .split(/\s+/)
+    .find((w) => w.startsWith(prefix));
+  return word == null ? null : word.slice(prefix.length);
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -176,7 +176,7 @@ mod tests {
         assert!(fields["line_number"].is_number());
         // The writer binds these; the layer leaves them alone.
         assert_eq!(r.run_id, None);
-        assert_eq!(r.process, "");
+        assert_eq!(r.process_id, "");
         assert_eq!(r.step, None);
     }
 

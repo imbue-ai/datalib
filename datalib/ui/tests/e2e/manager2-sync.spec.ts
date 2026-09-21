@@ -555,6 +555,11 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     await cell.dblclick();
     const dialog = page.getByRole("dialog", { name: "Step log" });
     await expect(dialog).toBeVisible();
+    // Opened on the step's attempt — a process of the run, with how it
+    // ended in its name — and on the whole of it: the step's own words
+    // and the runner's about it.
+    const which = dialog.getByLabel("Which process of the run");
+    await expect(which.locator("option:checked")).toHaveText(/^flaky\/ingest · attempt 1 · exited 1$/);
     // The line the panel opened on is the runner's word on how the step
     // ended, marked, with the step's own last words above it.
     const jumped = dialog.locator('.rl-grid .slick-cell.rl-jumped[col-id="msg"]');

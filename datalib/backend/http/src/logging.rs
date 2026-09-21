@@ -5,11 +5,20 @@
 
 use std::io::IsTerminal;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer, DEFAULT_LOG_FILTER};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+static PROCESS_ID: OnceLock<String> = OnceLock::new();
+
+/// Which of the store's `processes` this server writes under, once
+/// [`init`] has started the writer; `None` before, or when the store
+/// could not be opened.
+pub fn process_id() -> Option<String> {
+    PROCESS_ID.get().cloned()
+}
 
 /// Install the subscriber and start the store writer. Call once, after
 /// the data root is claimed: a server refused the root must not write
@@ -25,6 +34,9 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
         retention_of(root),
     )
     .map(Arc::new);
+    if let Some(w) = &writer {
+        let _ = PROCESS_ID.set(w.process_id().to_string());
+    }
     let store = writer.as_ref().map(|w| StoreLayer::new(Arc::downgrade(w)));
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));

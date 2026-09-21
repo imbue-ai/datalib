@@ -9,7 +9,7 @@ import {
   fetchAllJobs,
   fetchManageRows,
   fetchRuns,
-  type RunInfo,
+  healthSnapshot,
   fetchTreeHistory,
   enqueueJob,
   cancelJob,
@@ -46,7 +46,7 @@ import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
-import RunLogPanel from "@/components/RunLogPanel.vue";
+import RunLogPanel, { type LogScope } from "@/components/RunLogPanel.vue";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
@@ -377,13 +377,17 @@ function freshest<T>(commit: (value: T) => void) {
   // — or the one in flight — as a grid that follows the run while it goes.
 
 /// What the log panel is showing, or null when it is closed. A null
-/// `row` is the server's own log: every run at once, narrowed by the
-/// query bar to what `datalib-http` wrote rather than to a step.
+/// No `row` is the server's own log: the launch serving this page,
+/// with the store's other launches and the runs a pick away.
 const logFor = ref<{
   row: Row | null;
   runId: string;
+  /// The server launch the panel opens on, for the server's log.
+  launchId?: string | null;
   live: boolean;
   startedAt: string | null;
+  /// What the panel's pickers currently show, for the header.
+  scope?: LogScope;
   /// Open at the line that says how the step ended, for a row whose
   /// status is the outcome of a run — the hover on Failed or Stopped
   /// promises exactly that.
@@ -396,17 +400,36 @@ const ALL_RUNS_LOG = "*";
 /// which updates `logFor` for the header but must not remount the panel.
 const logOpenedOn = ref("");
 
-/// The picker in the panel moved: say so in the header.
-function onLogRunChanged(run: RunInfo | null) {
+/// The panel's pickers moved: say so in the header.
+function onLogScopeChanged(scope: LogScope) {
   if (!logFor.value) return;
-  logFor.value = run
-    ? {
-        ...logFor.value,
-        runId: run.run_id,
-        live: run.finished_at_utc == null,
-        startedAt: run.started_at_utc,
-      }
-    : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null };
+  logFor.value =
+    scope.kind === "run"
+      ? {
+          ...logFor.value,
+          runId: scope.run.run_id,
+          live: (scope.process ?? scope.run).finished_at_utc == null,
+          startedAt: scope.run.started_at_utc,
+          scope,
+        }
+      : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null, scope };
+}
+
+/// How a process reads in the header: the runner, or a step's attempt
+/// and how it ended.
+function processNote(scope: LogScope): string {
+  if (scope.kind !== "run" || !scope.process) return "";
+  const p = scope.process;
+  const who = p.step ? `attempt ${p.attempt ?? "?"}` : "the runner";
+  const end =
+    p.finished_at_utc == null
+      ? "running"
+      : p.signal != null
+        ? `ended by signal ${p.signal}`
+        : p.exit_code != null
+          ? `exited ${p.exit_code}`
+          : "finished";
+  return ` · ${who}, ${end}`;
 }
 
 /// The run whose log answers "what was this step doing": the one in
@@ -425,11 +448,13 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean; started
 }
 
 /// The server's log — what `datalib-http` itself said: the worker, the
-/// applets, every request that failed. Always live: the server writing
-/// it is the one serving this page.
+/// applets, every request that failed. Opens on the launch serving this
+/// page, which is always live; when the server is recording nothing
+/// (no store), on everything, narrowed by the query bar.
 function openServerLog() {
   logError.value = null;
-  logFor.value = { row: null, runId: ALL_RUNS_LOG, live: true, startedAt: null };
+  const launchId = healthSnapshot()?.process_id ?? null;
+  logFor.value = { row: null, runId: ALL_RUNS_LOG, launchId, live: true, startedAt: null };
   logOpenedOn.value = ALL_RUNS_LOG;
 }
 
@@ -1540,9 +1565,18 @@ onUnmounted(() => {
           <div v-if="!logFor.row">
             <h3>Server log</h3>
             <p>
-              What <code>datalib-http</code> wrote — its own lines and its applets’ — beside
-              every run the store holds. Clear <code>process:http</code> from the search to see
-              the runs’ lines too.
+              What <code>datalib-http</code> wrote — its own lines and its applets’.
+              <template v-if="logFor.scope?.kind === 'launch'">
+                The launch that started
+                {{ formatRelative(logFor.scope.launch.started_at_utc, Date.now()) }}<span
+                  v-if="logFor.scope.launch.git_hash"
+                >, built from <code>{{ logFor.scope.launch.git_hash.slice(0, 10) }}</code></span
+                >; the picker has its earlier launches and the runs.
+              </template>
+              <template v-else-if="logFor.launchId">
+                This server’s launch; the picker has its earlier launches and the runs.
+              </template>
+              <template v-else>Every line the store holds.</template>
             </p>
           </div>
           <div v-else>
@@ -1555,7 +1589,8 @@ onUnmounted(() => {
                   v-if="logFor.startedAt"
                   :title="formatStamp(logFor.startedAt)"
                 >, started {{ formatRelative(logFor.startedAt, Date.now()) }}</span>
-                · run <code>{{ logFor.runId }}</code>
+                · run <code>{{ logFor.runId }}</code
+                >{{ logFor.scope ? processNote(logFor.scope) : "" }}
               </span>
             </p>
           </div>
@@ -1567,10 +1602,11 @@ onUnmounted(() => {
           :key="logOpenedOn + '/' + (logFor.row?.id ?? '')"
           :run-id="logOpenedOn"
           :step="logFor.row?.id ?? null"
+          :launch-id="logFor.launchId ?? null"
           :live="logFor.live"
-          :initial-query="logFor.row ? undefined : 'process:http'"
+          :initial-query="logFor.row || logFor.launchId ? undefined : 'process:http min_level:info'"
           :jump-to-end="logFor.jumpToEnd"
-          @run-changed="onLogRunChanged"
+          @scope-changed="onLogScopeChanged"
         />
       </div>
     </div>
