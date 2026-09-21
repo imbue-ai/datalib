@@ -42,6 +42,7 @@ import {
   type RunLogLine,
 } from "@/api";
 import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
+import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -86,9 +87,9 @@ const emit = defineEmits<{
 const ALL_RUNS = "*";
 const LAUNCH_PREFIX = "launch:";
 
-/// The first picker: a run, a launch of the server, or everything.
-/// A run's value is its id; a launch's is prefixed, since both are
-/// UUIDs.
+/// The first picker: a run, a launch of the server or a page of the
+/// app, or everything. A run's value is its id; a launch's or a page's
+/// is prefixed, since all are UUIDs.
 const picked = ref(props.launchId ? `${LAUNCH_PREFIX}${props.launchId}` : props.runId);
 const allRuns = computed(() => picked.value === ALL_RUNS);
 const launchId = computed(() =>
@@ -103,6 +104,14 @@ const processId = ref<string | null>(null);
 const runs = ref<RunInfo[]>([]);
 /// The server's launches, newest first.
 const launches = ref<ProcessInfo[]>([]);
+/// The app's pages — one per load in a tab — newest first.
+const pages = ref<ProcessInfo[]>([]);
+/// The launch or page picked, when one is.
+const launch = computed(() =>
+  launchId.value
+    ? ([...launches.value, ...pages.value].find((x) => x.process_id === launchId.value) ?? null)
+    : null,
+);
 /// The processes of the run on screen: its runner and its steps'
 /// attempts, newest first.
 const runProcesses = ref<ProcessInfo[]>([]);
@@ -112,10 +121,7 @@ const currentProcess = computed(
 /// Whether what is on screen may still be writing. The opened run says
 /// so by prop; anything picked by whether the store has closed it.
 const live = computed(() => {
-  if (launchId.value) {
-    const l = launches.value.find((x) => x.process_id === launchId.value);
-    return !l || l.finished_at_utc == null;
-  }
+  if (launchId.value) return !launch.value || launch.value.finished_at_utc == null;
   if (allRuns.value) return props.live || runs.value.some((x) => x.finished_at_utc == null);
   if (currentProcess.value) return currentProcess.value.finished_at_utc == null;
   if (runId.value === props.runId) return props.live;
@@ -268,9 +274,10 @@ function onQueryInput(ev: Event) {
 
 async function loadRuns() {
   try {
-    [runs.value, launches.value] = await Promise.all([
+    [runs.value, launches.value, pages.value] = await Promise.all([
       fetchRuns({ step: props.step ?? undefined, limit: 30 }),
       fetchProcesses({ process: "http", limit: 20 }),
+      fetchProcesses({ process: "ui", limit: 20 }),
     ]);
   } catch {
     // The pickers are a convenience; the opened run still shows.
@@ -298,8 +305,7 @@ async function loadProcesses(pickStep: string | null) {
 
 function announce() {
   if (launchId.value) {
-    const launch = launches.value.find((l) => l.process_id === launchId.value);
-    if (launch) emit("scope-changed", { kind: "launch", launch });
+    if (launch.value) emit("scope-changed", { kind: "launch", launch: launch.value });
     return;
   }
   const run = runs.value.find((r) => r.run_id === runId.value);
@@ -342,6 +348,15 @@ function launchLabel(l: ProcessInfo): string {
   const state = l.finished_at_utc == null ? "running" : "ended";
   const mine = l.process_id === healthSnapshot()?.process_id ? " · this server" : "";
   return `server started ${when} · ${state}${mine}`;
+}
+
+/// How a page reads: when it opened, whether it is still open, and
+/// whether it is the one this panel is on.
+function pageLabel(p: ProcessInfo): string {
+  const when = formatRelative(p.started_at_utc, Date.now());
+  const state = p.finished_at_utc == null ? "open" : "closed";
+  const mine = p.process_id === thisPage.process_id ? " · this page" : "";
+  return `page opened ${when} · ${state}${mine}`;
 }
 
 /// The run id as the column shows it: the first block of the UUID, which
@@ -806,6 +821,11 @@ onUnmounted(() => {
             {{ launchLabel(l) }}
           </option>
         </optgroup>
+        <optgroup v-if="pages.length" label="Pages of the app">
+          <option v-for="p in pages" :key="p.process_id" :value="LAUNCH_PREFIX + p.process_id">
+            {{ pageLabel(p) }}
+          </option>
+        </optgroup>
         <option :value="ALL_RUNS">everything the store holds</option>
       </select>
       <select
@@ -830,7 +850,8 @@ onUnmounted(() => {
     <p v-else-if="lineCount === 0" class="rl-note">
       <template v-if="query.trim()">Nothing matches the query.</template>
       <template v-else>
-        Nothing logged yet<span v-if="launchId"> by this server</span
+        Nothing logged yet<span v-if="launch?.process === 'ui'"> by this page</span
+        ><span v-else-if="launchId"> by this server</span
         ><span v-else-if="currentProcess"> by this process</span
         ><span v-else-if="runId"> for this run</span>.
       </template>

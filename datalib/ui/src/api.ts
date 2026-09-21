@@ -1001,9 +1001,10 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 // other vocabularies here. Every stamp is UTC (`…+00:00`), with the
 // offset it was written in beside it as `tz_offset` (`+02:00`).
 
-// Which datalib program a process was: the runner (its own lines, and
-// every step's), or the app's server (its own, and its applets').
-export type LogProcess = "dag" | "http";
+// Which datalib program a process was: the runner (its own lines), a
+// step it spawned, the app's server (its own, and its applets'), or a
+// page of the app in a tab (what `telemetry.ts` reported from it).
+export type LogProcess = "dag" | "step" | "http" | "ui";
 
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
@@ -1019,7 +1020,7 @@ export type RunInfo = {
 export type ProcessInfo = {
   process_id: string;
   process: LogProcess | string;
-  // The run it belonged to; null for the server.
+  // The run it belonged to; null for the server and a page.
   run_id: string | null;
   // For a step's attempt: which step, which attempt.
   step: string | null;
@@ -1038,7 +1039,7 @@ export type ProcessInfo = {
 
 // Processes newest first; `run` narrows to one run's (its runner and
 // its steps' attempts), `process` to one kind (`http`: the server's
-// launches).
+// launches; `ui`: pages of the app).
 export function fetchProcesses(
   opts: { run?: string; process?: string; limit?: number } = {},
   signal?: AbortSignal,

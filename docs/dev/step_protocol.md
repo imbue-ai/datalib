@@ -348,10 +348,12 @@ rather than rounding it up to `info`.
 
 **Every process is a row.** `processes` has one row per process that
 took part: a run of the runner, each attempt of each step it spawned,
-and each launch of the app server — with when it started and ended,
-and, for a step attempt, how: the `exit_code` it exited with, or the
-`signal` that ended it, as the runner saw in `wait(2)`. (The runner and
-the server record themselves, and a process cannot see its own end.)
+each launch of the app server, and each page of the app open in a
+browser tab (the server records it; `docs/dev/app_stores.md`) — with
+when it started and ended, and, for a step attempt, how: the
+`exit_code` it exited with, or the `signal` that ended it, as the
+runner saw in `wait(2)`. (The runner and the server record themselves,
+and a process cannot see its own end; a page says when it is going.)
 Every log line names the process that wrote it: a step attempt's for
 what came out of the step's pipes, the runner's for its own lines —
 including what it says *about* a step, which is why a line also keeps

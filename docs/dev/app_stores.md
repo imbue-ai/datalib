@@ -12,7 +12,8 @@
 <data_root>/system/runs.sqlite                    every run's step states, log lines and
                                                   metrics, plus the app server's own log;
                                                   every process — runner, step attempt,
-                                                  server launch — a row in `processes`
+                                                  server launch, page of the app — a
+                                                  row in `processes`
                                                   (plain SQLite; any sqlite3 opens it)
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
@@ -36,6 +37,17 @@ path, query, status and milliseconds, under the tracing target
 asked for. A read of the log itself is the one request that leaves no
 line: the panel refetches whenever the log moves, and a line per
 refetch would keep it moving.
+
+A page of the app — one load in one browser tab — is a `ui` process
+of its own, and what happened on it is its lines: `ui.page_load`,
+`ui.navigate` (the path, which is the open card stack, so a search
+typed into a grid is in it), `ui.error` for an exception nobody
+caught, `ui.page_hide`. The page posts them in batches to
+`POST /api/ui/events` (`datalib/ui/src/telemetry.ts` on one side,
+`datalib/backend/http/src/ui_events.rs` on the other) and sends its
+process id on every request as `X-Datalib-Page`, which the request
+log keeps as `page` — the join from an action to what the server did
+for it. The log panel lists pages beside the server's launches.
 
 ## The three stores `datalib-http` owns
 

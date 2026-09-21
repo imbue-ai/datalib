@@ -5,19 +5,29 @@
 
 use std::io::IsTerminal;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer, DEFAULT_LOG_FILTER};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static PROCESS_ID: OnceLock<String> = OnceLock::new();
+/// Weak like the subscriber's handle: the writer's drop is its final
+/// flush, and a strong handle here would never let it happen.
+static WRITER: OnceLock<Weak<ProcessLogWriter>> = OnceLock::new();
 
 /// Which of the store's `processes` this server writes under, once
 /// [`init`] has started the writer; `None` before, or when the store
 /// could not be opened.
 pub fn process_id() -> Option<String> {
     PROCESS_ID.get().cloned()
+}
+
+/// The store writer, for rows that do not come through `tracing`: what
+/// a page of the app reports about itself. `None` before [`init`], when
+/// the store could not be opened, or once the writer has been dropped.
+pub fn writer() -> Option<Arc<ProcessLogWriter>> {
+    WRITER.get().and_then(Weak::upgrade)
 }
 
 /// Install the subscriber and start the store writer. Call once, after
@@ -36,6 +46,7 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
     .map(Arc::new);
     if let Some(w) = &writer {
         let _ = PROCESS_ID.set(w.process_id().to_string());
+        let _ = WRITER.set(Arc::downgrade(w));
     }
     let store = writer.as_ref().map(|w| StoreLayer::new(Arc::downgrade(w)));
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()

@@ -1566,7 +1566,12 @@ onUnmounted(() => {
             <h3>Server log</h3>
             <p>
               What <code>datalib-http</code> wrote — its own lines and its applets’.
-              <template v-if="logFor.scope?.kind === 'launch'">
+              <template v-if="logFor.scope?.kind === 'launch' && logFor.scope.launch.process === 'ui'">
+                A page of the app, opened
+                {{ formatRelative(logFor.scope.launch.started_at_utc, Date.now()) }}: what the
+                person did there, as the page reported it.
+              </template>
+              <template v-else-if="logFor.scope?.kind === 'launch'">
                 The launch that started
                 {{ formatRelative(logFor.scope.launch.started_at_utc, Date.now()) }}<span
                   v-if="logFor.scope.launch.git_hash"

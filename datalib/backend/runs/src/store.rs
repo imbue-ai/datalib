@@ -783,6 +783,18 @@ impl ProcessLogWriter {
         self.0.log(row);
     }
 
+    /// A process this one records on behalf of — a page of the app,
+    /// which cannot reach the store itself — as it starts, and again
+    /// with `finished_at_utc` set when it says it is going.
+    pub fn process(&self, row: ProcessRow) {
+        self.0
+            .pending
+            .lock()
+            .expect("run store mutex")
+            .processes
+            .insert(row.process_id.clone(), row);
+    }
+
     /// The row this launch writes under, for the server to say which
     /// of the store's launches it is.
     pub fn process_id(&self) -> &str {
