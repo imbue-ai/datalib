@@ -8,7 +8,7 @@
 //! bookkeeping sidecars, volatile fields, JSONB, why pools are size 1, why
 //! DDL runs in two passes — are in `datalib/backend/etl/README.md`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
@@ -422,17 +422,94 @@ fn take_writer_lock(db_path: &Path) -> Result<FileLock> {
     Ok(lock)
 }
 
+/// What `open` does with a table whose stored shape the DDL can no
+/// longer be reached from by `ADD COLUMN` alone: a column removed,
+/// renamed or retyped, a key or a `NOT NULL` changed. See the README
+/// §"Schema self-healing".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnSchemaBreak {
+    /// Fail the open, naming the table and the change, and leave the
+    /// file as it was. Raw stores: their rows may be the only copy.
+    Refuse,
+    /// Drop the table, recreate it empty, and forget the store's
+    /// cursors so the next run refills it. Derived stores, whose rows
+    /// are a function of another store; and a raw store under
+    /// `--reset-and-redownload`, which is about to refill it anyway.
+    Rebuild,
+}
+
+/// Set by `datalib-step` for a `--reset-and-redownload` run, where a
+/// raw store is about to be emptied and refilled and a refusal would
+/// only be in the way. Process-wide because the open sits under every
+/// provider's `RawDb::open`, which has no run context to read.
+static REBUILD_RAW_STORES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn rebuild_raw_stores_on_schema_break() {
+    REBUILD_RAW_STORES.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
 /// store — render output, an index, a blob CAS — would otherwise get
 /// `sync_runs` and the scope tables as three empty tables suggesting a
 /// provenance it lacks. `kind` is what its `_datalib_meta` names it.
+/// Always [`OnSchemaBreak::Rebuild`]: every row is a function of some
+/// other store, so a rebuild costs a pass over that store.
 pub async fn open_derived(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, false, kind).await
+    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Rebuild).await
 }
 
+/// A raw store, for the process that owns it. [`OnSchemaBreak::Refuse`]
+/// unless this is a reset run ([`rebuild_raw_stores_on_schema_break`]).
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
-    open_inner(db_path, extra_ddl, true, StoreKind::Raw).await
+    let policy = if REBUILD_RAW_STORES.load(std::sync::atomic::Ordering::Relaxed) {
+        OnSchemaBreak::Rebuild
+    } else {
+        OnSchemaBreak::Refuse
+    };
+    open_with(db_path, extra_ddl, policy).await
 }
+
+/// [`open`] with the policy said rather than taken from the process.
+pub async fn open_with(
+    db_path: &Path,
+    extra_ddl: &[&str],
+    on_break: OnSchemaBreak,
+) -> Result<SqlitePool> {
+    open_inner(db_path, extra_ddl, true, StoreKind::Raw, on_break).await
+}
+
+/// The error [`OnSchemaBreak::Refuse`] fails an open with: every table
+/// whose stored shape the DDL cannot be reached from additively, and
+/// what differs. The file was not changed.
+#[derive(Debug)]
+pub struct SchemaBreak {
+    pub store: PathBuf,
+    /// `(table, what differs)`, in DDL order.
+    pub breaks: Vec<(String, String)>,
+}
+
+impl std::fmt::Display for SchemaBreak {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "{} has a shape this build's DDL cannot be reached from by adding columns, \
+             and its rows may be the only copy, so nothing was changed:",
+            self.store.display()
+        )?;
+        for (table, what) in &self.breaks {
+            writeln!(f, "  {table}: {what}")?;
+        }
+        write!(
+            f,
+            "Either write a migration for it (docs/dev/plans/schema_migrations.md §3.3), \
+             or — if upstream still has the data — re-download this source: \
+             `datalib-dag --reset-and-redownload --sync <source>/ingest <config>`."
+        )
+    }
+}
+
+impl std::error::Error for SchemaBreak {}
 
 /// Open a store to read data somebody else owns.
 ///
@@ -531,6 +608,7 @@ async fn open_inner(
     extra_ddl: &[&str],
     include_shared: bool,
     kind: StoreKind,
+    on_break: OnSchemaBreak,
 ) -> Result<SqlitePool> {
     // Logged at every call so a stray second pool against an already-open
     // file is attributable: with max_connections=1 it surfaces only as
@@ -557,47 +635,63 @@ async fn open_inner(
     // writer left in the working set was never at a seal boundary, and every
     // reader pins commits, so nobody was promised it.
     discard_dirty_working_tree(&pool, db_path).await?;
-    // Tables, then the reconcile, then indexes — see the README for why the
-    // order is load-bearing. `parse_create_table_name` returns `None` for
-    // exactly the statements that must wait.
+    // Tables, then indexes — see the README for why the order is
+    // load-bearing. `parse_create_table_name` returns `None` for exactly
+    // the statements that must wait.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     // `_datalib_meta` first, in every store: it says which build wrote
     // the file, and it rides in the same schema commit as the rest.
     let meta_ddl: &[&str] = &[datalib_store_meta::DDL];
     let ddl = || meta_ddl.iter().chain(extra_ddl).chain(shared);
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
+    // Every table is planned against the file as it is before anything
+    // is created or altered: a refusal has to leave the file untouched,
+    // and it has to name every break, not the first.
+    let mut plans = Vec::new();
     for stmt in ddl().filter(is_create_table) {
-        // Audited: every DDL statement is built in a provider's `schema_raw.rs`
-        // from static consts; no user or upstream data reaches it.
-        sqlx::query(sqlx::AssertSqlSafe(*stmt))
-            .execute(&pool)
+        let table = parse_create_table_name(stmt).expect("filtered on it");
+        let plan = plan_table_schema(&pool, stmt, &table)
             .await
-            .with_context(|| {
-                format!(
-                    "apply DDL: {}",
-                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
-                )
-            })?;
+            .with_context(|| format!("plan schema: {table}"))?;
+        plans.push((*stmt, table, plan));
     }
-    // Add columns an older store predates, or drop+recreate when ADD
-    // can't express the change.
+    let breaks: Vec<(String, String)> = plans
+        .iter()
+        .filter_map(|(_, table, plan)| match plan {
+            TablePlan::Break(what) => Some((table.clone(), what.clone())),
+            _ => None,
+        })
+        .collect();
+    if !breaks.is_empty() && on_break == OnSchemaBreak::Refuse {
+        pool.close().await;
+        return Err(anyhow::Error::new(SchemaBreak {
+            store: db_path.to_path_buf(),
+            breaks,
+        }));
+    }
+    let mut created = Vec::new();
     let mut recreated = Vec::new();
-    for stmt in ddl() {
-        let outcome = reconcile_table_schema(&pool, stmt).await.with_context(|| {
-            format!(
-                "reconcile schema: {}",
-                stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
-            )
-        })?;
-        if let Reconciled::Recreated(table) = outcome {
-            recreated.push(table);
+    for (stmt, table, plan) in &plans {
+        match apply_table_plan(&pool, stmt, table, plan, on_break)
+            .await
+            .with_context(|| format!("reconcile schema: {table}"))?
+        {
+            Reconciled::Kept => {}
+            Reconciled::Created => created.push(table.clone()),
+            Reconciled::Recreated => recreated.push(table.clone()),
         }
     }
-    if !recreated.is_empty() {
-        forget_cursors_after_recreate(&pool, &recreated).await?;
+    // A table that appeared in a store that already had others is as
+    // empty as a recreated one, and a cursor that says "read through
+    // here" would leave it empty until upstream changed. A store whose
+    // every table was just created is a first open, with no cursor to
+    // forget.
+    let first_open = created.len() == plans.len();
+    if !recreated.is_empty() || (!created.is_empty() && !first_open) {
+        forget_cursors(&pool, &created, &recreated).await?;
     }
-    // Indexes last, so they see the reconciled columns — and so reconcile's
-    // drop+recreate path costs no index.
+    // Indexes last, so they see the reconciled columns — and so a
+    // recreate costs no index.
     for stmt in ddl().filter(|s| !is_create_table(s)) {
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
@@ -676,33 +770,47 @@ async fn open_inner(
     Ok(pool)
 }
 
-/// One column's introspected shape, from `PRAGMA table_xinfo`.
-struct ColumnInfo {
-    name: String,
-    decl_type: String,
-    not_null: bool,
-    default: Option<String>,
-    /// `hidden` 2/3. The generation expression isn't recoverable from
-    /// `table_xinfo`, so a missing generated column forces drop+recreate.
-    generated: bool,
+/// One column's introspected shape, from `PRAGMA table_xinfo`. Two
+/// columns compare equal when a row written under one reads correctly
+/// under the other: the name, the declared type, nullability, the
+/// default, the place in the primary key, and whether it is generated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnInfo {
+    pub name: String,
+    /// Upper-cased with its whitespace collapsed, so `varchar(36)` and
+    /// `VARCHAR (36)` are one type.
+    pub decl_type: String,
+    pub not_null: bool,
+    pub default: Option<String>,
+    /// 1-based position in the primary key, 0 when not part of it.
+    pub pk: i64,
+    /// `hidden` 2 (VIRTUAL) or 3 (STORED).
+    pub generated: bool,
+    /// Only a STORED generated column cannot be added to an existing
+    /// table; a VIRTUAL one can.
+    pub stored_generated: bool,
 }
 
 impl ColumnInfo {
-    fn add_column_decl(&self) -> String {
-        let ty = if self.decl_type.is_empty() {
-            "TEXT"
-        } else {
-            self.decl_type.as_str()
-        };
-        let mut decl = format!("{} {ty}", self.name);
+    fn describe(&self) -> String {
+        let mut s = format!("{} {}", self.name, self.decl_type);
         if self.not_null {
-            decl.push_str(" NOT NULL");
+            s.push_str(" NOT NULL");
         }
         if let Some(d) = &self.default {
-            decl.push_str(" DEFAULT ");
-            decl.push_str(d);
+            s.push_str(&format!(" DEFAULT {d}"));
         }
-        decl
+        if self.pk > 0 {
+            s.push_str(&format!(" PRIMARY KEY#{}", self.pk));
+        }
+        if self.generated {
+            s.push_str(if self.stored_generated {
+                " GENERATED STORED"
+            } else {
+                " GENERATED VIRTUAL"
+            });
+        }
+        s
     }
 }
 
@@ -735,12 +843,23 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
         }
         let not_null: i64 = r.try_get("notnull").unwrap_or(0);
         let hidden: i64 = r.try_get("hidden").unwrap_or(0);
+        let decl_type: String = r.try_get("type").unwrap_or_default();
         cols.push(ColumnInfo {
             name,
-            decl_type: r.try_get("type").unwrap_or_default(),
+            decl_type: decl_type
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_uppercase(),
             not_null: not_null != 0,
-            default: r.try_get("dflt_value").ok().flatten(),
+            default: r
+                .try_get::<Option<String>, _>("dflt_value")
+                .ok()
+                .flatten()
+                .map(|d| d.trim().to_string()),
+            pk: r.try_get("pk").unwrap_or(0),
             generated: hidden == 2 || hidden == 3,
+            stored_generated: hidden == 3,
         });
     }
     Ok(cols)
@@ -778,21 +897,59 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
     cols
 }
 
-pub async fn declared_column_names(create_sql: &str, table: &str) -> Result<BTreeSet<String>> {
-    Ok(declared_columns(create_sql, table)
-        .await?
-        .into_iter()
-        .map(|c| c.name)
-        .collect())
+/// How `table` in the file differs from `create_sql`, for a caller that
+/// rebuilds on any difference: `None` when the table is absent or has
+/// exactly the declared shape, else one line naming what moved.
+pub async fn table_drift(
+    pool: &SqlitePool,
+    create_sql: &str,
+    table: &str,
+) -> Result<Option<String>> {
+    let actual = table_columns(pool, table).await?;
+    if actual.is_empty() {
+        return Ok(None);
+    }
+    let declared = declared_columns(create_sql, table).await?;
+    Ok(shape_drift(&declared, &actual))
 }
 
-/// Empty when the table does not exist, matching [`table_columns`].
-pub async fn actual_column_names(pool: &SqlitePool, table: &str) -> Result<BTreeSet<String>> {
-    Ok(table_columns(pool, table)
-        .await?
-        .into_iter()
-        .map(|c| c.name)
-        .collect())
+/// What differs between two column lists, or `None` when nothing does.
+fn shape_drift(declared: &[ColumnInfo], actual: &[ColumnInfo]) -> Option<String> {
+    let mut parts = Vec::new();
+    let missing: Vec<&str> = declared
+        .iter()
+        .filter(|d| !actual.iter().any(|a| a.name == d.name))
+        .map(|d| d.name.as_str())
+        .collect();
+    let unexpected: Vec<&str> = actual
+        .iter()
+        .filter(|a| !declared.iter().any(|d| d.name == a.name))
+        .map(|a| a.name.as_str())
+        .collect();
+    let changed: Vec<String> = declared
+        .iter()
+        .filter_map(|d| {
+            let a = actual.iter().find(|a| a.name == d.name)?;
+            (a != d).then(|| {
+                format!(
+                    "{} (stored: {}; declared: {})",
+                    d.name,
+                    a.describe(),
+                    d.describe()
+                )
+            })
+        })
+        .collect();
+    if !missing.is_empty() {
+        parts.push(format!("missing: [{}]", missing.join(", ")));
+    }
+    if !unexpected.is_empty() {
+        parts.push(format!("unexpected: [{}]", unexpected.join(", ")));
+    }
+    if !changed.is_empty() {
+        parts.push(format!("changed: [{}]", changed.join("; ")));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 pub fn parse_create_table_name(sql: &str) -> Option<String> {
@@ -813,82 +970,180 @@ pub fn parse_create_table_name(sql: &str) -> Option<String> {
 
 enum Reconciled {
     Kept,
-    /// The table was dropped and recreated empty; its name.
-    Recreated(String),
+    /// The table did not exist and was created.
+    Created,
+    /// The table was dropped and recreated empty.
+    Recreated,
 }
 
-/// Add missing non-generated columns via `ALTER TABLE … ADD COLUMN`;
-/// otherwise drop and recreate from the DDL. See the README for why the drop
-/// is safe for raw stores and why `open` runs this between the table and
-/// index halves of the DDL.
-async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<Reconciled> {
-    let Some(table) = parse_create_table_name(create_sql) else {
-        return Ok(Reconciled::Kept);
-    };
+/// What it takes to bring one table in the file to its DDL, decided
+/// before anything is touched.
+#[derive(Debug, PartialEq, Eq)]
+enum TablePlan {
+    /// Present, and every column has the declared shape.
+    Kept,
+    /// Absent.
+    Create,
+    /// Present, and reachable by `ALTER TABLE … ADD COLUMN` with these
+    /// clauses, verbatim from the DDL.
+    Add(Vec<String>),
+    /// Present, and not reachable additively: what differs.
+    Break(String),
+}
 
-    // Desired columns, via a probe built from this exact DDL.
-    let desired = declared_columns(create_sql, &table).await?;
+/// Whether a column clause can go through `ALTER TABLE … ADD COLUMN`.
+/// SQLite refuses a key, a `NOT NULL` with no default and a STORED
+/// generated column there; anything else it accepts, a VIRTUAL
+/// generated column included.
+fn can_be_added(col: &ColumnInfo) -> bool {
+    col.pk == 0 && !(col.not_null && col.default.is_none()) && !col.stored_generated
+}
 
-    // Empty ⇒ table doesn't exist (the DDL pass should have created it).
-    let actual = table_columns(pool, &table).await?;
+async fn plan_table_schema(pool: &SqlitePool, create_sql: &str, table: &str) -> Result<TablePlan> {
+    let actual = table_columns(pool, table).await?;
     if actual.is_empty() {
-        // Audited: `create_sql` is our own static DDL.
-        sqlx::query(sqlx::AssertSqlSafe(create_sql))
-            .execute(pool)
-            .await
-            .with_context(|| format!("create missing table {table}"))?;
-        return Ok(Reconciled::Kept);
+        return Ok(TablePlan::Create);
     }
-
-    let actual_names: std::collections::HashSet<&str> =
-        actual.iter().map(|c| c.name.as_str()).collect();
-    let desired_names: std::collections::HashSet<&str> =
-        desired.iter().map(|c| c.name.as_str()).collect();
-    let has_extra = actual_names.iter().any(|n| !desired_names.contains(n));
-    let missing: Vec<&ColumnInfo> = desired
+    let declared = declared_columns(create_sql, table).await?;
+    let Some(drift) = shape_drift(&declared, &actual) else {
+        return Ok(TablePlan::Kept);
+    };
+    // Additive means: every difference is a declared column the file
+    // lacks, and each one can be added.
+    let additive = actual.iter().all(|a| declared.iter().any(|d| d == a))
+        && declared
+            .iter()
+            .filter(|d| !actual.iter().any(|a| a.name == d.name))
+            .all(can_be_added);
+    if !additive {
+        return Ok(TablePlan::Break(drift));
+    }
+    let mut clauses = Vec::new();
+    for col in declared
         .iter()
-        .filter(|c| !actual_names.contains(c.name.as_str()))
-        .collect();
-
-    if !has_extra && missing.is_empty() {
-        return Ok(Reconciled::Kept);
-    }
-
-    // Additive-only, no generated columns missing → ALTER ADD.
-    if !has_extra && missing.iter().all(|c| !c.generated) {
-        let mut added_all = true;
-        for col in &missing {
-            let sql = format!("ALTER TABLE {table} ADD COLUMN {}", col.add_column_decl());
-            // Audited: identifiers come from our own static DDL.
-            match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
-                Ok(_) => tracing::info!(
-                    table = %table,
-                    column = %col.name,
-                    "doltlite_raw: added missing column to existing table"
-                ),
-                Err(e) => {
-                    tracing::warn!(
-                        table = %table,
-                        column = %col.name,
-                        error = %format!("{e:#}"),
-                        "doltlite_raw: ADD COLUMN failed; falling back to drop+recreate"
-                    );
-                    added_all = false;
-                    break;
-                }
+        .filter(|d| !actual.iter().any(|a| a.name == d.name))
+    {
+        match column_clause(create_sql, &col.name) {
+            Some(clause) => clauses.push(clause),
+            None => {
+                return Ok(TablePlan::Break(format!(
+                    "{drift}; and the clause for {} could not be read out of the DDL",
+                    col.name
+                )))
             }
         }
-        if added_all {
-            return Ok(Reconciled::Kept);
+    }
+    Ok(TablePlan::Add(clauses))
+}
+
+/// The column definition for `column` as the DDL wrote it — the text
+/// between the top-level commas of the `CREATE TABLE` body that starts
+/// with that name — so an `ADD COLUMN` carries whatever the declaration
+/// carried (a `DEFAULT`, a `COLLATE`, a generation expression).
+fn column_clause(create_sql: &str, column: &str) -> Option<String> {
+    let open = create_sql.find('(')?;
+    let body = &create_sql[open + 1..];
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut clauses = Vec::new();
+    let mut in_quote: Option<char> = None;
+    for (i, c) in body.char_indices() {
+        match (in_quote, c) {
+            (Some(q), _) if c == q => in_quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"' | '`') => in_quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') if depth == 0 => {
+                clauses.push(&body[start..i]);
+                break;
+            }
+            (None, ')') => depth -= 1,
+            (None, ',') if depth == 0 => {
+                clauses.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
         }
     }
+    clauses
+        .into_iter()
+        .map(str::trim)
+        .find(|clause| {
+            clause
+                .split(|c: char| c.is_whitespace() || c == '(')
+                .next()
+                .map(|first| first.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']'))
+                == Some(column)
+        })
+        .map(|clause| clause.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 
-    // Fallback: drop + recreate.
-    tracing::warn!(
-        table = %table,
-        "doltlite_raw: schema not reconcilable by ADD COLUMN (column removed, \
-         renamed, generated, or ADD failed); dropping and recreating from DDL"
-    );
+async fn apply_table_plan(
+    pool: &SqlitePool,
+    create_sql: &str,
+    table: &str,
+    plan: &TablePlan,
+    on_break: OnSchemaBreak,
+) -> Result<Reconciled> {
+    match plan {
+        TablePlan::Kept => return Ok(Reconciled::Kept),
+        TablePlan::Create => {
+            // Audited: `create_sql` is our own static DDL.
+            sqlx::query(sqlx::AssertSqlSafe(create_sql))
+                .execute(pool)
+                .await
+                .with_context(|| format!("create {table}"))?;
+            return Ok(Reconciled::Created);
+        }
+        TablePlan::Add(clauses) => {
+            let mut added_all = true;
+            for clause in clauses {
+                // Audited: `clause` is a slice of our own static DDL.
+                let sql = format!("ALTER TABLE {table} ADD COLUMN {clause}");
+                match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
+                    Ok(_) => tracing::info!(
+                        table,
+                        column = %clause,
+                        "doltlite_raw: added a column an older store lacked"
+                    ),
+                    Err(e) if on_break == OnSchemaBreak::Refuse => {
+                        // Planned as additive and refused by the engine:
+                        // the file has this one ALTER less than the DDL
+                        // wants and nothing else, which the next open
+                        // discards with the working set.
+                        return Err(anyhow::Error::new(e)
+                            .context(format!("ALTER TABLE {table} ADD COLUMN {clause}")));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            table,
+                            column = %clause,
+                            error = %format!("{e:#}"),
+                            "doltlite_raw: ADD COLUMN failed; rebuilding the table"
+                        );
+                        added_all = false;
+                        break;
+                    }
+                }
+            }
+            if added_all {
+                return Ok(Reconciled::Kept);
+            }
+        }
+        TablePlan::Break(what) => {
+            debug_assert_eq!(
+                on_break,
+                OnSchemaBreak::Rebuild,
+                "a Refuse open never gets here"
+            );
+            tracing::warn!(
+                table,
+                what = %what,
+                "doltlite_raw: the stored shape cannot be reached by ADD COLUMN; \
+                 dropping and recreating the table from the DDL"
+            );
+        }
+    }
     // Audited: `table` is parsed from our own static DDL.
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
         .execute(pool)
@@ -898,7 +1153,7 @@ async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<R
         .execute(pool)
         .await
         .with_context(|| format!("recreate {table}"))?;
-    Ok(Reconciled::Recreated(table))
+    Ok(Reconciled::Recreated)
 }
 
 /// The tables a resume cursor can live in, store-wide. Per-row cursors
@@ -911,13 +1166,13 @@ const CURSOR_TABLES: &[&str] = &[
 ];
 
 /// A cursor is only valid under the schema that set it. A recreated
-/// table is empty, and a cursor that says "read through here" would let
-/// the next run resume past rows the table no longer has — a store that
-/// stays empty until upstream changes, with nothing saying why. So a
-/// recreate forgets every cursor in the store, and the next run walks
-/// from the start into every table, which the unchanged ones absorb as
-/// no-op upserts.
-async fn forget_cursors_after_recreate(pool: &SqlitePool, recreated: &[String]) -> Result<()> {
+/// table is empty, and so is one that just appeared, and a cursor that
+/// says "read through here" would let the next run resume past rows the
+/// table does not have — a store that stays empty until upstream
+/// changes, with nothing saying why. So either forgets every cursor in
+/// the store, and the next run walks from the start into every table,
+/// which the unchanged ones absorb as no-op upserts.
+async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[String]) -> Result<()> {
     let mut cleared = Vec::new();
     for table in CURSOR_TABLES {
         if table_columns(pool, table).await?.is_empty() {
@@ -934,10 +1189,11 @@ async fn forget_cursors_after_recreate(pool: &SqlitePool, recreated: &[String]) 
         }
     }
     tracing::warn!(
+        created = %created.join(","),
         recreated = %recreated.join(","),
         cursors_cleared = %cleared.join(","),
-        "doltlite_raw: a table was recreated empty, so the store's resume cursors \
-         were cleared; the next run walks from the start"
+        "doltlite_raw: a table is empty that the store's cursors would skip past, \
+         so the cursors were cleared; the next run walks from the start"
     );
     Ok(())
 }
@@ -2458,39 +2714,229 @@ mod tests {
         assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
+    /// A column the DDL no longer declares cannot be reached by ADD, so a
+    /// raw store refuses the open: the error names the table and the
+    /// column, and the file — the column, the row — is exactly as it was.
+    /// The same store under `Rebuild` (a reset run) drops and recreates.
     #[tokio::test]
-    async fn open_drops_and_recreates_on_removed_column() {
-        // A column the current DDL no longer declares can't be reconciled by
-        // ADD; it must drop+recreate.
+    async fn a_removed_column_is_refused_untouched_and_rebuilt_only_on_a_reset() {
         let d = tempdir().unwrap();
         let p = d.path().join("recreate.doltlite_db");
-        let stale = "CREATE TABLE IF NOT EXISTS widgets (
-            id TEXT PRIMARY KEY,
-            name TEXT NULL,
-            payload TEXT NULL,
-            legacy_col TEXT NULL
-        )";
         {
-            let pool = open(&p, &[stale]).await.unwrap();
+            let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
             sqlx::query("INSERT INTO widgets (id, legacy_col) VALUES ('w1', 'x')")
                 .execute(&pool)
                 .await
                 .unwrap();
+            commit_run(&pool, "setup").await.unwrap();
             pool.close().await;
         }
 
-        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let err = match open(&p, &[WIDGETS_DDL]).await {
+            Ok(pool) => {
+                pool.close().await;
+                panic!("a removed column must refuse the open");
+            }
+            Err(e) => e,
+        };
+        let brk = err
+            .downcast_ref::<SchemaBreak>()
+            .unwrap_or_else(|| panic!("a SchemaBreak, got {err:#}"));
+        assert_eq!(brk.breaks.len(), 1);
+        assert_eq!(brk.breaks[0].0, "widgets");
+        assert!(
+            brk.breaks[0].1.contains("unexpected: [legacy_col]"),
+            "{}",
+            brk.breaks[0].1
+        );
+        assert!(brk.to_string().contains("--reset-and-redownload"));
+
+        // Untouched: the column and the row are still there, and the
+        // shape the DDL that wrote it declares still opens it.
+        let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
+        let v: String = sqlx::query_scalar("SELECT legacy_col FROM widgets WHERE id = 'w1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(v, "x");
+        pool.close().await;
+
+        // A reset run rebuilds, which is what the old policy always did.
+        let pool = open_with(&p, &[WIDGETS_DDL], OnSchemaBreak::Rebuild)
+            .await
+            .unwrap();
         let cols = table_columns(&pool, "widgets").await.unwrap();
         assert!(
             !cols.iter().any(|c| c.name == "legacy_col"),
             "legacy_col should be gone after drop+recreate"
         );
-        // Recreate wipes rows — acceptable for a raw store, which re-fetches.
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(n, 0);
+        pool.close().await;
+    }
+
+    /// Every non-additive change refuses, and the message says which:
+    /// a changed type, a `NOT NULL` added, a key moved, a column that
+    /// needs a value existing rows do not have.
+    #[tokio::test]
+    async fn every_non_additive_change_is_refused_by_name() {
+        let d = tempdir().unwrap();
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "type",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n INTEGER)",
+            ),
+            (
+                "not_null",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT NOT NULL)",
+            ),
+            (
+                "pk",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT, n TEXT, PRIMARY KEY (id, n))",
+            ),
+            (
+                "default",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n INTEGER DEFAULT 0)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n INTEGER DEFAULT 1)",
+            ),
+            (
+                "rename",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, m TEXT)",
+            ),
+            (
+                "not_null_no_default",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT NOT NULL)",
+            ),
+        ];
+        for (name, before, after) in cases {
+            let p = d.path().join(format!("{name}.doltlite_db"));
+            let pool = open(&p, &[before]).await.unwrap();
+            commit_run(&pool, "setup").await.unwrap();
+            pool.close().await;
+            match open(&p, &[after]).await {
+                Ok(pool) => {
+                    pool.close().await;
+                    panic!("{name}: must refuse");
+                }
+                Err(e) => {
+                    let brk = e
+                        .downcast_ref::<SchemaBreak>()
+                        .unwrap_or_else(|| panic!("{name}: a SchemaBreak, got {e:#}"));
+                    assert_eq!(brk.breaks[0].0, "t", "{name}");
+                    assert!(brk.breaks[0].1.contains('n'), "{name}: {}", brk.breaks[0].1);
+                }
+            }
+        }
+    }
+
+    /// The additive changes an existing store absorbs without a refusal
+    /// and without losing a row: a nullable column, one with a default,
+    /// and a VIRTUAL generated column — the shape the docs recommend for
+    /// a field derivable from the payload.
+    #[tokio::test]
+    async fn additive_changes_are_added_in_place() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("add.doltlite_db");
+        const BEFORE: &str = "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, payload TEXT)";
+        const AFTER: &str = "CREATE TABLE IF NOT EXISTS t (
+            id TEXT PRIMARY KEY,
+            payload TEXT,
+            note TEXT NULL,
+            n INTEGER NOT NULL DEFAULT 0,
+            kind TEXT GENERATED ALWAYS AS (json_extract(payload, '$.kind')) VIRTUAL
+        )";
+        {
+            let pool = open(&p, &[BEFORE]).await.unwrap();
+            sqlx::query("INSERT INTO t (id, payload) VALUES ('a', '{\"kind\":\"x\"}')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            commit_run(&pool, "setup").await.unwrap();
+            pool.close().await;
+        }
+        let pool = open(&p, &[AFTER]).await.expect("additive");
+        let (n, kind): (i64, String) = sqlx::query_as("SELECT n, kind FROM t WHERE id = 'a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            (n, kind.as_str()),
+            (0, "x"),
+            "the row is kept and the new columns read"
+        );
+        // And the second open finds nothing to do: the shapes agree.
+        pool.close().await;
+        let pool = open(&p, &[AFTER]).await.unwrap();
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        let pool = open(&p, &[AFTER]).await.unwrap();
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after, before, "an unchanged shape commits nothing");
+        pool.close().await;
+    }
+
+    /// A table that appears in a store that already had others is as
+    /// empty as a recreated one, so the cursors go; a store whose every
+    /// table is new is a first open and has none to lose.
+    #[tokio::test]
+    async fn a_new_table_forgets_the_stores_cursors() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("new_table.doltlite_db");
+        store_with_cursors(&p, &[WIDGETS_DDL]).await;
+
+        const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
+        let pool = open(&p, &[WIDGETS_DDL, GADGETS]).await.unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "the table that was there keeps its row");
+        assert_eq!(
+            cursor_counts(&pool).await,
+            (0, 0, 0),
+            "a new, empty table is one the cursors would skip past"
+        );
+        pool.close().await;
+    }
+
+    /// `column_clause` hands back a column's definition as the DDL wrote
+    /// it, whatever punctuation the other columns carry.
+    #[test]
+    fn column_clause_reads_a_definition_out_of_the_ddl() {
+        const DDL: &str = "CREATE TABLE IF NOT EXISTS t (
+            id TEXT PRIMARY KEY,
+            n INTEGER NOT NULL DEFAULT 0,
+            note TEXT DEFAULT 'a, b (c)',
+            kind TEXT GENERATED ALWAYS AS (json_extract(payload, '$.kind')) VIRTUAL,
+            UNIQUE (id, n)
+        )";
+        assert_eq!(
+            column_clause(DDL, "n").as_deref(),
+            Some("n INTEGER NOT NULL DEFAULT 0")
+        );
+        assert_eq!(
+            column_clause(DDL, "note").as_deref(),
+            Some("note TEXT DEFAULT 'a, b (c)'")
+        );
+        assert_eq!(
+            column_clause(DDL, "kind").as_deref(),
+            Some("kind TEXT GENERATED ALWAYS AS (json_extract(payload, '$.kind')) VIRTUAL")
+        );
+        assert_eq!(column_clause(DDL, "missing"), None);
     }
 
     const STALE_WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (
@@ -2554,7 +3000,9 @@ mod tests {
         let p = d.path().join("recreate_cursors.doltlite_db");
         store_with_cursors(&p, &[STALE_WIDGETS_DDL]).await;
 
-        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let pool = open_with(&p, &[WIDGETS_DDL], OnSchemaBreak::Rebuild)
+            .await
+            .unwrap();
         let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
             .fetch_one(&pool)
             .await

@@ -57,6 +57,14 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// blake3 over this store's DDL: what the render step folds into its
+/// params, so a change to any render-store table re-renders every
+/// source. Nobody has to remember a bump, and a column added to
+/// `grid_rows` is not `NULL` on every row rendered before it.
+pub fn schema_hash() -> String {
+    datalib_store_meta::schema_hash(store_ddl())
+}
+
 /// One raw row a bucket's render asked for, found or not.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Input {
