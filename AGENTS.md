@@ -45,6 +45,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposal; measures bytes at rest (§4) before you touch how text is stored.
 - [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — the design record of the `problems` table: per-instance ids, severity, the copy downstream into the index, the Manage counts and the document banner. Built through its PR 5; still in `plans/` because the per-provider fetch tail is open.
 - [`docs/dev/plans/completed/diff_renderer.md`](docs/dev/plans/completed/diff_renderer.md) — built: a diff group renders what changed in a source between two commits of its raw store; `config_model.md` is the reference.
+- [`docs/dev/plans/schema_migrations.md`](docs/dev/plans/schema_migrations.md) — audit of how every store survives a schema change today, and the plan for after there are users: a `_datalib_meta` table, refuse-don't-drop for irreplaceable raw stores, a migration ladder, a downgrade guard. Read before changing a `schema_raw.rs` struct, `app_schema`, or `doltlite_raw::open`.
 
 **UI**
 
