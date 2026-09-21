@@ -4,7 +4,15 @@
 // sandbox root of its own — see `config-mutating.ts`.
 
 import { test, expect, type Page } from "@playwright/test";
-import { MENU_DISABLED, SELECTED_ROWS, expandGroup, groupRow, menuEntry, pipelineRow, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import {
+  MENU_DISABLED,
+  SELECTED_ROWS,
+  expandGroup,
+  groupRow,
+  menuEntry,
+  pipelineRow,
+  MANAGE_WITH_CONFIG,
+} from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
 const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-menu-content");
@@ -67,17 +75,13 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   // is left exactly as it was — a right-click aims, it does not select.
   const group = groupRow(page, "unified_index");
   await group.locator('[col-id="status"]').click({ button: "right" });
-  await expect(menuEntries(page).last()).toHaveText(
-    "Remove from config, with everything under it",
-  );
+  await expect(menuEntries(page).last()).toHaveText("Remove from config, with everything under it");
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
   await expect(group.locator(".slick-cell.selected")).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
 
-test("Rename edits the group's name in the cell and writes it to the config", async ({
-  page,
-}) => {
+test("Rename edits the group's name in the cell and writes it to the config", async ({ page }) => {
   await openManager(page);
   const editor = page.locator(".m2-editor");
   const original = await editor.inputValue();
@@ -91,9 +95,12 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   // The table repaints itself on a clock ("12 seconds ago" goes stale),
   // and a repaint that rebuilt this row would close the editor under
   // the typist. Force one and expect the same input to survive it.
-  await page.locator(".tg-grid").first().evaluate((el) => {
-    (el as HTMLElement & { __api: { refreshCells(): void } }).__api.refreshCells();
-  });
+  await page
+    .locator(".tg-grid")
+    .first()
+    .evaluate((el) => {
+      (el as HTMLElement & { __api: { refreshCells(): void } }).__api.refreshCells();
+    });
   await page.waitForTimeout(200);
   await expect(input).toBeVisible();
   await expect(input).toBeFocused();

@@ -108,9 +108,7 @@ async function resolveNamespace(ns: string): Promise<Record<string, unknown>> {
   const entries = frontendManifest.value.get(ns);
   if (!entries) {
     const err = frontendErrors.value.get(ns);
-    throw new Error(
-      err ? `namespace "${ns}" failed to load: ${err}` : `no namespace "${ns}"`,
-    );
+    throw new Error(err ? `namespace "${ns}" failed to load: ${err}` : `no namespace "${ns}"`);
   }
   const obj: Record<string, unknown> = {};
   let complete = true;
@@ -155,9 +153,7 @@ export function referencedNamespaces(source: string): Set<string> {
 /// Build the `comp` object a card's source should see: one property per
 /// namespace it references. Namespaces it does not mention are not
 /// loaded, so a card costs only the components it actually uses.
-export async function resolveCompScope(
-  source: string,
-): Promise<Record<string, unknown>> {
+export async function resolveCompScope(source: string): Promise<Record<string, unknown>> {
   await ensureFrontend();
   const comp: Record<string, unknown> = {};
   for (const ns of referencedNamespaces(source)) {
@@ -169,11 +165,7 @@ export async function resolveCompScope(
 
 /// The card source a gallery entry expands to: the fully qualified name
 /// plus its stored arguments, serialized as JSON literals.
-export function gallerySource(
-  ns: string,
-  name: string,
-  args: unknown[] = [],
-): string {
+export function gallerySource(ns: string, name: string, args: unknown[] = []): string {
   const call = args.map((a) => JSON.stringify(a)).join(", ");
   return `comp.${ns}.${name}(${call})`;
 }

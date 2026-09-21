@@ -46,21 +46,21 @@ async function initialize() {
       <p>Initializing writes that one config file, and nothing else. It:</p>
       <ul>
         <li>
-          declares the two index steps every source feeds — the grid index
-          and the semantic vector index
+          declares the two index steps every source feeds — the grid index and the semantic vector
+          index
         </li>
         <li>
-          declares the <code>Unified Index</code> applet, which is what
-          actually serves the table, search and document views
+          declares the <code>Unified Index</code> applet, which is what actually serves the table,
+          search and document views
         </li>
         <li>
-          adds <strong>no data sources</strong>: nothing is downloaded, no
-          account is contacted, and nothing outside this folder is touched.
+          adds <strong>no data sources</strong>: nothing is downloaded, no account is contacted, and
+          nothing outside this folder is touched.
         </li>
       </ul>
       <p>
-        Then you pick your first data source — a Slack export, a Claude
-        export, a folder of PDFs — on the Manage screen this opens next.
+        Then you pick your first data source — a Slack export, a Claude export, a folder of PDFs —
+        on the Manage screen this opens next.
       </p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <button class="primary" :disabled="busy" @click="initialize">

@@ -39,8 +39,8 @@ watch(
 // what to do about it, so they share everything below the heading.
 const notAConfig = computed(() => !props.config.parsed_ok);
 
-const worst = computed(() =>
-  live.value.find((d) => d.severity === "fatal") ?? live.value[0] ?? null,
+const worst = computed(
+  () => live.value.find((d) => d.severity === "fatal") ?? live.value[0] ?? null,
 );
 
 let checkAt = 0;
@@ -112,20 +112,19 @@ function severityLabel(d: Diagnostic): string {
       <template v-if="notAConfig">
         <h2>This config file can’t be read</h2>
         <p>
-          <code class="root">{{ config.path }}</code> is not valid TOML, so
-          nothing in it could be loaded — not your data sources, and not the
-          <code>unified_index</code> applet that serves the table, search and
-          document views. That is why the rest of the app is hidden: it has
+          <code class="root">{{ config.path }}</code> is not valid TOML, so nothing in it could be
+          loaded — not your data sources, and not the <code>unified_index</code> applet that serves
+          the table, search and document views. That is why the rest of the app is hidden: it has
           nothing to show until this file parses.
         </p>
       </template>
       <template v-else>
         <h2>This config declares no Unified Index</h2>
         <p>
-          <code class="root">{{ config.path }}</code> loaded, but it has no
-          usable <code>unified_index</code> applet. That applet is what serves
-          the table, search and the document view, so every screen in the app
-          would answer <code>no applet "unified_index"</code> without it.
+          <code class="root">{{ config.path }}</code> loaded, but it has no usable
+          <code>unified_index</code> applet. That applet is what serves the table, search and the
+          document view, so every screen in the app would answer
+          <code>no applet "unified_index"</code> without it.
         </p>
       </template>
 
@@ -136,7 +135,8 @@ function severityLabel(d: Diagnostic): string {
 
       <p class="cli">
         From a terminal, the same check is
-        <code>datalib-dag --check {{ config.path }}</code>.
+        <code>datalib-dag --check {{ config.path }}</code
+        >.
       </p>
 
       <ul v-if="live.length" class="diags">
@@ -152,8 +152,9 @@ function severityLabel(d: Diagnostic): string {
           <span v-else class="loc loc-none">—</span>
           <span class="sev">{{ severityLabel(d) }}</span>
           <span class="body">
-            <span v-if="d.entry" class="entry">{{ d.entry.kind }}
-              {{ d.entry.id ? `"${d.entry.id}"` : `#${d.entry.index}` }}:</span>
+            <span v-if="d.entry" class="entry"
+              >{{ d.entry.kind }} {{ d.entry.id ? `"${d.entry.id}"` : `#${d.entry.index}` }}:</span
+            >
             {{ d.message }}
             <span v-if="d.help" class="help">{{ d.help }}</span>
           </span>

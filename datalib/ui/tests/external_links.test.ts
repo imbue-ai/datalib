@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installExternalLinkHandler,
-  isExternalHref,
-  openExternal,
-} from "../src/externalLinks";
+import { installExternalLinkHandler, isExternalHref, openExternal } from "../src/externalLinks";
 
 const APP = "http://127.0.0.1:8765";
 const BASE = `${APP}/`;
@@ -26,9 +22,7 @@ describe("isExternalHref", () => {
   it("treats an off-origin http(s) link as external", () => {
     // The two shapes from the bug report: a document's `↗` outlink, and
     // a link that came out of the email body itself.
-    expect(
-      isExternalHref("https://mail.superhuman.com/thread/abc", BASE, APP),
-    ).toBe(true);
+    expect(isExternalHref("https://mail.superhuman.com/thread/abc", BASE, APP)).toBe(true);
     expect(isExternalHref("https://superhuman.com", BASE, APP)).toBe(true);
     expect(isExternalHref("http://example.com/x", BASE, APP)).toBe(true);
   });
@@ -85,11 +79,7 @@ describe("openExternal", () => {
   it("falls back to a new tab in a plain browser", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     await openExternal("https://superhuman.com/");
-    expect(open).toHaveBeenCalledWith(
-      "https://superhuman.com/",
-      "_blank",
-      "noopener",
-    );
+    expect(open).toHaveBeenCalledWith("https://superhuman.com/", "_blank", "noopener");
   });
 
   it("does not throw when the IPC call rejects", async () => {
@@ -140,11 +130,7 @@ describe("installExternalLinkHandler", () => {
         'target="_blank" rel="noopener noreferrer">↗</a>',
     );
     expect(ev.defaultPrevented).toBe(true);
-    expect(open).toHaveBeenCalledWith(
-      "https://mail.superhuman.com/t/1",
-      "_blank",
-      "noopener",
-    );
+    expect(open).toHaveBeenCalledWith("https://mail.superhuman.com/t/1", "_blank", "noopener");
   });
 
   it("opens a bare in-body link instead of navigating the app away", () => {
@@ -156,8 +142,7 @@ describe("installExternalLinkHandler", () => {
   });
 
   it("finds the anchor when the click lands on a child element", () => {
-    document.body.innerHTML =
-      '<a href="https://example.com/x"><span id="inner">go</span></a>';
+    document.body.innerHTML = '<a href="https://example.com/x"><span id="inner">go</span></a>';
     const ev = new MouseEvent("click", {
       bubbles: true,
       composed: true,
@@ -203,12 +188,7 @@ describe("installExternalLinkHandler", () => {
   it("leaves modifier and middle clicks to the browser", () => {
     // cmd-click / middle-click are how a browser user asks for a new
     // tab; swallowing them would take that away.
-    for (const init of [
-      { metaKey: true },
-      { ctrlKey: true },
-      { shiftKey: true },
-      { button: 1 },
-    ]) {
+    for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { button: 1 }]) {
       const ev = clickAnchor('<a href="https://example.com/x">x</a>', init);
       expect(ev.defaultPrevented, JSON.stringify(init)).toBe(false);
     }

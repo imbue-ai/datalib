@@ -44,12 +44,7 @@ import {
 import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
-import {
-  compareStamps,
-  formatRelative,
-  formatStamp,
-  formatTimeOfDay,
-} from "@/config/timeFormat";
+import { compareStamps, formatRelative, formatStamp, formatTimeOfDay } from "@/config/timeFormat";
 
 const props = defineProps<{
   /// The run the panel opens on, or `*` for every run.
@@ -318,7 +313,10 @@ function announce() {
     return;
   }
   const run = runs.value.find((r) => r.run_id === runId.value);
-  emit("scope-changed", run ? { kind: "run", run, process: currentProcess.value } : { kind: "all" });
+  emit(
+    "scope-changed",
+    run ? { kind: "run", run, process: currentProcess.value } : { kind: "all" },
+  );
 }
 
 async function pickScope(ev: Event) {
@@ -493,126 +491,126 @@ function buildColumns(): Column<RunLogLine>[] {
 
 function columnSet(): Column<RunLogLine>[] {
   return [
-  {
-    id: "ts_utc",
-    name: "Time",
-    field: "ts_utc",
-    ...fixed(110),
-    // The time of day to the millisecond, in the viewer's zone (a
-    // step's own lines are stamped in UTC, the runner's in local time);
-    // the date is in the tooltip, since every line of one run shares it.
-    // Clipped from the left: the seconds and milliseconds are what tell
-    // one line from the next, the hour is the same for all.
-    cssClass: "rl-clip-left",
-    formatter: timeOfDay,
-    sortable: true,
-    sortComparer: (a, b, dir) => compareStamps(a, b) * (dir ?? 1),
-  },
-  {
-    id: "run_id",
-    name: "Run",
-    field: "run_id",
-    ...fixed(100),
-    hidden: !allRuns.value,
-    formatter: runIdShort,
-    sortable: true,
-    ...groupable("Run", "run_id"),
-  },
-  {
-    id: "process",
-    name: "Process",
-    field: "process",
-    ...fixed(90),
-    hidden: oneProcess.value,
-    formatter: plain,
-    sortable: true,
-    ...groupable("Process", "process"),
-  },
-  {
-    id: "git_hash",
-    name: "Commit",
-    field: "git_hash",
-    ...fixed(100),
-    hidden: oneProcess.value,
-    formatter: commitShort,
-    sortable: true,
-    ...groupable("Commit", "git_hash"),
-  },
-  {
-    id: "step",
-    name: "Step",
-    field: "step",
-    ...fixed(180),
-    hidden: oneProcess.value,
-    formatter: plain,
-    sortable: true,
-    ...groupable("Step", "step"),
-  },
-  {
-    id: "level",
-    name: "Level",
-    field: "level",
-    ...fixed(80),
-    formatter: plain,
-    sortable: true,
-    ...groupable("Level", "level"),
-  },
-  {
-    id: "stream",
-    name: "Stream",
-    field: "stream",
-    ...fixed(84),
-    formatter: plain,
-    sortable: true,
-    ...groupable("Stream", "stream"),
-  },
-  {
-    id: "thread",
-    name: "Thread",
-    field: "thread",
-    ...fixed(150),
-    formatter: plain,
-    sortable: true,
-    ...groupable("Thread", "thread"),
-  },
-  {
-    id: "target",
-    name: "Target",
-    field: "target",
-    ...fixed(200),
-    formatter: plain,
-    sortable: true,
-    ...groupable("Target", "target"),
-  },
-  {
-    id: "msg",
-    name: "Message",
-    field: "msg",
-    width: 600,
-    minWidth: 320,
-    formatter: plain,
-    sortable: true,
-    ...groupable("Message", "msg"),
-  },
-  {
-    id: "source",
-    name: "Source",
-    // The value is read out of `fields`; the column has no field of its
-    // own, and the id is what the header and the test find it by.
-    field: "fields",
-    ...fixed(180),
-    cssClass: "rl-clip-left",
-    formatter: source,
-    sortable: false,
-  },
-  {
-    id: "fields",
-    name: "Fields",
-    field: "fields",
-    ...fixed(220),
-    formatter: otherFields,
-    sortable: true,
-  },
+    {
+      id: "ts_utc",
+      name: "Time",
+      field: "ts_utc",
+      ...fixed(110),
+      // The time of day to the millisecond, in the viewer's zone (a
+      // step's own lines are stamped in UTC, the runner's in local time);
+      // the date is in the tooltip, since every line of one run shares it.
+      // Clipped from the left: the seconds and milliseconds are what tell
+      // one line from the next, the hour is the same for all.
+      cssClass: "rl-clip-left",
+      formatter: timeOfDay,
+      sortable: true,
+      sortComparer: (a, b, dir) => compareStamps(a, b) * (dir ?? 1),
+    },
+    {
+      id: "run_id",
+      name: "Run",
+      field: "run_id",
+      ...fixed(100),
+      hidden: !allRuns.value,
+      formatter: runIdShort,
+      sortable: true,
+      ...groupable("Run", "run_id"),
+    },
+    {
+      id: "process",
+      name: "Process",
+      field: "process",
+      ...fixed(90),
+      hidden: oneProcess.value,
+      formatter: plain,
+      sortable: true,
+      ...groupable("Process", "process"),
+    },
+    {
+      id: "git_hash",
+      name: "Commit",
+      field: "git_hash",
+      ...fixed(100),
+      hidden: oneProcess.value,
+      formatter: commitShort,
+      sortable: true,
+      ...groupable("Commit", "git_hash"),
+    },
+    {
+      id: "step",
+      name: "Step",
+      field: "step",
+      ...fixed(180),
+      hidden: oneProcess.value,
+      formatter: plain,
+      sortable: true,
+      ...groupable("Step", "step"),
+    },
+    {
+      id: "level",
+      name: "Level",
+      field: "level",
+      ...fixed(80),
+      formatter: plain,
+      sortable: true,
+      ...groupable("Level", "level"),
+    },
+    {
+      id: "stream",
+      name: "Stream",
+      field: "stream",
+      ...fixed(84),
+      formatter: plain,
+      sortable: true,
+      ...groupable("Stream", "stream"),
+    },
+    {
+      id: "thread",
+      name: "Thread",
+      field: "thread",
+      ...fixed(150),
+      formatter: plain,
+      sortable: true,
+      ...groupable("Thread", "thread"),
+    },
+    {
+      id: "target",
+      name: "Target",
+      field: "target",
+      ...fixed(200),
+      formatter: plain,
+      sortable: true,
+      ...groupable("Target", "target"),
+    },
+    {
+      id: "msg",
+      name: "Message",
+      field: "msg",
+      width: 600,
+      minWidth: 320,
+      formatter: plain,
+      sortable: true,
+      ...groupable("Message", "msg"),
+    },
+    {
+      id: "source",
+      name: "Source",
+      // The value is read out of `fields`; the column has no field of its
+      // own, and the id is what the header and the test find it by.
+      field: "fields",
+      ...fixed(180),
+      cssClass: "rl-clip-left",
+      formatter: source,
+      sortable: false,
+    },
+    {
+      id: "fields",
+      name: "Fields",
+      field: "fields",
+      ...fixed(220),
+      formatter: otherFields,
+      sortable: true,
+    },
   ];
 }
 
@@ -644,11 +642,9 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   // `onBeforeMenuShow` is handed the cell's coordinates and nothing
   // else; the command callbacks get the column and the row as well.
   const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as
-    | Column<RunLogLine>
-    | undefined;
+    Column<RunLogLine> | undefined;
   const line = (args.dataContext ?? args.grid.getDataItem(args.row ?? -1)) as
-    | RunLogLine
-    | undefined;
+    RunLogLine | undefined;
   const field = column?.field as keyof RunLogLine | undefined;
   const key = field && QUERY_KEYS[field];
   if (!column || !line || !field || !key) return null;
@@ -805,7 +801,10 @@ onMounted(async () => {
     },
   });
   themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
-  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  themeWatch.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
 });
 
 onUnmounted(() => {
@@ -833,7 +832,12 @@ onUnmounted(() => {
       />
       <label class="rl-level">
         at least
-        <select class="rl-run" :value="minLevel" aria-label="Lowest level to show" @change="pickLevel">
+        <select
+          class="rl-run"
+          :value="minLevel"
+          aria-label="Lowest level to show"
+          @change="pickLevel"
+        >
           <option v-for="l in LEVELS" :key="l" :value="l">{{ l }}</option>
         </select>
       </label>

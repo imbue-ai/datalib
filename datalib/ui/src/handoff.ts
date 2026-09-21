@@ -4,11 +4,7 @@
 // layouts all get it for free — nothing here knows which layout is
 // active.
 import { ref, watch } from "vue";
-import {
-  freshUserName,
-  noteUserComponent,
-  USER_NAMESPACE,
-} from "@/cards/frontendRegistry";
+import { freshUserName, noteUserComponent, USER_NAMESPACE } from "@/cards/frontendRegistry";
 import { encodeColumns } from "@/router/columns";
 import { healthSnapshot, putLib } from "@/api";
 import { pushToast } from "@/toasts";
@@ -34,8 +30,7 @@ function seedSource(name: string): string {
 // So point the agent at the file instead: it runs on this machine, as
 // this user, and can re-read it whenever it needs a fresh one.
 function authLines(): string[] {
-  const tokenFile =
-    healthSnapshot()?.token_file ?? "<data root>/system/api-token";
+  const tokenFile = healthSnapshot()?.token_file ?? "<data root>/system/api-token";
   return [
     `The API needs the server's token on every call. It changes each time`,
     `the server restarts, so read it fresh:`,
@@ -170,12 +165,8 @@ function persistedFlag(key: string) {
   });
   return flag;
 }
-export const skipModifyInstructions = persistedFlag(
-  "datalib-agent-skip-card-instructions",
-);
-export const skipConfigInstructions = persistedFlag(
-  "datalib-agent-skip-config-instructions",
-);
+export const skipModifyInstructions = persistedFlag("datalib-agent-skip-card-instructions");
+export const skipConfigInstructions = persistedFlag("datalib-agent-skip-config-instructions");
 
 // Copy a wayfinder to the clipboard. Clipboard can be blocked (insecure
 // origin / no focus); fall back to showing the text so the user can
@@ -227,11 +218,7 @@ function handOff(handoff: AgentHandoff, skip: boolean): void {
 
 // The 🤖 button on a card backed by the user component `name`: hand the
 // existing component to an agent for modification.
-export function modifyComponentWithAgent(
-  name: string,
-  cardSource: string,
-  state: string,
-): void {
+export function modifyComponentWithAgent(name: string, cardSource: string, state: string): void {
   handOff(
     {
       kind: "modify",

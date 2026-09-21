@@ -107,10 +107,7 @@ export type EdgeHoverPayload = {
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
   gridView: (opts?: { q?: string; columns?: string[] }) => CardRender;
-  documentView: (
-    markdownUuid?: string | null,
-    sectionUuid?: string | null,
-  ) => CardRender;
+  documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
   // rendered document (the unified_index applet's /docs) and, on
   // pick, replaces this card

@@ -12,9 +12,7 @@ async function stackPath(page: import("@playwright/test").Page): Promise<string>
 }
 
 test.describe("toolbar", () => {
-  test("Data sources opens the sources card once, then only reveals it", async ({
-    page,
-  }) => {
+  test("Data sources opens the sources card once, then only reveals it", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".miller-col")).toHaveCount(1);
 

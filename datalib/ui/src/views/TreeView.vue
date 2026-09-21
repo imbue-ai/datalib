@@ -65,9 +65,7 @@ function newNode(source: string, parentId: string | null): TreeNode {
 
 const nodes = ref<TreeNode[]>([newNode("gridView()", null)]);
 
-const layoutRects = computed(() =>
-  layoutTree(nodes.value, { hGap: H_GAP, vGap: V_GAP }),
-);
+const layoutRects = computed(() => layoutTree(nodes.value, { hGap: H_GAP, vGap: V_GAP }));
 
 // Layout rects shifted by each node's manual drag offset plus all of
 // its ancestors' — so dragging a node carries its subtree along.
@@ -78,10 +76,7 @@ const rects = computed(() => {
     let o = offsets.get(id);
     if (o) return o;
     const n = byId.get(id)!;
-    const p =
-      n.parentId !== null && byId.has(n.parentId)
-        ? offsetOf(n.parentId)
-        : { x: 0, y: 0 };
+    const p = n.parentId !== null && byId.has(n.parentId) ? offsetOf(n.parentId) : { x: 0, y: 0 };
     o = { x: p.x + n.dx, y: p.y + n.dy };
     offsets.set(id, o);
     return o;
@@ -97,9 +92,7 @@ const rects = computed(() => {
 function rectOf(id: string): Rect {
   // Every node the template iterates is in the layout; the fallback
   // only guards a transient render between list and rects updates.
-  return (
-    rects.value.get(id) ?? { x: 0, y: 0, width: NODE_WIDTH, height: NODE_HEIGHT }
-  );
+  return rects.value.get(id) ?? { x: 0, y: 0, width: NODE_WIDTH, height: NODE_HEIGHT };
 }
 
 // Parent→child connectors: one cubic bezier per non-root node, from
@@ -162,7 +155,10 @@ function zoomReset() {
 function zoomToFit() {
   const el = viewportEl.value;
   if (!el || rects.value.size === 0) return;
-  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  let x1 = Infinity,
+    y1 = Infinity,
+    x2 = -Infinity,
+    y2 = -Infinity;
   for (const r of rects.value.values()) {
     x1 = Math.min(x1, r.x);
     y1 = Math.min(y1, r.y);
@@ -436,10 +432,7 @@ function commitSource(node: TreeNode, e: Event) {
 const nodeDragLive = ref(false);
 
 // Shared pointer-capture drag plumbing for node moves and resizes.
-function captureDrag(
-  ev: PointerEvent,
-  onMove: (mx: number, my: number) => void,
-) {
+function captureDrag(ev: PointerEvent, onMove: (mx: number, my: number) => void) {
   ev.preventDefault();
   nodeDragLive.value = true;
   const startX = ev.clientX;
@@ -547,7 +540,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
               rows="1"
               :value="node.source"
               spellcheck="false"
-              placeholder="card source — e.g. documentView(&quot;uuid&quot;), Enter to run"
+              placeholder='card source — e.g. documentView("uuid"), Enter to run'
               @input="growSourceBox($event.target as HTMLTextAreaElement)"
               @keydown.enter.exact.prevent="commitSource(node, $event)"
             />
@@ -556,11 +549,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
             </div>
             <CardControls :source="node.source" :ctx="ctxFor(node)" />
           </div>
-          <ShadowCard
-            class="tree-node-card"
-            :source="node.source"
-            :ctx="ctxFor(node)"
-          />
+          <ShadowCard class="tree-node-card" :source="node.source" :ctx="ctxFor(node)" />
           <div
             v-for="corner in CORNERS"
             :key="corner"
@@ -573,11 +562,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
       </div>
       <div class="tree-controls">
         <button title="zoom out" @click="zoomStep(1 / 1.2)">−</button>
-        <button
-          class="tree-controls-pct"
-          title="reset zoom to 100%"
-          @click="zoomReset"
-        >
+        <button class="tree-controls-pct" title="reset zoom to 100%" @click="zoomReset">
           {{ Math.round(zoom * 100) }}%
         </button>
         <button title="zoom in" @click="zoomStep(1.2)">+</button>
@@ -692,7 +677,10 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
 .tree-node-source {
   flex: 1 1 auto;
   cursor: text;
-  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  font:
+    12px/1.5 ui-monospace,
+    Menlo,
+    monospace;
   padding: 0.2rem 0.4rem;
   border: none;
   border-radius: 3px;

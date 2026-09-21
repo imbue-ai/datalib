@@ -101,7 +101,10 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-function firstBlocked(targets: MenuTarget[], pick: (t: MenuTarget) => string | null): string | null {
+function firstBlocked(
+  targets: MenuTarget[],
+  pick: (t: MenuTarget) => string | null,
+): string | null {
   for (const t of targets) {
     const why = pick(t);
     if (why) return targets.length === 1 ? why : `${t.name}: ${why}`;

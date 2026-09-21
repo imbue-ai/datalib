@@ -1,0 +1,11 @@
+# Format only what //datalib/ui:format_test checks — `.ts` and `.vue` —
+# so `pnpm exec prettier --write .` and the gate agree. The JSON under
+# src/ is generated, the goldens are fixtures.
+*
+!*/
+!*.ts
+!*.vue
+node_modules/
+dist/
+playwright-report/
+test-results/

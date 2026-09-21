@@ -9,9 +9,7 @@ import { test, expect } from "@playwright/test";
 // itself with `documentView("<uuid>")` on pick.
 
 test.describe("new-card gallery (non-dev mode)", () => {
-  test("+ strip → gallery → Document → picker → document card", async ({
-    page,
-  }) => {
+  test("+ strip → gallery → Document → picker → document card", async ({ page }) => {
     await page.goto("/");
     // Non-dev: no source boxes, but the "+" creation strip is there.
     await expect(page.locator(".miller-col-source")).toHaveCount(0);
@@ -57,9 +55,7 @@ test.describe("new-card gallery (non-dev mode)", () => {
     const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
     await expect(col).toBeVisible({ timeout: 10_000 });
     await expect(col.locator(".miller-col-title")).toHaveText("Log · everything");
-    expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
-      "logView()",
-    );
+    expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain("logView()");
   });
 
   test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {

@@ -98,7 +98,11 @@ const processLabel = computed(() => {
 /// A filter for the log beside this card: a column's value as its key,
 /// a field's as the text the fields column would match.
 function narrowBy(key: string, value: string, exclude: boolean) {
-  props.ctx.bus.publish("log.query", { token: filterToken(key, value, exclude) }, { from: props.ctx.cardId });
+  props.ctx.bus.publish(
+    "log.query",
+    { token: filterToken(key, value, exclude) },
+    { from: props.ctx.cardId },
+  );
 }
 
 function narrowByField(key: string, value: unknown, exclude: boolean) {
@@ -112,7 +116,9 @@ function narrowByField(key: string, value: unknown, exclude: boolean) {
 
 async function copyLine() {
   if (!line.value) return;
-  copied.value = await copyToClipboard(JSON.stringify({ ...line.value, process: process.value }, null, 2));
+  copied.value = await copyToClipboard(
+    JSON.stringify({ ...line.value, process: process.value }, null, 2),
+  );
   setTimeout(() => (copied.value = false), 1200);
 }
 </script>
@@ -125,7 +131,12 @@ async function copyLine() {
       <header class="ll-head">
         <span class="ll-level" :class="`ll-${line.level}`">{{ line.level }}</span>
         <span v-if="line.target" class="ll-target">
-          <button class="ll-chip" type="button" title="Keep only this target" @click="narrowBy('target', line.target!, false)">
+          <button
+            class="ll-chip"
+            type="button"
+            title="Keep only this target"
+            @click="narrowBy('target', line.target!, false)"
+          >
             {{ line.target }}
           </button>
         </span>
@@ -143,7 +154,12 @@ async function copyLine() {
         <template v-if="line.step">
           <dt>step</dt>
           <dd>
-            <button class="ll-chip" type="button" title="Keep only this step" @click="narrowBy('step', line.step!, false)">
+            <button
+              class="ll-chip"
+              type="button"
+              title="Keep only this step"
+              @click="narrowBy('step', line.step!, false)"
+            >
               {{ line.step }}
             </button>
             <span v-if="line.attempt" class="ll-dim"> · attempt {{ line.attempt }}</span>
@@ -154,7 +170,12 @@ async function copyLine() {
         <template v-if="line.thread">
           <dt>thread</dt>
           <dd>
-            <button class="ll-chip" type="button" title="Keep only this thread" @click="narrowBy('thread', line.thread!, false)">
+            <button
+              class="ll-chip"
+              type="button"
+              title="Keep only this thread"
+              @click="narrowBy('thread', line.thread!, false)"
+            >
               {{ line.thread }}
             </button>
             <span v-if="line.stream" class="ll-dim"> · {{ line.stream }}</span>
@@ -163,22 +184,40 @@ async function copyLine() {
         <template v-if="source">
           <dt>source</dt>
           <dd>
-            <a v-if="sourceHref" class="ll-link" :href="sourceHref" target="_blank" rel="noopener">{{ sourceLabel(source) }}</a>
+            <a
+              v-if="sourceHref"
+              class="ll-link"
+              :href="sourceHref"
+              target="_blank"
+              rel="noopener"
+              >{{ sourceLabel(source) }}</a
+            >
             <span v-else>{{ sourceLabel(source) }}</span>
           </dd>
         </template>
         <template v-if="line.git_hash">
           <dt>commit</dt>
           <dd>
-            <a v-if="commitHref" class="ll-link" :href="commitHref" target="_blank" rel="noopener">{{ line.git_hash.slice(0, 10) }}</a>
+            <a
+              v-if="commitHref"
+              class="ll-link"
+              :href="commitHref"
+              target="_blank"
+              rel="noopener"
+              >{{ line.git_hash.slice(0, 10) }}</a
+            >
           </dd>
         </template>
         <template v-if="line.run_id">
           <dt>run</dt>
-          <dd><code>{{ line.run_id }}</code></dd>
+          <dd>
+            <code>{{ line.run_id }}</code>
+          </dd>
         </template>
         <dt>seq</dt>
-        <dd><code>{{ line.seq }}</code></dd>
+        <dd>
+          <code>{{ line.seq }}</code>
+        </dd>
       </dl>
 
       <template v-if="fields">

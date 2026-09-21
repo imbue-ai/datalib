@@ -9,10 +9,7 @@
 // for the common `name(...)` shape (an alias name is already the
 // friendliest thing we have for a user component), a generic label
 // otherwise.
-export function displayTitle(
-  source: string,
-  declared: string | null | undefined,
-): string {
+export function displayTitle(source: string, declared: string | null | undefined): string {
   if (declared) return declared;
   const trimmed = source.trim();
   if (trimmed === "") return "new card";

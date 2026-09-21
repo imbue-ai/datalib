@@ -21,13 +21,8 @@ type Row = {
 // and the scroll behavior goes unexercised.
 test.use({ viewport: { width: 1500, height: 450 } });
 
-async function assertSelectedVisible(
-  page: import("@playwright/test").Page,
-  uuid: string,
-) {
-  const selected = page.locator(
-    `.chat-preview [data-section-uuid="${uuid}"].selected`,
-  );
+async function assertSelectedVisible(page: import("@playwright/test").Page, uuid: string) {
+  const selected = page.locator(`.chat-preview [data-section-uuid="${uuid}"].selected`);
   await expect(selected).toBeVisible({ timeout: 10_000 });
   const inView = await selected.evaluate((el) => {
     const pane = el.closest(".chat-preview")!;
@@ -36,15 +31,10 @@ async function assertSelectedVisible(
     // The section's top edge sits inside the pane's viewport.
     return r.top >= p.top - 1 && r.top < p.bottom;
   });
-  expect(inView, `section ${uuid} must be inside the pane viewport`).toBe(
-    true,
-  );
+  expect(inView, `section ${uuid} must be inside the pane viewport`).toBe(true);
 }
 
-test("row clicks highlight and scroll to the right message", async ({
-  page,
-  request,
-}) => {
+test("row clicks highlight and scroll to the right message", async ({ page, request }) => {
   // Use the backend search API to find a conversation with two message
   // rows far apart, so the scroll between them is unambiguous.
   const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
@@ -85,10 +75,7 @@ test("row clicks highlight and scroll to the right message", async ({
   ).not.toBeNull();
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   await clickRowByUuid(page, chosen!.uuidA);
   await assertSelectedVisible(page, chosen!.uuidA);

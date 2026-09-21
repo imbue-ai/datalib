@@ -83,12 +83,15 @@ describe("calibrationMax", () => {
     // The row shrank: its own past is the tallest thing it has to
     // draw, and a max taken from `bytes` alone would put it off the
     // top of the box.
-    expect(
-      calibrationMax([{ value: 10, samples: [at(4, 900), at(1, 10)] }]),
-    ).toBe(900);
+    expect(calibrationMax([{ value: 10, samples: [at(4, 900), at(1, 10)] }])).toBe(900);
   });
 
   it("ignores a row with nothing on disk", () => {
-    expect(calibrationMax([{ value: null, samples: [] }, { value: 7, samples: [] }])).toBe(7);
+    expect(
+      calibrationMax([
+        { value: null, samples: [] },
+        { value: 7, samples: [] },
+      ]),
+    ).toBe(7);
   });
 });

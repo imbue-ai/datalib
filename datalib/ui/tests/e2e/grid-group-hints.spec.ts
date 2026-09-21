@@ -10,8 +10,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 /// Our placeholder, in the grid's own drop zone.
-const placeholder = (page: Page) =>
-  page.locator(".grid-box .slick-draggable-dropzone-placeholder");
+const placeholder = (page: Page) => page.locator(".grid-box .slick-draggable-dropzone-placeholder");
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -26,9 +25,7 @@ async function groupBy(page: Page, colId: string) {
   );
 }
 
-test("the empty row-group bar explains what dropping a column there does", async ({
-  page,
-}) => {
+test("the empty row-group bar explains what dropping a column there does", async ({ page }) => {
   await openGrid(page);
 
   // Nothing is grouped by default, so this is the state a new user

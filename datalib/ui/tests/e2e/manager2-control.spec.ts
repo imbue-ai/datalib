@@ -168,7 +168,11 @@ async function untilJobFinished(
         seen = await jobFor(request, s);
         return seen ? `${seen.state}${seen.active ? " (still active)" : ""}` : "(no job)";
       },
-      { timeout, intervals: [200], message: `the job for ${s.id} never finished as ${states.join("/")}` },
+      {
+        timeout,
+        intervals: [200],
+        message: `the job for ${s.id} never finished as ${states.join("/")}`,
+      },
     )
     .toMatch(new RegExp(`^(${states.join("|")})$`));
   return seen!;
@@ -189,7 +193,10 @@ async function dumpStopEvidence(request: APIRequestContext, why: string): Promis
     console.warn(`[e2e] ${why}: could not read the API: ${e}`);
   }
   try {
-    const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as { name: string; log: string }[];
+    const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as {
+      name: string;
+      log: string;
+    }[];
     const mine = servers.find((s) => s.name === "sandbox-manager2-control");
     if (!mine) return;
     const tail = readFileSync(mine.log, "utf8").split("\n").slice(-80).join("\n");
@@ -345,10 +352,9 @@ test.describe("sources run independently, one job at a time", () => {
     await settleRunner(page, 60_000);
     const finished = await jobs(request);
     for (const s of [CHATGPT, CLAUDE, PDFS]) {
-      expect(
-        finished.find((j) => j.source_ids === ingestOf(s))?.state,
-        `${s.id}'s job`,
-      ).toBe("done");
+      expect(finished.find((j) => j.source_ids === ingestOf(s))?.state, `${s.id}'s job`).toBe(
+        "done",
+      );
     }
   });
 
@@ -417,7 +423,11 @@ test.describe("sources run independently, one job at a time", () => {
             }
             return `winding down (${stopped?.state ?? "no job"})`;
           },
-          { timeout: 45_000, intervals: [100], message: `the job for ${CHATGPT.id} never finished` },
+          {
+            timeout: 45_000,
+            intervals: [100],
+            message: `the job for ${CHATGPT.id} never finished`,
+          },
         )
         .toBe("finished");
       finished = true;
@@ -435,7 +445,8 @@ test.describe("sources run independently, one job at a time", () => {
           ? `showed its wind-down (banner ${seen.banner ? "seen" : "not seen"})`
           : "was over before a sample saw it"),
     );
-    if (seen) expect(seen.disabled, "while winding down, Stopping takes no second click").toBe(true);
+    if (seen)
+      expect(seen.disabled, "while winding down, Stopping takes no second click").toBe(true);
     // …and once the runner has gone, both stand down.
     await expect(banner).toBeHidden({ timeout: 10_000 });
     await expect(stopping).toHaveCount(0);

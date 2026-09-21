@@ -82,10 +82,7 @@ function highlight(code: string, lang: string): string {
       /* fall through to escape */
     }
   }
-  return code
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 const md = new MarkdownIt({
@@ -100,14 +97,11 @@ const md = new MarkdownIt({
 // (`http://...`, `data:...`, `//cdn/...`) pass through unchanged. The
 // rules live in `./asset_urls` so they are unit-testable on their own.
 function envUuid(env: unknown): string | null {
-  return (
-    (env as { markdownUuid?: string | null } | undefined)?.markdownUuid ?? null
-  );
+  return (env as { markdownUuid?: string | null } | undefined)?.markdownUuid ?? null;
 }
 const defaultImageRender =
   md.renderer.rules.image ||
-  ((tokens, idx, options, _env, self) =>
-    self.renderToken(tokens, idx, options));
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const srcIdx = token.attrIndex("src");
@@ -132,9 +126,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 for (const rule of ["html_block", "html_inline"] as const) {
   const fallback = md.renderer.rules[rule];
   md.renderer.rules[rule] = (tokens, idx, options, env, self) => {
-    const rendered = fallback
-      ? fallback(tokens, idx, options, env, self)
-      : tokens[idx].content;
+    const rendered = fallback ? fallback(tokens, idx, options, env, self) : tokens[idx].content;
     return rewriteIframeSrcs(rendered, envUuid(env));
   };
 }
@@ -142,16 +134,12 @@ for (const rule of ["html_block", "html_inline"] as const) {
 // Sanitized last, after every rewrite: the body is whatever the source
 // sent, and `html: true` above lets it through as HTML.
 const html = computed(() =>
-  sanitizeRenderedHtml(
-    md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
-  ),
+  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null })),
 );
 const root = ref<HTMLElement | null>(null);
 
 async function onCopyClick(ev: MouseEvent) {
-  const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>(
-    "button.copy-uuid",
-  );
+  const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.copy-uuid");
   if (!btn) return;
   ev.preventDefault();
   ev.stopPropagation();
@@ -229,9 +217,7 @@ function onBodyMouseOver(ev: MouseEvent) {
   if (!(t instanceof Element)) return;
   const el = t.closest<HTMLElement>(".edge-source[data-edge-id]");
   if (!el) return;
-  const edge = (props.outgoingEdges ?? []).find(
-    (e) => e.edge_uuid === el.dataset.edgeId,
-  );
+  const edge = (props.outgoingEdges ?? []).find((e) => e.edge_uuid === el.dataset.edgeId);
   if (!edge) return;
   emit("hover-edge", {
     md: edge.dst_markdown_uuid,
@@ -343,7 +329,12 @@ onMounted(() => {
     class="chat-body markdown-body"
     ref="root"
     v-html="html"
-    @click="(ev) => { onBodyEdgeClick(ev); onCopyClick(ev); }"
+    @click="
+      (ev) => {
+        onBodyEdgeClick(ev);
+        onCopyClick(ev);
+      }
+    "
     @mouseover="onBodyMouseOver"
     @mouseout="onBodyMouseOut"
   ></div>
@@ -455,8 +446,9 @@ onMounted(() => {
    fallback can never re-enter. Applies to the English sections too,
    which is harmless. */
 .chat-body .msg--perseus {
-  font-family: "Noto Sans", "GFS Neohellenic", "Helvetica Neue",
-    "Lucida Grande", "Arial Unicode MS", sans-serif;
+  font-family:
+    "Noto Sans", "GFS Neohellenic", "Helvetica Neue", "Lucida Grande", "Arial Unicode MS",
+    sans-serif;
 }
 /* Per-block sections (tool_use / tool_result / thinking). Nested
    inside their parent message wrapper, so we keep them visually
@@ -490,19 +482,11 @@ onMounted(() => {
   position: absolute;
   inset: auto 0 0 0;
   height: 5rem;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    var(--datalib-card-bg, #fafafa)
-  );
+  background: linear-gradient(to bottom, transparent, var(--datalib-card-bg, #fafafa));
   pointer-events: none;
 }
 .chat-body > .msg.msg--clamped.selected::after {
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    var(--datalib-hover, #f0f0f0)
-  );
+  background: linear-gradient(to bottom, transparent, var(--datalib-hover, #f0f0f0));
 }
 .chat-body > .msg > button.msg-expand {
   display: block;

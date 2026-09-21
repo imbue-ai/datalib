@@ -48,11 +48,7 @@ const HANDOFF_SCHEMES = new Set(["mailto:", "tel:"]);
  * rule is testable without a DOM, and so callers that already hold a
  * document can pass its own base.
  */
-export function isExternalHref(
-  href: string,
-  base: string,
-  origin: string,
-): boolean {
+export function isExternalHref(href: string, base: string, origin: string): boolean {
   if (!href) return false;
   let url: URL;
   try {

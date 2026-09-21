@@ -120,9 +120,15 @@ onBeforeUnmount(() => {
     <textarea v-model="text" class="m2-editor cfg-editor" spellcheck="false" @input="onEdit" />
     <div class="cfg-actions">
       <button class="cfg-btn" :disabled="!dirty || busy" @click="save">Save</button>
-      <button class="cfg-btn muted" :disabled="!dirty || busy" @click="discard">Discard changes</button>
-      <span v-if="dirty" class="cfg-dirty">Unsaved — the Sources table still shows the last saved version.</span>
-      <span v-if="banner" class="cfg-banner" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</span>
+      <button class="cfg-btn muted" :disabled="!dirty || busy" @click="discard">
+        Discard changes
+      </button>
+      <span v-if="dirty" class="cfg-dirty"
+        >Unsaved — the Sources table still shows the last saved version.</span
+      >
+      <span v-if="banner" class="cfg-banner" :class="banner.ok ? 'good' : 'bad'">{{
+        banner.text
+      }}</span>
     </div>
   </div>
 </template>
@@ -146,7 +152,9 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--datalib-muted);
 }
-.cfg-file code { word-break: break-all; }
+.cfg-file code {
+  word-break: break-all;
+}
 .cfg-editor {
   flex: 1 1 auto;
   min-height: 0;
@@ -168,9 +176,17 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
 }
-.cfg-dirty, .cfg-banner { font-size: 12px; color: var(--datalib-muted); }
-.cfg-banner.good { color: var(--datalib-log-ok); }
-.cfg-banner.bad { color: var(--datalib-log-error); }
+.cfg-dirty,
+.cfg-banner {
+  font-size: 12px;
+  color: var(--datalib-muted);
+}
+.cfg-banner.good {
+  color: var(--datalib-log-ok);
+}
+.cfg-banner.bad {
+  color: var(--datalib-log-error);
+}
 .cfg-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);
@@ -181,7 +197,14 @@ onBeforeUnmount(() => {
   font-size: 12px;
   cursor: pointer;
 }
-.cfg-btn:hover:not(:disabled) { background: var(--datalib-hover); }
-.cfg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.cfg-btn.muted { color: var(--datalib-muted); }
+.cfg-btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.cfg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cfg-btn.muted {
+  color: var(--datalib-muted);
+}
 </style>

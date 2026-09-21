@@ -11,8 +11,12 @@ describe("ingestReach", () => {
 
     const exp = { export: { path: "/export" } };
     expect(ingestReach("linkedin", exp)).toBe("local");
-    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: true } })).toBe("origin");
-    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: false } })).toBe("local");
+    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: true } })).toBe(
+      "origin",
+    );
+    expect(ingestReach("linkedin", { export: { ...exp.export, fetch_photos: false } })).toBe(
+      "local",
+    );
   });
 
   it("tells email's server modes from its mbox", () => {
@@ -58,7 +62,10 @@ describe("the generated mirror", () => {
   it("names a declared method on every entry that has one", () => {
     for (const e of CATALOG) {
       if (!e.method) continue;
-      expect(INGEST_METHODS[e.type].map((m) => m.path), e.type).toContain(e.method);
+      expect(
+        INGEST_METHODS[e.type].map((m) => m.path),
+        e.type,
+      ).toContain(e.method);
     }
   });
 });

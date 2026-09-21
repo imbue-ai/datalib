@@ -23,17 +23,12 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
   // `SEARCH_SETTLE`.
   test.setTimeout(180_000);
 
-  test("score column is non-increasing and viewport lands at row 0", async ({
-    page,
-  }) => {
+  test("score column is non-increasing and viewport lands at row 0", async ({ page }) => {
     // 1. Open the search page empty. Time-asc default scrolls to the
     //    bottom, so we have a non-zero scrollTop — the precondition
     //    for the scroll-to-top assertion below.
     await page.goto("/");
-    await page
-      .locator(".grid-box .slick-row")
-      .first()
-      .waitFor({ timeout: 10_000 });
+    await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
     // The main pane's viewport: the grid keeps one per frozen quadrant.
     const viewport = page.locator(".grid-box .slick-viewport-top.slick-viewport-left");
     await expect(viewport).toBeVisible();
@@ -62,9 +57,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     const operators = page.locator(".grid-box .slick-headerrow .filter-score select");
     await expect(operators).toHaveCount(1);
     expect(await operators.innerText()).not.toContain("&nbsp;");
-    const firstRow = page
-      .locator(".grid-box .slick-row")
-      .first();
+    const firstRow = page.locator(".grid-box .slick-row").first();
     await expect(firstRow).toBeVisible();
 
     // 3. Viewport must have scrolled to row 0. `scrollRowIntoView(0)`
@@ -82,9 +75,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    non-increasing prefix is enough to assert the sort direction.
     //    Row order, not DOM order: the grid appends a row's node when
     //    it first scrolls in, so the DOM is not sorted.
-    const cells = page.locator(
-      '.grid-box .slick-row [col-id="score"]',
-    );
+    const cells = page.locator('.grid-box .slick-row [col-id="score"]');
     const texts = await cells.evaluateAll((els) =>
       els
         .map((el) => ({
@@ -94,8 +85,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
         .sort((a, b) => a.row - b.row)
         .map((c) => c.text),
     );
-    expect(texts.length, "expected qmd-routed search to surface score cells")
-      .toBeGreaterThan(1);
+    expect(texts.length, "expected qmd-routed search to surface score cells").toBeGreaterThan(1);
 
     const values: number[] = [];
     texts.forEach((txt, i) => {

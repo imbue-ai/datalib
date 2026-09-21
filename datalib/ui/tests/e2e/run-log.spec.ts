@@ -48,7 +48,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
 
   // The server's boot lines all come from its main thread but one; the
   // menu names the value under the click.
-  const mainCell = dialog.locator(`${ROWS} .slick-cell[col-id="thread"]`).filter({ hasText: /^main$/ }).first();
+  const mainCell = dialog
+    .locator(`${ROWS} .slick-cell[col-id="thread"]`)
+    .filter({ hasText: /^main$/ })
+    .first();
   await mainCell.click({ button: "right" });
   await expect(menuEntry(page, "Keep only Thread=main")).toBeVisible();
   await expect(menuEntry(page, "Exclude all Thread=main")).toBeVisible();
@@ -57,13 +60,17 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(query).toHaveValue("min_level:info thread:main");
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
-  await expect.poll(async () => {
-    const n = await lineCount(page);
-    return n > 0 && n < all;
-  }).toBe(true);
   await expect
     .poll(async () => {
-      const threads = await dialog.locator(`${ROWS} .slick-cell[col-id="thread"]`).allTextContents();
+      const n = await lineCount(page);
+      return n > 0 && n < all;
+    })
+    .toBe(true);
+  await expect
+    .poll(async () => {
+      const threads = await dialog
+        .locator(`${ROWS} .slick-cell[col-id="thread"]`)
+        .allTextContents();
       return [...new Set(threads.map((t) => t.trim()))];
     })
     .toEqual(["main"]);
@@ -125,13 +132,18 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   );
 
   // "keep" on the thread chip narrows the log beside it.
-  await inspector.locator(".ll-meta").getByRole("button", { name: /^main$/ }).click();
+  await inspector
+    .locator(".ll-meta")
+    .getByRole("button", { name: /^main$/ })
+    .click();
   await expect(dialog.locator(".rl-search")).toHaveValue("min_level:info thread:main");
 
   // The arrow key moves the selection, and the inspector follows.
   await dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]').click();
   await page.keyboard.press("ArrowDown");
-  const second = (await dialog.locator(ROWS).nth(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
+  const second = (
+    await dialog.locator(ROWS).nth(1).locator('.slick-cell[col-id="msg"]').textContent()
+  )?.trim();
   await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
 });
 
@@ -151,7 +163,9 @@ test("grouped by a column, the lines fold under group rows", async ({ page }) =>
   await expect(dialog.locator(".slick-group-toggle-all")).toBeHidden();
 
   await page.evaluate(() =>
-    (window as unknown as { __fwRunLogApi: { groupBy: (ids: string[]) => void } }).__fwRunLogApi.groupBy(["level"]),
+    (
+      window as unknown as { __fwRunLogApi: { groupBy: (ids: string[]) => void } }
+    ).__fwRunLogApi.groupBy(["level"]),
   );
 
   // A chip for the column takes the placeholder's place in the bar…

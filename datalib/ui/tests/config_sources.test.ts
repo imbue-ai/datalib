@@ -63,9 +63,7 @@ describe("listSources", () => {
   });
 
   it("treats an empty inputs list as input-less", () => {
-    const rows = listSources(
-      '[[steps]]\nid = "x/ingest"\ncommand = "fetch-x"\ninputs = []\n',
-    );
+    const rows = listSources('[[steps]]\nid = "x/ingest"\ncommand = "fetch-x"\ninputs = []\n');
     expect(rows.map((r) => r.id)).toEqual(["x/ingest"]);
   });
 
@@ -78,9 +76,7 @@ describe("listSources", () => {
   it("tolerates malformed entries without crashing", () => {
     // An inline step has no table of its own, so it lists with a zero
     // range ("not locatable") rather than pointing at something else.
-    const rows = listSources(
-      'steps = [{id = "i/ingest", command = "c"}]\n',
-    );
+    const rows = listSources('steps = [{id = "i/ingest", command = "c"}]\n');
     expect(rows.map((r) => r.id)).toEqual(["i/ingest"]);
     expect(rows[0]).toMatchObject({ start: 0, end: 0 });
   });

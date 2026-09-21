@@ -273,11 +273,23 @@ code.hljs {
   text-transform: uppercase;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
-.problem-error .problem-severity { color: var(--datalib-log-error); }
-.problem-warning .problem-severity { color: var(--datalib-log-warn); }
-.problem-info .problem-severity { color: var(--datalib-muted); }
-.problem-text { flex: 1 1 auto; min-width: 0; }
-.problem-jump { color: inherit; text-decoration: underline dotted; }
+.problem-error .problem-severity {
+  color: var(--datalib-log-error);
+}
+.problem-warning .problem-severity {
+  color: var(--datalib-log-warn);
+}
+.problem-info .problem-severity {
+  color: var(--datalib-muted);
+}
+.problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.problem-jump {
+  color: inherit;
+  text-decoration: underline dotted;
+}
 .problem-sample {
   display: inline-block;
   margin-left: 0.4rem;
@@ -528,8 +540,9 @@ code.hljs {
    fallback can never re-enter. Applies to the English sections too,
    which is harmless. */
 .chat-body .msg--perseus {
-  font-family: "Noto Sans", "GFS Neohellenic", "Helvetica Neue",
-    "Lucida Grande", "Arial Unicode MS", sans-serif;
+  font-family:
+    "Noto Sans", "GFS Neohellenic", "Helvetica Neue", "Lucida Grande", "Arial Unicode MS",
+    sans-serif;
 }
 /* Per-block sections (tool_use / tool_result / thinking). Nested
    inside their parent message wrapper, so we keep them visually
@@ -563,19 +576,11 @@ code.hljs {
   position: absolute;
   inset: auto 0 0 0;
   height: 5rem;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    var(--datalib-card-bg, #fafafa)
-  );
+  background: linear-gradient(to bottom, transparent, var(--datalib-card-bg, #fafafa));
   pointer-events: none;
 }
 .chat-body > .msg.msg--clamped.selected::after {
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    var(--datalib-hover, #f0f0f0)
-  );
+  background: linear-gradient(to bottom, transparent, var(--datalib-hover, #f0f0f0));
 }
 .chat-body > .msg > button.msg-expand {
   display: block;

@@ -21,10 +21,7 @@ import { actOnRowByUuid, expectGridPainted } from "./grid-helpers";
 //   4. Assert computed -webkit-line-clamp is "2" (catches a future
 //      refactor that drops the CSS rule entirely).
 
-test("Contents column clamps to exactly two lines with ellipsis", async ({
-  page,
-  request,
-}) => {
+test("Contents column clamps to exactly two lines with ellipsis", async ({ page, request }) => {
   // Find a fixture row with a snippet long enough that a 2-line clamp
   // must actually truncate. 200 chars comfortably overflows two lines at
   // the column's typical width.
@@ -40,9 +37,7 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
   ).toBeTruthy();
 
   await page.goto("/");
-  await expect(
-    page.locator(".grid-box .slick-row").first(),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".grid-box .slick-row").first()).toBeVisible({ timeout: 10_000 });
   // A collapsed grid keeps its rows in the DOM but paints nothing, and
   // a nudge into a zero-height viewport scrolls nowhere. Assert the
   // paint first so that failure reads as the layout bug it is rather
@@ -97,12 +92,8 @@ test("Contents column clamps to exactly two lines with ellipsis", async ({
 
   // Visible height is two lines, give or take sub-pixel rounding.
   const expectedTwoLines = metrics.lineHeightPx * 2;
-  expect(metrics.clientHeight).toBeGreaterThanOrEqual(
-    Math.floor(expectedTwoLines) - 1,
-  );
-  expect(metrics.clientHeight).toBeLessThanOrEqual(
-    Math.ceil(expectedTwoLines) + 1,
-  );
+  expect(metrics.clientHeight).toBeGreaterThanOrEqual(Math.floor(expectedTwoLines) - 1);
+  expect(metrics.clientHeight).toBeLessThanOrEqual(Math.ceil(expectedTwoLines) + 1);
 
   // And the clamp property itself is what we expect (guards against a
   // future refactor that drops the rule).

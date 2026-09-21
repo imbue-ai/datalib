@@ -14,10 +14,7 @@ describe("quick-add snippets", () => {
       expect(rest).toEqual([]);
       expect(group.type).toBeTruthy();
       const steps = listSteps(text);
-      expect(steps.map((s) => s.id)).toEqual([
-        `${group.id}/ingest`,
-        `${group.id}/render_markdown`,
-      ]);
+      expect(steps.map((s) => s.id)).toEqual([`${group.id}/ingest`, `${group.id}/render_markdown`]);
       expect(steps[1].inputs).toEqual([`${group.id}/ingest`]);
       // No command: a built-in step is `datalib-step`.
       expect(text).not.toContain("command");

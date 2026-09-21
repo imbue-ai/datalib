@@ -43,16 +43,9 @@ export function assetUrl(markdownUuid: string, src: string): string {
  */
 const IFRAME_SRC = /(<iframe\b[^>]*?\bsrc\s*=\s*)(["'])([^"']*)\2/gi;
 
-export function rewriteIframeSrcs(
-  html: string,
-  markdownUuid: string | null | undefined,
-): string {
+export function rewriteIframeSrcs(html: string, markdownUuid: string | null | undefined): string {
   if (!markdownUuid) return html;
-  return html.replace(
-    IFRAME_SRC,
-    (whole: string, head: string, quote: string, src: string) =>
-      src && !isAbsoluteOrUrl(src)
-        ? `${head}${quote}${assetUrl(markdownUuid, src)}${quote}`
-        : whole,
+  return html.replace(IFRAME_SRC, (whole: string, head: string, quote: string, src: string) =>
+    src && !isAbsoluteOrUrl(src) ? `${head}${quote}${assetUrl(markdownUuid, src)}${quote}` : whole,
   );
 }

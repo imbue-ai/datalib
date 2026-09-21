@@ -61,7 +61,10 @@ describe("historyRows", () => {
     const [store, c, messages] = rows;
     expect(store.path).toEqual(["slack/ingest/entities.doltlite_db"]);
     expect(store.rows).toBeNull();
-    expect(c.path).toEqual(["slack/ingest/entities.doltlite_db", "slack/ingest/entities.doltlite_db@aaa"]);
+    expect(c.path).toEqual([
+      "slack/ingest/entities.doltlite_db",
+      "slack/ingest/entities.doltlite_db@aaa",
+    ]);
     expect(c.stepId).toBe("slack/ingest");
     expect(c.run).toBe("job-7");
     expect(c.rows).toBe(1824);
@@ -113,7 +116,9 @@ describe("historyRows", () => {
 describe("messageWithoutRun", () => {
   it("drops the trailing run stamp and nothing else", () => {
     expect(messageWithoutRun("download slack: msgs=4 run=0199-abc")).toBe("download slack: msgs=4");
-    expect(messageWithoutRun("render slack: 2 document(s) run=j1 ")).toBe("render slack: 2 document(s)");
+    expect(messageWithoutRun("render slack: 2 document(s) run=j1 ")).toBe(
+      "render slack: 2 document(s)",
+    );
     expect(messageWithoutRun("schema: apply DDL")).toBe("schema: apply DDL");
     expect(messageWithoutRun("rerun=3 things")).toBe("rerun=3 things");
   });

@@ -75,15 +75,11 @@ describe("filePathFromUrl", () => {
     // Real filename from the corpus this was built against. Passing the
     // raw URL to the reveal IPC would hunt for a file named `...%23...`.
     const url = "file:///c/Imbue%20Mail%20-%20New%20Order%20%23%20101445654.pdf";
-    expect(filePathFromUrl(url)).toBe(
-      "/c/Imbue Mail - New Order # 101445654.pdf",
-    );
+    expect(filePathFromUrl(url)).toBe("/c/Imbue Mail - New Order # 101445654.pdf");
   });
 
   it("round-trips non-ASCII", () => {
-    expect(filePathFromUrl("file:///c/%E6%97%A5%E6%9C%AC.pdf")).toBe(
-      "/c/日本.pdf",
-    );
+    expect(filePathFromUrl("file:///c/%E6%97%A5%E6%9C%AC.pdf")).toBe("/c/日本.pdf");
   });
 
   it("returns null for http(s) URLs so web rows keep Open source", () => {
@@ -100,8 +96,7 @@ describe("filePathFromUrl", () => {
 });
 
 describe("revealActionLabel", () => {
-  const setUA = (ua: string) =>
-    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(ua);
+  const setUA = (ua: string) => vi.spyOn(navigator, "userAgent", "get").mockReturnValue(ua);
 
   it("uses the platform's own wording", () => {
     setUA("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
@@ -152,7 +147,11 @@ describe("pickPath", () => {
 
   it("passes an extension filter only for file pickers", async () => {
     const invoke = fakeTauri(() => Promise.resolve("/Users/x/Catalog.lrcat"));
-    await pickPath({ picks: "file", title: "Choose your Lightroom catalog", extensions: ["lrcat"] });
+    await pickPath({
+      picks: "file",
+      title: "Choose your Lightroom catalog",
+      extensions: ["lrcat"],
+    });
     expect((invoke.mock.calls[0][1] as any).options).toMatchObject({
       directory: false,
       filters: [{ name: "Supported files", extensions: ["lrcat"] }],

@@ -41,7 +41,9 @@ function packageRoot(file: string): string | null {
 function readPackage(root: string): PackageInfo {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const repository =
-    typeof manifest.repository === "string" ? manifest.repository : (manifest.repository?.url ?? "");
+    typeof manifest.repository === "string"
+      ? manifest.repository
+      : (manifest.repository?.url ?? "");
   const licenseText = fs
     .readdirSync(root)
     .filter((f) => LICENSE_FILE.test(f))
@@ -89,9 +91,19 @@ export function thirdPartyNotices(): Plugin {
       for (const p of packages) {
         lines.push(`## ${p.name} ${p.version}`, "", `License: ${p.license}`);
         if (p.repository) lines.push(`Repository: ${p.repository}`);
-        lines.push("", "```", p.licenseText || `(no license file in the package; see its package.json)`, "```", "");
+        lines.push(
+          "",
+          "```",
+          p.licenseText || `(no license file in the package; see its package.json)`,
+          "```",
+          "",
+        );
       }
-      this.emitFile({ type: "asset", fileName: "THIRD_PARTY_NOTICES.md", source: lines.join("\n") });
+      this.emitFile({
+        type: "asset",
+        fileName: "THIRD_PARTY_NOTICES.md",
+        source: lines.join("\n"),
+      });
     },
   };
 }
