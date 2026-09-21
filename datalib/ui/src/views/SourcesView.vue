@@ -44,7 +44,7 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 );
 const saving = ref(false);
 const dirty = ref(false);
-const latchkeyCli = ref("npx -y latchkey");
+const latchkeyCli = ref("latchkey");
 
 // Table view of the text: re-derived on every edit. While the text
 // doesn't parse the last good rows stay up (grayed) with the parse

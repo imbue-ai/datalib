@@ -1119,7 +1119,8 @@ fn resolve_outputs(
                 step: spec.id.clone(),
                 level: crate::events::LogLevel::Info,
                 msg: format!(
-                    "reported no version for {path}; reading the whole tree to hash it.                      A version the step derives from what it wrote would be cheaper."
+                    "reported no version for {path}; reading the whole tree to hash it. \
+                     A version the step derives from what it wrote would be cheaper."
                 ),
                 ts: None,
                 stream: None,

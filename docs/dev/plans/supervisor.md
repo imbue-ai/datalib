@@ -1,12 +1,14 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: greenfield proposal (2026-09-19, revised 2026-09-20), not built.** This is the
-alternative to [`join_running_sync.md`](join_running_sync.md), which
-patches the runner we have. Both start from the same measurement
-(§0 there). This one asks what we would build if the UI's needs came
-first. §1 describes the tree as it stands at `ae2d52f0`; nothing else
-here describes the tree. Where this doc and the tree disagree, the tree
-wins.
+**Status: greenfield proposal (2026-09-19, revised 2026-09-21); its
+slice 0 is built, the rest is not.** This is the alternative to
+[`join_running_sync.md`](join_running_sync.md), which patches the runner
+we have. Both start from the same measurement (§0 there). This one asks
+what we would build if the UI's needs came first. §1 describes the tree
+as it stands at `692f59bd`, after #600 (a writer's `open` discards the
+working set; no commit on SIGINT) and #606 (a stop ends a download at
+its next consistent point) landed; nothing else here describes the
+tree. Where this doc and the tree disagree, the tree wins.
 
 ## 0. The claim
 
@@ -55,11 +57,19 @@ invocations, which say what was done about it.
 Checked against the tree. Most of the storage-side work is done.
 
 - **The step protocol is already the right contract.** A step is a
-  subprocess that writes under its tree, is idempotent, commits
-  atomically, reports content versions on stdout and checkpoints as it
-  goes, and takes SIGINT as "checkpoint and exit"
-  ([`step_protocol.md`](../step_protocol.md)). Nothing in this design
-  changes what a step sees, except one environment variable (§2.6).
+  subprocess that writes under its tree, is idempotent, commits only
+  correct states, reports content versions on stdout and checkpoints as
+  it goes, and takes SIGINT as "stop at your next consistent point,
+  commit there, exit 130" ([`step_protocol.md`](../step_protocol.md);
+  the built-in ingests do this through `datalib_etl::stop::StopFlag`,
+  #606). Nothing in this design changes what a step sees, except one
+  environment variable (§2.6).
+- **Nothing ever adopts a crashed writer's leftovers.** A doltlite
+  writer's `open` discards a dirty working set — `dolt_reset --hard`
+  plus the untracked tables it leaves — instead of sealing it into a
+  "rescue" commit, and nothing commits from a signal handler (#600).
+  Every commit in a store is therefore one a writer vouched for at a
+  boundary it chose, which is what lets a consumer read at any commit.
 - **One writer at a time per file is enforced where it matters.**
   `RawDb::open` takes `flock(2)` on `<store>.doltlite_db.lock` and
   refuses a second writer with the holder named; the kernel releases it
@@ -131,8 +141,9 @@ reads = ["work-email/raw"]         # `inputs` today; names a sink now
 every current config is a valid new one. What changes is what the
 loader refuses: **two steps may name one sink.** The rule becomes
 *one writer at a time*, and the supervisor is what enforces it — it
-never starts a second writer on a sink while one runs, and the store's
-`flock` is the backstop if something slips past.
+never starts a second writer on a sink while one runs, and the sink's
+own writer lock (the table below) is the backstop if something slips
+past.
 
 Why want it: the `claude` provider's api and export methods share one
 store today by being one step with two methods; an mbox import beside
@@ -143,13 +154,44 @@ render, so the only thing one shared index step serializes is the pass
 itself, and a pass is small. Splitting it per source is possible under
 this design and not worth doing first.
 
-**A sink's version belongs to the sink.** For a doltlite store it is
-the head commit, read by the supervisor after any writer finishes
-(`datalib_history` already reads a store's log without linking `etl`).
-For a tree with no store of its own — a markdown tree, qmd's
-`index.sqlite` — the step reports it as it does today, and the last
-report stands. The step's `outcome` line keeps working unchanged; it is
-just no longer the *only* way a sink's version can move.
+#### What a sink has to be
+
+Everything above is stated for doltlite because that is what the raw
+and render stores are, but the supervisor never opens a store; it
+schedules against three properties, and any storage that has them is a
+sink. A new kind of sink is a new implementation of these, not a change
+to the tick.
+
+| property | what the supervisor needs | why |
+|---|---|---|
+| **a version** | a string that is a function of the sink's *committed* content, cheap to read without opening the sink for writing | `stale()` compares it on every tick; equal strings mean nothing moved |
+| **atomic publish** | a reader sees only states a writer committed whole; a writer that dies leaves nothing a reader can reach | a consumer runs against whatever is published, at any moment, with no run boundary to hide behind |
+| **one writer at a time** | the supervisor never starts a second writer while one runs, and the sink refuses one if something slips past | the same rule the etl README enforces per file today |
+
+How the sinks we have meet them:
+
+| sink | version | atomic publish | writer lock | on a crash |
+|---|---|---|---|---|
+| a doltlite store (raw, render) | head commit | `dolt_commit` at a seal; readers pin a commit | `flock` on the sibling `.lock` | the next `open` discards the working set |
+| a plain SQLite file (qmd's `index.sqlite`, `runs.sqlite`) | a version the writer records *in the same transaction* as the data — a row in a `versions` table, or `PRAGMA user_version` | the transaction; readers open read-only | SQLite's own writer lock, plus the supervisor's scheduling | the transaction rolls back by itself |
+| a file tree indexed by a store (the markdown documents) | the version of the store that indexes it: a `.md` file is reachable only through a committed `markdowns` row, so the tree has no version of its own | write the file, then commit the row that names it; a file no committed row names is unreachable | the indexing store's | orphan files are junk the next writer may remove; readers never saw them |
+| a plain file tree (perseus's TEI XML, written by `curl -o`) | a content hash of the tree, computed by the supervisor **once, when its writer finishes** — the runner's hash today — and held until the next writer finishes | none of its own: a reader listing the tree mid-write sees a half-written file, so the supervisor starts no writer while a reader of the sink runs (or the step writes beside and renames) | the supervisor's scheduling alone | the next completed write re-hashes the whole tree, half-written files included, so nothing is adopted silently |
+| a step that declares its own version | whatever its `outcome` line says, held by the supervisor until the next report | the step's promise, under the protocol's any-path rule | the supervisor's scheduling alone | the step's promise |
+
+The last two rows are how every non-store sink works today and stay
+available; the first three are what the supervisor can read for
+itself. What matters is *when* a version is computed, not how: the
+tree hash is a fine version for fourteen XML files, and a poor one for
+a multi-gigabyte index — so a sink whose version is expensive to
+compute is a sink that should record one instead (the qmd index, a
+SQLite file, gets a `versions` row). Either way the supervisor
+computes or reads a version **once per completed invocation** and the
+tick compares cached strings; nothing is ever hashed inside the tick.
+
+For a doltlite sink the version is read by the supervisor after any
+writer finishes (`datalib_history` already reads a store's log without
+linking `etl`). The step's `outcome` line keeps working unchanged; it
+is just no longer the *only* way a sink's version can move.
 
 ### 2.2 Intent: requests, and what they put in scope
 
@@ -226,7 +268,7 @@ Everything the runner's loop needed special machinery for falls out:
 
 - **A consumer runs while its producer is still running.** A checkpoint
   moves the sink's version; the consumer is stale and in scope; the tick
-  starts it against the checkpointed commit. When the producer finishes,
+  starts it against that version. When the producer finishes,
   the sink moves once more; if the consumer consumed an earlier version
   it is stale again and runs once more, else it is fresh. No
   `final_pass_owed`, because there is no final pass — only "is it stale
@@ -268,27 +310,29 @@ That rests on one rule, and it is stricter than the one
 > **A commit is a correct state. Never leave a torn tree on *any*
 > path** — success, failure, interrupt, or crash.
 
-The protocol today asks for atomicity on the success path and
+The protocol used to ask for atomicity on the success path and
 recoverability on the others, because the only reader was the next run
-of the same step. Here every commit has readers at once. Two places
-the tree has to change to honour it:
+of the same step. Here every commit has readers at once. The tree
+honours the stricter rule since #600 and #606, and
+[`step_protocol.md`](../step_protocol.md) states it:
 
-- **The rescue commit goes** (landed: #600). A writer's `open` that
-  finds a crashed predecessor's dirty rows *sealed them into a rescue commit*
-  (`doltlite_raw.rs::rescue_dirty_working_tree`, etl README § One
-  writer per file). That is a torn state committed for everyone to
-  read, and its own fallback says the rest: "the next ETL commit will
-  fold the dirty rows in implicitly", because every commit is `-Am`.
-  So not just the rescue but the sweep behind it: a writer's `open`
-  **discards** the working set (`dolt_reset --hard`, or doltlite's
-  equivalent) before it does anything else. With seals, what a crash
-  loses is the delta since the last checkpoint, and refetching it from
-  the cursor is what idempotency promises. The interrupt path has the
-  same rule: a SIGINT commits only at a boundary the provider chose
-  (the `Checkpointer` seal); a hook that commits whatever is in flight
-  is a rescue by another name and goes with it. This one does not wait
-  for the supervisor — it is a change to `RawDb::open` and lands on
-  its own (§5, slice 0).
+- **Nothing adopts a crashed writer's leftovers.** A doltlite writer's
+  `open` used to seal a predecessor's dirty rows into a "rescue"
+  commit — a torn state committed for everyone to read, and because
+  every commit is `-Am`, the same rows rode into the next commit even
+  when the rescue failed. `open` now discards the working set
+  (`dolt_reset --hard`, then the untracked tables reset leaves behind)
+  before doing anything else, and a schema commit provably carries no
+  rows. For the other sink kinds the same rule is met the way §2.1's
+  table says: a SQLite transaction rolls back on its own, an unnamed
+  file in a tree is unreachable. With seals, a crash loses the delta
+  since the last one, and the cursor refetches it.
+- **Nothing commits from a signal handler.** SIGINT raises a stop flag;
+  the download ends at its next consistent point, `finish` commits
+  there, and the step reports `cancelled`. A stopped run does not record
+  its scope config as satisfied, so a widened filter interrupted
+  part-way is backfilled by the next run
+  ([`data_architecture_ingestion.md` § A claim of completeness…](../data_architecture_ingestion.md)).
 
 - **Truncation is never an implementation detail of an incremental
   step.** The truncate-before-refill shape is the one the streaming
@@ -405,14 +449,14 @@ applied to operators.
 Emptying a sink is something a person asks for, on purpose, and it
 deserves its own verb and its own button rather than a flag on a
 download. **`clear <sink>`** is a framework step, not a provider's: it
-takes the sink's writer lock like any writer, empties every table in
-the store — entities, sidecars, cursors, because the etl README keeps a
-store's bookkeeping *in* the store — and commits once. In the doltlite
-sense nothing is gone: the commit before it is still there, the
-history panel shows it, and a wrong click is a revert, which is why
-this can be a button at all. The UI says exactly that: "Clear Work
-Gmail — every row goes, the history keeps them, the next Sync
-re-downloads from nothing."
+takes the sink's writer lock like any writer, empties the sink — for a
+store, every table: entities, sidecars, cursors, because the etl README
+keeps a store's bookkeeping *in* the store — and publishes that once,
+as one version. For a doltlite sink nothing is gone: the commit before
+it is still there, the history panel shows it, and a wrong click is a
+revert, which is why this can be a button at all. The UI says exactly
+that: "Clear Work Gmail — every row goes, the history keeps them, the
+next Sync re-downloads from nothing."
 
 A clear opens a request rooted at the sink (a sink can be a root: its
 scope is its readers' closure), so the emptiness propagates the way any
@@ -424,10 +468,14 @@ starts from the beginning. `--reset-and-redownload` becomes
 `reset_and_redownload` branch: a download never wipes, it only
 downloads.
 
-Two sinks need a word. A render store is doltlite and clears the same
-way. The qmd index is a plain SQLite file with no history; clearing it
-is deleting it, and the UI's wording for that sink is different
-because the promise is different.
+What "clear" promises depends on the sink kind (§2.1's table), and the
+supervisor knows which it is talking to. A doltlite sink — raw or
+render — clears to an empty commit with the history intact: the button
+can say "the history keeps them". A sink without history — qmd's
+`index.sqlite`, a plain tree — is emptied for good, and the button says
+that instead. A sink that only a step's report versions is cleared by
+the step, through the same `clear` verb passed to it, because the
+supervisor cannot know its shape.
 
 ## 3. Hazards
 
@@ -447,13 +495,16 @@ because the promise is different.
   it, honestly, and the row says which request. The test to write
   first: a tick over a graph with stale steps and no open request
   starts nothing.
-- **Cheap sink versions are load-bearing.** A tick that hashes a tree
-  to learn a sink's version is a tick that costs seconds; `stale()` runs
-  on every event. Doltlite sinks are free (head commit). Markdown trees
-  and qmd's sqlite need a reported or sidecar version; the runner's
-  fallback of hashing on the step's behalf becomes "unknown, treat as
-  moved once, then trust the step's next report" — a fallback, so it
-  logs when it fires.
+- **A version is computed when a writer finishes, never in the tick.**
+  `stale()` runs on every event, so anything it does is done constantly;
+  it compares strings the supervisor already holds. The tree hash a
+  plain-tree sink needs (perseus) is computed once, when its writer
+  completes, exactly as the runner does today. What makes that hash
+  wrong is size, not principle: `qmd_index` reports no version and has
+  its whole `index.sqlite` hashed after every pass, which is the one
+  place the cost shows; slice 2 gives it a `versions` row. A new sink
+  whose tree is large gets the same treatment before it gets a row in
+  the graph.
 - **The tick is one function with the whole graph in scope.** That is
   the point, and also where a bug in `stale()` starts every step at
   once. Budgets bound the blast radius; a test that a tick on an
@@ -474,6 +525,15 @@ because the promise is different.
   is measured against, and the AGENTS.md warning stands: expect a
   scheduling change to pass locally and fail on CI, and count the opens
   first.
+- **A non-doltlite sink is only as safe as its row in §2.1's table.**
+  The three properties are easy to claim and easy to half-meet: a
+  SQLite version written in a *separate* transaction from the data is
+  a version that can lie; a file tree whose files are reachable by
+  path before their row is committed publishes torn state to anyone
+  listing the directory. Each new sink kind gets the same two-process
+  test doltlite has — a writer killed mid-write, a reader that must
+  see the old version and nothing else — before the supervisor is
+  allowed to schedule against it.
 
 ## 4. How it compares to the join
 
@@ -500,20 +560,26 @@ already pretending the batch runner was.
 
 Each slice lands green and the app works after each.
 
-0. **The rescue commit goes** (§2.5) — landed in #600. `RawDb::open` discards a dirty
-   working set instead of sealing it; the interrupt hooks are audited
-   for a commit outside a seal boundary. `doltlite_raw.rs`'s "phase 2"
-   test, which today asserts the rescue swept the orphaned writes,
-   asserts they are gone and the store is at its last commit. Lands
-   before anything else and under either plan.
+0. ~~**The rescue commit goes**~~ **Done: #600, #606.** `RawDb::open`
+   discards a dirty working set instead of sealing it, and the
+   interrupt commit hook is gone; SIGINT raises a stop flag and the
+   download ends at its next consistent point with a real final commit.
+   Taking the rescue away exposed that `RawStoreSession::finish` never
+   committed the blob CAS — the next run's rescue had been doing it —
+   and that jmap saved its state token before its enumeration finished.
+   Both fixed there.
 1. **Sinks in the graph.** `writes`/`reads` in the config with the
    defaults above; `Graph` bipartite; the loader allows a shared sink.
    No scheduler change yet: the current runner treats a shared sink as
    a diagnostic-level warning and runs as now. Tests: today's configs
    load identically; a shared sink loads.
-2. **Sink versions from the store.** A doltlite sink's version is its
+2. **Sink versions from the sink.** A doltlite sink's version is its
    head commit, read by the framework; the step's report is checked
-   against it in tests, then becomes optional for doltlite sinks.
+   against it in tests, then becomes optional for doltlite sinks. The
+   qmd index gets a `versions` row written in the transaction that
+   updates it. A plain tree keeps the tree hash, computed on writer
+   completion and cached; the supervisor learns which sinks' readers do
+   not pin, so it never starts a writer on one while a reader runs.
 3. **The supervisor library**, batch mode only: the tick of §2.3 with
    one request rooted at every source, run until it closes. It passes
    the scheduler's existing tests re-expressed against requests and

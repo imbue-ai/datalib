@@ -457,7 +457,7 @@ const serviceRegistered = ref(true);
 /// How to invoke latchkey on the machine running the backend. `npx`
 /// until the server says otherwise, so a command is never shown naming
 /// a binary that isn't there.
-const latchkeyCli = ref("npx -y latchkey");
+const latchkeyCli = ref("latchkey");
 /// The latchkey gateway the backend talks through, when there is one.
 /// Under a gateway the credentials and the browser that signs in to
 /// them are on the gateway's side, and latchkey refuses every command

@@ -60,6 +60,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
 - [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
+- [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — **read before touching `release.yml`**: the steps that assemble a release are scripts under `scripts/release/`, tested on every `bazel test //...` and on Linux from a mac by `bazelisk run //tools:release_steps_docker`; what stays release-only.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl and the router in front of it, fetched from `latchkey-curl-shims`; read before touching `latchkey.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
 - [`docs/dev/runtime_fetch.md`](docs/dev/runtime_fetch.md) — where the Node runtime `qmd` and `latchkey` run from comes from: staged beside the binaries, or fetched sha256-pinned on first use. Read before touching `node_runtime.rs`, `stage_runtime.sh` or the release's runtime job.
