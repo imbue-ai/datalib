@@ -43,7 +43,7 @@ pub enum StoreKind {
     Feedback,
     Jobs,
     Usage,
-    /// `system/runs.sqlite`, the one plain-SQLite store.
+    /// `system/runs/runs.sqlite`, the one plain-SQLite store.
     Runs,
 }
 

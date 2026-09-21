@@ -1,7 +1,7 @@
 // The page's own record in the server's log.
 //
 // One load of the app in one tab is a `ui` process in
-// `system/runs.sqlite`, the way a launch of the server is one (see
+// `system/runs/runs.sqlite`, the way a launch of the server is one (see
 // `docs/dev/app_stores.md`). What happens on it — a navigation, an
 // error nobody caught, whatever a component chooses to `track` — is
 // posted to `POST /api/ui/events` in batches and lands as that

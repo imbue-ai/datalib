@@ -1,7 +1,7 @@
 //! What a person did at the screen, in the same log as everything else.
 //!
 //! A page of the app — one load in one browser tab — is a process in
-//! `system/runs.sqlite`, of kind `ui`, with an id the page mints for
+//! `system/runs/runs.sqlite`, of kind `ui`, with an id the page mints for
 //! itself and keeps for its life. It cannot reach the store, so it
 //! posts batches here: a navigation, an error it caught, whatever the
 //! UI chose to report. Each becomes a `log` row under the page's
