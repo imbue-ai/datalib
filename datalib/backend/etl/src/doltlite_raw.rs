@@ -530,7 +530,8 @@ async fn open_inner(
     // file is attributable: with max_connections=1 it surfaces only as
     // "database is locked" on dolt_commit.
     let started = std::time::Instant::now();
-    tracing::info!(path = %db_path.display(), "doltlite_raw::open: opening sqlite pool");
+    let store = path_label(db_path);
+    tracing::info!(store, "doltlite_raw::open: opening {store}");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
@@ -628,10 +629,11 @@ async fn open_inner(
          A reader cannot tell either from a source that lost every row.",
         db_path.display()
     );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
     tracing::info!(
-        path = %db_path.display(),
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "doltlite_raw::open: pool ready"
+        store,
+        elapsed_ms,
+        "doltlite_raw::open: {store} ready in {elapsed_ms}ms"
     );
     Ok(pool)
 }
@@ -1030,9 +1032,11 @@ pub const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
 /// A store's path as a log line names it: under the data root when the
 /// runner said where that is, since every store's is the same prefix.
 fn store_label(pool: &SqlitePool) -> String {
-    let path = pool.connect_options().get_filename().to_path_buf();
-    let under_root = std::env::var_os(DATA_ROOT_ENV)
-        .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf));
+    path_label(pool.connect_options().get_filename())
+}
+
+fn path_label(path: &Path) -> String {
+    let under_root = std::env::var_os(DATA_ROOT_ENV).and_then(|root| path.strip_prefix(root).ok());
     under_root.unwrap_or(path).display().to_string()
 }
 

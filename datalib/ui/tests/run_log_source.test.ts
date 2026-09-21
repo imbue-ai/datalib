@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sourceLabel, sourceOf, sourceUrl } from "../src/components/runLogSource";
+import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "../src/components/runLogSource";
 
 const COMMIT = "ae2d52f0f08c93fa49b82189e5715f278c517ad7";
 
@@ -54,5 +54,14 @@ describe("sourceLabel", () => {
   it("is file:line, or the file alone", () => {
     expect(sourceLabel({ file: "a.rs", line: 3 })).toBe("a.rs:3");
     expect(sourceLabel({ file: "a.rs", line: null })).toBe("a.rs");
+  });
+});
+
+describe("fieldsWithoutSource", () => {
+  it("drops the two keys the Source column shows and keeps the rest", () => {
+    expect(fieldsWithoutSource('{"filename":"a.rs","line_number":3,"account":"x"}')).toBe('{"account":"x"}');
+    expect(fieldsWithoutSource('{"filename":"a.rs","line_number":3}')).toBe("");
+    expect(fieldsWithoutSource(null)).toBe("");
+    expect(fieldsWithoutSource("not json")).toBe("not json");
   });
 });

@@ -18,12 +18,14 @@ rust_library(
         "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-subscriber",
+        "@datalib_crates//:uuid",
     ],
 )
 

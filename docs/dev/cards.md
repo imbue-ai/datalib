@@ -300,10 +300,24 @@ programs against:
 - `sourcesView()` — the Manage screen as a card: the tree of what
   `config.toml` declares over `GET /api/manage/rows`, drawn by
   `TableGrid`, with the row actions and the panels they open — the
-  wizard, a step's log, a group's commit history — teleported to
-  `<body>`. Browse opens a `gridView(...)` beside it through
-  `host.openCards`. The `/data_sources` route is this card at 1.6× width
+  wizard, a group's commit history — teleported to `<body>`. Browse
+  opens a `gridView(...)` beside it through `host.openCards`, and a
+  step's log or the server's a `logView(...)` the same way. The
+  `/data_sources` route is this card at 1.6× width
   with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
+- `logView({ run, step, launch, q, jumpToEnd })` — the run log
+  (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one
+  process's lines — a step's newest attempt, the runner, a launch of the
+  server — or a whole run's, with pickers to move between them and the
+  query bar over `/api/log`. The Manage card opens one beside itself for
+  a step or for the server. Selecting a line (a click, or the arrow
+  keys) opens `logLineView` via `host.openCards`, the way the grid
+  opens a document.
+- `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
+  over `/api/log/{seq}`): the message, the fields as a tree
+  (`cards/JsonTree.ce.vue`), the source link at the process's commit,
+  the process itself. Its *keep* / *exclude* buttons narrow the log
+  beside it through the bus (`log.query`, a token for the query bar).
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes
@@ -345,7 +359,7 @@ again, and the only ones that should know the grid's DOM or options:
 - `cards/typedColumns.ts` — `ColumnSpec` → column definitions.
   `cards/cellRenderers.ts` beneath it is plain DOM and would not change.
 - `cards/TableGrid.ce.vue`, `cards/GridCard.ce.vue` (its grid half),
-  `components/RunLogPanel.vue`, `components/ProbeItemPicker.vue` — the
+  `components/RunLogPanel.ce.vue`, `components/ProbeItemPicker.vue` — the
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.

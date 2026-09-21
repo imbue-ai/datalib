@@ -39,9 +39,9 @@ impl LogLevel {
     }
 }
 
-/// Which datalib program put the line in the store: the runner (its
-/// own lines and everything it relayed from a step's pipes) or the
-/// app's server (its own lines and what its applets said).
+/// Which datalib program a process was: the runner (its own lines), a
+/// step it spawned (what came out of the step's pipes), or the app's
+/// server (its own lines and what its applets said).
 #[derive(
     Debug,
     Clone,
@@ -58,6 +58,7 @@ impl LogLevel {
 #[strum(serialize_all = "snake_case")]
 pub enum Process {
     Dag,
+    Step,
     Http,
 }
 
@@ -111,9 +112,12 @@ pub struct LogRow {
     /// `None` for a line written outside any run: the server's own.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: Option<String>,
-    /// A [`Process`] word.
-    #[col(sql = "VARCHAR(16)")]
-    pub process: String,
+    /// The process that wrote it (`processes`): a step's for what came
+    /// out of the step, the runner's for its own lines, the server's for
+    /// its own. A row handed to a writer with this empty gets the
+    /// writer's own.
+    #[col(sql = "VARCHAR(64)")]
+    pub process_id: String,
     /// `None` for a line about the run, or the server, rather than one
     /// step.
     #[col(sql = "VARCHAR(255)")]
@@ -148,9 +152,4 @@ pub struct LogRow {
     /// there were any.
     #[col(sql = "TEXT")]
     pub fields: Option<String>,
-    /// The commit the writing process was built from, for a line outside
-    /// any run — the server's, which restarts between versions while the
-    /// store keeps its lines. A run's lines carry it on the run instead.
-    #[col(sql = "VARCHAR(64)")]
-    pub git_hash: Option<String>,
 }
