@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use datalib_etl::http::{HttpRequest, HttpService, PLAYBACK_ENV};
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
@@ -118,6 +119,7 @@ impl Harness {
         let mut opts = FetchOptions::new(db.clone());
         opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
         let summary = gmail_api::fetch(opts).await;
+        db.commit_all("test").await.unwrap();
         db.close().await;
         std::env::remove_var(PLAYBACK_ENV);
         summary.expect("gmail fetch under playback")
@@ -131,6 +133,7 @@ impl Harness {
             .fetch_all(db.pool())
             .await
             .expect("read gmail_messages");
+        db.commit_all("test").await.unwrap();
         db.close().await;
         ids.into_iter().collect()
     }

@@ -72,6 +72,6 @@ impl DataProcessor for SignalIngest {
             "recipients={} chats={} chat_items={} media_files={} snapshot={}",
             s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

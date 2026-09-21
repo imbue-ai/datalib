@@ -305,9 +305,17 @@ exist hashes to the distinguished version `absent`
 ## stderr: logging
 
 stderr is yours for humans: every line is captured into the event
-stream as an `info` log, and the last ~20 lines become the error
-message if you exit non-zero. So is every stdout line that is not an
-event. Each line records which pipe it came from (`stream`) and is
+stream as an `info` log. So is every stdout line that is not an
+event. If you exit non-zero, the last few lines a person could not
+find by reading "it failed" — plain lines, and the message of any
+structured `warn` or `error` line — become the step's error message;
+structured `info` lines stay in the log. The runner writes that
+message into the log too, as the step's last line at `error` level,
+and that line is where the Manage row's double-click opens the log.
+A step that exits after a cancel (`failure: cancelled`) is recorded
+as stopped, its message says so, and its line is a `warn`.
+
+Each line records which pipe it came from (`stream`) and is
 timestamped as the runner reads it, and the two pipes are read
 concurrently, so the log is in arrival order across both.
 
@@ -328,14 +336,36 @@ columns — the line's own timestamp wins over the runner's arrival time
 remaining `fields`) rides along as `fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
+Every level is kept, `debug` included: a built-in step logs its own
+lines down to `debug` by default (`datalib_log_filter::DEFAULT_LOG_FILTER`,
+which `RUST_LOG` overrides) — a doltlite commit, a batch of rows
+upserted, a request being retried, each with its numbers in the
+sentence — and the runner stores a `DEBUG` envelope as a `debug` row
+rather than rounding it up to `info`.
+
+**Where a line came from.** `filename` is the repo-relative path rustc
+saw and `line_number` the line, so the log view can show `file:line`
+and link it to GitHub at the commit the binaries came from. That
+commit is recorded at run time, never compiled in (a build stamp costs
+a rebuild of everything downstream on every commit): `datalib_runs::git_hash`
+reads `DATALIB_GIT_HASH` from the environment — the dev launchers set
+it from the checkout — else a `git-hash` file beside the binaries,
+which the release tarball and the .app carry the way they carry
+`runtime.manifest`. The runner writes it on the run's row; the app
+server writes it on each of its own lines, because the server restarts
+between versions while the store keeps its lines. A binary that can
+say neither records nothing, and the view shows `file:line` as text.
+
 ## Signals: graceful cancellation (optional)
 
 On cancellation (Ctrl-C, or the UI's cancel) the runner sends your
-process **SIGINT** and waits. If you can, checkpoint-commit your
-partial state, print a `{"event":"outcome","failure":"cancelled"}`
-line, and exit 130. If you do nothing, you'll be killed after a grace
-period and the next run re-derives from whatever landed on disk —
-correct, just wasteful.
+process **SIGINT** and waits. Print a
+`{"event":"outcome","failure":"cancelled"}` line and exit 130. **Do
+not commit on the way out.** Your last seal stands; whatever you wrote
+after it is not at a boundary you chose, and the next writer's `open`
+discards it — a commit made from a signal handler would publish a
+half-written batch to every reader. If you do nothing, you'll be
+killed after a grace period, with the same result.
 
 ## Minimal examples
 

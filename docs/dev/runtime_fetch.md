@@ -70,6 +70,10 @@ named, which is the same outcome as before with a better message.
 
 ## The manifest
 
+(`git-hash`, the other file beside the binaries, is not the runtime's:
+it is the commit they came from, for the log view's source links —
+`docs/dev/step_protocol.md` § "Where a line came from".)
+
 The `build` job writes `runtime.manifest` beside the binaries, reading
 each asset's sha256 back from the sidecar the `runtime` job published
 and its size from the release. One asset per line:
@@ -127,7 +131,17 @@ the models.
   at build time, after checking its sidecar; the manifest beside the
   binaries is never consulted because the sibling candidate wins.
 - **The .app** stages its own with `datalib/tauri/stage-runtime.sh` and
-  is signed as a unit.
+  is signed as a unit. Its two JS trees are staged `--no-symlinks`:
+  rewritten from the pnpm store layout into npm's flat one by
+  `scripts/hoist_node_modules.py`, because Tauri's resource bundler
+  copies regular files only and the store layout reaches every package
+  through a link — a tree that lost them has every byte and no entry
+  script. (Dereferencing the links instead does not work: Node looks
+  for a package's dependencies beside where it really lives.) The flat
+  tree is the same size, 299 MB against 307 MB. `datalib/tauri/check-app.sh`
+  runs the bundled `datalib-step pull-runtime` after every `tauri
+  build`, so a bundle whose runtime cannot start fails the build
+  instead of shipping.
 
 ## Adding a platform, or a backend
 

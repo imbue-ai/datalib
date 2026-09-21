@@ -2,6 +2,7 @@
 // are on, the DM picker — through the same probe and the same grid the
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
+import { MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 const field = (page: Page, caption: string) =>
@@ -53,7 +54,7 @@ async function stubBackend(page: Page) {
 }
 
 async function openManager(page: Page) {
-  await page.goto("/sources2");
+  await page.goto(MANAGE_WITH_CONFIG);
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 

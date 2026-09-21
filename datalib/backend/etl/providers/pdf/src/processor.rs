@@ -63,6 +63,6 @@ impl DataProcessor for PdfIngest {
             "pdfs={} docs={} hashed={} reused={} needs_ocr={} too_large={} errors={}",
             s.pdfs_seen, s.documents, s.hashed, s.reused, s.needs_ocr, s.too_large, s.errors,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

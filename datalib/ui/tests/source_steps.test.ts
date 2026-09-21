@@ -758,6 +758,19 @@ command = "datalib-applet unified_index"
   });
 });
 
+describe("what Test connection is sent", () => {
+  /// The form's `<input type=number>` hands back a string, and the
+  /// backend's `Option<i64>` will not take `"30"`.
+  it("sends numbers as numbers", () => {
+    const values = seedFieldValues(SLACK);
+    values["api.refresh_window_days"] = "30";
+    const params = paramsObject(SLACK, values, "download") as {
+      api: { refresh_window_days: unknown };
+    };
+    expect(params.api.refresh_window_days).toBe(30);
+  });
+});
+
 describe("what Test connection authenticates as", () => {
   /// The probe runs as `latchkey --account <acct> curl`, so an account
   /// left out of its params tests a different identity from the one

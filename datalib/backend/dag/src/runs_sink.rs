@@ -15,6 +15,7 @@ use datalib_runs::{
 };
 
 use crate::events::{Event, EventSink, LogLevel};
+use crate::run_state::RunState;
 use crate::step::StepId;
 
 /// What we know about one step right now.
@@ -47,6 +48,7 @@ impl RunStoreSink {
         data_root: &std::path::Path,
         run_id: &str,
         started_at_utc: &str,
+        git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
         Some(Self {
@@ -54,6 +56,7 @@ impl RunStoreSink {
                 data_root,
                 run_id,
                 started_at_utc,
+                git_hash,
                 retention,
             )?),
             steps: Mutex::new(HashMap::new()),
@@ -145,15 +148,41 @@ impl EventSink for RunStoreSink {
                     ..Default::default()
                 }
             }),
+            // The reason a step ended badly is a log line too, so the
+            // log panel has a line to jump to: the last error-level line
+            // of a failed step is why it failed, the last warn-level one
+            // of a stopped step is where it stopped.
             Event::StepFinish {
                 step,
                 status,
                 error,
-            } => self.update(step, |a| {
-                a.row.state = status.as_str().into();
-                a.row.finished_at_utc = Some(now().0);
-                a.row.error = error.clone();
-            }),
+            } => {
+                self.update(step, |a| {
+                    a.row.state = status.as_str().into();
+                    a.row.finished_at_utc = Some(now().0);
+                    a.row.error = error.clone();
+                });
+                if let Some(error) = error {
+                    let level = if *status == RunState::Stopped {
+                        LogLevel::Warn
+                    } else {
+                        LogLevel::Error
+                    };
+                    let (ts_utc, tz_offset) = now();
+                    self.writer.log(LogRow {
+                        step: Some(step.clone()),
+                        attempt: self.attempt_of(step),
+                        ts_utc,
+                        tz_offset,
+                        level: level.as_str().into(),
+                        msg: error.clone(),
+                        fields: Some(
+                            serde_json::json!({ "finished": status.as_str() }).to_string(),
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
             Event::Metric {
                 step,
                 name,
@@ -186,15 +215,20 @@ impl EventSink for RunStoreSink {
                 };
                 self.metric(step, "checkpoints", &BTreeMap::new(), n as i64);
                 let (ts_utc, tz_offset) = now();
+                let since_last = match rows {
+                    Some(rows) => format!("{rows} rows since the last, "),
+                    None => String::new(),
+                };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
                     ts_utc,
                     tz_offset,
                     level: LogLevel::Info.as_str().into(),
-                    msg: "sealed a checkpoint".into(),
+                    msg: format!("sealed checkpoint #{n}: {since_last}now at {version}"),
                     fields: Some(
-                        serde_json::json!({ "version": version, "rows": rows }).to_string(),
+                        serde_json::json!({ "version": version, "rows": rows, "checkpoint": n })
+                            .to_string(),
                     ),
                     ..Default::default()
                 });
@@ -254,7 +288,6 @@ impl EventSink for RunStoreSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::run_state::RunState;
     use datalib_runs::{log_after, snapshot, Snapshot};
 
     async fn run(events: &[Event]) -> (tempfile::TempDir, Snapshot) {
@@ -264,6 +297,7 @@ mod tests {
                 td.path(),
                 "run-1",
                 "2026-09-11T10:00:00+01:00",
+                Some("ae2d52f0".into()),
                 Retention::default(),
             )
             .expect("start the store");
@@ -291,6 +325,14 @@ mod tests {
 
     /// The sugar. The stream carries increments; the store must carry a
     /// position, or coalescing would drop work.
+    /// The commit the runner came from rides on the run row, for the log
+    /// view to link a line's file and line back to.
+    #[tokio::test]
+    async fn the_run_records_its_commit() {
+        let (_td, snap) = run(&[]).await;
+        assert_eq!(snap.git_hash.as_deref(), Some("ae2d52f0"));
+    }
+
     #[tokio::test]
     async fn increments_accumulate_into_done_and_queued() {
         let (_td, snap) = run(&[
@@ -400,10 +442,12 @@ mod tests {
     }
 
     /// The step's own words reach the store, and the terminal state
-    /// sticks with its error and its finish time.
+    /// sticks with its error and its finish time. The error is also the
+    /// last line of the step's log, at error level, so the log panel
+    /// has a line to jump to; a stop is a warning there, not an error.
     #[tokio::test]
     async fn the_last_message_and_the_outcome_are_recorded() {
-        let (_td, snap) = run(&[
+        let (td, snap) = run(&[
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
@@ -425,6 +469,30 @@ mod tests {
         assert_eq!(s.msg.as_deref(), Some("conversations.list"));
         assert_eq!(s.error.as_deref(), Some("boom"));
         assert!(s.started_at_utc.is_some() && s.finished_at_utc.is_some());
+        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(
+            (log[0].level.as_str(), log[0].msg.as_str()),
+            ("error", "boom")
+        );
+        assert_eq!(log[0].fields.as_deref(), Some(r#"{"finished":"failed"}"#));
+
+        let (td, _) = run(&[
+            Event::StepFinish {
+                step: "slack/raw".into(),
+                status: RunState::Stopped,
+                error: Some("stopped when asked to".into()),
+            },
+            Event::StepFinish {
+                step: "slack/rendered_md".into(),
+                status: RunState::Succeeded,
+                error: None,
+            },
+        ])
+        .await;
+        let log = log_after(td.path(), "run-1", None, 0, 100).await;
+        assert_eq!(log.len(), 1, "a clean finish logs nothing: {log:?}");
+        assert_eq!(log[0].level, "warn");
     }
 
     /// Log lines, hints and checkpoints all land in the log, unwrapped,
@@ -482,7 +550,10 @@ mod tests {
         assert_eq!(log[0].target.as_deref(), Some("slack::http"));
         assert_eq!(log[0].fields.as_deref(), Some(r#"{"retry_in":30}"#));
         assert_eq!(log[1].fields.as_deref(), Some(r#"{"hint":true}"#));
-        assert_eq!(log[2].msg, "sealed a checkpoint");
+        assert_eq!(
+            log[2].msg,
+            "sealed checkpoint #1: 12 rows since the last, now at abc"
+        );
         assert!(
             log.iter().all(|l| l.attempt == 2),
             "every line names the pass it belongs to"

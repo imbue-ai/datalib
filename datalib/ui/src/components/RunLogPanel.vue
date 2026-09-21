@@ -33,6 +33,7 @@ import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
+import { sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -52,6 +53,10 @@ const props = defineProps<{
   /// What the query bar starts with — `process:http` for the server's
   /// log. Editable like anything typed there.
   initialQuery?: string;
+  /// Open scrolled to the line that says how the step ended — the
+  /// runner writes its error as the step's last error-level line, a
+  /// stop as its last warning — and keep that line marked.
+  jumpToEnd?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -104,6 +109,8 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
+/// The `seq` of the line the panel opened on, which its cells mark.
+let jumpedTo: number | null = null;
 
 /// The filter as sent to the server: the step while narrowed, none once
 /// widened. Widening restarts from the beginning, because the lines the
@@ -136,6 +143,7 @@ async function load(fresh: boolean) {
       await nextTick();
       if (!bundle) {
         createGrid(got);
+        if (props.jumpToEnd) jumpToEnd(got);
       } else if (fresh) {
         bundle.dataset = got;
       } else {
@@ -166,6 +174,25 @@ async function load(fresh: boolean) {
   }
 }
 
+/// The line that says how the step ended: the one the runner wrote at
+/// finish, else the last warning or error. Scrolled to on the first
+/// paint, with a few lines of what led up to it above.
+function jumpToEnd(lines: RunLogLine[]) {
+  const isFinish = (l: RunLogLine) => !!l.fields && /"finished"/.test(l.fields);
+  const isProblem = (l: RunLogLine) => l.level === "error" || l.level === "warn";
+  const target = [...lines].reverse().find(isFinish) ?? [...lines].reverse().find(isProblem);
+  if (!target || !bundle) return;
+  jumpedTo = target.seq;
+  const row = bundle.dataView.getRowById(target.seq);
+  if (row == null) return;
+  const grid = bundle.slickGrid;
+  const vp = grid.getViewportNode();
+  const visible = vp ? Math.floor(vp.clientHeight / ROW_HEIGHT) : 10;
+  grid.scrollRowToTop(Math.max(0, row - Math.floor(visible / 2)));
+  grid.invalidateRow(row);
+  grid.render();
+}
+
 let atBottom = true;
 function onScroll(_e: unknown, args: { grid: SlickGrid }) {
   const vp = args.grid.getViewportNode();
@@ -193,6 +220,10 @@ function onQueryInput(ev: Event) {
 async function loadRuns() {
   try {
     runs.value = await fetchRuns({ step: props.step ?? undefined, limit: 30 });
+    // A run's lines link to source at the run's commit, which arrives
+    // here; lines drawn before it did are drawn again.
+    bundle?.slickGrid.invalidateAllRows();
+    bundle?.slickGrid.render();
   } catch {
     // The picker is a convenience; the opened run still shows.
   }
@@ -227,7 +258,8 @@ function runLabel(r: RunInfo): string {
 
 function levelClass(line: RunLogLine | undefined): string {
   const l = line?.level;
-  return l === "error" ? "rl-error" : l === "warn" ? "rl-warn" : "";
+  const level = l === "error" ? "rl-error" : l === "warn" ? "rl-warn" : "";
+  return line && line.seq === jumpedTo ? `${level} rl-jumped` : level;
 }
 
 const ROW_HEIGHT = 24;
@@ -250,6 +282,34 @@ const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
   text: shortRunId(String(value ?? "")),
   toolTip: String(value ?? ""),
 });
+
+/// The commit a line's source is relative to: the line's own for a
+/// process's line, the run's for a run's, when either was known.
+function commitOf(line: RunLogLine): string | null {
+  if (line.git_hash) return line.git_hash;
+  if (line.run_id) return runs.value.find((r) => r.run_id === line.run_id)?.git_hash ?? null;
+  return null;
+}
+
+/// `file:line`, as a link to that line on GitHub at the right commit
+/// when one is known, else as text. Clipped from the left like Time:
+/// the file's name and the line tell the lines apart, the directories
+/// are the same for most.
+const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
+  const src = sourceOf(line?.fields);
+  if (!src) return { text: "", toolTip: "", addClasses: levelClass(line) };
+  const shown = sourceLabel(src);
+  const commit = line ? commitOf(line) : null;
+  const href = commit && sourceUrl(commit, src);
+  if (!commit || !href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
+  const a = document.createElement("a");
+  a.className = "rl-source";
+  a.textContent = shown;
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  return { html: a, toolTip: `${shown} at ${commit.slice(0, 10)}`, addClasses: levelClass(line) };
+};
 
 /// What a group row says: the column, its value and how many lines
 /// share it. An element rather than a string for the reason `plain`
@@ -389,6 +449,17 @@ function columnSet(): Column<RunLogLine>[] {
     formatter: plain,
     sortable: true,
     ...groupable("Message", "msg"),
+  },
+  {
+    id: "source",
+    name: "Source",
+    // The value is read out of `fields`; the column has no field of its
+    // own, and the id is what the header and the test find it by.
+    field: "fields",
+    ...fixed(180),
+    cssClass: "rl-clip-left",
+    formatter: source,
+    sortable: false,
   },
   {
     id: "fields",
@@ -702,8 +773,17 @@ onUnmounted(() => {
 .rl-grid .slick-cell.rl-error {
   color: var(--datalib-log-error);
 }
+/* The line the panel opened on: the one that says how the step ended. */
+.rl-grid .slick-cell.rl-jumped {
+  background: color-mix(in srgb, var(--datalib-log-error) 14%, transparent);
+  font-weight: 600;
+}
 .rl-grid .rl-group-count {
   color: var(--datalib-muted);
+}
+.rl-grid .rl-source {
+  color: inherit;
+  text-decoration: underline dotted;
 }
 .rl-grid .slick-cell {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -30,6 +30,21 @@ pub trait RawStoreHandle {
             pool.close().await;
         }
     }
+
+    /// One `dolt_commit` per store, last-declared first: a provider
+    /// declares its entity pool before its blob CAS, and blobs commit
+    /// before the rows that name them (`raw_store::SealState::seal`).
+    /// For a test that drives `fetch` itself and so stands in for the
+    /// step's `finish`; the step goes through `RawStoreSession`.
+    async fn commit_all(&self, msg: &str) -> anyhow::Result<()>
+    where
+        Self: Sync,
+    {
+        for pool in self.pools().into_iter().rev() {
+            crate::doltlite_raw::commit_run(pool, msg).await?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

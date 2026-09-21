@@ -245,6 +245,12 @@ export const MENU_DISABLED = /slick-menu-item-disabled/;
 /// A row the grid has selected: its cells carry the class.
 export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
 
+/// Manager2 with the config editor (`.m2-editor`) open beside the
+/// sources card. `/sources2` opens the sources card alone, which is
+/// what a person gets; a spec that reads or writes `config.toml`
+/// through the editor asks for both cards by their stack.
+export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
+
 /// A Pipeline row, by the key its record carries. A step under a
 /// group has a row only while the group is open — see `expandGroup`.
 export const pipelineRow = (page: Page, id: string) =>

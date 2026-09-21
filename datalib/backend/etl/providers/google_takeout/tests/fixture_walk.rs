@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::progress::Progress;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_google_takeout::ingest::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {
@@ -45,6 +46,7 @@ async fn run_all() -> (tempfile::TempDir, ingest::FetchSummary, PathBuf) {
         .unwrap();
     // Closed, not dropped: every caller reopens this store, and a
     // dropped pool is still a live connection for a moment.
+    db.commit_all("test").await.unwrap();
     db.close().await;
     (work, summary, db_path)
 }
@@ -200,6 +202,7 @@ async fn second_run_skips_via_file_checkpoint() {
     let summary2 = ingest::fetch(opts(work.path(), &db, SyncFlags::all()).await)
         .await
         .unwrap();
+    db.commit_all("test").await.unwrap();
     db.close().await;
     let _ = work; // keep temp dir alive
 
@@ -220,6 +223,7 @@ async fn sync_flags_default_disables_everything() {
     let summary = ingest::fetch(opts(work.path(), &db, SyncFlags::default()).await)
         .await
         .unwrap();
+    db.commit_all("test").await.unwrap();
     db.close().await;
     assert_eq!(summary.maps_reviews, 0);
     assert_eq!(summary.youtube_subscriptions, 0);

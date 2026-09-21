@@ -54,6 +54,6 @@ impl DataProcessor for YolinkIngest {
             "devices={} windows={} readings={} errors={} requests={}",
             s.devices, s.windows, s.readings, s.errors, s.requests,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }

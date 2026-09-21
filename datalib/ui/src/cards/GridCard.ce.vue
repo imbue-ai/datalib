@@ -27,7 +27,7 @@ import type {
   SlickDraggableGrouping,
   SlickEventData,
 } from "@slickgrid-universal/common";
-import { typedColumns, groupTitle } from "./typedColumns";
+import { FILTER_GRID_OPTIONS, typedColumns, groupTitle } from "./typedColumns";
 import {
   fetchAccounts,
   fetchQmdState,
@@ -1169,6 +1169,7 @@ function gridOptions(): GridOption {
     // Per-column filters in a row under the header; the query bar is
     // the one the server answers, these narrow what it returned.
     enableFiltering: true,
+    ...FILTER_GRID_OPTIONS,
     showHeaderRow: true,
     headerRowHeight: 28,
     defaultFilterPlaceholder: "",

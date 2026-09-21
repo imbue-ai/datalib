@@ -10,6 +10,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { menuEntry } from "./grid-helpers";
 
+// The commit playwright.config.ts handed the backends. Node's globals
+// are not in this tsconfig, as in api-token.spec.ts.
+declare const process: { env: Record<string, string | undefined> };
+const GIT_HASH = process.env.DATALIB_GIT_HASH;
+
 const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 
 async function openServerLog(page: Page) {
@@ -42,9 +47,18 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await menuEntry(page, "Keep only Thread=main").click();
 
   await expect(query).toHaveValue("process:http thread:main");
-  await expect.poll(() => lineCount(page)).toBeLessThan(all);
-  const threads = await dialog.locator(`${ROWS} .slick-cell[col-id="thread"]`).allTextContents();
-  expect(new Set(threads.map((t) => t.trim()))).toEqual(new Set(["main"]));
+  // A reload empties the count before it refills, so "fewer than all"
+  // alone is met mid-way; wait for the narrowed lines to be there.
+  await expect.poll(async () => {
+    const n = await lineCount(page);
+    return n > 0 && n < all;
+  }).toBe(true);
+  await expect
+    .poll(async () => {
+      const threads = await dialog.locator(`${ROWS} .slick-cell[col-id="thread"]`).allTextContents();
+      return [...new Set(threads.map((t) => t.trim()))];
+    })
+    .toEqual(["main"]);
 
   await dialog.locator(ROWS).first().click({ button: "right" });
   await menuEntry(page, "Clear the query").click();
@@ -52,6 +66,26 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // With no query at all, every line in the store — at least the
   // server's own.
   await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);
+});
+
+// A tracing line carries the file and line that wrote it; the Source
+// column shows them and, since the server knows which commit it came
+// from (playwright.config.ts hands it one), links them to that line on
+// GitHub. The link is the UI's to build: the store holds only the path
+// rustc saw and the commit.
+test("a line's source links to its file and line at the server's commit", async ({ page }) => {
+  expect(GIT_HASH, "playwright.config.ts should have pinned DATALIB_GIT_HASH").toBeTruthy();
+  const dialog = await openServerLog(page);
+  const link = dialog.locator(`${ROWS} .slick-cell[col-id="source"] a`).first();
+  await expect(link).toBeVisible();
+  const shown = (await link.textContent()) ?? "";
+  const m = /^(datalib\/backend\/.+\.rs):(\d+)$/.exec(shown.trim());
+  expect(m, `source cell reads ${JSON.stringify(shown)}`).not.toBeNull();
+  await expect(link).toHaveAttribute(
+    "href",
+    `https://github.com/imbue-ai/datalib/blob/${GIT_HASH}/${m![1]}#L${m![2]}`,
+  );
+  await expect(link).toHaveAttribute("target", "_blank");
 });
 
 // Grouping goes through the panel's `__fwRunLogApi.groupBy`, which

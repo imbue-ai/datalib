@@ -877,6 +877,7 @@ mod plan_tests {
                 },
             )
             .unwrap();
+        store.commit("fixture").unwrap();
         store.close();
     }
 
@@ -1007,6 +1008,7 @@ mod stale_tree_tests {
                 },
             )
             .unwrap();
+        store.commit("fixture").unwrap();
         store.close();
     }
 

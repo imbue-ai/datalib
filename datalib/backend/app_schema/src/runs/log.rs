@@ -148,4 +148,9 @@ pub struct LogRow {
     /// there were any.
     #[col(sql = "TEXT")]
     pub fields: Option<String>,
+    /// The commit the writing process was built from, for a line outside
+    /// any run — the server's, which restarts between versions while the
+    /// store keeps its lines. A run's lines carry it on the run instead.
+    #[col(sql = "VARCHAR(64)")]
+    pub git_hash: Option<String>,
 }

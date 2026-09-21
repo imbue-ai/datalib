@@ -6,7 +6,12 @@
 // no grid. `TableGrid.ce.vue` mounts one over these for the simple
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
-import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
+import type {
+  Column,
+  Formatter,
+  GridOption,
+  GroupingFormatterItem,
+} from "@slickgrid-universal/common";
 import { Editors, Filters } from "@slickgrid-universal/common";
 import type { Action, ColumnSpec, Identity, StatusView, Chip, Timeseries } from "@/api";
 import {
@@ -28,8 +33,8 @@ export type SlickColumnOptions<T> = {
   rows: () => T[];
   /// How far back a `timeseries` cell's samples reach, in seconds.
   windowSecs?: number;
-  /// The rows form a tree; the first column carries the chevron and
-  /// shows each row's own id beside its label.
+  /// The rows form a tree; the tree column (`treeColumnField`) carries
+  /// the chevron and shows each row's own id beside its label.
   tree?: boolean;
   /// What each action id does when its button is pressed. An id with
   /// no handler draws no button.
@@ -46,6 +51,28 @@ export type SlickColumnOptions<T> = {
   /// Per-field refinements a type cannot know — a width, a hover, a
   /// formatter — merged over the typed definition.
   overrides?: Record<string, Partial<Column<T>>>;
+};
+
+/// Grid options a grid drawing `filterable` columns must carry. The
+/// compound number filter's operator dropdown pads each operator to
+/// three characters with `&nbsp;` entities and then, with
+/// `enableHtmlRendering` off, sets them as text — so its blank first
+/// option read `&nbsp;&nbsp;&nbsp;`. Naming every operator already
+/// padded, with no-break spaces, leaves it nothing to add.
+const NBSP = "\u00a0";
+const pad = (op: string) => ({ operatorAlt: op.padEnd(3, NBSP) });
+export const FILTER_GRID_OPTIONS: Pick<GridOption, "compoundOperatorAltTexts"> = {
+  compoundOperatorAltTexts: {
+    numeric: {
+      "": pad(NBSP),
+      "=": pad("="),
+      "<": pad("<"),
+      "<=": pad("<="),
+      ">": pad(">"),
+      ">=": pad(">="),
+      "<>": pad("<>"),
+    },
+  },
 };
 
 /// A group row's title: the column, the value and how many rows share
@@ -198,6 +225,13 @@ function text(value: unknown): string {
 
 const plain: Formatter = (_r, _c, value) => ({ text: text(value), toolTip: text(value) });
 
+/// The column a tree hangs its chevrons off: the first one that is not
+/// a row of buttons, so an `actions` column never becomes the tree
+/// wherever it sits.
+export function treeColumnField(specs: ColumnSpec[]): string {
+  return (specs.find((s) => s.type !== "actions") ?? specs[0])?.field ?? "";
+}
+
 export function typedColumns<T extends Record<string, unknown>>(
   specs: ColumnSpec[],
   opts: SlickColumnOptions<T>,
@@ -209,10 +243,11 @@ export function typedColumns<T extends Record<string, unknown>>(
     );
 
   const Actions = actionsFormatter<T>(opts.actions ?? {});
+  const treeField = treeColumnField(specs);
 
-  return specs.map((spec, index) => {
+  return specs.map((spec) => {
     const f = spec.field;
-    const isTreeColumn = !!opts.tree && index === 0;
+    const isTreeColumn = !!opts.tree && f === treeField;
     const base: Column<T> = {
       id: f,
       // A dotted path type the spec's plain field name cannot satisfy.
@@ -366,7 +401,7 @@ export function typedColumns<T extends Record<string, unknown>>(
       }
     })();
     const merged = { ...base, ...typed, ...opts.overrides?.[f] };
-    // A tree hangs off the first column whatever its type; an identity
+    // A tree hangs off its column whatever the type; an identity
     // column already drew its chevron above.
     if (isTreeColumn && spec.type !== "identity") {
       const inner = (opts.overrides?.[f]?.params as { innerFormatter?: Formatter<T> } | undefined)

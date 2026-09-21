@@ -37,6 +37,16 @@ pub enum GuardVerdict {
     GiveUp(String),
 }
 
+/// How far into its give-up budget a source is, for the line that says
+/// a request is being retried: each count beside its limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub sequential_failures: u64,
+    pub max_sequential_failures: u64,
+    pub time_without_progress: Duration,
+    pub max_time_without_progress: Duration,
+}
+
 impl RetryGuard {
     /// First backoff after a retryable failure that carried no `Retry-After`.
     pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
@@ -79,6 +89,15 @@ impl RetryGuard {
     pub fn on_progress(&self) {
         self.sequential_failures.store(0, Ordering::Relaxed);
         *self.last_progress.lock().unwrap() = Instant::now();
+    }
+
+    pub fn budget(&self) -> Budget {
+        Budget {
+            sequential_failures: self.sequential_failures.load(Ordering::Relaxed),
+            max_sequential_failures: self.max_sequential_failures,
+            time_without_progress: self.last_progress.lock().unwrap().elapsed(),
+            max_time_without_progress: self.max_time_without_progress,
+        }
     }
 
     pub fn on_failure(&self) -> GuardVerdict {

@@ -485,6 +485,12 @@ jobs:
           # the fetched tree in the user's cache.
           install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
 
+          # The commit beside the binaries, for `datalib_runs::git_hash`:
+          # what a log line's file and line number are relative to.
+          # A file, not a build stamp, so no rustc action depends on
+          # the workspace status (test.yml § stamping).
+          git rev-parse HEAD > "${stage}/git-hash"
+
           # `runtime.manifest`: which runtime asset of THIS release
           # the binaries fetch on first use, with its sha256 and
           # size read back from what the `runtime` job published.
@@ -891,7 +897,7 @@ jobs:
           driver-opts: image=moby/buildkit:latest
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

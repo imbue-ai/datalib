@@ -56,6 +56,15 @@ fn main() {
         }
     }
 
+    // `binaries/git-hash` is the commit the sidecars came from, written
+    // by stage-runtime.sh. Same placeholder story as the binaries above;
+    // a placeholder is not a commit, and `datalib_runs::git_hash` says
+    // nothing rather than something wrong.
+    if !Path::new("binaries/git-hash").exists() {
+        let _ = fs::create_dir_all("binaries");
+        let _ = fs::write("binaries/git-hash", b"placeholder\n");
+    }
+
     // `bundle.resources` also lists `runtime/` — the Node runtime +
     // latchkey/qmd package trees staged by stage-runtime.sh, which (like
     // the binaries above) only runs under `tauri build`. Tauri validates

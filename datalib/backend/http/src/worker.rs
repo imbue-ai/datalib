@@ -641,7 +641,8 @@ mod tests {
 
         let job = running_job(&repo).await;
         {
-            let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+            let w =
+                RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", None, keep).unwrap();
             w.step(step_row("a/ingest", "succeeded"));
         }
         let (state, why) = what_became_of(td.path(), &job).await;
@@ -651,7 +652,8 @@ mod tests {
 
         let job = running_job(&repo).await;
         {
-            let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+            let w =
+                RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", None, keep).unwrap();
             w.step(step_row("a/ingest", "failed"));
             w.step(step_row("a/render_markdown", "blocked"));
         }
@@ -664,7 +666,7 @@ mod tests {
         let job = running_job(&repo).await;
         // Kept alive across the look, the way a SIGKILLed runner's
         // record is: started, never stamped finished.
-        let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", keep).unwrap();
+        let w = RunWriter::start(td.path(), &job.id, "2026-09-17T10:00:00Z", None, keep).unwrap();
         w.step(step_row("a/ingest", "succeeded"));
         w.step(step_row("a/render_markdown", "running"));
         tokio::time::sleep(Duration::from_millis(600)).await;

@@ -56,7 +56,7 @@ fn write_two_runs(root: &Path) {
     };
     let t = "2026-09-11T10:00:00+01:00";
     {
-        let w = RunWriter::start(root, "run-1", "2026-09-10T10:00:00+01:00", keep).unwrap();
+        let w = RunWriter::start(root, "run-1", "2026-09-10T10:00:00+01:00", None, keep).unwrap();
         w.step(StepRunRow {
             step: "slack/ingest".into(),
             state: "succeeded".into(),
@@ -73,7 +73,7 @@ fn write_two_runs(root: &Path) {
         });
     }
     {
-        let w = RunWriter::start(root, "run-2", "2026-09-11T10:00:00+01:00", keep).unwrap();
+        let w = RunWriter::start(root, "run-2", "2026-09-11T10:00:00+01:00", None, keep).unwrap();
         w.step(StepRunRow {
             step: "slack/ingest".into(),
             state: "running".into(),

@@ -25,6 +25,8 @@ how the system works; when a completed plan stops being worth keeping,
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete, commented config.
 - [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. Read before touching step ids, the wizard, or `datalib-step`'s dispatch.
 - [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md), [`streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md) — a consumer starting before its producer finishes; partly built. Read §"The hazard" and §"The sink contract" before any consumer reads a store or deletes on an empty read.
+- [`docs/dev/plans/join_running_sync.md`](docs/dev/plans/join_running_sync.md) — proposal: a job enqueued while a run is in flight joins that run instead of waiting for it; keeps one runner per root.
+- [`docs/dev/plans/supervisor.md`](docs/dev/plans/supervisor.md) — greenfield alternative to the join: one resident supervisor reconciles the graph, open requests (what someone asked for, and so what is in scope) and facts; sinks first-class with one writer at a time; the same verbs for a person at the screen and an agent at a shell.
 - [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — built: the run store `system/runs.sqlite`, also the app server's log.
 - [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
 

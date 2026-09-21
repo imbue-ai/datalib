@@ -87,7 +87,7 @@ impl DataProcessor for NotionIngest {
             "pages(new={}/upd={}) comments(new={}/upd={}) requests={}",
             s.new_pages, s.upd_pages, s.new_comments, s.upd_comments, s.official_requests,
         );
-        Ok(session.finish(ctx, summary).await)
+        session.finish(ctx, summary).await
     }
 }
 

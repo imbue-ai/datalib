@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
+use std::time::Instant;
 
 /// One table's worth of `(id, payload)` pairs to record in a single
 /// bulk-write batch. Shared by the entity-side
@@ -171,6 +172,24 @@ pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
     if rows.is_empty() {
         return Ok(());
     }
+    let started = Instant::now();
+    upsert_entity_rows(tx, rows).await?;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let table = T::TABLE;
+    let count = rows.len();
+    tracing::debug!(
+        table,
+        rows = count,
+        elapsed_ms,
+        "upserted a batch of {count} rows into {table} in {elapsed_ms}ms"
+    );
+    Ok(())
+}
+
+async fn upsert_entity_rows<T: BulkUpsertable>(
+    tx: &mut Transaction<'_, Sqlite>,
+    rows: &[T],
+) -> Result<()> {
     let table = T::TABLE;
 
     // Column lists: typed columns first, then (optionally) payload.

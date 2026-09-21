@@ -1008,6 +1008,8 @@ export type RunInfo = {
   started_at_utc: string;
   finished_at_utc: string | null;
   tz_offset: string | null;
+  // The commit the runner was built from, when it knew.
+  git_hash: string | null;
 };
 
 // One log line.
@@ -1034,6 +1036,10 @@ export type RunLogLine = {
   msg: string;
   // A JSON object, as text, when the line carried structured fields.
   fields: string | null;
+  // The commit the writing process came from, for a line outside any
+  // run (the server restarts between versions; the store keeps its
+  // lines). A run's lines carry it on the run (`RunInfo.git_hash`).
+  git_hash: string | null;
 };
 
 // Recent runs, newest first; with `step`, only the runs it took part in.

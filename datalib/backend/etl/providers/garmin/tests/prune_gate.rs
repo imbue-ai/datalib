@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::http::{HttpResponse, PLAYBACK_ENV};
 use datalib_etl::progress::Progress;
+use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_garmin::auth::Credentials;
 use datalib_etl_garmin::ingest::api::{base_url, req_get};
@@ -89,6 +90,7 @@ impl Account {
             sealer: None,
         })
         .await;
+        db.commit_all("test").await.unwrap();
         db.close().await;
         summary.unwrap()
     }
@@ -120,6 +122,7 @@ impl Account {
     async fn set_cursor(&self, scope: &str, value: &str) {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         db.set_cursor(scope, value).await.unwrap();
+        db.commit_all("test").await.unwrap();
         db.close().await;
     }
 }

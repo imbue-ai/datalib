@@ -74,7 +74,6 @@ describe("writing a step", () => {
     const values = seedFieldValues(GMAIL);
     values["latchkey_settings.account"] = "thad@imbue.com";
     values["only_extract_labels"] = ["Inbox", "Work/Projects"];
-    values["gmail.message_budget"] = "5000";
     const toml = buildStep({
       entry: GMAIL,
       group: "gmail",
@@ -83,7 +82,15 @@ describe("writing a step", () => {
     });
     expect(toml).toContain('account = "thad@imbue.com"');
     expect(toml).toContain('only_extract_labels = ["Inbox", "Work/Projects"]');
-    expect(toml).toContain("message_budget = 5000");
+  });
+
+  /// The download paces itself against Gmail's quota and backs off when
+  /// Google rate-limits it, so there is nothing about throughput for a
+  /// person to guess at.
+  it("asks nothing about quota or a per-run budget", () => {
+    const targets = (GMAIL.fields ?? []).map((f) => f.target);
+    expect(targets).not.toContain("gmail.message_budget");
+    expect(targets).not.toContain("gmail.quota_units_per_minute");
   });
 
   it("gives each variant's render step the right webmail outlink", () => {
@@ -231,17 +238,6 @@ describe("the params a probe is sent", () => {
       latchkey_settings: { account: "thad@imbue.com" },
       gmail: { user_id: "me" },
     });
-  });
-
-  it("sends numbers as numbers", () => {
-    // The form's `<input type=number>` hands back a string, and the
-    // backend's `Option<usize>` will not take `"5000"`.
-    const values = seedFieldValues(GMAIL);
-    values["gmail.message_budget"] = "5000";
-    const params = paramsObject(GMAIL, values, "download") as {
-      gmail: { message_budget: unknown };
-    };
-    expect(params.gmail.message_budget).toBe(5000);
   });
 
   it("carries Fastmail's hostname, which is the whole of its mode", () => {

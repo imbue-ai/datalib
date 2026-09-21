@@ -1023,6 +1023,7 @@ async fn test_cache() -> FingerprintCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl::store_handle::RawStoreHandle;
 
     const TWO_MSG_MBOX: &str = concat!(
         "From 1111@xxx Wed Jun 03 22:30:48 +0000 2026\n",
@@ -1112,6 +1113,7 @@ mod tests {
         // Close before re-opening — doltlite has one writer per file;
         // without an explicit close the second open races the
         // writes-in-flight and sees an empty working tree.
+        db.commit_all("test").await.unwrap();
         db.close().await;
         assert_eq!(summary.emails_upserted, 2);
         assert_eq!(summary.threads_upserted, 1);
@@ -1165,6 +1167,7 @@ mod tests {
             .await
             .unwrap();
             summaries.push(s);
+            db.commit_all("test").await.unwrap();
             db.close().await;
         }
         let db = RawDb::open(&db_path).await.unwrap();
@@ -1207,6 +1210,7 @@ mod tests {
         })
         .await
         .unwrap();
+        db.commit_all("test").await.unwrap();
         db.close().await;
         s
     }

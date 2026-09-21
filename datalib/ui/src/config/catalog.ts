@@ -17,7 +17,6 @@ type FieldBase = {
 
 export type Field =
   | ({ kind: "text" } & FieldBase & {
-      placeholder?: string;
       required?: boolean;
       /// Renders as the latchkey-account control rather than a bare
       /// text box: a dropdown of the accounts latchkey has stored for
@@ -40,7 +39,6 @@ export type Field =
   /// `GET /api/fs/browse` endpoint exists — `<input type=file>` is no
   /// substitute, since a browser never yields a filesystem path.
   | ({ kind: "path" } & FieldBase & {
-      placeholder?: string;
       required?: boolean;
       picks?: "file" | "dir";
       /// Dialog title. Name the thing being chosen ("Choose your
@@ -74,7 +72,6 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-      placeholder?: string;
       /// Offer a picker built from `POST /api/probe`, alongside the
       /// comma-separated box. Names *which* of the probe's items this
       /// field takes: every label, only the ones a render filter can
@@ -83,9 +80,9 @@ export type Field =
       probe?: ProbeNoun;
     });
 
-/// What a `probe:` field is a picker *of*. The value is the word the
-/// wizard uses around the picker — "pick from this account's real
-/// folders" — so it has to read as one.
+/// What a `probe:` field is a picker *of*: which of the probe's items
+/// it takes. The wizard says `labels` and `mailboxes` in the source's
+/// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
 export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels";
 
 export type CatalogEntry = {
@@ -120,6 +117,11 @@ export type CatalogEntry = {
   /// Nothing is pre-filled from it: a blank name still falls back to
   /// the id.
   nameHint: string;
+  /// What this source calls a mailbox on its own screens — Gmail says
+  /// "labels", every other mail client "folders" — used in the
+  /// sentences around a `labels`/`mailboxes` picker. Defaults to
+  /// "folders".
+  mailboxNoun?: "labels" | "folders";
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
   /// False for a provider that declares no render step at all.
@@ -190,9 +192,9 @@ export const CATALOG: CatalogEntry[] = [
         probe: "channels",
         target: "api.channels",
         label: "Channels",
-        placeholder: "general, engineering",
         help:
-          "Channel names without the #. Leave empty for every channel you're a member of. " +
+          "Channel names without the #, comma-separated: general, engineering. Leave empty for " +
+          "every channel you're a member of. " +
           "A channel named here is mirrored whether or not you're a member of it.",
       },
       {
@@ -245,7 +247,6 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.dm_conversations",
         requires: "api.dms",
         label: "Only these DMs",
-        placeholder: "D024BE7LH, https://….slack.com/archives/G0ABC12DE",
         help:
           "Slack's id for each conversation, or a link to it — right-click a DM in Slack's " +
           "sidebar and Copy link, or copy the address bar with the DM open. Both 1:1 and " +
@@ -293,7 +294,6 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Claude account",
-        placeholder: "you@example.com",
         help:
           "Which stored claude.ai login to mirror. Leave it empty if latchkey holds only " +
           "one — naming the wrong one mirrors someone else's conversations.",
@@ -324,7 +324,6 @@ export const CATALOG: CatalogEntry[] = [
         probe: "conversations",
         target: "api.conv_uuids",
         label: "Only these conversations",
-        placeholder: "https://claude.ai/chat/…",
         help:
           "Bare UUIDs or paste-able chat URLs. Leave empty to walk everything — this is a " +
           "scoping tool for a first run against a large account.",
@@ -363,7 +362,6 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "ChatGPT account",
-        placeholder: "you@example.com",
         help:
           "Which stored chatgpt.com login to mirror. Leave it empty if latchkey holds only " +
           "one — naming the wrong one mirrors someone else's conversations.",
@@ -379,7 +377,6 @@ export const CATALOG: CatalogEntry[] = [
         probe: "conversations",
         target: "api.conv_uuids",
         label: "Only these conversations",
-        placeholder: "https://chatgpt.com/c/…",
         help:
           "Bare ids or paste-able chat URLs. Leave empty to walk everything — this is a " +
           "scoping tool for a first run against a large account.",
@@ -407,6 +404,7 @@ export const CATALOG: CatalogEntry[] = [
     icon: "gmail",
     defaultName: "gmail",
     nameHint: "Work Gmail",
+    mailboxNoun: "labels",
     wizard: true,
     canProbe: true,
     credentialService: "google-gmail",
@@ -425,7 +423,6 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Google account",
-        placeholder: "you@example.com",
         help:
           "Which stored Google login to mirror. Leave it empty if latchkey holds only one — " +
           "it is required only when the google-gmail service has more than one account, " +
@@ -436,22 +433,12 @@ export const CATALOG: CatalogEntry[] = [
         probe: "labels",
         target: "only_extract_labels",
         label: "Download only these labels",
-        placeholder: "Inbox, Work/Projects",
         help:
-          "Exact label paths — a nested label must be listed in full, and listing a parent " +
+          "Exact label paths, comma-separated — Inbox, Work/Projects. A nested label must be " +
+          "listed in full, and listing a parent " +
           "does not include its children. Empty downloads the whole account, which is the " +
           "point of a mirror; narrow it for a first run against a large mailbox. Widening " +
           "it later backfills the labels you added.",
-      },
-      {
-        kind: "int",
-        target: "gmail.message_budget",
-        label: "Stop after this many messages each run",
-        help:
-          "Gmail's quota allows about 300 messages a minute, so a 100k-message account is " +
-          "roughly six hours of downloading. A budget makes that a series of runs that each " +
-          "finish successfully and resume where they stopped, instead of one long run that " +
-          "fails and poisons everything downstream. Leave empty for no limit.",
       },
       {
         kind: "bytes",
@@ -470,7 +457,6 @@ export const CATALOG: CatalogEntry[] = [
         phase: "render",
         target: "only_render_labels",
         label: "Render only these labels",
-        placeholder: "Inbox, Work/Projects",
         help:
           "A second, narrower filter applied when markdown is written — so a whole account " +
           "can be downloaded once and only part of it turned into searchable pages. Empty " +
@@ -505,7 +491,6 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        placeholder: "you@fastmail.com",
         help:
           "Which stored Fastmail login to mirror. Leave it empty if latchkey holds only one.",
       },
@@ -514,11 +499,10 @@ export const CATALOG: CatalogEntry[] = [
         probe: "labels",
         target: "only_extract_labels",
         label: "Download only these folders",
-        placeholder: "Inbox, travel/portugal",
         help:
-          "Exact folder paths, parent first — `travel/portugal` is the folder inside " +
-          "`travel`, and listing `travel` alone does not include it. Empty downloads the " +
-          "whole mailbox.",
+          "Exact folder paths, comma-separated, parent first — `travel/portugal` is the " +
+          "folder inside `travel`, and listing `travel` alone does not include it. Empty " +
+          "downloads the whole mailbox.",
       },
       {
         kind: "bytes",
@@ -543,7 +527,6 @@ export const CATALOG: CatalogEntry[] = [
         phase: "render",
         target: "only_render_labels",
         label: "Render only these folders",
-        placeholder: "Inbox, travel/portugal",
         help:
           "A second, narrower filter applied when markdown is written — so a whole mailbox " +
           "can be downloaded once and only part of it turned into searchable pages. Empty " +
@@ -599,7 +582,6 @@ export const CATALOG: CatalogEntry[] = [
         required: false,
         target: "api.token_dir",
         label: "Token folder",
-        placeholder: "~/.garth",
         help:
           "Where `datalib-step login garmin` (or garth) put oauth1_token.json. " +
           "Leave empty for ~/.garth.",
@@ -627,9 +609,9 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "export.path",
         label: "Export folder",
-        placeholder: "~/Downloads/claude-export",
         help:
-          "The directory you unpacked the export into — the one holding conversations.json. " +
+          "The directory you unpacked the export into — the one holding conversations.json, " +
+          "~/Downloads/claude-export say. " +
           "The export is a complete snapshot: a conversation it no longer mentions is " +
           "dropped from the mirror.",
       },
@@ -657,7 +639,6 @@ export const CATALOG: CatalogEntry[] = [
         required: false,
         target: "sessions.path",
         label: "Sessions folder",
-        placeholder: "~/.claude/projects",
         help:
           "Leave empty for the standard store, ~/.claude/projects. Point it elsewhere for " +
           "a copy of that folder from another machine. A session Claude Code later deletes " +
@@ -684,9 +665,9 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "export.path",
         label: "Export folder",
-        placeholder: "~/Downloads/facebook-<id>-<date>",
         help:
-          "The unzipped \"Download your information\" export, requested in JSON format — " +
+          "The unzipped \"Download your information\" export, requested in JSON format — a " +
+          "folder like ~/Downloads/facebook-<id>-<date>, " +
           "the folder holding your_facebook_activity/, connections/ and the rest. " +
           "The HTML format is not read.",
       },
@@ -711,7 +692,6 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "Backup folder",
-        placeholder: "~/backups/SignalBackups",
         help:
           "The folder holding your signal-backup-* snapshots, pulled off the phone. " +
           "The newest snapshot in it is the one decrypted.",
@@ -720,10 +700,10 @@ export const CATALOG: CatalogEntry[] = [
         kind: "text",
         target: "backup.aep_env_var",
         label: "Passphrase environment variable",
-        placeholder: "SIGNAL_BACKUP_PASSPHRASE",
         help:
           "Name of the env var holding the backup passphrase — not the passphrase itself. " +
-          "The backend reads it at download time. Leave empty for the default.",
+          "The backend reads it at download time. Leave empty for the default, " +
+          "SIGNAL_BACKUP_PASSPHRASE.",
       },
       {
         kind: "select",
@@ -759,7 +739,6 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "backup.path",
         label: "WhatsApp folder",
-        placeholder: "~/backups/WhatsApp",
         help:
           "The WhatsApp/ directory pulled off the phone — the one containing " +
           "Databases/msgstore.db.crypt15 and a Media/ tree.",
@@ -768,10 +747,9 @@ export const CATALOG: CatalogEntry[] = [
         kind: "text",
         target: "backup.key_env_var",
         label: "Decryption-key environment variable",
-        placeholder: "WHATSAPP_BACKUP_DECRYPTION_KEY",
         help:
           "Name of the env var holding the hex-encoded 32-byte root key — not the key " +
-          "itself. Leave empty for the default.",
+          "itself. Leave empty for the default, WHATSAPP_BACKUP_DECRYPTION_KEY.",
       },
     ],
   },
@@ -796,7 +774,6 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "fswalk.path",
         label: "PDF folder",
-        placeholder: "~/Documents",
         help:
           "Scanned recursively for PDFs. Documents are identified by their bytes, so the " +
           "same file in two places is one document; a PDF with no extractable text is " +
@@ -806,10 +783,10 @@ export const CATALOG: CatalogEntry[] = [
         kind: "string_list",
         target: "ignore",
         label: "Ignore patterns",
-        placeholder: "drafts/**, **/scans/**",
         help:
-          "Gitignore-shaped patterns pruned from the scan, on top of any .gitignore files " +
-          "found in the tree. Leave empty to walk everything.",
+          "Gitignore-shaped patterns pruned from the scan, comma-separated — drafts/**, " +
+          "**/scans/** — on top of any .gitignore files found in the tree. Leave empty to " +
+          "walk everything.",
       },
       {
         kind: "bytes",
@@ -839,7 +816,6 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "fswalk.path",
         label: "Folder",
-        placeholder: "~/Documents",
         help:
           "Scanned recursively, recording every entry's path, kind, size and content " +
           "hash. Rescans are keyed on mtime, size and inode, so an unchanged file is " +
@@ -880,7 +856,6 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "fswalk.path",
         label: "Media folder",
-        placeholder: "~/Music",
         help:
           "Scanned for audio, images, video and .m3u playlists. Files are identified by " +
           "their bytes rather than their extension, and each one also gets a hash over " +
@@ -946,9 +921,9 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "catalog.path",
         label: "Catalog file",
-        placeholder: "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat",
         help:
-          "A .lrcat, which is an ordinary SQLite database. Every table is mirrored, and " +
+          "A .lrcat, which is an ordinary SQLite database — Lightroom keeps it under " +
+          "~/Pictures/Lightroom. Every table is mirrored, and " +
           "doltlite stores only what changed between runs — so prior states stay queryable.",
       },
       {
@@ -1002,11 +977,10 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "database.path",
         label: "Messages database",
-        placeholder: "~/Library/Messages/chat.db",
         help:
-          "The chat.db the Messages app keeps; press Cmd-Shift-G in the picker and paste " +
-          "~/Library/Messages to reach it. Choose it with the picker rather than typing " +
-          "the path: macOS protects the folder, and picking the file is what lets Datalib " +
+          "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
+          "picker and paste that path to reach it. Choose it with the picker rather than " +
+          "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
           "read it. If a sync still fails with \"Operation not permitted\", grant Datalib " +
           "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
           "listed by name and path only — their bytes are not copied, since picking " +
@@ -1065,9 +1039,9 @@ export const CATALOG: CatalogEntry[] = [
         required: true,
         target: "library.path",
         label: "Photos library",
-        placeholder: "~/Pictures/Photos Library.photoslibrary",
         help:
-          "The library bundle; its database/Photos.sqlite is what gets mirrored. Choose it " +
+          "The library bundle, usually ~/Pictures/Photos Library.photoslibrary; its " +
+          "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +
           "\"Operation not permitted\", grant Datalib Full Disk Access in System Settings.",

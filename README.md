@@ -3,7 +3,7 @@
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
 datalib mirrors your personal data — chats, email, messages, contacts,
-documents, photos — out of the services that hold it and into one place
+documents, photos, health and fitness — out of the services that hold it and into one place
 you own: a folder on your own computer, in open formats, with history.
 Once it is there you can search it, join it across sources, and point
 whatever tools you like at it, without asking anyone's permission.
@@ -42,7 +42,7 @@ look before you hand it anything of yours. Building from source is the
 
 ## Read this before you point an agent at it
 
-datalib is plain old software. Running a sync invokes no AI model and no
+datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
 agent, and nothing leaves your machine: the only network traffic is
 datalib reading from the services you configured, plus a one-time
 download of the search models the first time the semantic index is
@@ -116,11 +116,14 @@ export, or a backup pulled off a phone.
   </tr>
 </table>
 
-A source's `type` names the thing being mirrored. *Where the data comes
-from* is one table on the source's ingest step, named under the type:
-`api` is the product's own API, `export` an unpacked export, `backup` a
-phone backup, `fswalk` a folder to scan. Every shape, fully commented,
-is in [`all_sources.toml`](docs/user/config_examples/all_sources.toml).
+A source's `type` says *what* is being mirrored (`claude`, `whatsapp`,
+…). Its ingest step says *how*, with one table named for the method:
+`[steps.params.api]` reads the product's own API, `[steps.params.export]`
+an unpacked export, `[steps.params.backup]` a phone backup,
+`[steps.params.fswalk]` a folder on disk. So a `claude` source pulled
+from the API and one read from an export share a type and differ only
+in that table. Every shape, fully commented, is in
+[`all_sources.toml`](docs/user/config_examples/all_sources.toml).
 Something not here? Any program that speaks the
 [step protocol](docs/dev/step_protocol.md) is a source.
 
