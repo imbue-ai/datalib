@@ -24,11 +24,10 @@ pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
 
 use std::path::{Path, PathBuf};
 
-/// Where the store lives under a data root.
-pub const RUNS_REL_PATH: &str = "system/runs.sqlite";
-
+/// Where the store lives under a data root: `system/runs/runs.sqlite`,
+/// as `datalib_runtime::layout` places it.
 pub fn runs_path(data_root: &Path) -> PathBuf {
-    data_root.join(RUNS_REL_PATH)
+    datalib_runtime::layout::runs_db(data_root)
 }
 
 /// The two states the store itself names. Every other value of

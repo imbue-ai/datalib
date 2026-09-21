@@ -39,6 +39,17 @@ pub const JOBS_DB: &str = "jobs.doltlite_db";
 /// swept into whichever commit came next. Nothing commits this one at
 /// all — the rows are the history.
 pub const USAGE_DB: &str = "usage.doltlite_db";
+/// The run store's own directory, relative to `system/`: the store and
+/// the WAL SQLite keeps beside it are then one tree to whatever
+/// measures disk, and one watch to whatever watches it.
+pub const RUNS_DIR: &str = "runs";
+/// The run store — every run's step states, log lines and metrics, and
+/// the app's own log — relative to [`RUNS_DIR`]. The one plain-SQLite
+/// store.
+pub const RUNS_DB: &str = "runs.sqlite";
+/// [`RUNS_DIR`] relative to the data root, for whatever keys trees by
+/// that string — the usage walker, the Manage rows.
+pub const RUNS_DIR_REL: &str = "system/runs";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are
 /// advisory, naming the holder so a refused server can say where the
@@ -96,6 +107,26 @@ pub fn usage_db(data_root: &Path) -> PathBuf {
 
 pub fn lock_file(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(LOCK_FILE)
+}
+
+pub fn runs_dir(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(RUNS_DIR)
+}
+
+pub fn runs_db(data_root: &Path) -> PathBuf {
+    runs_dir(data_root).join(RUNS_DB)
+}
+
+#[cfg(test)]
+mod runs_layout_tests {
+    use super::*;
+
+    /// The one spelled-out relative path agrees with the parts it is
+    /// assembled from everywhere else.
+    #[test]
+    fn the_relative_runs_dir_is_the_joined_parts() {
+        assert_eq!(runs_dir(Path::new("")), Path::new(RUNS_DIR_REL));
+    }
 }
 
 /// Create `data_root` readable by its owner only, if it does not exist.

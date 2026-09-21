@@ -1,5 +1,5 @@
 //! Every request the app makes leaves a line in the server's log —
-//! `system/runs.sqlite`, read back through `GET /api/log` — except the
+//! `system/runs/runs.sqlite`, read back through `GET /api/log` — except the
 //! reads of the log itself, which would otherwise wake the log panel
 //! into refetching forever. One test, because the subscriber it
 //! installs is the process's only one.

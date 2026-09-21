@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // A job's state as one bar: full and green when done, red when failed,
 // muted when canceled, a sliding sliver while pending or running. What
-// the run's steps are doing is on the Manager2 tab, from the run store.
+// the run's steps are doing is on the sources card, from the run store.
 defineProps<{
   msg: string | null;
   state: string;

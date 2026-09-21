@@ -114,7 +114,7 @@ record surfaces there by itself, under the right scope.
 
 ### 1d. The run store — per run, not per source
 
-`system/runs.sqlite` (`datalib/backend/app_schema/src/runs/`): `log`
+`system/runs/runs.sqlite` (`datalib/backend/app_schema/src/runs/`): `log`
 rows with a `LogLevel`, `metrics` with a current value per series per
 step per run, `step_runs.error` for a step that failed. On the Manage
 screen, `manage/activity.rs` turns "warn + error lines so far this

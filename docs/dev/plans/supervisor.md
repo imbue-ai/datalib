@@ -87,7 +87,7 @@ Checked against the tree. Most of the storage-side work is done.
   the *output*; the scheduler just happens to learn it from the one
   step allowed to produce it.
 - **The run store is SQLite and already carries what a step is doing**
-  (`system/runs.sqlite`: `step_runs`, `log`, `metrics`; pushed to the UI
+  (`system/runs/runs.sqlite`: `step_runs`, `log`, `metrics`; pushed to the UI
   as `table_changed` frames by `watch.rs`). `logs_and_metrics` moved
   progress and logs there, but not the scheduler's memory: versions,
   fingerprints and `current_run` are still `system/dag_state.json`,
@@ -264,6 +264,27 @@ substance: never succeeded, or some read sink's version differs from
 what its last successful invocation consumed, or its own fingerprint
 changed. For a root it is the request-relative rule of §2.2.
 
+**The tick is the functional core** in the sense of
+[`style.md`](../style.md): it takes values — the graph, the open
+requests and pauses, every sink's version, which steps are running —
+and returns values — each row's state and the starts to make, with
+the versions they consume — and touches nothing else. The shell
+around it turns an event (a step exited, a checkpoint line arrived, a
+request row was inserted, the config changed) into an update to those
+values, calls the tick, and does what it said: spawns, writes the
+`steps` and `invocations` rows, pushes the frame.
+
+That is what makes every scheduling claim in this document a
+synchronous test — no tokio, no tempdir, no polling: "a tick with
+stale steps and no open request starts nothing", "a checkpoint
+mid-pass owes exactly one more pass", "Stop on one request leaves the
+fan-in in the other's scope", each a few values in and a list of
+starts out. `scheduler.rs` keeps the same facts as parallel
+`Vec<bool>`s mutated between `JoinSet::spawn` and `state.save`, and
+its streaming tests have to run real tasks and wait on a flag to see
+them; its `Decision::{Run, Skip, Block}` is already the shape of the
+tick's output.
+
 Everything the runner's loop needed special machinery for falls out:
 
 - **A consumer runs while its producer is still running.** A checkpoint
@@ -368,7 +389,7 @@ about a unit this design does not have. `DATALIB_DAG_RUN_ID` becomes
 
 ### 2.7 One store, one writer, everything the UI shows
 
-`dag_state.json` goes. The supervisor's memory *is* `system/runs.sqlite`,
+`dag_state.json` goes. The supervisor's memory *is* `system/runs/runs.sqlite`,
 which it alone writes:
 
 | table | rows |
@@ -412,8 +433,8 @@ is not hypothetical — `agent_user.md` exists because agents already run
 syncs and read the mirror — and because a person and an agent will
 often be working the same root at once.
 
-**Observe.** `system/runs.sqlite` is plain SQLite, so an agent needs no
-datalib binary to read it: `sqlite3 system/runs.sqlite 'select id,
+**Observe.** `system/runs/runs.sqlite` is plain SQLite, so an agent needs no
+datalib binary to read it: `sqlite3 system/runs/runs.sqlite 'select id,
 state, state_detail from steps'` is the whole of the Manage screen's
 Status column; `invocations` joined to `log` is the per-step log the
 UI shows on double-click; `requests` joined to `request_steps` is the
@@ -580,13 +601,17 @@ Each slice lands green and the app works after each.
    updates it. A plain tree keeps the tree hash, computed on writer
    completion and cached; the supervisor learns which sinks' readers do
    not pin, so it never starts a writer on one while a reader runs.
-3. **The supervisor library**, batch mode only: the tick of §2.3 with
-   one request rooted at every source, run until it closes. It passes
-   the scheduler's existing tests re-expressed against requests and
-   invocations (the semantics they pin — subset sync, not-selected
-   history, unselected trees never hashed — are exactly what scope
-   means, and hold). `datalib-dag`
-   switches to it; the fixture genrule is the proof.
+3. **The supervisor library**, batch mode only: the tick of §2.3 as a
+   pure function over values, with its tests written first and
+   synchronous — the two hazards in §3 that say "the first test
+   written" are the first two — then the thin shell that feeds it
+   events and runs its starts, with one request rooted at every
+   source, run until it closes. It passes the scheduler's existing
+   tests re-expressed against requests and invocations (the semantics
+   they pin — subset sync, not-selected history, unselected trees
+   never hashed — are exactly what scope means, and hold), and most
+   of them stop needing tokio to say so. `datalib-dag` switches to
+   it; the fixture genrule is the proof.
 4. **Resident mode in `datalib-http`**, replacing `worker.rs`: the
    `requests` and `request_steps` tables, `POST /api/requests`,
    `/api/requests/<id>/stop`, `/api/steps/<id>/{pause,resume}`, live

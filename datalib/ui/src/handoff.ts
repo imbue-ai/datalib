@@ -105,7 +105,7 @@ function configWayfinder(configPath: string): string {
   const origin = window.location.origin;
   return [
     `Modify the datalib data-source config — the user has its editor`,
-    `open in the Manage tab right now.`,
+    `open in a card right now.`,
     ``,
     `Read the guide first: ${origin}/agent/config.md (no token needed)`,
     ``,
@@ -229,7 +229,7 @@ export function modifyComponentWithAgent(name: string, cardSource: string, state
   );
 }
 
-// The 🤖 button on the Manage tab's config editor: hand the config file
+// The 🤖 button on the config editor: hand the config file
 // to an agent for modification.
 export function modifyConfigWithAgent(configPath: string): void {
   handOff(

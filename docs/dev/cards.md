@@ -109,7 +109,7 @@ column, the tree layout's "+ card" button, the tiling layout's ＋ add
 areas), and it always creates a `galleryView()` card — the **new-card
 gallery** (`datalib/ui/src/cards/libs/galleryView.ts`): a list of
 every titled component with a short description, builtins first
-(gridView leading), then every component in the frontend store. A
+(sourcesView leading), then every component in the frontend store. A
 store entry's row expands to its qualified name called with its stored
 `component_args`, so one component appears once per namespace with its
 own arguments (`comp.slack_work.channels("slack_work")`,
@@ -302,7 +302,8 @@ programs against:
   `TableGrid`, with the row actions and the panels they open — the
   wizard, a group's commit history — teleported to `<body>`. Browse
   opens a `gridView(...)` beside it through `host.openCards`, and a
-  step's log or the server's a `logView(...)` the same way. The `/sources2` route is this card at 1.6× width
+  step's log or the server's a `logView(...)` the same way. The
+  `/data_sources` route is this card at 1.6× width
   with `configView()` beside it (`MANAGE_STACK` in `router/index.ts`).
 - `logView({ run, step, launch, q, jumpToEnd })` — the run log
   (`components/RunLogPanel.ce.vue` in `cards/LogCard.ce.vue`): one

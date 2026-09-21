@@ -54,6 +54,28 @@ describe("rowMenu", () => {
     ).toBe("Not in the pipeline");
   });
 
+  it("offers the system row its log and its path, and nothing that edits the config", () => {
+    const menu = rowMenu(
+      [target({ id: "system", name: "System", kind: "system", type: null, statusFrom: null })],
+      opts,
+    );
+    expect(entry(menu, "browse").name).toBe("Browse the log");
+    expect(entry(menu, "browse").disabled).toBeNull();
+    expect(entry(menu, "reveal").disabled).toBeNull();
+    expect(entry(menu, "compare").disabled).toBe("Not a config entry");
+    expect(entry(menu, "remove").disabled).toBe("Not a config entry");
+    expect(entry(menu, "log").disabled).toBe("The log is what Browse opens here");
+    expect(entry(menu, "history").disabled).toBe(
+      "The run log is plain SQLite, with no commit history",
+    );
+    // Several rows with the system row among them: the reason names it.
+    const mixed = rowMenu(
+      [target(), target({ id: "system", name: "System", kind: "system" })],
+      opts,
+    );
+    expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
+  });
+
   it("limits the one-row actions when several rows are targeted, and names the row a reason came from", () => {
     const menu = rowMenu([target(), target({ id: "mail", name: "Mail", editBlocked: "x" })], opts);
     expect(entry(menu, "browse").disabled).toBe("One row at a time");

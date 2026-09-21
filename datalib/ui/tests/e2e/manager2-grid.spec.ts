@@ -1,10 +1,10 @@
-// The Pipeline table on /sources2 (Manager2View) actually paints.
+// The Pipeline table on /data_sources (the sources card) actually paints.
 
 import { test, expect } from "@playwright/test";
 import { TABLE_ROWS, expectGridPainted } from "./grid-helpers";
 
 test("the Pipeline table paints at full height", async ({ page }) => {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 
   // Rows are bound. This stayed true throughout the bug, so it is the

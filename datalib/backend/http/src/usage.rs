@@ -405,6 +405,16 @@ fn prune(history: &mut VecDeque<UsageSample>) {
 /// trees, and the walk records a subtotal at both levels, so the Manage
 /// screen's group row has a measured series of its own rather than a sum
 /// of two step functions sampled at different instants.
+/// The trees the walker records: every declared one, and two no config
+/// names — `system/`, and the run store's directory inside it — for the
+/// Manage screen's System group.
+pub fn measured_trees(config_path: &Path) -> Vec<String> {
+    let mut trees = declared_trees(config_path);
+    trees.push(datalib_core::layout::SYSTEM_DIR.to_string());
+    trees.push(datalib_core::layout::RUNS_DIR_REL.to_string());
+    trees
+}
+
 pub fn declared_trees(config_path: &Path) -> Vec<String> {
     match datalib_dag::config::load(config_path) {
         Ok((cfg, _root)) => {
@@ -443,7 +453,7 @@ pub async fn sample_once(
     // A recursive read_dir of a large root is not something to do on
     // the async executor.
     let measured = tokio::task::spawn_blocking(move || {
-        let want: BTreeSet<String> = declared_trees(&config_path).into_iter().collect();
+        let want: BTreeSet<String> = measured_trees(&config_path).into_iter().collect();
         measure(&root, &want)
     })
     .await;

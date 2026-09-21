@@ -49,7 +49,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
   expect(await violations(page)).toEqual([]);
 
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(page.locator(TABLE_ROWS).first()).toBeVisible({ timeout: 15_000 });
   expect(await violations(page)).toEqual([]);
 

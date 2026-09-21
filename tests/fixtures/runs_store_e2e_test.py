@@ -91,7 +91,7 @@ class RunStoreEndToEnd(unittest.TestCase):
             0,
             f"the run failed\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}",
         )
-        self.store = self.root / "system" / "runs.sqlite"
+        self.store = self.root / "system" / "runs" / "runs.sqlite"
 
     def test_the_runner_leaves_a_store_stock_sqlite_can_open(self) -> None:
         self.assertTrue(self.store.exists(), f"no run store at {self.store}")
@@ -189,7 +189,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         # know the runner did not quietly claim the path for the
         # prolly-tree engine.
         self.assertFalse(
-            (self.root / "system" / ".runs.sqlite-lock").exists(),
+            (self.root / "system" / "runs" / ".runs.sqlite-lock").exists(),
             "a lock sidecar means doltlite claimed the store after all",
         )
 

@@ -232,7 +232,7 @@ rust_test(
     ],
 )
 
-# The run endpoints read what the runner wrote to `system/runs.sqlite`.
+# The run endpoints read what the runner wrote to `system/runs/runs.sqlite`.
 rust_test(
     name = "runs_endpoints_test",
     srcs = ["tests/runs_endpoints.rs"],

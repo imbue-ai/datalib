@@ -1,0 +1,188 @@
+# Audit: the tree against "functional core, imperative shell"
+
+A record, not reference. The tree at `220566f8` (after #626) read
+against [`style.md` § Functional core, imperative shell](style.md).
+Every claim below was checked against the tree — the function outlines,
+the test lists, and whether a pure function is called from a test or
+only through the shell around it — not against a commit message or
+a comment.
+
+How it was read: the DAG runner, the shared ingest and render crates,
+the Slack provider (ingest and render) as the representative of the
+API-walking providers, chat-common, the http server's worker and
+Manage handlers, and the UI's `.ts` modules and largest components.
+Providers other than Slack were sampled by outline, not read whole;
+finding 2's "the same move applies" is a claim about shape, not a
+verified one per provider.
+
+## The short version
+
+The pattern is in the tree, unevenly and unnamed. Half a dozen
+places compute a decision purely and act on it afterwards, and those
+are the best-tested code in the repo. The rest interleaves the
+decision with the fetch, the write and the spawn, and the tell is
+always the same: the tests for the *logic* are `#[tokio::test]`s
+against a tempdir, or Playwright.
+
+## Where the split already exists
+
+Named here so they can be pointed at as the house shape.
+
+| core | tests | note |
+|---|---|---|
+| `manage/status::step_status(StatusArgs) -> StatusView` (`http/src/manage/status.rs`) | ~70, synchronous, including a replayed timeline | The clearest case. Its header says "pure functions over the runner's record, the job queue and the config's edges; the handler feeds them one snapshot." The property `never_goes_backwards_across_the_live_sequence` is only writable because of that. |
+| `RenderPlan::decide(stored, params, version_changed)` (`datalib_step/src/render.rs`) | 4, synchronous | `FromCursor` or `Everything(reason)`; `render_source` acts on it. |
+| `Adjustments::plan(prev, inputs)`, `select_targets` (`slack/src/ingest/mod.rs`) | ~30, synchronous | What a config change means for the walk; which conversations to walk. Built on `scope_config::{turned_on, limit_relaxed, filter_widened}`, themselves pure and tested. |
+| `config::check_text(text) -> ConfigCheck` (`dag/src/config.rs`) | many | `load_graded` is three lines of I/O around it; validation is a value (`diagnostics.rs`). |
+| `Scan::changes_since(prev) -> Changes` (`etl/src/fsscan.rs`) | 11, async | Pure over two values — but every test reaches it through `scan_all` on a tempdir (finding 6). |
+| `ui/src/config/{rowMenu,sourceSteps,activity,browsePresets,commitHistory,timeFormat,sparkline}.ts` | the UI's only 9 unit-test files | The pure modules got tests; the components got Playwright. |
+
+The *shapes* are right at a few key seams too: `Decision::{Run, Skip,
+Block}` in the scheduler is a decision as data; `RenderedMarkdown` is
+a whole document as a value (rows, sections, edges, problems) handed
+to a sink callback; a render processor's `parse → render_all` reads
+the raw store into `ParsedSlack` and then builds `NormalizedChat`s
+from it purely.
+
+## Where it breaks down
+
+Ordered by what fixing it buys.
+
+### 1. The scheduler loop
+
+`Runner::run` (`dag/src/scheduler.rs:216`) is ~620 lines holding the
+run's whole state as a dozen parallel vectors — `in_flight`,
+`final_pass_owed`, `streaming_pass_owed`, `early`, `remaining_deps`,
+`versions`, `changed_now`, a `QueueLedger` — mutated inline between
+`JoinSet::spawn`, `state.save` and `sink.emit`. `decide` (`:863`) is
+nearly pure but is `&self`, builds a `StepCtx` carrying live sinks,
+and is never called from a test; `finish` (`:989`) emits an event and
+reads the clock. All 34 tests go through `run()` with real tokio and a
+tempdir, and the streaming ones wait on an `until(flag)` loop to
+observe the state machine. Every deadlock and never-terminates bug
+the file's comments narrate was a state-machine bug found by running
+it.
+
+**What to do.** This is the supervisor's tick
+([`plans/supervisor.md` § 2.3](plans/supervisor.md)), and the plan now
+says so: the tick is a pure function from (graph, intent, facts) to
+(row states, starts), with its tests written first and synchronous.
+Don't refactor `scheduler.rs` toward that shape in place — slice 3 of
+the plan replaces it. What *is* worth doing now, if the supervisor is
+more than a few weeks out: make `decide` a free function over values
+(drop `&self`, return the inputs a `StepCtx` needs rather than the
+`StepCtx`) and give it the table of tests its clauses deserve.
+
+### 2. The Slack channel walk plans itself between fetches
+
+`export_channel` (`slack/src/ingest/mod.rs:504`) decides which ranges
+to walk — a forward walk from the resume cursor or from `since`, an
+optional refresh window, an optional backfill below the oldest stored
+message, and whether a pass enumerated completely and so may prune —
+inline, between calls to `list_history` that fetch and upsert. The
+plan is a pure function of `(since_ts, channel_latest_ts,
+channel_oldest_ts, refresh_window_days, now, adjust)`; the
+`slack_channel_walk_planned` log line is already the shape of the
+value. The only test of "the refresh window is skipped under
+`force_full_walk`" is a live or synth run.
+
+**What to do.** `fn walk_passes(...) -> Vec<Pass>` with `Pass { oldest,
+latest, inclusive, prunes: bool, why: &'static str }`, ~30 lines,
+table-driven tests; `export_channel` becomes `for pass in
+walk_passes(..) { list_history(pass) }`. Then look at the other
+providers with a since/cursor/window interplay (email's Gmail and
+JMAP walkers, github, gitlab) for the same shape.
+
+### 3. Chat-common writes files in the middle of building a value
+
+`render_one` (`chat-common/src/render.rs:156`) builds `sections`
+purely, `fs::write`s them (`:189`), materializes attachment bytes to
+`page_dir` (`:238`) — and then hands the sink a `RenderedMarkdown`
+whose `sections` "concatenated are the `.md`'s bytes". The value
+already contains everything the write needs. Because of this every
+`_render` crate needs a filesystem, the render-preview golden needs a
+tempdir, and a renderer cannot be tested without one.
+
+**What to do.** Move the `.md` write and the blob materialization into
+the driver's `emit_doc` (the sink already fuses Load), adding a
+`blobs` field to `RenderedMarkdown` naming what to place where. Every
+provider's render then becomes `ParsedX -> Vec<RenderedMarkdown>`,
+pure. The preview golden (`samples::write_samples`) becomes a
+snapshot of values, and a `_render` crate's tests stop needing a
+tempdir.
+
+### 4. A recovered job's fate is decided while killing things
+
+`worker::what_became_of` (`http/src/worker.rs:264`) returns `(JobState,
+String)` while calling `alive(pid)`, `terminate(pid)` and
+`snapshot_of(root)`. The five recovery tests build a real store to
+exercise a four-way `match`.
+
+**What to do.** `fn verdict(job, runner_alive: bool, run:
+Option<&RunSnapshot>) -> (JobState, String, Option<Kill>)`; the shell
+reads liveness and the snapshot, calls it, kills if told to. The
+supervisor retires `worker.rs` (plan § 2.8), so weigh this against
+finding 1's timing — it is an hour's work either way.
+
+### 5. `SourcesCard.ce.vue` decides things beside its fetches
+
+`decorate` (`:240`), `groupEditBlocked` (`:300`) and `mergeJob`
+(`:1303`) are decisions about rows and job events living in a
+1,554-line component next to `fetch` and grid-API calls, tested only
+by Playwright. `mergeJob` is a reducer — `(jobs, event) -> jobs` — and
+reads `new Date()` inline. The repo already knows the fix: `rowMenu.ts`
+and `sourceSteps.ts` were pulled out exactly this way and got tests.
+
+**What to do.** `ui/src/config/jobs.ts` with `mergeJob(jobs, event,
+now)` and a test that a job's row never goes backwards across a
+sequence of events — the frontend twin of `status.rs`'s timeline test.
+`decorate` and `groupEditBlocked` follow the same route.
+
+### 6. Pure functions tested only through their shells
+
+`Scan::changes_since` is pure but every test reaches it through
+`scan_all` on a tempdir. `Runner::decide` is nearly pure and has no
+direct test at all. The cost is not correctness — the tests pass — but
+each is a tempdir and an async runtime spent on asserting a value
+comparison, and a new clause gets tested at the same price or not at
+all.
+
+**What to do.** Where a core already exists, add the table of
+synchronous tests against it and leave one shell test as the
+integration check. Do this opportunistically, when touching the file.
+
+### Not findings
+
+The throughput code — `bulk_upsert`, `grid_index`'s row loop, the blob
+CAS, `doltlite_raw` — is I/O all the way down and has no decision
+worth extracting. The download side as a whole is a shell by nature
+(fetch, then store); the pattern applies to *what* it decides to
+fetch, which is findings 2 and 6, not to the fetching.
+
+## Todo
+
+In priority order. Each is one PR. Tracked as
+[#633](https://github.com/imbue-ai/datalib/issues/633).
+
+- [ ] **Slack walk plan** (finding 2): `walk_passes` as a value with
+      table tests; `export_channel` loops over it. Then survey email,
+      github and gitlab for the same shape and file one issue each
+      where it applies.
+- [ ] **Render writes move to the sink** (finding 3): `emit_doc`
+      writes the `.md` and places blobs; `RenderedMarkdown` gains
+      `blobs`; chat-common's `render_one` stops touching the
+      filesystem; the preview golden and the `_render` crates' tests
+      lose their tempdirs.
+- [ ] **`mergeJob` and friends out of `SourcesCard`** (finding 5):
+      `ui/src/config/jobs.ts`, `now` passed in, a never-goes-backwards
+      test.
+- [ ] **`decide` as a free function** (finding 1, interim): only if
+      supervisor slice 3 is not the next thing; otherwise skip and
+      write the tick pure from the start.
+- [ ] **`what_became_of` → `verdict`** (finding 4): same condition as
+      the line above; retired by supervisor slice 4.
+- [ ] **Direct tests for `changes_since`** (finding 6): when next in
+      `fsscan.rs`.
+- [ ] **Provider survey**: read the other API-walking providers'
+      `fetch` whole, not by outline, for inline plans of the finding-2
+      shape.

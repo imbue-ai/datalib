@@ -39,7 +39,7 @@ a {
 }
 
 .datalib-shell {
-  /* Viewport-pinned flex column: the header takes its natural height
+  /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
      (MillerView) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
@@ -50,57 +50,34 @@ a {
   box-sizing: border-box;
   padding: 1rem;
 }
-.datalib-header {
+/* A band across the top: tinted, hairline below, full-bleed by
+   countering the shell's 1rem padding. */
+.datalib-toolbar {
   flex: 0 0 auto;
-}
-
-/* Browser-style tab band: the header sits on a tinted strip and the
-   active tab is cut from the page background, flowing into the
-   content below with no separating line under it. Negative margins
-   counter the shell's 1rem padding so the band runs full-bleed. */
-.datalib-header {
   display: flex;
-  align-items: flex-end;
-  gap: 0.6rem;
+  align-items: center;
+  gap: 0.4rem;
   margin: -1rem -1rem 0.75rem;
-  padding: 0.5rem 1rem 0;
+  padding: 0.4rem 1rem;
   background: var(--datalib-card-bg);
   border-bottom: 1px solid var(--datalib-border);
-}
-.datalib-header h1 {
-  margin: 0 0 0.45rem 0;
-  font-size: 1.25rem;
 }
 .datalib-spacer {
   flex: 1;
 }
-.datalib-tabs {
-  display: flex;
-  gap: 2px;
-  margin-left: 0.75rem;
-}
-/* The active tab is cut from the page background; border-bottom: none
-   plus the -1px overlap lets its background erase the band's hairline
-   so tab and page read as one surface. */
-.datalib-tab {
-  padding: 0.35rem 0.95rem;
-  margin-bottom: -1px;
+.datalib-tool {
+  padding: 0.25rem 0.75rem;
   border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  color: var(--datalib-muted);
-  text-decoration: none;
-  line-height: 1.4;
-}
-.datalib-tab:hover {
-  background: var(--datalib-hover);
+  border-radius: 4px;
+  background: transparent;
   color: var(--datalib-fg);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
 }
-.datalib-tab.router-link-active {
-  background: var(--datalib-bg);
+.datalib-tool:hover {
+  background: var(--datalib-hover);
   border-color: var(--datalib-border);
-  color: var(--datalib-accent);
-  font-weight: 600;
 }
 
 :root.preview-dark {

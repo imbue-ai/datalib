@@ -230,7 +230,7 @@ export const MENU_DISABLED = /slick-menu-item-disabled/;
 export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
 
 /// Manager2 with the config editor (`.m2-editor`) open beside the
-/// sources card. `/sources2` opens the sources card alone, which is
+/// sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";

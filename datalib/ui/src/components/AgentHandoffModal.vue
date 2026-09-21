@@ -2,7 +2,7 @@
   AgentHandoffModal — the step-by-step instructions shown when existing
   work is handed to a coding agent (handoff.ts): "modify" (the 🤖
   button on a component-backed card) and "config" (the 🤖 button on the
-  Manage tab's config editor). The create flow has no dialog — a
+  config editor). The create flow has no dialog — a
   freshly minted component renders its instructions in the card body
   (cards/libs/agentSeedView.ts). Driven entirely by the module-level
   `pendingHandoff` store; mounted once in App.

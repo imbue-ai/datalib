@@ -1,15 +1,17 @@
 <script setup lang="ts">
 // Routed view for the card surface. Owns the chrome the layouts
-// share — the dev and layout toggles along the bottom — and keeps
-// each layout host alive across toggles (v-show, not v-if) so
-// switching back doesn't lose its cards. The data root and its size
-// are the app-wide `RootStorageBar` below this; a grid card carries
-// its own row count.
-import { ref } from "vue";
+// share — the status bar along the bottom: the data root and its
+// size, the log, then the dev and layout toggles flush right — and
+// keeps each layout host alive across toggles (v-show, not v-if) so
+// switching back doesn't lose its cards. A grid card carries its own
+// row count.
+import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
+import RootStorageBar from "@/components/RootStorageBar.vue";
 import { devMode } from "@/devMode";
+import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
 type Layout = "columns" | "tree" | "tiling";
 const layout = ref<Layout>("columns");
@@ -21,14 +23,44 @@ function setLayout(next: Layout) {
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
 }
+
+// The toolbar's commands go to whichever layout is showing.
+const miller = useTemplateRef<SurfaceCommands>("miller");
+const tree = useTemplateRef<SurfaceCommands>("tree");
+const tiling = useTemplateRef<SurfaceCommands>("tiling");
+function active(): SurfaceCommands | null {
+  if (layout.value === "tree") return tree.value;
+  if (layout.value === "tiling") return tiling.value;
+  return miller.value;
+}
+onMounted(() => {
+  surface.value = {
+    addCard: () => active()?.addCard(),
+    showCard: (source) => active()?.showCard(source),
+  };
+});
+onBeforeUnmount(() => {
+  surface.value = null;
+});
 </script>
 
 <template>
   <div class="cards-root">
-    <MillerView v-show="layout === 'columns'" />
-    <TreeView v-if="treeMounted" v-show="layout === 'tree'" />
-    <TilingView v-if="tilingMounted" v-show="layout === 'tiling'" />
+    <MillerView ref="miller" v-show="layout === 'columns'" />
+    <TreeView v-if="treeMounted" ref="tree" v-show="layout === 'tree'" />
+    <TilingView v-if="tilingMounted" ref="tiling" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
+      <RootStorageBar />
+      <!-- What the system is doing belongs down here with the data
+           root's size: the log over every run, revealed if a card
+           already shows it. -->
+      <button
+        class="cards-logs"
+        title="the run log: every line the runner, the steps and the server wrote"
+        @click="active()?.showCard(LOG_CARD)"
+      >
+        Logs
+      </button>
       <button
         class="cards-dev-toggle"
         :class="{ 'is-active': devMode }"
@@ -87,12 +119,24 @@ function setLayout(next: Layout) {
   /* Bleed over the shell's left padding: the cards keep their gutter,
      but the status bar spans the full viewport width. */
   margin-left: -1rem;
-  padding: 0.15rem 0.8rem;
-  border-top: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
-  font-size: 0.8rem;
-  opacity: 0.85;
+  padding: 0.25rem 1rem;
+  border-top: 1px solid var(--datalib-border);
+  background: var(--datalib-card-bg);
+  font-size: 12px;
   min-height: 1.5rem;
+}
+.cards-logs {
+  flex: 0 0 auto;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0.1rem 0.5rem;
+}
+.cards-logs:hover {
+  background: var(--datalib-hover);
 }
 /* The dev + layout toggles sit flush right as a cluster — the dev
    button carries the auto margin. */
@@ -104,7 +148,7 @@ function setLayout(next: Layout) {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 12px;
   padding: 0.1rem 0.5rem;
 }
 .cards-dev-toggle:hover {
@@ -127,7 +171,7 @@ function setLayout(next: Layout) {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 12px;
   padding: 0.1rem 0.5rem;
 }
 .cards-layout-toggle button + button {

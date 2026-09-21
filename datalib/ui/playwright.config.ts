@@ -300,7 +300,7 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
   return { name, child, urlFile, log };
 }
 
-// The announced URL is `<origin>/sources2?token=<DATALIB_TOKEN>`; the specs want
+// The announced URL is `<origin>/data_sources?token=<DATALIB_TOKEN>`; the specs want
 // the origin. Absent, empty and short of the whole token all read the
 // same way here — as "not yet", so a torn read is one more turn of the
 // poll rather than a truncated port number that parses.
@@ -459,7 +459,7 @@ export default defineConfig({
     },
     // One project per config-mutating spec, doing one job: pointing
     // `baseURL` at that spec's own backend, so the spec itself can go
-    // on saying `page.goto("/sources2")`.
+    // on saying `page.goto("/data_sources")`.
     ...SANDBOXES.map((s) => ({
       name: `chromium-${s.spec}`,
       testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
@@ -493,8 +493,8 @@ export default defineConfig({
         // The sandboxed DACTAL iframe: an opaque origin loading module
         // scripts, which WebKit and Chromium have disagreed about.
         /dactal-sandbox\.spec\.ts/,
-        // /sources2 — the Manager2 Pipeline table, and the commit-history
-        // grid it opens in a modal.
+        // /data_sources — the sources card's Pipeline table, and the
+        // commit-history grid it opens in a modal.
         /manager2-grid\.spec\.ts/,
         /manager2-history\.spec\.ts/,
         // The run-log panel's grid, menu and drag-to-group bar.
