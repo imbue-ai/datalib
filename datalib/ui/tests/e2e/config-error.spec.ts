@@ -50,7 +50,7 @@ test.beforeEach(() => {
 // blocking screen instead of the real reason.
 test.afterEach(async ({ page }) => {
   if (original) writeConfig(original);
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(gate(page)).toHaveCount(0);
 });
 
@@ -81,7 +81,7 @@ test("a broken entry costs that entry, and nothing else", async ({
   const search = await request.get("/applet/unified_index/search?q=&limit=1");
   expect(search.status()).toBe(200);
 
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   // No gate, and the app is fully navigable.
   await expect(gate(page)).toHaveCount(0);
   await expect(tabs(page)).toBeVisible();
@@ -106,7 +106,7 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   // from, and that is what the disabled button has to say.
   writeConfig(`${original}\n[[steps]]\ngroup = "ghost"\nfunction = "ingest"\n`);
 
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
@@ -124,7 +124,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   page,
   request,
 }) => {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(tabs(page)).toBeVisible();
   await expect(gate(page)).toHaveCount(0);
 
@@ -165,7 +165,7 @@ test("a config with no unified_index applet blocks too", async ({
   page,
   request,
 }) => {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await expect(tabs(page)).toBeVisible();
 
   // Valid TOML, a valid config, and useless: every view in the app is

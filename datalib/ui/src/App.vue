@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterView, RouterLink } from "vue-router";
-import { MANAGE_STACK } from "@/router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
@@ -60,8 +59,9 @@ onUnmounted(() => stop?.());
       <h1>datalib</h1>
       <nav v-if="!gate" class="datalib-tabs" aria-label="Navigation">
         <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
-        <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink>
-        <RouterLink class="datalib-tab" :to="MANAGE_STACK">Manager2</RouterLink>
+        <!-- The old Manage screen is hidden, not gone: `/sources` still
+             serves SourcesView.vue, and this link brings it back. -->
+        <!-- <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink> -->
       </nav>
       <div class="datalib-spacer" />
       <!-- Lightweight sync indicator in the header's flexible space —

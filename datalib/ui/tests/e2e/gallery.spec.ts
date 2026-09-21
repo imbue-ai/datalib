@@ -17,15 +17,15 @@ test.describe("new-card gallery (non-dev mode)", () => {
     await expect(page.locator(".miller-col-source")).toHaveCount(0);
     await page.locator(".miller-add").click();
 
-    // The gallery column appears, builtins listed with gridView first.
+    // The gallery column appears, builtins listed with sourcesView first.
     const galleryRows = page.locator(".gv-row");
-    await expect(galleryRows.first()).toContainText("Search");
+    await expect(galleryRows.first()).toContainText("Manage data sources");
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
       "galleryView()",
     );
 
-    // Pick "Document" → the gallery card becomes the document picker.
-    await galleryRows.filter({ hasText: "Document" }).first().click();
+    // Pick "Markdown Document" → the gallery card becomes the document picker.
+    await galleryRows.filter({ hasText: "Markdown Document" }).first().click();
     const docRows = page.locator(".dp-row");
     await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
@@ -50,10 +50,10 @@ test.describe("new-card gallery (non-dev mode)", () => {
     await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test("gallery's Search entry becomes a second grid", async ({ page }) => {
+  test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
     await page.goto("/");
     await page.locator(".miller-add").click();
-    await page.locator(".gv-row", { hasText: "Search" }).first().click();
+    await page.locator(".gv-row", { hasText: "Unified Search" }).first().click();
     // Two grid columns now: the default one and the freshly picked one.
     await expect(page.locator(".grid-box .slickgrid-container")).toHaveCount(2, {
       timeout: 10_000,

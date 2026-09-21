@@ -248,7 +248,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // ── 12-14. a file appears in the folder ──────────────────────────
     copyFileSync(LATECOMER!, `${SCAN_DIR}/warp_core_manual.pdf`);
 
-    await page.goto(`${BASE}/sources2`);
+    await page.goto(`${BASE}/data_sources`);
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // Re-read rather than reuse: this is a fresh page, and the numbers
     // it shows are the ones the assertion below is about.
@@ -303,7 +303,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     );
     page.on("dialog", (d) => void d.accept());
 
-    await page.goto(`${BASE}/sources2`);
+    await page.goto(`${BASE}/data_sources`);
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // A fresh browser context: the groups are folded again.
     await expandGroup(page, "pdfs");

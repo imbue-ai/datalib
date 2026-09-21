@@ -18,7 +18,7 @@ const GIT_HASH = process.env.DATALIB_GIT_HASH;
 const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 
 async function openServerLog(page: Page) {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await page.getByRole("button", { name: "Server log" }).click();
   const dialog = page.getByRole("dialog", { name: "Server log" });
   await expect(dialog).toBeVisible();

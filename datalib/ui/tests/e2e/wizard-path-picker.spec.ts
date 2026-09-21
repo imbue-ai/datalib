@@ -7,7 +7,7 @@
 import { test, expect } from "@playwright/test";
 
 test("a path field types in a browser and offers no dead picker button", async ({ page }) => {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await page.getByRole("button", { name: "+ Data Source" }).click();
 
   // WhatsApp is the descriptor that prompted the rule: one required

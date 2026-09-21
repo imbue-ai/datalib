@@ -1,7 +1,7 @@
 // Builtin view: the new-card gallery — the way every new card starts,
 // in both dev and non-dev mode. It lists every parameter-less
 // component with a short description: a hardcoded builtin list first
-// (gridView leading, since it's the app's front door), then every
+// (sourcesView leading, since it's the app's front door), then every
 // titled component in the frontend store, then the
 // "build a component with an agent" entry (handoff.ts),
 // which mints a fresh component and walks the user through handing it
@@ -28,14 +28,14 @@ type GalleryEntry = {
 // The builtin gallery, in display order.
 const BUILTIN_GALLERY: GalleryEntry[] = [
   {
-    source: "gridView()",
-    title: "Search",
-    description: "Search and browse everything in your library.",
+    source: "sourcesView()",
+    title: "Manage data sources",
+    description: "Configure, view, and execute data ingestion steps and data stores.",
   },
   {
-    source: "sourcesView()",
-    title: "Sources",
-    description: "Every source and step your config declares: sync them, edit them, read their logs.",
+    source: "gridView()",
+    title: "Unified Search",
+    description: "Search and browse everything in your library.",
   },
   {
     source: "configView()",
@@ -44,8 +44,8 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
   },
   {
     source: "documentPickerView()",
-    title: "Document",
-    description: "Pick a document from your library and read it.",
+    title: "Markdown Document",
+    description: "View rendered markdown for any document in your library.",
   },
   {
     source: "dactalView()",
