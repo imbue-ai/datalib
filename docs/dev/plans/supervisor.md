@@ -174,17 +174,19 @@ How the sinks we have meet them:
 |---|---|---|---|---|
 | a doltlite store (raw, render) | head commit | `dolt_commit` at a seal; readers pin a commit | `flock` on the sibling `.lock` | the next `open` discards the working set |
 | a plain SQLite file (qmd's `index.sqlite`, `runs.sqlite`) | a version the writer records *in the same transaction* as the data — a row in a `versions` table, or `PRAGMA user_version` | the transaction; readers open read-only | SQLite's own writer lock, plus the supervisor's scheduling | the transaction rolls back by itself |
-| a file tree (the markdown documents) | the version of the store that indexes it: a `.md` file is reachable only through a committed `markdowns` row, so the tree has no version of its own | write the file, then commit the row that names it; a file no committed row names is unreachable | the indexing store's | orphan files are junk the next writer may remove; readers never saw them |
+| a file tree indexed by a store (the markdown documents) | the version of the store that indexes it: a `.md` file is reachable only through a committed `markdowns` row, so the tree has no version of its own | write the file, then commit the row that names it; a file no committed row names is unreachable | the indexing store's | orphan files are junk the next writer may remove; readers never saw them |
+| a plain file tree (perseus's TEI XML, written by `curl -o`) | a content hash of the tree, computed by the supervisor **once, when its writer finishes** — the runner's hash today — and held until the next writer finishes | none of its own: a reader listing the tree mid-write sees a half-written file, so the supervisor starts no writer while a reader of the sink runs (or the step writes beside and renames) | the supervisor's scheduling alone | the next completed write re-hashes the whole tree, half-written files included, so nothing is adopted silently |
 | a step that declares its own version | whatever its `outcome` line says, held by the supervisor until the next report | the step's promise, under the protocol's any-path rule | the supervisor's scheduling alone | the step's promise |
 
-The last row is how every sink works today and stays available; the
-first three are what the supervisor can read for itself. **What goes
-away is the fallback**: today a step that reports no version has its
-whole tree hashed by the runner (the `qmd_index` step does this on
-every run — "reported no version for `unified_index/qmd_index`; reading
-the whole tree to hash it"). A tick cannot afford that, and a fallback
-that succeeds slowly is the kind AGENTS.md says to remove: a sink with
-no readable version and no report is a config error, said at load.
+The last two rows are how every non-store sink works today and stay
+available; the first three are what the supervisor can read for
+itself. What matters is *when* a version is computed, not how: the
+tree hash is a fine version for fourteen XML files, and a poor one for
+a multi-gigabyte index — so a sink whose version is expensive to
+compute is a sink that should record one instead (the qmd index, a
+SQLite file, gets a `versions` row). Either way the supervisor
+computes or reads a version **once per completed invocation** and the
+tick compares cached strings; nothing is ever hashed inside the tick.
 
 For a doltlite sink the version is read by the supervisor after any
 writer finishes (`datalib_history` already reads a store's log without
@@ -493,14 +495,16 @@ supervisor cannot know its shape.
   it, honestly, and the row says which request. The test to write
   first: a tick over a graph with stale steps and no open request
   starts nothing.
-- **Cheap sink versions are load-bearing.** `stale()` runs on every
-  event, so a version that costs a tree hash to read is a tick that
-  costs seconds. Every sink kind in §2.1's table has a cheap one —
-  doltlite's head commit, a SQLite `versions` row, the indexing store's
-  commit for a file tree, the step's own report — and the runner's
-  hash-the-tree fallback is not carried over. Today the only step
-  relying on it is `qmd_index`; slice 2 gives its `index.sqlite` a
-  version of its own.
+- **A version is computed when a writer finishes, never in the tick.**
+  `stale()` runs on every event, so anything it does is done constantly;
+  it compares strings the supervisor already holds. The tree hash a
+  plain-tree sink needs (perseus) is computed once, when its writer
+  completes, exactly as the runner does today. What makes that hash
+  wrong is size, not principle: `qmd_index` reports no version and has
+  its whole `index.sqlite` hashed after every pass, which is the one
+  place the cost shows; slice 2 gives it a `versions` row. A new sink
+  whose tree is large gets the same treatment before it gets a row in
+  the graph.
 - **The tick is one function with the whole graph in scope.** That is
   the point, and also where a bug in `stale()` starts every step at
   once. Budgets bound the blast radius; a test that a tick on an
@@ -573,9 +577,9 @@ Each slice lands green and the app works after each.
    head commit, read by the framework; the step's report is checked
    against it in tests, then becomes optional for doltlite sinks. The
    qmd index gets a `versions` row written in the transaction that
-   updates it, and the runner's hash-the-tree fallback goes; a sink with
-   neither a readable version nor a reporting step is a load-time
-   diagnostic.
+   updates it. A plain tree keeps the tree hash, computed on writer
+   completion and cached; the supervisor learns which sinks' readers do
+   not pin, so it never starts a writer on one while a reader runs.
 3. **The supervisor library**, batch mode only: the tick of §2.3 with
    one request rooted at every source, run until it closes. It passes
    the scheduler's existing tests re-expressed against requests and
