@@ -117,8 +117,11 @@ what the commit added, deleted and modified (`datalib/backend/history/`).
 
 Each row is one `dolt_commit()` call from the ETL — e.g.
 `download slack: msgs=29 replies=51 media[...]` for a successful Slack
-sync, or `download slack: interrupted (Ctrl-C)` for a
-ctrl-c'd run. `dolt_log()` walks back from `HEAD` on the active branch
+sync, or `checkpoint slack: entities` for a seal partway through one.
+A cancelled download stops at its next consistent point and commits
+there under the same `download …` message; whatever a *killed* run
+wrote after its last commit is discarded by the next writer's `open`.
+`dolt_log()` walks back from `HEAD` on the active branch
 (use `active_branch()` to check which one that is).
 
 ### Which branch is checked out / what branches exist
@@ -216,12 +219,12 @@ doltlite -readonly claude/ingest/entities.doltlite_db \
   "SELECT * FROM dolt_at_conversations('HEAD^1') WHERE id = '<the id>';"
 ```
 
-A download normally makes exactly one commit, at the end
+A short download makes one commit, at the end
 (`download <name>: <summary>`), so `HEAD^1` is usually the previous
-sync. The exception is an interrupted run, which leaves a
-`download <name>: interrupted (Ctrl-C)` commit — check `dolt_log`
-messages before trusting `HEAD^1`, and walk further back (`HEAD~10`, or
-a hash from `dolt_log`) for a wider window.
+sync. A long one also seals checkpoints on the way
+(`checkpoint <name>: entities`), so check `dolt_log` messages before
+trusting `HEAD^1`, and walk further back (`HEAD~10`, or a hash from
+`dolt_log`) for a wider window.
 
 ### Which commits changed one row
 

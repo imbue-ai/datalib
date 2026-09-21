@@ -122,8 +122,8 @@ async fn main() -> Result<()> {
     ));
 
     // Orchestrator tail: commit THEN gc, in that order. `dolt_commit`
-    // first seals the working set into one `dolt_log` entry (and leaves
-    // a clean tree so the next open skips the rescue commit); `dolt_gc`
+    // first seals the working set into one `dolt_log` entry (a scan left
+    // uncommitted is what the next open discards); `dolt_gc`
     // then reclaims the per-batch chunk novelty against the committed
     // tree. The reverse order (gc-then-commit on one connection) fails
     // with "failed to flush" at scale — see `ingest::fetch`.

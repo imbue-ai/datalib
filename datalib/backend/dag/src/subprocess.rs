@@ -511,7 +511,7 @@ impl Drop for RegisteredChild {
     }
 }
 
-/// SIGINT every running step, so each checkpoints and exits `stopped`.
+/// SIGINT every running step, so each exits `stopped`.
 pub fn interrupt_children() {
     #[cfg(unix)]
     signal_children(libc::SIGINT);

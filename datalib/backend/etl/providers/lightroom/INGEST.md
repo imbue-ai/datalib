@@ -481,7 +481,8 @@ a 4–5 GB catalog, which is not.
 
 The run is still atomic *as history*: the dolt commit only happens at the
 end, so a crash mid-run leaves HEAD untouched and a dirty working tree,
-which `doltlite_raw::open` seals into its own rescue commit next time. A multi-hundred-GB database
+which `doltlite_raw::open` discards next time; the next run refills from
+the source as every run does. A multi-hundred-GB database
 would want the copy chunked by primary-key range. A Lightroom catalog
 (tens of MB, low hundreds of thousands of rows) is nowhere near that.
 

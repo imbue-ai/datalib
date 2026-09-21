@@ -66,9 +66,9 @@ impl RawDb {
         })
     }
 
-    /// Open the store to *read* it, for the render pass: no rescue
-    /// commit, no DDL, no commit — three writes to a file render does not
-    /// own. See `datalib_etl::doltlite_raw::open_reader`.
+    /// Open the store to *read* it, for the render pass: no discard of
+    /// the working set, no DDL, no commit — three writes to a file render
+    /// does not own. See `datalib_etl::doltlite_raw::open_reader`.
     ///
     /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
     pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {

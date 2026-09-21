@@ -226,7 +226,7 @@ Against the audit, finding by finding:
 | 2.1 Ctrl-C commits regardless of policy | *correct* — every commit is safe |
 | 2.2 rescue commits a crashed wipe | correct — there is no wipe to crash inside |
 | 2.3 hand-run render reads a torn commit | reads a truthful partial store; nothing is mass-deleted |
-| 2.4 slack applet opens the render store writably | still a bug (a reader must never rescue-commit or run `dolt_status` on a store it does not own); the damage shrinks from a torn document to lost checkpoint rows once documents are transactions |
+| 2.4 slack applet opens the render store writably | fixed in #526: the applet reads through `doltlite_raw::open_reader`, read-only and pinned, so it can neither discard the renderer's working set nor run `dolt_status` on it |
 | 2.5 wipers protected by omission | nothing to protect |
 | 2.6 streaming ingests already honour it | they are the model for everyone else |
 
