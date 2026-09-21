@@ -1,15 +1,16 @@
-//! Bringing an existing app store up to the current column names.
+//! The app stores' migration ladder (`datalib_store_meta::ladder`).
 //!
 //! The app stores are created with `CREATE TABLE IF NOT EXISTS`, which
-//! leaves a table that already exists exactly as it was — so when a
-//! column is renamed in the schema, a data root from before the rename
-//! keeps the old name and every query against it fails. This is the
-//! one rename so far: the stamps we mint became `<x>_at_utc` beside a
-//! `tz_offset` (#427), and the old values were local-offset stamps
-//! rather than UTC, so the rows are rewritten as well as the columns.
+//! leaves a table that already exists exactly as it was — so a rename in
+//! the schema reaches an existing root only through a rung here. One
+//! rung so far: the stamps we mint became `<x>_at_utc` beside a
+//! `tz_offset`, and the old values were local-offset stamps rather than
+//! UTC, so the rows are rewritten as well as the columns. The rung
+//! probes for the old column, so a store made after the rename is at
+//! version 0 and passes through it unchanged.
 
-use sqlx::sqlite::SqlitePool;
-use sqlx::Row;
+use datalib_store_meta::Migration;
+use sqlx::{Row, SqliteConnection};
 
 /// One table's stamp columns, old name to new, and the key that names
 /// a row for the rewrite.
@@ -41,10 +42,13 @@ pub(crate) const DISK_USAGE: StampColumns = StampColumns {
     renames: &[("measured_at", "measured_at_utc")],
 };
 
-async fn column_names(pool: &SqlitePool, table: &str) -> Result<Vec<String>, sqlx::Error> {
+async fn column_names(
+    conn: &mut SqliteConnection,
+    table: &str,
+) -> Result<Vec<String>, sqlx::Error> {
     // Safe: `table` is one of the three literals above, never input.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
     Ok(rows.iter().map(|r| r.get::<String, _>("name")).collect())
 }
@@ -55,10 +59,10 @@ async fn column_names(pool: &SqlitePool, table: &str) -> Result<Vec<String>, sql
 /// or one with no table yet — is left alone. Returns whether anything
 /// was changed, so the caller can commit it.
 pub(crate) async fn migrate_stamps(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     spec: &StampColumns,
 ) -> Result<bool, sqlx::Error> {
-    let cols = column_names(pool, spec.table).await?;
+    let cols = column_names(conn, spec.table).await?;
     if cols.is_empty() {
         return Ok(false);
     }
@@ -78,7 +82,7 @@ pub(crate) async fn migrate_stamps(
             "ALTER TABLE {} RENAME COLUMN {old} TO {new}",
             spec.table
         )))
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
     if !has("tz_offset") {
@@ -87,10 +91,10 @@ pub(crate) async fn migrate_stamps(
             "ALTER TABLE {} ADD COLUMN tz_offset VARCHAR(8)",
             spec.table
         )))
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
-    rewrite_rows(pool, spec, &renames).await?;
+    rewrite_rows(conn, spec, &renames).await?;
     Ok(true)
 }
 
@@ -98,7 +102,7 @@ pub(crate) async fn migrate_stamps(
 /// becomes UTC, and the offset of the latest of them goes in
 /// `tz_offset` — what a row written today would carry.
 async fn rewrite_rows(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     spec: &StampColumns,
     renames: &[(&str, &str)],
 ) -> Result<(), sqlx::Error> {
@@ -116,7 +120,7 @@ async fn rewrite_rows(
         select_cols.join(", "),
         spec.table
     )))
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
     for row in rows {
         let key: Vec<String> = spec.key.iter().map(|k| row.get::<String, _>(k)).collect();
@@ -158,7 +162,28 @@ async fn rewrite_rows(
         for k in &key {
             q = q.bind(k);
         }
-        q.execute(pool).await?;
+        q.execute(&mut *conn).await?;
     }
     Ok(())
 }
+
+/// Rung 1 of every app store's ladder, one per store because a rung
+/// captures nothing.
+macro_rules! stamps_rung {
+    ($spec:expr) => {
+        Migration {
+            version: 1,
+            name: "stamps to utc + tz_offset",
+            apply: |conn| {
+                Box::pin(async move {
+                    migrate_stamps(conn, &$spec).await?;
+                    Ok(())
+                })
+            },
+        }
+    };
+}
+
+pub(crate) const FEEDBACK_LADDER: &[Migration] = &[stamps_rung!(FEEDBACK)];
+pub(crate) const SYNC_JOBS_LADDER: &[Migration] = &[stamps_rung!(SYNC_JOBS)];
+pub(crate) const DISK_USAGE_LADDER: &[Migration] = &[stamps_rung!(DISK_USAGE)];

@@ -300,12 +300,46 @@ generated — not on its column names.
   such table and what differs) and the file is exactly as it was. A raw
   store's rows may be the only copy — an export whose source is gone, a
   window upstream no longer serves — so nothing is dropped on the way
-  in. The refusal names the two ways out: a migration
-  (`docs/dev/plans/schema_migrations.md` §3.3, not built yet) or
+  in. The refusal names the two ways out: a rung on the provider's
+  migration ladder (below) or
   `datalib-dag --reset-and-redownload --sync <source>/ingest`, which
   runs the open as `OnSchemaBreak::Rebuild`: drop, recreate, clear the
   cursors, refill. Derived stores (`open_derived`: render, index, CAS)
   always rebuild, since every row is a function of another store.
+
+### The migration ladder
+
+A non-additive change that has to reach existing stores is a rung
+(`datalib_store_meta::Migration`) on the provider's ladder, passed to
+`open_migrating(path, ddl, LADDER)` instead of `open`. Rungs are
+numbered densely from 1; `_datalib_meta.schema_version` is how many
+have run; an open runs the rest in order before it compares the DDL,
+each in one transaction with the version bump and then its own commit
+(`migrate v<n>: <name>`), so a crash between two rungs is resumed by
+the next open. A store above the ladder's top is refused: a newer
+build migrated it. The DDL still has to match once the rungs have run
+— a rung that leaves the shape wrong is a bug in the rung, and the
+open refuses on it like any other break.
+
+```rust
+pub const LADDER: &[Migration] = &[Migration {
+    version: 1,
+    name: "messages.body becomes messages.text",
+    apply: |conn| Box::pin(async move {
+        sqlx::query("ALTER TABLE messages RENAME COLUMN body TO text")
+            .execute(&mut *conn).await?;
+        Ok(())
+    }),
+}];
+```
+
+A rung may read the old shape through `dolt_at_<table>('HEAD')` and
+write the new one, and it clears a cursor table itself (`DELETE FROM
+sync_scope_state`) when the change alters what the cursor means. The
+test for a rung is always the same shape: build the store at
+`version - 1` by hand, open with the ladder, assert the rows —
+`app_store.rs`'s `a_store_from_before_the_utc_columns_is_migrated_on_open`
+is the template, and `app_store_migrate.rs` the one ladder in the tree.
 
 The two-pass order is load-bearing. An index over a column introduced by
 a later schema change cannot be created against an older store, so a

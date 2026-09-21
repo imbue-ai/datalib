@@ -16,6 +16,7 @@ rust_library(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:thiserror",
         "@datalib_crates//:uuid",

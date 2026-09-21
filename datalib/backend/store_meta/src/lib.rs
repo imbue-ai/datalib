@@ -16,7 +16,9 @@ use sqlx::{Row, SqlitePool};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 pub mod guard;
+pub mod ladder;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
+pub use ladder::Migration;
 
 pub const TABLE: &str = "_datalib_meta";
 

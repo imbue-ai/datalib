@@ -2,7 +2,7 @@
 //! sync job queue, and the bytes-on-disk timeseries, one doltlite file
 //! each.
 
-use crate::app_store_migrate::{migrate_stamps, DISK_USAGE, FEEDBACK, SYNC_JOBS};
+use crate::app_store_migrate::{DISK_USAGE_LADDER, FEEDBACK_LADDER, SYNC_JOBS_LADDER};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
 use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
@@ -37,52 +37,75 @@ pub struct AppStore {
 impl AppStore {
     /// Open (or create) the stores for a data root and ensure their
     /// tables exist. DDL is `CREATE TABLE IF NOT EXISTS`, so a populated
-    /// file is untouched — which is why a store from before a column
-    /// rename is migrated first (`app_store_migrate`).
+    /// file is untouched — which is why each store's ladder runs first
+    /// (`app_store_migrate`).
     pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
         let usage_pool = open_pool(&crate::layout::usage_db(root)).await?;
-        // Before the migration and the DDL: a store a newer line of
-        // datalib wrote is refused whole (`datalib_store_meta::guard`).
-        for (pool, path) in [
-            (&feedback_pool, crate::layout::feedback_db(root)),
-            (&jobs_pool, crate::layout::jobs_db(root)),
-            (&usage_pool, crate::layout::usage_db(root)),
+        let has_dolt = probe_dolt_extensions(&feedback_pool).await;
+        let internal = |e: anyhow::Error| sqlx::Error::Protocol(format!("{e:#}"));
+        // Before the ladder and the DDL: a store a newer line of datalib
+        // wrote is refused whole (`datalib_store_meta::guard`). Then the
+        // rungs above the store's version. Feedback is committed per row
+        // with `-Am`, so each rung is sealed as its own commit; jobs and
+        // usage are never committed, by design.
+        for (pool, path, ladder, commits) in [
+            (
+                &feedback_pool,
+                crate::layout::feedback_db(root),
+                FEEDBACK_LADDER,
+                has_dolt,
+            ),
+            (
+                &jobs_pool,
+                crate::layout::jobs_db(root),
+                SYNC_JOBS_LADDER,
+                false,
+            ),
+            (
+                &usage_pool,
+                crate::layout::usage_db(root),
+                DISK_USAGE_LADDER,
+                false,
+            ),
         ] {
-            let written_by = datalib_store_meta::read(pool)
-                .await
-                .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+            let written_by = datalib_store_meta::read(pool).await.map_err(internal)?;
             if let Err(newer) = datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
                 for p in [&feedback_pool, &jobs_pool, &usage_pool] {
                     p.close().await;
                 }
                 return Err(sqlx::Error::Configuration(Box::new(newer)));
             }
+            let stored = written_by.map_or(0, |m| m.schema_version);
+            let top = datalib_store_meta::ladder::top(ladder);
+            if stored > top {
+                for p in [&feedback_pool, &jobs_pool, &usage_pool] {
+                    p.close().await;
+                }
+                return Err(sqlx::Error::Configuration(Box::new(
+                    datalib_store_meta::ladder::AheadOfLadder { stored, top },
+                )));
+            }
+            for rung in datalib_store_meta::ladder::pending(ladder, stored).map_err(internal)? {
+                sqlx::query(datalib_store_meta::DDL).execute(pool).await?;
+                datalib_store_meta::ladder::apply(pool, rung)
+                    .await
+                    .map_err(internal)?;
+                if commits {
+                    sqlx::query("SELECT dolt_commit('-Am', ?)")
+                        .bind(format!("migrate v{}: {}", rung.version, rung.name))
+                        .execute(pool)
+                        .await?;
+                }
+            }
         }
-        let has_dolt = probe_dolt_extensions(&feedback_pool).await;
         let store = Self {
             feedback_pool,
             jobs_pool,
             usage_pool,
             has_dolt,
         };
-        for (pool, spec) in [
-            (&store.feedback_pool, &FEEDBACK),
-            (&store.jobs_pool, &SYNC_JOBS),
-        ] {
-            if migrate_stamps(pool, spec).await? && has_dolt {
-                // The rewrite is a change to a versioned file; leaving it
-                // in the working set would fold it into whichever commit
-                // comes next.
-                sqlx::query("SELECT dolt_commit('-Am', ?)")
-                    .bind(format!("migrate {}: stamps to utc + tz_offset", spec.table))
-                    .execute(pool)
-                    .await?;
-            }
-        }
-        // Usage is the store nothing commits, by design.
-        migrate_stamps(&store.usage_pool, &DISK_USAGE).await?;
         store.init_feedback_table().await?;
         store.init_sync_jobs_table().await?;
         store.init_disk_usage_table().await?;
@@ -90,15 +113,31 @@ impl AppStore {
         // committed per row with `-Am`, so a changed meta row is sealed
         // here rather than left to ride into the next feedback commit;
         // jobs and usage are never committed and their rows just land.
-        for (pool, kind, ddl) in [
-            (&store.feedback_pool, StoreKind::Feedback, FEEDBACK_DDL),
-            (&store.jobs_pool, StoreKind::Jobs, SYNC_JOBS_DDL),
-            (&store.usage_pool, StoreKind::Usage, DISK_USAGE_DDL),
+        for (pool, kind, ddl, ladder) in [
+            (
+                &store.feedback_pool,
+                StoreKind::Feedback,
+                FEEDBACK_DDL,
+                FEEDBACK_LADDER,
+            ),
+            (
+                &store.jobs_pool,
+                StoreKind::Jobs,
+                SYNC_JOBS_DDL,
+                SYNC_JOBS_LADDER,
+            ),
+            (
+                &store.usage_pool,
+                StoreKind::Usage,
+                DISK_USAGE_DDL,
+                DISK_USAGE_LADDER,
+            ),
         ] {
             let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
-            let changed = datalib_store_meta::write(pool, kind, &hash, 0)
+            let top = datalib_store_meta::ladder::top(ladder);
+            let changed = datalib_store_meta::write(pool, kind, &hash, top)
                 .await
-                .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+                .map_err(internal)?;
             if changed && has_dolt && kind == StoreKind::Feedback {
                 sqlx::query("SELECT dolt_commit('-Am', ?)")
                     .bind(format!(
@@ -672,6 +711,25 @@ mod tests {
         let usage = store.recent_disk_usage(10).await.unwrap();
         assert_eq!(usage.len(), 1);
         assert_eq!(usage[0].measured_at_utc, "2026-09-10T08:00:00.000000+00:00");
+
+        // The rung is recorded: every store is at the ladder's top, and
+        // feedback's rung is its own commit.
+        for pool in [&store.feedback_pool, &store.jobs_pool, &store.usage_pool] {
+            let meta = datalib_store_meta::read(pool).await.unwrap().unwrap();
+            assert_eq!(meta.schema_version, 1);
+        }
+        if store.has_dolt {
+            let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+                .fetch_all(store.feedback_pool())
+                .await
+                .unwrap();
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.starts_with("migrate v1: stamps to utc")),
+                "{messages:?}"
+            );
+        }
 
         // Opening again is a no-op: nothing to rename, nothing rewritten.
         drop(store);
