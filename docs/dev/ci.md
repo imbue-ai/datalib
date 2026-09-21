@@ -51,7 +51,9 @@ CI ran on a two-week-old image (#500).
 (the Node runtime `qmd` and `latchkey` run from, one per platform, which
 the binaries fetch on first use — `runtime_fetch.md`), then the six
 tarballs, the notarized macOS app, and the prod docker image with its
-doc test (#469). It does not build the CI image.
+doc test (#469). It does not build the CI image. The steps that
+assemble the assets are scripts under `scripts/release/`, run by
+`bazel test //...` before any tag runs them — `release_steps.md`.
 
 **BuildBuddy** (`imbue.buildbuddy.io`) is the action cache, the build
 event stream and the remote downloader for both `test.yml` bazel jobs.

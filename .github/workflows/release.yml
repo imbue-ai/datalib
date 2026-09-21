@@ -98,10 +98,12 @@ jobs:
               echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
           fi
 
-      # The trees come out of Bazel; the script prunes the bindings this
-      # platform cannot use and proves the one it keeps loads. The
-      # archive holds the tree's contents at its top (`node/`, `qmd/`,
-      # `latchkey/`), which is how the resolver unpacks it into
+      # The step is a script so //tools:stage_runtime_test runs the same
+      # lines before a tag does (docs/dev/release_steps.md). The trees
+      # come out of Bazel; the script prunes the bindings this platform
+      # cannot use, proves the one it keeps loads, and tars the tree
+      # with its contents at the top (`node/`, `qmd/`, `latchkey/`),
+      # which is how the resolver unpacks it into
       # `~/.cache/datalib/runtime/<sha12>/`.
       - name: Stage the runtime
         id: stage
@@ -110,39 +112,7 @@ jobs:
           CUDA: ${{ matrix.cuda }}
         run: |
           set -euo pipefail
-          checksum() {
-              if command -v sha256sum >/dev/null; then
-                  sha256sum "$1" > "$1.sha256"
-              else
-                  shasum -a 256 "$1" > "$1.sha256"
-              fi
-          }
-          # Two branches rather than an optional-args array: the mac
-          # runner's bash 3.2 treats an empty array as unbound under -u.
-          if [[ "${CUDA}" == "true" ]]; then
-              scripts/stage_runtime.sh runtime --cuda runtime-cuda
-          else
-              scripts/stage_runtime.sh runtime
-          fi
-          # Smoke the staged tree on the runner (same triple as the
-          # asset): the Node runs, and qmd loads from it. latchkey is
-          # left out — its `--version` initializes a keyring, which a
-          # bare runner has none of.
-          runtime/node/bin/node --version
-          runtime/node/bin/node runtime/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version
-
-          tarball="runtime-${TRIPLE}.tar.gz"
-          tar -czf "${tarball}" -C runtime .
-          checksum "${tarball}"
-          ls -la "${tarball}"
-          files="${tarball} ${tarball}.sha256"
-          if [[ "${CUDA}" == "true" ]]; then
-              cuda_tarball="runtime-${TRIPLE}-cuda.tar.gz"
-              tar -czf "${cuda_tarball}" -C runtime-cuda .
-              checksum "${cuda_tarball}"
-              ls -la "${cuda_tarball}"
-              files="${files} ${cuda_tarball} ${cuda_tarball}.sha256"
-          fi
+          files="$(scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}" | tr '\n' ' ')"
           echo "files=${files}" >> "$GITHUB_OUTPUT"
 
       # Plain `gh`, create-if-missing, retry once: see the build job's
@@ -364,8 +334,10 @@ jobs:
       # an unstamped build produces. The post-build version assertion
       # below catches any future regression where stamping gets
       # silently disabled.
+      # `:bin` is `:dist` under the public names, the one list of what
+      # ships; the stage step below copies it whole.
       - name: Build dist bins
-        run: bazel build //datalib/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
+        run: bazel build //datalib/backend:bin -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
 
       # musl legs only: refuse to publish anything that isn't fully
       # static. A regression here (say, a new crate sneaking in a
@@ -431,6 +403,12 @@ jobs:
       # PRs / main; this workflow only re-checks `version_consistency_test`
       # + the dist build to keep tag-time wall clock low.
 
+      # The step is a script so //tools:stage_tarball_test runs the same
+      # lines before a tag does (docs/dev/release_steps.md): the binaries
+      # `:bin` laid out above, the `latchkey` launcher, the commit, the
+      # manifest of the runtime asset the `runtime` job published (read
+      # back through `gh`, with its sha256 and size), and the third-party
+      # notices — then the tarball and its sha256.
       - name: Stage tarball
         id: stage
         env:
@@ -439,99 +417,7 @@ jobs:
           TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
-          version="${REF_NAME#v}"
-
-          # sha256 helper: Linux runners have `sha256sum`; macOS has
-          # `shasum`. Use whichever is available so the same step works
-          # on both.
-          checksum() {
-              if command -v sha256sum >/dev/null; then
-                  sha256sum "$1" > "$1.sha256"
-              else
-                  shasum -a 256 "$1" > "$1.sha256"
-              fi
-          }
-
-          stage="datalib-${version}-${TRIPLE}"
-          mkdir -p "${stage}"
-
-          # Map bazel output paths -> public installed names. Add a line
-          # here when you add a binary to //datalib/backend:dist.
-          # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
-          # datalib-http resolves them via sibling lookup (see
-          # http/src/worker.rs resolve_bin) — and the two curl shims keep
-          # theirs: datalib-step looks for `latchkey-curl-router` next to
-          # itself (datalib/backend/etl/src/latchkey.rs) and the router
-          # looks for `curl-impersonate` next to itself.
-          cp bazel-bin/datalib/backend/dag/datalib_dag_bin "${stage}/datalib-dag"
-          cp bazel-bin/datalib/backend/datalib_step/datalib_step "${stage}/datalib-step"
-          cp bazel-bin/datalib/backend/http/datalib_http_bin "${stage}/datalib-http"
-          cp bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin "${stage}/datalib-migrate-config"
-          cp bazel-bin/datalib/backend/applets/datalib_applet "${stage}/datalib-applet"
-          # Not under datalib/backend/ — the doltlite shell is
-          # third-party C. `//datalib/backend:bin` reaches it via a
-          # second `root_paths` entry; here the path is just spelled
-          # out. //tools:dist_names_test compares the two.
-          cp bazel-bin/third-party/doltlite/doltlite "${stage}/datalib-doltlite"
-          cp bazel-bin/datalib/backend/etl/providers/fsindex/fsindex "${stage}/datalib-fsindex"
-          cp bazel-bin/datalib/backend/dirtree_diff/dirtree_diff "${stage}/datalib-dirtree-diff"
-          cp bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router "${stage}/latchkey-curl-router"
-          cp bazel-bin/third-party/latchkey-curl-shims/curl-impersonate "${stage}/curl-impersonate"
-          chmod +x "${stage}"/*
-
-          # The `latchkey` launcher: runs the bundled latchkey with
-          # the router curl beside it, from `runtime/` when one
-          # is staged beside it (the docker image) and else from
-          # the fetched tree in the user's cache.
-          install -m 0755 scripts/latchkey-wrapper.sh "${stage}/latchkey"
-
-          # The commit beside the binaries, for `datalib_runs::git_hash`:
-          # what a log line's file and line number are relative to.
-          # A file, not a build stamp, so no rustc action depends on
-          # the workspace status (test.yml § stamping).
-          git rev-parse HEAD > "${stage}/git-hash"
-
-          # `runtime.manifest`: which runtime asset of THIS release
-          # the binaries fetch on first use, with its sha256 and
-          # size read back from what the `runtime` job published.
-          # The musl legs name their gnu sibling's asset: the Node
-          # in it is a glibc build (nodejs.org ships no musl one),
-          # and a musl datalib on a glibc host — the common case —
-          # runs it fine; a musl host is refused by the resolver
-          # with the reason named. The format is
-          # datalib/backend/runtime/src/runtime_manifest.rs's.
-          runtime_triple="${TRIPLE/-musl/-gnu}"
-          manifest="${stage}/runtime.manifest"
-          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${REF_NAME}"
-          manifest_line() { # kind, asset name
-              local kind="$1" name="$2" sha bytes
-              gh release download "${REF_NAME}" --pattern "${name}.sha256" --clobber --dir manifest-src
-              sha="$(cut -d' ' -f1 "manifest-src/${name}.sha256")"
-              bytes="$(gh release view "${REF_NAME}" --json assets \
-                  --jq ".assets[] | select(.name == \"${name}\") | .size")"
-              [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 for ${name}: ${sha}" >&2; exit 1; }
-              [[ "${bytes}" =~ ^[0-9]+$ ]] || { echo "no size for ${name} on the release" >&2; exit 1; }
-              echo "${kind} ${name} ${sha} ${bytes} ${base_url}/${name}"
-          }
-          {
-              echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
-              manifest_line cpu "runtime-${runtime_triple}.tar.gz"
-              if [[ "${runtime_triple}" == "x86_64-unknown-linux-gnu" ]]; then
-                  manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
-              fi
-          } > "${manifest}"
-          cat "${manifest}"
-
-          # Third-party notices beside the binaries. Runs a
-          # default-config bazel build of its own, which repoints
-          # bazel-bin; every copy out of bazel-bin above is already
-          # done.
-          scripts/third_party_notices.sh "${stage}/licenses"
-
-          tarball="datalib-${TRIPLE}.tar.gz"
-          tar -czf "${tarball}" "${stage}"
-          checksum "${tarball}"
-
+          tarball="$(scripts/release/stage_tarball.sh "${REF_NAME}" "${TRIPLE}")"
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
