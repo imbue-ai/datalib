@@ -3,9 +3,12 @@
 **Status: built in full (2026-09-14), kept as the record of what was
 decided.** Every slice in [Order of work](#order-of-work) landed
 (#419, #421, #425, #428, #431). Where this file says "today" it means
-`5f589a59`, the tree before any of it; the tables section is current
-and the rest is the argument. The open questions at the end are the
-loose ends, with what each costs.
+`5f589a59`, the tree before any of it. **The reference is
+[`docs/dev/logging.md`](../../logging.md)**; the tables here have moved
+on since (`processes` arrived with #616, the request and page logs
+with #623 and #626), and this file is the argument, not the shape.
+The open questions at the end are the loose ends, with what each
+costs.
 
 This supersedes §3 ("Pipeline state as a table") and §4 ("Run logs,
 beside the data") of [`data_centric_ui.md`](data_centric_ui.md). That

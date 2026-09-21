@@ -1,16 +1,8 @@
-//! What a person did at the screen, in the same log as everything else.
-//!
-//! A page of the app — one load in one browser tab — is a process in
-//! `system/runs.sqlite`, of kind `ui`, with an id the page mints for
-//! itself and keeps for its life. It cannot reach the store, so it
-//! posts batches here: a navigation, an error it caught, whatever the
-//! UI chose to report. Each becomes a `log` row under the page's
-//! process, with the page's own clock; the process row is asserted
-//! with every batch and closed when the page says it is going.
-//!
-//! The request log (`request_log.rs`) carries the same id on every
-//! request the page made, as `page`, which is how a line here is joined
-//! to what the server did about it.
+//! `POST /api/ui/events`: what a page of the app reports about itself,
+//! written as the lines of its own `ui` process (`docs/dev/logging.md`).
+//! The page cannot reach the store, so it posts batches here; the
+//! process row is asserted with every batch and closed when the page
+//! says it is going.
 
 use app_schema::runs::{LogLevel, LogRow, Process, ProcessRow};
 use axum::http::StatusCode;

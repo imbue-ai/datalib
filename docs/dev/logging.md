@@ -54,11 +54,17 @@ A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
 is not the same thing: the runner's line "step X failed" is authored by
 the runner and about step X.
 
-The commit comes from `datalib_runtime::build_id::git_hash`: the
+The commit belongs to the process, not the store, because lines from
+different builds sit in one file — the server restarts between
+versions. It comes from `datalib_runtime::build_id::git_hash`: the
 `DATALIB_GIT_HASH` environment variable (the dev launchers set it from
 the checkout), else a `git-hash` file beside the binaries (the release
-tarball and the .app carry one). Nothing is compiled in — a build stamp
-would rebuild everything downstream on every commit.
+tarball and the .app carry one); a binary that can say neither records
+nothing, and the line inspector shows `file:line` as text instead of a
+link. Nothing is compiled in — a build stamp would rebuild everything
+downstream on every commit. A step attempt running the built-in step
+program shares the runner's commit; a custom command has none; a page
+has the server's, since the bundle is embedded in the binary.
 
 ## Where a line comes from
 
