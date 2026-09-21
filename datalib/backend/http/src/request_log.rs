@@ -7,6 +7,10 @@
 //! handler that is the whole request; for the SSE stream and an applet
 //! proxy whose body streams, it is the open.
 //!
+//! A request from a page of the app carries the page's process id
+//! (`ui_events::PAGE_HEADER`), logged as `page`: the join between what
+//! the page reported doing and what the server did for it.
+//!
 //! Two kinds of request write nothing. A read of the log itself: the
 //! log panel refetches whenever the log moves, so a line per read would
 //! wake it into a loop against its own store. And the bundle's
@@ -29,6 +33,11 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().and_then(crate::auth::query_without_token);
+    let page = req
+        .headers()
+        .get(crate::ui_events::PAGE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     let started = Instant::now();
     let resp = next.run(req).await;
     let status = resp.status();
@@ -46,12 +55,14 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         tracing::warn!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
+            page = page.as_deref(),
             "{method} {path} {code} {ms}ms"
         );
     } else {
         tracing::info!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
+            page = page.as_deref(),
             "{method} {path} {code} {ms}ms"
         );
     }

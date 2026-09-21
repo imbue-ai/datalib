@@ -1,5 +1,6 @@
 // One row per process that took part: a run of the runner, each
-// attempt of each of its steps, or a launch of the app's server. What
+// attempt of each of its steps, a launch of the app's server, or a
+// page of the app open in a browser tab (the server records it). What
 // a line's file and line number are relative to lives here, once,
 // rather than on every line — and so does how a process ended.
 
@@ -9,15 +10,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "processes", primary_key = "process_id")]
 pub struct ProcessRow {
-    /// A UUID: minted by the process itself when it opens the store, or
-    /// by the runner for a step it spawns.
+    /// A UUID: minted by the process itself when it opens the store, by
+    /// the runner for a step it spawns, or by a page for itself.
     #[col(sql = "VARCHAR(64)")]
     pub process_id: String,
     /// A [`super::Process`] word: which program this was.
     #[col(sql = "VARCHAR(16)")]
     pub process: String,
     /// The run this process belonged to — the runner's own, or the one
-    /// its step ran in. `None` for the server: it runs between runs.
+    /// its step ran in. `None` for the server and a page: they run
+    /// between runs.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: Option<String>,
     /// For a step's process: which step, and which attempt of it.

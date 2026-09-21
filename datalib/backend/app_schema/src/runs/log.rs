@@ -40,8 +40,10 @@ impl LogLevel {
 }
 
 /// Which datalib program a process was: the runner (its own lines), a
-/// step it spawned (what came out of the step's pipes), or the app's
-/// server (its own lines and what its applets said).
+/// step it spawned (what came out of the step's pipes), the app's
+/// server (its own lines and what its applets said), or one page of
+/// the app in a browser tab (what the person did there, reported
+/// through the server).
 #[derive(
     Debug,
     Clone,
@@ -60,6 +62,7 @@ pub enum Process {
     Dag,
     Step,
     Http,
+    Ui,
 }
 
 impl Process {

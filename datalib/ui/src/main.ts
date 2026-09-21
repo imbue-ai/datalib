@@ -4,6 +4,7 @@ import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
 import { installExternalLinkHandler } from "./externalLinks";
+import { installTelemetry } from "./telemetry";
 // The grid theme, for every grid that is not inside a card's shadow
 // root, and for the menus the grid appends to <body> from those that
 // are — a card imports it a second time, inline, for its own root.
@@ -40,4 +41,7 @@ void fetchHealth().catch(() => {});
 const app = createApp(App);
 app.use(createPinia());
 app.use(router);
+// Before mount, so the first route and anything the mount throws are
+// on the page's record.
+installTelemetry(router, app);
 app.mount("#app");
