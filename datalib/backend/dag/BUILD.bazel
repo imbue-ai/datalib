@@ -80,10 +80,32 @@ rust_binary(
         ":datalib_dag",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+# The runner refuses a root a newer datalib wrote, on --check and on a
+# run, before anything is written.
+rust_test(
+    name = "newer_root_test",
+    size = "small",
+    srcs = ["tests/newer_root.rs"],
+    data = [":datalib_dag_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+    },
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
 

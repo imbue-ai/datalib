@@ -542,6 +542,16 @@ async fn open_inner(
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
     let pool = connect_pool(db_path, Access::ReadWrite).await?;
+    // Before anything writes: a store a newer line of datalib wrote is
+    // refused whole, because the reconcile below would drop what it
+    // does not know (`datalib_store_meta::guard`).
+    let written_by = datalib_store_meta::read(&pool)
+        .await
+        .with_context(|| format!("read _datalib_meta of {}", db_path.display()))?;
+    if let Err(newer) = datalib_store_meta::refuse_if_newer(db_path, written_by.as_ref()) {
+        pool.close().await;
+        return Err(anyhow::Error::new(newer));
+    }
     // A store starts at its last commit. Whatever a crashed or interrupted
     // writer left in the working set was never at a seal boundary, and every
     // reader pins commits, so nobody was promised it.
@@ -3226,6 +3236,78 @@ mod tests {
         sqlx::query(T1).execute(&c).await.unwrap();
         assert_eq!(datalib_store_meta::read(&c).await.unwrap(), None);
         c.close().await;
+    }
+
+    /// A store a newer line of datalib wrote is refused before anything
+    /// touches it: the error names both versions, and the table keeps
+    /// its rows and its columns — the reconcile that would have dropped
+    /// them never ran. The same line's builds still open it.
+    #[tokio::test]
+    async fn a_store_a_newer_build_wrote_is_refused_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("newer.doltlite_db");
+        const WIDE: &str = "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)";
+        const NARROW: &str = "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)";
+
+        let a = open(&path, &[WIDE]).await.unwrap();
+        if !has_dolt_extensions(&a).await {
+            return;
+        }
+        sqlx::query("INSERT INTO t VALUES (1, 'kept')")
+            .execute(&a)
+            .await
+            .unwrap();
+        // What a newer release would have written.
+        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            .execute(&a)
+            .await
+            .unwrap();
+        commit_run(&a, "as if by 99.0.0").await.unwrap();
+        a.close().await;
+
+        // An older build, with a DDL that would have dropped `v`.
+        let err = match open(&path, &[NARROW]).await {
+            Ok(pool) => {
+                pool.close().await;
+                panic!("an older build opened a newer store");
+            }
+            Err(e) => e,
+        };
+        let newer = err
+            .downcast_ref::<datalib_store_meta::NewerBuild>()
+            .unwrap_or_else(|| panic!("a NewerBuild error, got {err:#}"));
+        assert_eq!(newer.wrote, "99.0.0");
+        assert_eq!(newer.running, datalib_runtime::build_id::DATALIB_VERSION);
+
+        // Untouched: the row and the column are still there.
+        let reader = open_reader(&path, None).await.unwrap().unwrap();
+        let v: String = sqlx::query_scalar("SELECT v FROM pinned_t WHERE id = 1")
+            .fetch_one(reader.pool())
+            .await
+            .unwrap();
+        assert_eq!(v, "kept");
+        reader.close().await;
+
+        // The same line again (a patch apart) is not a downgrade.
+        let patch = {
+            let mut parts: Vec<String> = datalib_runtime::build_id::DATALIB_VERSION
+                .split('.')
+                .map(String::from)
+                .collect();
+            let last = parts.last_mut().unwrap();
+            *last = (last.parse::<u64>().unwrap() + 1).to_string();
+            parts.join(".")
+        };
+        let c = connect_pool(&path, Access::ReadWrite).await.unwrap();
+        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+            .bind(&patch)
+            .execute(&c)
+            .await
+            .unwrap();
+        commit_run(&c, "as if by the next patch").await.unwrap();
+        c.close().await;
+        let d = open(&path, &[WIDE]).await.expect("a patch apart opens");
+        d.close().await;
     }
 
     /// A schema commit carries schema and nothing else. `open` commits its

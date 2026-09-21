@@ -74,6 +74,11 @@ pub struct AppState {
     /// here so `GET /api/pipeline/storage` reads a snapshot rather than
     /// walking the disk per open tab. See [`crate::usage`].
     pub usage: Arc<usage::UsageMonitor>,
+    /// The stores under the root a newer line of datalib wrote, found at
+    /// boot. Non-empty means this server runs only to say so: no app
+    /// store is open, no worker runs, and `app_ready` is false
+    /// (`datalib_store_meta::guard`).
+    pub newer_root: Vec<datalib_store_meta::NewerBuild>,
 }
 
 impl AppState {
@@ -730,12 +735,18 @@ pub struct ConfigResponse {
     /// renders — inline in the editor by `span`, and per-row in the
     /// pipeline table by the entry's `id`.
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
-    /// Whether the app can serve its own views at all. False in two cases,
-    /// which the UI shows one screen for because they have one consequence:
-    /// the file is not a config, or it declares no usable `unified_index`
-    /// applet. That applet serves the grid, search and the document view, so
-    /// without it every view is a 502.
+    /// Whether the app can serve its own views at all. False in three
+    /// cases: the file is not a config, or it declares no usable
+    /// `unified_index` applet — one screen for both, because they have
+    /// one consequence: that applet serves the grid, search and the
+    /// document view, so without it every view is a 502 — or the root
+    /// was written by a newer datalib (`newer_root` says which stores),
+    /// which gets a screen of its own because there is nothing to edit.
     pub app_ready: bool,
+    /// Set when this build must not touch the root: the stores a newer
+    /// line of datalib wrote, and both versions. The UI shows these
+    /// instead of the app.
+    pub newer_root: Option<NewerRoot>,
     /// Number of data sources the user has configured (0 when the
     /// config is missing or invalid). See [`configured_source_count`]
     /// for why this is not simply the fringe's length.
@@ -747,6 +758,47 @@ pub struct ConfigResponse {
     pub latchkey_cli: String,
 }
 
+/// A root this build refuses, for the UI: what wrote it, what this is.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewerRoot {
+    pub running: String,
+    pub stores: Vec<NewerStore>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewerStore {
+    /// Root-relative where it can be, so the screen reads as a list of
+    /// sources rather than of absolute paths.
+    pub store: String,
+    pub wrote: String,
+}
+
+impl NewerRoot {
+    pub fn from_refusals(
+        root: &std::path::Path,
+        refused: &[datalib_store_meta::NewerBuild],
+    ) -> Option<Self> {
+        if refused.is_empty() {
+            return None;
+        }
+        Some(Self {
+            running: datalib_runtime::build_id::DATALIB_VERSION.to_string(),
+            stores: refused
+                .iter()
+                .map(|n| NewerStore {
+                    store: n
+                        .store
+                        .strip_prefix(root)
+                        .unwrap_or(&n.store)
+                        .display()
+                        .to_string(),
+                    wrote: n.wrote.clone(),
+                })
+                .collect(),
+        })
+    }
+}
+
 async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -754,6 +806,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     // to say; a *bad* one has diagnostics, which is the interesting
     // case and the one the UI acts on.
     let checked = load_dag_config(&path).ok();
+    let newer_root = NewerRoot::from_refusals(&s.root, &s.newer_root);
     let (parsed_ok, error, source_count, diagnostics, app_ready) = match &checked {
         Some(c) => (
             !c.is_fatal(),
@@ -763,7 +816,9 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
                 .map(|d| d.describe()),
             configured_source_count(&source_ids(c)),
             c.diagnostics.clone(),
-            !c.is_fatal() && c.cfg.applets.iter().any(|a| a.id == UNIFIED_INDEX_APPLET),
+            !c.is_fatal()
+                && c.cfg.applets.iter().any(|a| a.id == UNIFIED_INDEX_APPLET)
+                && newer_root.is_none(),
         ),
         None => (false, None, 0, Vec::new(), false),
     };
@@ -775,6 +830,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         error,
         diagnostics,
         app_ready,
+        newer_root,
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
     })
@@ -981,6 +1037,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         // hands the UI *proposed* text, not the state of the root.
         diagnostics: Vec::new(),
         app_ready: true,
+        newer_root: None,
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
     })

@@ -45,6 +45,7 @@ async fn post_feedback_inserts_row() {
         // tree reports as absent — the state a root nobody has walked
         // is in.
         usage: Default::default(),
+        newer_root: Vec::new(),
         // These endpoints must keep working in a data root that
         // declares no applets, which is every data root by default.
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(

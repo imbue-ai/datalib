@@ -133,6 +133,21 @@ async fn main() -> Result<()> {
             config_path.display()
         );
     }
+    // A root a newer line of datalib wrote is refused here, before the
+    // runner lock and before the scheduler state is read — an older
+    // build rewriting `dag_state.json` drops the fields it does not
+    // know, and every step's open would refuse anyway
+    // (`datalib_store_meta::guard`). `--check` reports it the same way.
+    let newer = datalib_store_meta::inspect_root(&data_root).await;
+    if !newer.is_empty() {
+        let lines: Vec<String> = newer.iter().map(ToString::to_string).collect();
+        bail!(
+            "{} was written by a newer datalib; this build ({}) will not touch it:\n{}",
+            data_root.display(),
+            datalib_runtime::build_id::DATALIB_VERSION,
+            lines.join("\n")
+        );
+    }
     if check_only {
         #[allow(clippy::disallowed_macros)]
         {

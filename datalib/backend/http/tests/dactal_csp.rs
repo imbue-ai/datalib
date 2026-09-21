@@ -35,6 +35,7 @@ async fn fetch_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, S
         // tree reports as absent — the state a root nobody has walked
         // is in.
         usage: Default::default(),
+        newer_root: Vec::new(),
         applets: Arc::new(datalib_http::applets::AppletRegistry::build(
             Vec::new(),
             (*root).clone(),

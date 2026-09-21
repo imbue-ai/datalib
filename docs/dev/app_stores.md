@@ -21,7 +21,10 @@ git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
 and committed with the schema (`datalib_store_meta`;
 `docs/dev/plans/schema_migrations.md` §3.1). A reader that wants to
-know what it is looking at reads that before its first query.
+know what it is looking at reads that before its first query — and
+every owner does, refusing a store a newer `major.minor` of datalib
+wrote (`datalib_store_meta::guard`; the app server then boots only to
+show the screen that says so, and `datalib-dag` refuses the root).
 
 One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
