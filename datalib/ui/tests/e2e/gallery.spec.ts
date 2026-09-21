@@ -50,6 +50,18 @@ test.describe("new-card gallery (non-dev mode)", () => {
     await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
   });
 
+  test("gallery's Logs entry becomes a log card over every run", async ({ page }) => {
+    await page.goto("/");
+    await page.locator(".miller-add").click();
+    await page.locator(".gv-row", { hasText: "Logs" }).first().click();
+    const col = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    await expect(col).toBeVisible({ timeout: 10_000 });
+    await expect(col.locator(".miller-col-title")).toHaveText("Log · everything");
+    expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
+      "logView()",
+    );
+  });
+
   test("gallery's Unified Search entry becomes a second grid", async ({ page }) => {
     await page.goto("/");
     await page.locator(".miller-add").click();

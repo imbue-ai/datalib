@@ -38,6 +38,12 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
     description: "Search and browse everything in your library.",
   },
   {
+    source: "logView()",
+    title: "Logs",
+    description:
+      "Every line the runner, the steps and the server wrote; pick a run or a process, narrow with the query bar.",
+  },
+  {
     source: "configView()",
     title: "config.toml",
     description: "The config file itself, edited directly.",
