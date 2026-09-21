@@ -267,7 +267,11 @@ a profile change; a bad read on their side. To the pipeline the first
 response was a success: the row was written, the commit recorded it,
 and no error, no `problems` row, no sidecar field marks it as suspect,
 because there is nothing to detect it on. A partial record is
-indistinguishable from a record that really looks like that.
+indistinguishable from a record that really looks like that. It is not
+a one-off, either: the bake three days earlier had claude.ai return a
+conversation with `files[].size_bytes` null on one fetch and populated
+on the fetches either side of it, and that one *was* accepted into the
+goldens as a "modified" row before anyone read it as a bad read.
 
 Incrementality then preserves the mistake. A [listing-diff
 provider](#cursor--resume-strategy) re-fetches a record only when its
