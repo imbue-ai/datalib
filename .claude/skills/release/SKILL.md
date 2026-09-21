@@ -215,21 +215,20 @@ agent has and the guide it reads can't drift apart.
    what conditions, how a source is spelled in the config, where the
    store lives, what needs a recent Minds app), so a change to any of
    that lands here even when nothing about the install moved.
-5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z`.
-   The repo is unprotected, but `thad-imbue` has no push access to it
-   (a direct push and a branch push both 403), so it lands through a
-   cross-fork PR from `thad-imbue/datalib-inspiration`:
+5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z`
+   and open the PR from a branch on the repo itself — `thad-imbue`
+   has push access there (`gh api repos/qi-imbue/datalib-inspiration
+   --jq .permissions` says so; the cross-fork detour of v0.28–v0.35.1
+   is over):
 
    ```sh
-   git remote add fork https://github.com/thad-imbue/datalib-inspiration.git
-   git checkout -b bump-datalib-vX.Y.Z && git push -u fork bump-datalib-vX.Y.Z
+   git checkout -b bump-datalib-vX.Y.Z && git push -u origin bump-datalib-vX.Y.Z
    gh pr create --repo qi-imbue/datalib-inspiration --base main \
-     --head thad-imbue:bump-datalib-vX.Y.Z
+     --head bump-datalib-vX.Y.Z
    ```
 
-   Someone with write access there has to merge it; check that the
-   previous bump's PR was actually merged before assuming the pin moved
-   (v0.28.0's #2, v0.31.1's #3 and v0.32.0's #4 were all still open
-   when v0.33.0's was opened — #4 against the v1 layout, so it could
-   no longer merge at all). Close a superseded one when you open its
-   successor.
+   Check that the previous bump's PR was actually merged before
+   assuming the pin moved (v0.28.0's #2, v0.31.1's #3 and v0.32.0's #4
+   were all still open when v0.33.0's was opened — #4 against the v1
+   layout, so it could no longer merge at all). Close a superseded one
+   when you open its successor.
