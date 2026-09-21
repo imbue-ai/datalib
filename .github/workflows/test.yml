@@ -361,6 +361,30 @@ jobs:
           path: e2e-report/playwright-report.zip
           retention-days: 7
 
+      # The suite's console log, green or red: Playwright's list of every
+      # test with its duration, and the specs' own `[e2e]` lines. This is
+      # the only record of what the suite spends its minutes on when it
+      # passes — bazel prints one wall-clock number for the whole target.
+      # When the test step says `(cached) PASSED` for the target, the
+      # suite did not run here and this log is the run's that did.
+      - name: Keep the e2e log
+        if: always()
+        run: |
+          set -euo pipefail
+          flags=(-c opt --config=release --config=ci --nostamp)
+          log="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.log"
+          if [[ -f "${log}" ]]; then
+            mkdir -p e2e-report && cp -L "${log}" e2e-report/test.log
+          else
+            echo "no e2e log at ${log} — the suite did not run"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && hashFiles('e2e-report/test.log') != ''
+        with:
+          name: e2e-test-log
+          path: e2e-report/test.log
+          retention-days: 14
+
       # Make the build downloadable: every shipped binary under its
       # public name (`//datalib/backend:bin` does the rename), in a
       # tarball laid out like the release's. Nearly free — the test

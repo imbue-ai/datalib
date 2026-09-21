@@ -26,9 +26,20 @@ bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip
 Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/`.
 
 On CI, a red `bazel test //...` job uploads that zip as the
-`e2e-playwright-report` artifact (kept a week); a green one uploads
-nothing, since every spec but the onboarding one records only on
-failure.
+`e2e-playwright-report` artifact (kept a week); a green one has no
+report to upload, since every spec but the onboarding one records only
+on failure. Green or red, the job uploads the suite's console log as
+the `e2e-test-log` artifact (two weeks): Playwright's list of every
+test with its duration, and the specs' `[e2e]` lines. That is where to
+look when the question is what the suite spends its minutes on, not
+what broke — bazel prints one number for the whole target. If the job's
+test step says `(cached) PASSED` for `//datalib/ui:e2e_test`, the suite
+did not run in that job and the log is from the run that did.
+
+```bash
+gh run download <run-id> -n e2e-test-log -D /tmp/e2e
+grep -E '^\s+(✓|✘)' /tmp/e2e/test.log | grep -oE '\[[a-z0-9-]+\] › [^›]+ › .*\([0-9.]+m?s\)$'
+```
 
 ## Opening it
 

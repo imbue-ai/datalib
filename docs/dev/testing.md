@@ -200,7 +200,12 @@ Three pieces make that possible, and each is small:
   ([`http.rs`](/datalib/backend/etl/src/http.rs)): a replayed request
   waits that long before it answers. Playback only; a fixture that
   answers instantly hides everything that depends on a download taking
-  time.
+  time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it
+  exists no replayed request is answered at all, and removing it lets
+  the download run on. That is what a spec uses when it has to *act* on
+  a download in flight (`manager2-control.spec.ts` adds and stops
+  sources beside one) — a hold is released when the spec is done, where
+  a delay is a window that a slow runner can miss.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.
