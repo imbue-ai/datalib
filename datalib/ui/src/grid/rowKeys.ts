@@ -6,7 +6,11 @@
 // past the view.
 import type { SlickDataView, SlickGrid } from "@slickgrid-universal/common";
 
-export function stampRowKeys(grid: SlickGrid, dataView: SlickDataView, keyOf: (item: unknown) => string) {
+export function stampRowKeys(
+  grid: SlickGrid,
+  dataView: SlickDataView,
+  keyOf: (item: unknown) => string,
+) {
   grid.onRendered.subscribe(() => {
     for (const node of grid.getCanvasNode().querySelectorAll<HTMLElement>(".slick-row[data-row]")) {
       const item = dataView.getItem(Number(node.dataset.row));

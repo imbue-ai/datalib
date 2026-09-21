@@ -101,5 +101,9 @@ export function activityChips(p: DagStepProgress): ActivityChip[] {
 
 /// The cell's sortable, filterable value: the chips as text.
 export function activityText(p: DagStepProgress | null): string {
-  return p ? activityChips(p).map((c) => c.text).join("  ") : "";
+  return p
+    ? activityChips(p)
+        .map((c) => c.text)
+        .join("  ")
+    : "";
 }

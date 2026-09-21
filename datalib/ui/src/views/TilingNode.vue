@@ -62,7 +62,7 @@ const tabLabel = (child: TileNode) =>
         rows="1"
         :value="node.source"
         spellcheck="false"
-        placeholder="card source — e.g. documentView(&quot;uuid&quot;), Enter to run"
+        placeholder='card source — e.g. documentView("uuid"), Enter to run'
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
@@ -72,10 +72,7 @@ const tabLabel = (child: TileNode) =>
     <!-- Empty slot: the host teleports this leaf's persistent card here
          (keyed by id), so it isn't remounted when the tree restructures
          around it. -->
-    <div
-      class="tiling-card"
-      :ref="(el) => api.setSlot(node.id, el as HTMLElement | null)"
-    />
+    <div class="tiling-card" :ref="(el) => api.setSlot(node.id, el as HTMLElement | null)" />
   </section>
 
   <!-- Container (any arrangement). One rendering for h / v / tab: the
@@ -85,11 +82,7 @@ const tabLabel = (child: TileNode) =>
        children are visible (v-show). Switching arrangement therefore
        never remounts a child card — it keeps its DOM, its state, and
        (crucially) doesn't re-run a grid card's selection restore. -->
-  <div
-    v-else
-    class="tiling-split"
-    :class="{ 'is-dragging': api.isDragging(node.id) }"
-  >
+  <div v-else class="tiling-split" :class="{ 'is-dragging': api.isDragging(node.id) }">
     <div class="tiling-cbar">
       <div
         v-if="!api.isRoot(node.id)"
@@ -135,16 +128,10 @@ const tabLabel = (child: TileNode) =>
         :aria-selected="i === (node.active ?? 0)"
         @click="api.setActive(asSplit(node), i)"
       >
-        <span
-          class="tiling-tab-label"
-          :class="{ 'tiling-tab-label--title': !devMode }"
-          >{{ tabLabel(child) }}</span
-        >
-        <button
-          class="tiling-tab-close"
-          title="close tab"
-          @click.stop="api.closeNode(child.id)"
-        >
+        <span class="tiling-tab-label" :class="{ 'tiling-tab-label--title': !devMode }">{{
+          tabLabel(child)
+        }}</span>
+        <button class="tiling-tab-close" title="close tab" @click.stop="api.closeNode(child.id)">
           ✕
         </button>
       </div>
@@ -384,7 +371,10 @@ const tabLabel = (child: TileNode) =>
   max-width: 16rem;
   padding: 0.25rem 0.5rem;
   cursor: pointer;
-  font: 12px/1.4 ui-monospace, Menlo, monospace;
+  font:
+    12px/1.4 ui-monospace,
+    Menlo,
+    monospace;
   border-right: 1px solid color-mix(in srgb, #888 50%, transparent);
   opacity: 0.65;
   white-space: nowrap;
@@ -484,7 +474,10 @@ const tabLabel = (child: TileNode) =>
 }
 .tiling-source {
   flex: 1 1 auto;
-  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  font:
+    12px/1.5 ui-monospace,
+    Menlo,
+    monospace;
   padding: 0.2rem 0.4rem;
   border: none;
   border-radius: 3px;

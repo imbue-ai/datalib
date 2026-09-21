@@ -72,34 +72,24 @@ async function figureJson(frame: import("@playwright/test").Frame) {
   return text!;
 }
 
-test("the yolink page's plot iframes resolve to backend asset URLs", async ({
-  page,
-  request,
-}) => {
+test("the yolink page's plot iframes resolve to backend asset URLs", async ({ page, request }) => {
   const resp = await request.get("/applet/unified_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   // Every time-series source renders a `Sensor Timeseries` page (the
   // fixture has yolink's and airvisual's), so the source id picks it.
-  const pageRow = rows.find(
-    (r) => r.kind === "Sensor Timeseries" && r.source_id === "yolink",
-  );
+  const pageRow = rows.find((r) => r.kind === "Sensor Timeseries" && r.source_id === "yolink");
   expect(pageRow, "the TNG fixture must contain the yolink page row").toBeTruthy();
   const mdUuid = pageRow!.markdown_uuid ?? pageRow!.uuid;
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 15_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
   await clickRowByUuid(page, pageRow!.uuid);
 
   // One iframe per physical quantity the fixture covers, each pointing
   // at the asset route rather than at the renderer's relative path.
   const plotIframe = (quantity: string) =>
-    page.locator(
-      `iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`,
-    );
+    page.locator(`iframe[src="/applet/unified_index/asset/${mdUuid}/plots/${quantity}.html"]`);
   for (const quantity of ["temperature", "humidity", "volume"]) {
     await expect(
       plotIframe(quantity),
@@ -138,9 +128,7 @@ test("the yolink page's plot iframes resolve to backend asset URLs", async ({
   const volume = await plotFrame(page, plotIframe("volume"), "volume");
   const volFigure: Figure = JSON.parse(await figureJson(volume));
   expect(volFigure.layout.yaxis2).toBeDefined();
-  const total = volFigure.data.find((t) =>
-    t.name.includes("meter total"),
-  )!;
+  const total = volFigure.data.find((t) => t.name.includes("meter total"))!;
   expect(total.yaxis).toBe("y2");
   // Gallons upstream, litres on the plot: the fixture's meter starts at
   // 8100 gal, which is ~30665 L. Unconverted it would still read ~8100.

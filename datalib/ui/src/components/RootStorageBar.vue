@@ -171,7 +171,10 @@ onBeforeUnmount(() => unsubscribe?.());
   color: var(--datalib-muted);
   background: var(--datalib-bg);
 }
-.root-bar-label { flex: 0 0 auto; font-weight: 600; }
+.root-bar-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
 /* The path yields first when the window narrows — the number and the
    plot are the point of the line. */
 .root-bar-path {
@@ -195,11 +198,15 @@ onBeforeUnmount(() => unsubscribe?.());
   gap: 6px;
   font-variant-numeric: tabular-nums;
 }
-.root-bar-size b { color: var(--datalib-fg); }
+.root-bar-size b {
+  color: var(--datalib-fg);
+}
 /* The change over the window, in the colour of the line that shows
    it. Not green: growth is not good news and shrinkage is not bad — the
    sign is the whole message. */
-.root-bar-delta { color: var(--datalib-accent); }
+.root-bar-delta {
+  color: var(--datalib-accent);
+}
 .root-bar-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);
@@ -210,14 +217,21 @@ onBeforeUnmount(() => unsubscribe?.());
   font-size: 12px;
   cursor: pointer;
 }
-.root-bar-btn:hover { background: var(--datalib-hover); }
+.root-bar-btn:hover {
+  background: var(--datalib-hover);
+}
 </style>
 
 <style>
 /* The sparkline is built as plain DOM, so its classes can't be scoped.
    `vector-effect: non-scaling-stroke` is load-bearing: the svg is
    stretched from its 260-unit box to the span's width. */
-.root-spark { display: block; overflow: visible; width: 100%; height: 100%; }
+.root-spark {
+  display: block;
+  overflow: visible;
+  width: 100%;
+  height: 100%;
+}
 .root-spark-line {
   fill: none;
   stroke: var(--datalib-accent);

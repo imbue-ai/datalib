@@ -122,7 +122,9 @@ async function copy(id: number, message: string) {
 }
 .datalib-toast-enter-active,
 .datalib-toast-leave-active {
-  transition: opacity 150ms ease, transform 150ms ease;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
 }
 .datalib-toast-enter-from,
 .datalib-toast-leave-to {

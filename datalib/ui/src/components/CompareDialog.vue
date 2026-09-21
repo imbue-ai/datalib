@@ -89,7 +89,10 @@ const ready = computed(
 
 /// How a commit reads in the pickers: when, and what the sync said.
 function label(c: HistoryCommit): string {
-  const when = c.date.replace("T", " ").replace(/\.\d+/, "").replace(/[+-]00:00$|Z$/, " UTC");
+  const when = c.date
+    .replace("T", " ")
+    .replace(/\.\d+/, "")
+    .replace(/[+-]00:00$|Z$/, " UTC");
   return `${when} — ${c.message} (${c.hash.slice(0, 8)})`;
 }
 
@@ -119,9 +122,9 @@ function submit() {
       </header>
       <div class="cmp-body">
         <p class="cmp-blurb">
-          A comparison is a source of its own: every record that was added, removed or
-          changed between two syncs, as documents with the changes marked and rows the grid
-          colours. It stays as it is until you compare again or remove it.
+          A comparison is a source of its own: every record that was added, removed or changed
+          between two syncs, as documents with the changes marked and rows the grid colours. It
+          stays as it is until you compare again or remove it.
         </p>
         <p v-if="loading" class="cmp-note">Reading the sync history…</p>
         <p v-else-if="error" class="cmp-error">{{ error }}</p>
@@ -142,7 +145,9 @@ function submit() {
           <label class="cmp-field">
             <span class="cmp-label">Name</span>
             <input v-model="name" class="cmp-input" type="text" />
-            <span class="cmp-hint">id: <code>{{ id }}</code></span>
+            <span class="cmp-hint"
+              >id: <code>{{ id }}</code></span
+            >
           </label>
           <label class="cmp-field">
             <span class="cmp-label">At most this many documents</span>
@@ -190,9 +195,18 @@ function submit() {
   gap: 12px;
   padding: 14px 18px;
 }
-.cmp-head { border-bottom: 1px solid var(--datalib-border); }
-.cmp-foot { border-top: 1px solid var(--datalib-border); justify-content: flex-end; }
-.cmp-head h2 { margin: 0; font-size: 17px; flex: 1; }
+.cmp-head {
+  border-bottom: 1px solid var(--datalib-border);
+}
+.cmp-foot {
+  border-top: 1px solid var(--datalib-border);
+  justify-content: flex-end;
+}
+.cmp-head h2 {
+  margin: 0;
+  font-size: 17px;
+  flex: 1;
+}
 .cmp-x {
   background: none;
   border: none;
@@ -201,12 +215,35 @@ function submit() {
   line-height: 1;
   cursor: pointer;
 }
-.cmp-body { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
-.cmp-blurb, .cmp-note { margin: 0; color: var(--datalib-muted); }
-.cmp-error { margin: 0; color: #ef4444; }
-.cmp-field { display: flex; flex-direction: column; gap: 4px; }
-.cmp-label { font-weight: 600; font-size: 13px; }
-.cmp-hint { color: var(--datalib-muted); font-size: 12px; }
+.cmp-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cmp-blurb,
+.cmp-note {
+  margin: 0;
+  color: var(--datalib-muted);
+}
+.cmp-error {
+  margin: 0;
+  color: #ef4444;
+}
+.cmp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cmp-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+.cmp-hint {
+  color: var(--datalib-muted);
+  font-size: 12px;
+}
 .cmp-input {
   width: 100%;
   padding: 8px 10px;
@@ -216,5 +253,7 @@ function submit() {
   color: var(--datalib-fg);
   font: inherit;
 }
-.cmp-num { width: 8em; }
+.cmp-num {
+  width: 8em;
+}
 </style>

@@ -25,9 +25,7 @@ async function pinFirstRowId(page: import("@playwright/test").Page) {
 }
 
 test.describe("URL reflects app state", () => {
-  test("selecting a row updates the URL and opens a document column", async ({
-    page,
-  }) => {
+  test("selecting a row updates the URL and opens a document column", async ({ page }) => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
 
@@ -37,19 +35,16 @@ test.describe("URL reflects app state", () => {
     await selectRowByUuid(page, rowId);
 
     const afterPath = await page.evaluate(() => location.pathname);
-    expect(
-      afterPath,
-      `expected path to change after row selection (was ${beforePath})`,
-    ).not.toBe(beforePath);
+    expect(afterPath, `expected path to change after row selection (was ${beforePath})`).not.toBe(
+      beforePath,
+    );
     // The row's document opened as a second column, and the column
     // stack (not just query params) carries it.
     expect(decodeURIComponent(afterPath)).toContain("documentView(");
     await expect(page.locator(".chat-preview")).toBeVisible();
   });
 
-  test("URL survives reload — selection and document column restored", async ({
-    page,
-  }) => {
+  test("URL survives reload — selection and document column restored", async ({ page }) => {
     await page.goto("/");
     const rowId = await pinFirstRowId(page);
     await selectRowByUuid(page, rowId);
@@ -80,9 +75,7 @@ test.describe("URL reflects app state", () => {
     });
   });
 
-  test("editing a column's source via the header re-runs the card", async ({
-    page,
-  }) => {
+  test("editing a column's source via the header re-runs the card", async ({ page }) => {
     // The editable source box only exists in dev mode; default chrome
     // shows titles.
     await page.addInitScript(() => localStorage.setItem("datalib-dev-mode", "1"));
@@ -100,8 +93,8 @@ test.describe("URL reflects app state", () => {
     await expect(page.locator(".chat-preview")).toBeVisible({
       timeout: 10_000,
     });
-    expect(
-      decodeURIComponent(await page.evaluate(() => location.pathname)),
-    ).toContain("documentView()");
+    expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
+      "documentView()",
+    );
   });
 });

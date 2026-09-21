@@ -7,10 +7,7 @@ import { contextMenuRowByUuid } from "./grid-helpers";
 // reaches `window`, so the browser's native menu never shows over the
 // grid's.
 
-test("right-click on a grid row suppresses the native browser menu", async ({
-  page,
-  request,
-}) => {
+test("right-click on a grid row suppresses the native browser menu", async ({ page, request }) => {
   const resp = await request.get("/applet/unified_index/search?q=&limit=50");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: unknown[] };

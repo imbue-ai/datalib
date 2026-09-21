@@ -118,9 +118,7 @@ function openCardsFrom(fromId: string, sources: string[]): string[] {
 function closeNode(id: string) {
   // A replacement tile keeps the tree non-empty when the last card
   // goes — a gallery card, same as addCard.
-  root.value = deleteNode(root.value, id, () =>
-    makeTile(freshId(), "galleryView()"),
-  );
+  root.value = deleteNode(root.value, id, () => makeTile(freshId(), "galleryView()"));
 }
 
 function setTileState(id: string, state: string) {
@@ -274,16 +272,12 @@ function resolveDrop(
   const addEl = el.closest("[data-tiling-add]");
   if (addEl) {
     const id = addEl.getAttribute("data-tiling-add")!;
-    return id !== draggedId && !subtreeContains(dragged, id)
-      ? { kind: "add", id }
-      : null;
+    return id !== draggedId && !subtreeContains(dragged, id) ? { kind: "add", id } : null;
   }
   const leafEl = el.closest("[data-tiling-leaf]");
   if (leafEl) {
     const id = leafEl.getAttribute("data-tiling-leaf")!;
-    return id !== draggedId && !subtreeContains(dragged, id)
-      ? { kind: "leaf", id }
-      : null;
+    return id !== draggedId && !subtreeContains(dragged, id) ? { kind: "leaf", id } : null;
   }
   return null;
 }
@@ -297,10 +291,7 @@ function startDrag(id: string, ev: PointerEvent) {
   draggingId.value = id;
   dropTarget.value = null;
   const onMove = (e: PointerEvent) => {
-    dropTarget.value = resolveDrop(
-      document.elementFromPoint(e.clientX, e.clientY),
-      id,
-    );
+    dropTarget.value = resolveDrop(document.elementFromPoint(e.clientX, e.clientY), id);
   };
   const onUp = () => {
     window.removeEventListener("pointermove", onMove, true);
@@ -355,11 +346,7 @@ provide(TILING_API, api);
         :to="slots.get(leaf.id)"
         :disabled="!slots.get(leaf.id)"
       >
-        <ShadowCard
-          class="tiling-mounted-card"
-          :source="leaf.source"
-          :ctx="ctxFor(leaf)"
-        />
+        <ShadowCard class="tiling-mounted-card" :source="leaf.source" :ctx="ctxFor(leaf)" />
       </Teleport>
     </div>
   </div>

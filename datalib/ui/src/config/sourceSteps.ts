@@ -110,7 +110,7 @@ function phaseOfFunction(fn: string | null): StepPhase {
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
   "unified_index/qmd_index": "Unified Index (QMD)",
-  "unified_index": "Unified Index (Applet)",
+  unified_index: "Unified Index (Applet)",
 };
 
 /// The label to show for an entry that declares no `name`. Falls back
@@ -162,9 +162,7 @@ function groupsOf({ ast, root }: ParsedConfig): ConfiguredGroup[] {
   if (!Array.isArray(root.groups)) return [];
   const groupRanges = ranges(ast, "groups");
   return root.groups.map((raw, i) => {
-    const g = raw as
-      | { id?: unknown; name?: unknown; type?: unknown; description?: unknown }
-      | null;
+    const g = raw as { id?: unknown; name?: unknown; type?: unknown; description?: unknown } | null;
     const [start, end] = groupRanges.get(i) ?? [0, 0];
     return {
       id: typeof g?.id === "string" ? g.id : "",
@@ -225,9 +223,7 @@ export function listSteps(text: string): ConfiguredStep[] {
       // Blank is the same as absent: the row falls back to the derived
       // label in both cases, so a whitespace name never blanks a row.
       const name =
-        typeof step?.name === "string" && step.name.trim() !== ""
-          ? step.name.trim()
-          : null;
+        typeof step?.name === "string" && step.name.trim() !== "" ? step.name.trim() : null;
       const [start, end] = stepRanges.get(i) ?? [0, 0];
       steps.push({
         id: id || `step ${i + 1}`,
@@ -567,9 +563,7 @@ function paramsToml(entry: CatalogEntry, values: FieldValues, phase: FieldPhase)
   // hand-edit shouldn't make them work that out.
   return [...tables.entries()]
     .sort(([a], [b]) => a.split(".").length - b.split(".").length || a.localeCompare(b))
-    .map(([table, lines]) =>
-      `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`,
-    )
+    .map(([table, lines]) => `[steps.params${table ? `.${table}` : ""}]\n${lines.join("\n")}`)
     .join("\n\n");
 }
 
@@ -586,10 +580,10 @@ function isSet(field: Field, value: unknown): boolean {
   }
   if (field.kind === "int") return value !== "" && Number.isFinite(Number(value));
   if (field.kind === "bytes") return parseByteSize(bytesText(value)) !== null;
-    // A select normally holds one of its options, so it is always written. The
-    // membership test is deliberately *not* here: a hand-edited config can hold
-    // a value the dropdown doesn't know, and dropping it on save would silently
-    // rewrite someone's config.
+  // A select normally holds one of its options, so it is always written. The
+  // membership test is deliberately *not* here: a hand-edited config can hold
+  // a value the dropdown doesn't know, and dropping it on save would silently
+  // rewrite someone's config.
   if (field.kind === "select") return String(value).trim() !== "";
   // A boolean is always meaningful — false is a real setting, and for
   // `media` (which defaults true) omitting it would change behavior.
@@ -629,8 +623,9 @@ function quote(s: string): string {
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t")
     // Everything else TOML calls a control char, as \uXXXX.
-    .replace(/[\u0000-\u001f\u007f]/g, (c) =>
-      `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    .replace(
+      /[\u0000-\u001f\u007f]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
     );
   return `"${escaped}"`;
 }
@@ -712,9 +707,7 @@ export function stepToml(opts: {
   params?: string;
 }): string {
   const inputs = opts.inputs ?? [];
-  const inputsLine = inputs.length
-    ? `\ninputs = [${inputs.map(quote).join(", ")}]`
-    : "";
+  const inputsLine = inputs.length ? `\ninputs = [${inputs.map(quote).join(", ")}]` : "";
   const params = opts.params ?? "";
   const block = `[[steps]]
 group = ${quote(opts.group)}
@@ -850,18 +843,15 @@ const FAN_IN_INPUTS =
   /((?:group\s*=\s*"unified_index"|id\s*=\s*"unified_index\/[^"]*")[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g;
 
 export function wireIntoFanIns(text: string, renderStepId: string): string {
-  return text.replace(
-    FAN_IN_INPUTS,
-    (whole, head: string, body: string, tail: string) => {
-      const ids = body
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      if (ids.includes(`"${renderStepId}"`)) return whole;
-      ids.push(`"${renderStepId}"`);
-      return `${head}${ids.join(", ")}${tail}`;
-    },
-  );
+  return text.replace(FAN_IN_INPUTS, (whole, head: string, body: string, tail: string) => {
+    const ids = body
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (ids.includes(`"${renderStepId}"`)) return whole;
+    ids.push(`"${renderStepId}"`);
+    return `${head}${ids.join(", ")}${tail}`;
+  });
 }
 
 /// Drop a render step from every fan-in's inputs. The mirror of
@@ -869,17 +859,14 @@ export function wireIntoFanIns(text: string, renderStepId: string): string {
 /// a config the runner refuses outright, so deleting a source has to
 /// take its edges with it.
 export function unwireFromFanIns(text: string, renderStepId: string): string {
-  return text.replace(
-    FAN_IN_INPUTS,
-    (_whole, head: string, body: string, tail: string) => {
-      const ids = body
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean)
-        .filter((t) => t !== `"${renderStepId}"`);
-      return `${head}${ids.join(", ")}${tail}`;
-    },
-  );
+  return text.replace(FAN_IN_INPUTS, (_whole, head: string, body: string, tail: string) => {
+    const ids = body
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .filter((t) => t !== `"${renderStepId}"`);
+    return `${head}${ids.join(", ")}${tail}`;
+  });
 }
 
 /// Append entries to the config text. Always at the end: the DAG
@@ -892,10 +879,7 @@ export function appendSource(text: string, body: string): string {
 }
 
 /// Remove entries — steps, applets or groups — from the config text.
-export function removeSteps(
-  text: string,
-  steps: Pick<ConfiguredStep, "start" | "end">[],
-): string {
+export function removeSteps(text: string, steps: Pick<ConfiguredStep, "start" | "end">[]): string {
   const cuts = steps
     .filter((s) => s.end > 0)
     .map((s) => [extendOverComments(text, s.start), s.end] as const)
@@ -962,7 +946,6 @@ export function suggestId(taken: Set<string>, base: string, fallback: string): s
   }
   return stem;
 }
-
 
 /// Why the table is empty, when it shouldn't be.
 ///

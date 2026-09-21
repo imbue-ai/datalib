@@ -16,9 +16,7 @@ let unsubscribe: (() => void) | null = null;
 
 const count = computed(() => active.value.size);
 const tooltip = computed(() =>
-  [...active.value.values()]
-    .map((j) => `${j.source_ids || "all"} (${j.kind})`)
-    .join(", "),
+  [...active.value.values()].map((j) => `${j.source_ids || "all"} (${j.kind})`).join(", "),
 );
 
 // Seed from the API (covers jobs already running when this mounts), and
@@ -72,12 +70,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <button
-    v-if="count > 0"
-    class="sync-indicator"
-    :title="tooltip"
-    @click="goSources"
-  >
+  <button v-if="count > 0" class="sync-indicator" :title="tooltip" @click="goSources">
     <span class="dot" />
     syncing{{ count > 1 ? ` (${count})` : "" }}
   </button>

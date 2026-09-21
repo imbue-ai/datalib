@@ -2,10 +2,7 @@
 // components. Both live in pure functions, so they can be pinned
 // without loading the UI.
 import { describe, expect, it } from "vitest";
-import {
-  gallerySource,
-  referencedNamespaces,
-} from "../src/cards/frontendRegistry";
+import { gallerySource, referencedNamespaces } from "../src/cards/frontendRegistry";
 
 describe("component namespaces", () => {
   it("sees the namespace a card references", () => {

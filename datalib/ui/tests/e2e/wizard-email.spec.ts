@@ -10,9 +10,7 @@ const wizard = (page: Page) => page.getByRole("dialog");
 /// nothing here. `.first()` keeps it to the text box — the chips are
 /// buttons, not inputs, so nothing else matches anyway.
 const field = (page: Page, caption: string) =>
-  wizard(page)
-    .locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`)
-    .first();
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`).first();
 /// The probe-filled picker for one field: a grid, one row per thing
 /// the account has, `data-key` being the exact string the filter
 /// writes.
@@ -51,10 +49,31 @@ const GMAIL_PROBE = {
     message_estimate: 26328,
   },
   items: [
-    { path: "Inbox", kind: "mailbox", title: null, role: "inbox", messages: null, updated_at: null },
+    {
+      path: "Inbox",
+      kind: "mailbox",
+      title: null,
+      role: "inbox",
+      messages: null,
+      updated_at: null,
+    },
     { path: "Sent", kind: "mailbox", title: null, role: "sent", messages: null, updated_at: null },
-    { path: "Bridge/Logs", kind: "mailbox", title: null, role: null, messages: null, updated_at: null },
-    { path: "Important", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
+    {
+      path: "Bridge/Logs",
+      kind: "mailbox",
+      title: null,
+      role: null,
+      messages: null,
+      updated_at: null,
+    },
+    {
+      path: "Important",
+      kind: "keyword",
+      title: null,
+      role: null,
+      messages: null,
+      updated_at: null,
+    },
     { path: "Starred", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
     { path: "Unread", kind: "keyword", title: null, role: null, messages: null, updated_at: null },
   ],
@@ -85,7 +104,14 @@ const FASTMAIL_PROBE = {
     { path: "Inbox", kind: "mailbox", title: null, role: "inbox", messages: 18, updated_at: null },
     { path: "Sent", kind: "mailbox", title: null, role: "sent", messages: 5, updated_at: null },
     { path: "travel", kind: "mailbox", title: null, role: null, messages: 5, updated_at: null },
-    { path: "travel/portugal", kind: "mailbox", title: null, role: null, messages: 5, updated_at: null },
+    {
+      path: "travel/portugal",
+      kind: "mailbox",
+      title: null,
+      role: null,
+      messages: 5,
+      updated_at: null,
+    },
   ],
   notes: [],
 };
@@ -155,9 +181,7 @@ test("Gmail and Fastmail are separate tiles over one step type", async ({ page }
   ).toBeDisabled();
 });
 
-test("a probe fills the label picker, and ticking a row writes the filter", async ({
-  page,
-}) => {
+test("a probe fills the label picker, and ticking a row writes the filter", async ({ page }) => {
   await pickTile(page, "gmail", "Mirror a Gmail account through Google's API.");
 
   // The account list comes from latchkey, and the dropdown says which
@@ -251,7 +275,9 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
-  await expect(page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]')).toBeVisible();
+  await expect(
+    page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]'),
+  ).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
   await expect(page.locator(".m2-editor")).toHaveValue(/outlink_format = "gmail"/);
@@ -263,9 +289,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   );
 });
 
-test("Fastmail writes its JMAP host without asking, and shows folder counts", async ({
-  page,
-}) => {
+test("Fastmail writes its JMAP host without asking, and shows folder counts", async ({ page }) => {
   await pickTile(page, "fastmail", "Mirror a Fastmail mailbox over JMAP.");
   await wizard(page).locator("select.wiz-accountpick").selectOption("troi@betazed.example");
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
@@ -327,7 +351,9 @@ test("the account follows the login, not the box", async ({ page }) => {
   // and the dropdown reads `__other` because a just-created account is
   // not in the list this stub keeps returning.
   await expect(
-    wizard(page).locator('.wiz-field:has(> .wiz-label:text-is("Fastmail account")) input.wiz-input'),
+    wizard(page).locator(
+      '.wiz-field:has(> .wiz-label:text-is("Fastmail account")) input.wiz-input',
+    ),
   ).toHaveValue("crusher@enterprise.gov");
 
   // …and that is what the config gets, not the address that was picked.

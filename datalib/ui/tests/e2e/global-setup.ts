@@ -97,14 +97,9 @@ export default async function globalSetup(): Promise<void> {
   // with ENOENT. Only bites when cwd is the workspace — i.e. under
   // `bazel run`, which is how the snapshot-update workflow is invoked, so
   // `bazel test` never saw it.
-  assertOnlyKnownSpecsWriteTheConfig(
-    decodeURIComponent(new URL(".", import.meta.url).pathname),
-  );
+  assertOnlyKnownSpecsWriteTheConfig(decodeURIComponent(new URL(".", import.meta.url).pathname));
   const token = process.env.DATALIB_TOKEN ?? "";
-  await awaitHealthy(
-    JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[],
-    token,
-  );
+  await awaitHealthy(JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[], token);
   const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
     url: string;
   }[];

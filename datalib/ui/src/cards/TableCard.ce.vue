@@ -44,19 +44,26 @@ onBeforeUnmount(() => unsubscribe?.());
   <div class="table-card">
     <div v-if="error" class="table-card-error">{{ error }}</div>
     <div class="table-card-grid">
-      <TableGrid
-        :columns="columns"
-        :rows="rows"
-        :rowKey="rowKey"
-        :tree="tree"
-        :selectable="true"
-      />
+      <TableGrid :columns="columns" :rows="rows" :rowKey="rowKey" :tree="tree" :selectable="true" />
     </div>
   </div>
 </template>
 
 <style>
-.table-card { position: absolute; inset: 0; display: flex; flex-direction: column; }
-.table-card-error { padding: 8px 12px; color: var(--datalib-log-error); font-size: 13px; }
-.table-card-grid { position: relative; flex: 1 1 auto; min-height: 0; }
+.table-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.table-card-error {
+  padding: 8px 12px;
+  color: var(--datalib-log-error);
+  font-size: 13px;
+}
+.table-card-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 </style>

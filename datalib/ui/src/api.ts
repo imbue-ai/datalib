@@ -202,7 +202,6 @@ export type DocEntry = {
 // --- The unified_index applet --------------------------------------------
 export const UNIFIED_INDEX = "/applet/unified_index";
 
-
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
@@ -324,10 +323,7 @@ export async function fetchSearch(
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await getJson<SearchResponse>(
-    `${UNIFIED_INDEX}/search?${params.toString()}`,
-    signal,
-  );
+  const r = await getJson<SearchResponse>(`${UNIFIED_INDEX}/search?${params.toString()}`, signal);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
@@ -338,17 +334,11 @@ export async function fetchSearch(
   return r;
 }
 
-export function fetchChat(
-  markdownUuid: string,
-  signal?: AbortSignal,
-): Promise<ChatResponse> {
+export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
   // One UUID per rendered `.md` file — no disambiguation needed.
   // Provider-specific sharding (beeper's per-period files) is already
   // encoded in the markdown_uuid scheme.
-  return getJson<ChatResponse>(
-    `${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
-    signal,
-  );
+  return getJson<ChatResponse>(`${UNIFIED_INDEX}/chat/${encodeURIComponent(markdownUuid)}`, signal);
 }
 
 // --- Config / setup API ----------------------------------------------------
@@ -438,10 +428,7 @@ export type SaveConfigResponse = {
 // Ask what the server makes of some config text without saving it —
 // the editor's linter. Same verdict `saveConfig` would give, and the
 // same shape, minus the write.
-export async function checkConfig(
-  text: string,
-  signal?: AbortSignal,
-): Promise<SaveConfigResponse> {
+export async function checkConfig(text: string, signal?: AbortSignal): Promise<SaveConfigResponse> {
   const r = await fetch("/api/config/check", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -485,9 +472,7 @@ export async function initConfig(signal?: AbortSignal): Promise<InitConfigRespon
     } catch {
       // ignore
     }
-    throw new Error(
-      detail ? `${r.status}: ${detail}` : `POST /api/config/init → ${r.status}`,
-    );
+    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/config/init → ${r.status}`);
   }
   return (await r.json()) as InitConfigResponse;
 }
@@ -598,10 +583,7 @@ export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {
 // `<root>/config.toml`. The backend validates before persisting; a
 // validation failure comes back as `{ok:false, error}` (HTTP 200), not
 // a thrown error, so the caller can show it inline.
-export async function saveConfig(
-  text: string,
-  signal?: AbortSignal,
-): Promise<SaveConfigResponse> {
+export async function saveConfig(text: string, signal?: AbortSignal): Promise<SaveConfigResponse> {
   const r = await fetch("/api/config", {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -927,14 +909,8 @@ export type TreeHistory = {
   stores: StoreHistory[];
 };
 
-export function fetchTreeHistory(
-  tree: string,
-  signal?: AbortSignal,
-): Promise<TreeHistory> {
-  return getJson<TreeHistory>(
-    `/api/pipeline/history?tree=${encodeURIComponent(tree)}`,
-    signal,
-  );
+export function fetchTreeHistory(tree: string, signal?: AbortSignal): Promise<TreeHistory> {
+  return getJson<TreeHistory>(`/api/pipeline/history?tree=${encodeURIComponent(tree)}`, signal);
 }
 
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
@@ -1240,9 +1216,7 @@ export async function putLib(
   const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(
-      description === undefined ? { source } : { source, description },
-    ),
+    body: JSON.stringify(description === undefined ? { source } : { source, description }),
     signal,
   });
   if (!r.ok) throw new Error(`PUT /api/lib/${name} → ${r.status}`);
@@ -1443,10 +1417,7 @@ export function latchkeyConnectStatus(id: string): Promise<ConnectAttempt> {
 /// Ask a provider what these credentials can reach. `params` is the
 /// **download** params, even when the caller is configuring a render
 /// step: that is where the credentials and the download mode live.
-export function probeSource(
-  type: string,
-  params: Record<string, unknown>,
-): Promise<ProbeReport> {
+export function probeSource(type: string, params: Record<string, unknown>): Promise<ProbeReport> {
   return quietJson<ProbeReport>("/api/probe", {
     method: "POST",
     headers: { "content-type": "application/json" },

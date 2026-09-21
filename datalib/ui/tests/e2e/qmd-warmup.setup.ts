@@ -27,8 +27,7 @@ setup("warm the qmd daemon", async ({ request }) => {
   // different lifetimes and deserve different budgets.
   await expect
     .poll(async () => (await request.get(query, { timeout: 240_000 })).status(), {
-      message:
-        "the applet never answered (502 = still spawning; see the status it settled on)",
+      message: "the applet never answered (502 = still spawning; see the status it settled on)",
       timeout: 240_000,
       intervals: [1_000],
     })

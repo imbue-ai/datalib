@@ -195,9 +195,7 @@ describe("a source's two steps", () => {
     const all = listSteps(PAIR);
     const render = all.find((s) => s.id === "slack/render_markdown")!;
     expect(producerOf(render, all)?.id).toBe("slack/ingest");
-    const orphan = listSteps(
-      PAIR.replace('inputs = ["slack/ingest"]\n', ""),
-    );
+    const orphan = listSteps(PAIR.replace('inputs = ["slack/ingest"]\n', ""));
     const unlinked = orphan.find((s) => s.id === "slack/render_markdown")!;
     expect(unlinked.inputs).toEqual([]);
     expect(producerOf(unlinked, orphan)?.id).toBe("slack/ingest");
@@ -577,7 +575,11 @@ describe("removeSteps / replaceSteps", () => {
     expect(after).not.toContain('channels = ["general"]');
     expect(after).toContain('name = "Work Slack"');
     // Still exactly four steps, and the render step is as it was.
-    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+    expect(
+      listSteps(after)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
@@ -604,7 +606,11 @@ describe("removeSteps / replaceSteps", () => {
     expect(after).not.toContain('channels = ["general"]');
     // The group and the index steps are untouched.
     expect(after).toContain('name = "Work Slack"');
-    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+    expect(
+      listSteps(after)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
@@ -629,7 +635,11 @@ describe("removeSteps / replaceSteps", () => {
       withGroup: false,
     });
     const after = replaceSteps(fetchOnly, [ingest!], out.stepsBody);
-    expect(listSteps(after).map((s) => s.id).sort()).toEqual([
+    expect(
+      listSteps(after)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
       "unified_index/grid_index",
@@ -706,9 +716,9 @@ describe("renameGroup", () => {
     for (const groupId of ["slack", "unified_index"]) {
       expect(renameGroup(PAIR, groupId, name)).toContain(`name = "${name}"`);
     }
-    expect(listSteps(renameGroup(PAIR, "slack", name)).find((s) => s.id === "slack/ingest")!.name).toBe(
-      name,
-    );
+    expect(
+      listSteps(renameGroup(PAIR, "slack", name)).find((s) => s.id === "slack/ingest")!.name,
+    ).toBe(name);
   });
 });
 

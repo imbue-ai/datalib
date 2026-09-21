@@ -238,7 +238,6 @@ export function renderTimeseries(
   return wrap;
 }
 
-
 export const WIDTH: Record<ColumnType, number> = {
   text: 150,
   count: 90,

@@ -124,8 +124,7 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
   // Parses as TOML but fails the config loader: two steps claiming the
   // same tree is an ownership conflict the loader rejects.
   await editor.fill(
-    '[[steps]]\nid = "x/ingest"\ncommand = "c"\n\n' +
-      '[[steps]]\nid = "x/ingest"\ncommand = "d"\n',
+    '[[steps]]\nid = "x/ingest"\ncommand = "c"\n\n' + '[[steps]]\nid = "x/ingest"\ncommand = "d"\n',
   );
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();

@@ -31,23 +31,17 @@ async function loadedFrame(page: Page): Promise<Frame> {
   });
   await expect(frame.locator("#status")).toContainText(/results? for/);
   await expect(frame.locator("#queryoutput .err")).toHaveCount(0);
-  const f = page
-    .frames()
-    .find((f) => f.url().endsWith("/dactal/index.html"));
+  const f = page.frames().find((f) => f.url().endsWith("/dactal/index.html"));
   expect(f, "the DACTAL frame should be in the frame tree").toBeTruthy();
   return f!;
 }
 
-test("the sandboxed frame gets its rows from the host and nothing else", async ({
-  page,
-}) => {
+test("the sandboxed frame gets its rows from the host and nothing else", async ({ page }) => {
   const frame = await loadedFrame(page);
 
   // The frame element carries the sandbox, without `allow-same-origin`
   // — with it, the frame could reach up and remove its own sandbox.
-  const sandbox = await page
-    .locator('iframe[src="/dactal/index.html"]')
-    .getAttribute("sandbox");
+  const sandbox = await page.locator('iframe[src="/dactal/index.html"]').getAttribute("sandbox");
   expect(sandbox).toBe("allow-scripts");
 
   const inside = await frame.evaluate(async () => {
@@ -81,9 +75,7 @@ test("the page opened on its own does nothing", async ({ page }) => {
   const resp = await page.goto("/dactal/index.html?dq=rows%2Fsource");
   expect(resp?.status()).toBe(200);
   expect(resp?.headers()["content-security-policy"]).toMatch(/sandbox/);
-  await expect(page.locator("#status")).toContainText(
-    "runs inside a Datalib card",
-  );
+  await expect(page.locator("#status")).toContainText("runs inside a Datalib card");
   await expect(page.locator("#queryoutput table")).toHaveCount(0);
   expect(await page.evaluate(() => window.origin)).toBe("null");
 });
@@ -122,9 +114,7 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
     // Both remote-loading shapes in the vendored engine: a <script src>
     // injection, and a fetch()-then-new Function().
     const scriptTag = await blocked(() => w.loadscript("dactal_assist.js"));
-    const fetched = await blocked(() =>
-      w.loadscript_namespaced("anything.js", "ns"),
-    );
+    const fetched = await blocked(() => w.loadscript_namespaced("anything.js", "ns"));
     // …and `eval`, which must still work — it is load-bearing for the
     // query language, which is why 'unsafe-eval' stays in the policy.
     let evalWorks = false;
@@ -144,16 +134,9 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
   });
 
   expect(result.scriptTag, "loadscript() must not reach dactal.org").toBe(true);
-  expect(
-    result.fetched,
-    "loadscript_namespaced() must not fetch from dactal.org",
-  ).toBe(true);
-  expect(result.evalWorks, "'unsafe-eval' must stay — the engine needs it").toBe(
-    true,
-  );
+  expect(result.fetched, "loadscript_namespaced() must not fetch from dactal.org").toBe(true);
+  expect(result.evalWorks, "'unsafe-eval' must stay — the engine needs it").toBe(true);
   // The failures have to come from the policy, not from the network
   // happening to be down in CI.
-  expect(result.violations).toEqual(
-    expect.arrayContaining(["script-src-elem", "connect-src"]),
-  );
+  expect(result.violations).toEqual(expect.arrayContaining(["script-src-elem", "connect-src"]));
 });

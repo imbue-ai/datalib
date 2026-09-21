@@ -9,9 +9,7 @@ import { test, expect } from "@playwright/test";
 // itself with `documentView("<uuid>")` on pick.
 
 test.describe("new-card gallery (non-dev mode)", () => {
-  test("+ strip → gallery → Document → picker → document card", async ({
-    page,
-  }) => {
+  test("+ strip → gallery → Document → picker → document card", async ({ page }) => {
     await page.goto("/");
     // Non-dev: no source boxes, but the "+" creation strip is there.
     await expect(page.locator(".miller-col-source")).toHaveCount(0);

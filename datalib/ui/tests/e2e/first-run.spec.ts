@@ -8,14 +8,8 @@ declare const process: { env: Record<string, string | undefined> };
 
 const EMPTY_URL = process.env.DATALIB_TEST_E2E_EMPTY_URL;
 
-test("an empty folder gets an explained bootstrap, not a 502", async ({
-  page,
-  request,
-}) => {
-  expect(
-    EMPTY_URL,
-    "playwright.config.ts should have started the empty-root backend",
-  ).toBeTruthy();
+test("an empty folder gets an explained bootstrap, not a 502", async ({ page, request }) => {
+  expect(EMPTY_URL, "playwright.config.ts should have started the empty-root backend").toBeTruthy();
 
   // Precondition: the root really is uninitialized, and the applet the
   // grid needs really is missing — i.e. this run reproduces the
@@ -23,9 +17,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   // by an earlier run.
   const before = await request.get(`${EMPTY_URL}/api/config`);
   expect((await before.json()).exists).toBe(false);
-  const search = await request.get(
-    `${EMPTY_URL}/applet/unified_index/search?q=&limit=1`,
-  );
+  const search = await request.get(`${EMPTY_URL}/applet/unified_index/search?q=&limit=1`);
   expect(search.status()).toBe(502);
   expect(await search.text()).toContain("no applet");
 
@@ -74,7 +66,5 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({
   // initialized.
   await page.goto(`${EMPTY_URL}/sources`);
   await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Set up a data library" }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Set up a data library" })).toHaveCount(0);
 });

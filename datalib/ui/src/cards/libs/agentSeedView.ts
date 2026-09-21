@@ -57,8 +57,7 @@ export function agentSeedView(name: string): CardRender {
     step1.appendChild(copyBtn);
 
     const step2 = document.createElement("li");
-    step2.textContent =
-      "Paste it into a coding agent, followed by what the card should show.";
+    step2.textContent = "Paste it into a coding agent, followed by what the card should show.";
     const step3 = document.createElement("li");
     step3.textContent =
       "Keep this card open — it re-renders every time the agent saves the component.";

@@ -27,8 +27,7 @@ const workspaceDir = path.resolve(here, "..", "..");
 // the roots below land somewhere bounded. Bare `tmpdir()` is the
 // `pnpm exec playwright test` path, where nobody reclaims them at all:
 // bazel exports TEST_TMPDIR but never TMPDIR.
-const scratchParent =
-  process.env.DATALIB_TEST_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
+const scratchParent = process.env.DATALIB_TEST_E2E_RUN_DIR || process.env.TEST_TMPDIR || tmpdir();
 function mintRoot(prefix: string): string {
   return mkdtempSync(path.join(scratchParent, prefix));
 }
@@ -49,14 +48,14 @@ function ensureFixtureRoot(): string {
 }
 const fixtureRoot = ensureFixtureRoot();
 
-  // A second backend on an empty data root, for the first-run onboarding spec.
-  // It has to be its own server: the onboarding screen is gated on the root
-  // having no `config.toml`, and there is no way back to that state from a
-  // populated one.
-  //
-  // Fresh `mkdtemp` per config load, so the spec that initializes it still
-  // sees an uninitialized root next run. Cached in env because worker
-  // subprocesses re-import this file and must not mint a second directory.
+// A second backend on an empty data root, for the first-run onboarding spec.
+// It has to be its own server: the onboarding screen is gated on the root
+// having no `config.toml`, and there is no way back to that state from a
+// populated one.
+//
+// Fresh `mkdtemp` per config load, so the spec that initializes it still
+// sees an uninitialized root next run. Cached in env because worker
+// subprocesses re-import this file and must not mint a second directory.
 function emptyRoot(): string {
   const existing = process.env.DATALIB_TEST_E2E_EMPTY_ROOT;
   if (existing) return existing;
@@ -66,9 +65,9 @@ function emptyRoot(): string {
 }
 const EMPTY_ROOT = emptyRoot();
 
-  // A third backend on a third empty root: `first-run.spec.ts` already owns
-  // EMPTY_ROOT and initializes it, and onboarding is one-shot — a root with a
-  // config can never go back to having none.
+// A third backend on a third empty root: `first-run.spec.ts` already owns
+// EMPTY_ROOT and initializes it, and onboarding is one-shot — a root with a
+// config can never go back to having none.
 function onboardingRoot(): string {
   const existing = process.env.DATALIB_TEST_E2E_ONBOARDING_ROOT;
   if (existing) return existing;
@@ -79,8 +78,7 @@ function onboardingRoot(): string {
 const ONBOARDING_ROOT = onboardingRoot();
 
 const binDir =
-  process.env.DATALIB_TEST_E2E_BIN_DIR ||
-  path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
+  process.env.DATALIB_TEST_E2E_BIN_DIR || path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
 
 // The tree the onboarding spec points its PDF source at. Built here
 // rather than in the spec so the spec never has to touch the
@@ -218,11 +216,11 @@ function sandboxRoots(): Sandbox[] {
 }
 const SANDBOX_ROOTS = sandboxRoots();
 
-  // The backend requires its API token on every route, so pin one via
-  // DATALIB_TOKEN rather than reading back a random one. `use.extraHTTPHeaders`
-  // then authenticates the `request` fixture and every navigation the browser
-  // context issues, so the specs stay unaware that auth exists. Cached in env
-  // because each worker subprocess re-imports this file.
+// The backend requires its API token on every route, so pin one via
+// DATALIB_TOKEN rather than reading back a random one. `use.extraHTTPHeaders`
+// then authenticates the `request` fixture and every navigation the browser
+// context issues, so the specs stay unaware that auth exists. Cached in env
+// because each worker subprocess re-imports this file.
 function cachedToken(): string {
   const existing = process.env.DATALIB_TOKEN;
   if (existing) return existing;
@@ -236,10 +234,7 @@ const API_TOKEN = cachedToken();
 //   bazelisk build //datalib/backend/http:datalib_http_bin
 const backendBin =
   process.env.DATALIB_HTTP_BIN ||
-  path.join(
-    workspaceDir,
-    "bazel-bin/datalib/backend/http/datalib_http_bin",
-  );
+  path.join(workspaceDir, "bazel-bin/datalib/backend/http/datalib_http_bin");
 
 // ── the backends ─────────────────────────────────────────────────────
 // Every backend binds `127.0.0.1:0` and announces the port the kernel
@@ -279,11 +274,7 @@ function logTail(file: string, lines = 30): string {
   }
 }
 
-function spawnBackend(
-  name: string,
-  root: string,
-  env: Record<string, string> = {},
-): Pending {
+function spawnBackend(name: string, root: string, env: Record<string, string> = {}): Pending {
   const dir = path.join(scratchParent, "servers");
   mkdirSync(dir, { recursive: true });
   const urlFile = path.join(dir, `${name}.url`);
@@ -295,20 +286,16 @@ function spawnBackend(
   // — the kernel closes it, and the backend takes the EOF as its cue to
   // exit (`datalib_parent_watch`). Workers re-importing this config
   // attach through `FW_E2E_SERVERS` and hold no copy of the pipe.
-  const child = spawn(
-    backendBin,
-    [root, "--no-open", "--url-file", urlFile],
-    {
-      stdio: ["pipe", fd, fd],
-      env: {
-        ...process.env,
-        DATALIB_BIND: "127.0.0.1:0",
-        DATALIB_TOKEN: API_TOKEN,
-        DATALIB_PARENT_PIPE: "1",
-        ...env,
-      },
+  const child = spawn(backendBin, [root, "--no-open", "--url-file", urlFile], {
+    stdio: ["pipe", fd, fd],
+    env: {
+      ...process.env,
+      DATALIB_BIND: "127.0.0.1:0",
+      DATALIB_TOKEN: API_TOKEN,
+      DATALIB_PARENT_PIPE: "1",
+      ...env,
     },
-  );
+  });
   closeSync(fd);
   return { name, child, urlFile, log };
 }
@@ -365,10 +352,10 @@ function servers(): Server[] {
   const pending = [
     spawnBackend("fixture", fixtureRoot),
     spawnBackend("empty", EMPTY_ROOT),
-      // The one server whose PATH carries the dash-named binaries. The
-      // scaffold config names `datalib-dag`, its steps and the
-      // `unified_index` applet bare, so PATH is how all three are found —
-      // the installed-user arrangement, which the other two never exercise.
+    // The one server whose PATH carries the dash-named binaries. The
+    // scaffold config names `datalib-dag`, its steps and the
+    // `unified_index` applet bare, so PATH is how all three are found —
+    // the installed-user arrangement, which the other two never exercise.
     spawnBackend("onboarding", ONBOARDING_ROOT, {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       // Signal's download step reads its passphrase from the
@@ -438,16 +425,12 @@ export default defineConfig({
   // trace, with the trace viewer built in — open it and you can scrub
   // the run action by action, with a DOM snapshot before and after
   // each. See tests/e2e/README-artifacts.md for how to open one.
-  reporter: [
-    ["list"],
-    ["html", { outputFolder: REPORT_DIR, open: "never" }],
-  ],
-    // Drop Playwright's default `-{projectName}-{platform}` snapshot suffix:
-    // ours are text dumps of API payloads, identical on every OS. Screenshot
-    // snapshots would legitimately differ per platform — opt those back in per
-    // `toMatchSnapshot()` call.
-  snapshotPathTemplate:
-    "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
+  reporter: [["list"], ["html", { outputFolder: REPORT_DIR, open: "never" }]],
+  // Drop Playwright's default `-{projectName}-{platform}` snapshot suffix:
+  // ours are text dumps of API payloads, identical on every OS. Screenshot
+  // snapshots would legitimately differ per platform — opt those back in per
+  // `toMatchSnapshot()` call.
+  snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
     headless: true,
@@ -472,9 +455,7 @@ export default defineConfig({
       // Everything that does not rewrite the config, against the one
       // shared read-only fixture root. The rest get a project apiece
       // below, pointed at a root of their own.
-      testIgnore: CONFIG_MUTATING.map(
-        (spec) => new RegExp(`${spec}\\.spec\\.ts`),
-      ),
+      testIgnore: CONFIG_MUTATING.map((spec) => new RegExp(`${spec}\\.spec\\.ts`)),
     },
     // One project per config-mutating spec, doing one job: pointing
     // `baseURL` at that spec's own backend, so the spec itself can go
@@ -485,12 +466,12 @@ export default defineConfig({
       use: { browserName: "chromium" as const, baseURL: s.url },
     })),
     {
-        // The desktop app runs in a WKWebView, and WebKit's layout has twice
-        // shipped an invisible AG Grid: it resolves a child's percentage
-        // `height` against the parent's *specified* height, so `height: 100%`
-        // under a flex-sized parent computes to `auto` and the grid collapses.
-        // Rows stay in the DOM, so every count assertion passes while nothing
-        // is painted — see `expectGridPainted`.
+      // The desktop app runs in a WKWebView, and WebKit's layout has twice
+      // shipped an invisible AG Grid: it resolves a child's percentage
+      // `height` against the parent's *specified* height, so `height: 100%`
+      // under a flex-sized parent computes to `auto` and the grid collapses.
+      // Rows stay in the DOM, so every count assertion passes while nothing
+      // is painted — see `expectGridPainted`.
       name: "webkit",
       use: { browserName: "webkit" },
       dependencies: ["warmup"],

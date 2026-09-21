@@ -132,7 +132,9 @@ function treeCell<T extends Record<string, unknown>>(inner: Formatter<T>): Forma
     title.setAttribute("level", String(level));
     const drawn = inner(row, cell, value, col, item, grid);
     if (drawn instanceof HTMLElement || drawn instanceof DocumentFragment) title.appendChild(drawn);
-    else title.textContent = typeof drawn === "string" ? drawn : ((drawn as { text?: string }).text ?? "");
+    else
+      title.textContent =
+        typeof drawn === "string" ? drawn : ((drawn as { text?: string }).text ?? "");
     wrap.append(indent, toggle, title);
     return wrap;
   };
@@ -311,7 +313,11 @@ export function typedColumns<T extends Record<string, unknown>>(
           return {
             formatter: (_r, _c, value) => renderStatus(value as StatusView | null),
             sortComparer: (a, b, dir) =>
-              compareText((a as StatusView | null)?.label, (b as StatusView | null)?.label, dir ?? 1),
+              compareText(
+                (a as StatusView | null)?.label,
+                (b as StatusView | null)?.label,
+                dir ?? 1,
+              ),
           };
         case "chips":
           return {
@@ -341,7 +347,11 @@ export function typedColumns<T extends Record<string, unknown>>(
             formatter: (_r, _c, value) =>
               renderTimeseries(value as Timeseries | null, ceilingOf(f), windowSecs),
             sortComparer: (a, b, dir) =>
-              compareNumber((a as Timeseries | null)?.value, (b as Timeseries | null)?.value, dir ?? 1),
+              compareNumber(
+                (a as Timeseries | null)?.value,
+                (b as Timeseries | null)?.value,
+                dir ?? 1,
+              ),
           };
         case "bytes":
           return {
@@ -404,8 +414,11 @@ export function typedColumns<T extends Record<string, unknown>>(
     // A tree hangs off its column whatever the type; an identity
     // column already drew its chevron above.
     if (isTreeColumn && spec.type !== "identity") {
-      const inner = (opts.overrides?.[f]?.params as { innerFormatter?: Formatter<T> } | undefined)
-        ?.innerFormatter ?? merged.formatter ?? plain;
+      const inner =
+        (opts.overrides?.[f]?.params as { innerFormatter?: Formatter<T> } | undefined)
+          ?.innerFormatter ??
+        merged.formatter ??
+        plain;
       merged.formatter = treeCell(inner);
       merged.width = Math.max(merged.width ?? 0, 340);
       merged.minWidth = Math.min(merged.minWidth ?? 300, 300);

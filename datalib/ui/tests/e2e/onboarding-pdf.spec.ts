@@ -61,9 +61,7 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
 /// GridCard exposes.
 async function gridRows(
   page: Page,
-): Promise<
-  { sender: string; conversation_name: string; source: string; source_id: string }[]
-> {
+): Promise<{ sender: string; conversation_name: string; source: string; source_id: string }[]> {
   return await page.evaluate(
     () =>
       (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows() as {
@@ -278,9 +276,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // ── 15. and it is searchable ─────────────────────────────────────
     await openExplore(page);
     const second = await gridRows(page);
-    expect(second.length, "the new document should have added rows").toBeGreaterThan(
-      first.length,
-    );
+    expect(second.length, "the new document should have added rows").toBeGreaterThan(first.length);
     expect(
       second.map((r) => r.conversation_name),
       "the document added to the folder should be in the grid",
@@ -325,7 +321,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 2. two sources in the table ──────────────────────────────────
     await expandGroup(page, "signal");
-    for (const id of ["pdfs/ingest", "pdfs/render_markdown", "signal/ingest", "signal/render_markdown"]) {
+    for (const id of [
+      "pdfs/ingest",
+      "pdfs/render_markdown",
+      "signal/ingest",
+      "signal/render_markdown",
+    ]) {
       await expect(row(page, id), `${id} should be a row`).toHaveCount(1);
     }
 

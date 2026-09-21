@@ -77,7 +77,9 @@ export async function flush(closing = false): Promise<void> {
     });
     if (!r.ok && !warned) {
       warned = true;
-      console.warn(`telemetry: /api/ui/events → ${r.status}; this page's actions are not being logged`);
+      console.warn(
+        `telemetry: /api/ui/events → ${r.status}; this page's actions are not being logged`,
+      );
     }
   } catch (e) {
     if (!warned) {
@@ -89,7 +91,11 @@ export async function flush(closing = false): Promise<void> {
 
 /// What an uncaught error becomes: its message as the line, its stack
 /// and where it came from as fields.
-export function errorEvent(source: string, err: unknown, extra: Record<string, unknown> = {}): PageEvent {
+export function errorEvent(
+  source: string,
+  err: unknown,
+  extra: Record<string, unknown> = {},
+): PageEvent {
   const e = err instanceof Error ? err : null;
   const msg = e ? `${e.name}: ${e.message}` : String(err);
   const fields: Record<string, unknown> = { source, ...extra };
@@ -97,7 +103,11 @@ export function errorEvent(source: string, err: unknown, extra: Record<string, u
   return { at: nowIso(), name: "error", level: "error", msg, fields };
 }
 
-export function trackError(source: string, err: unknown, extra: Record<string, unknown> = {}): void {
+export function trackError(
+  source: string,
+  err: unknown,
+  extra: Record<string, unknown> = {},
+): void {
   const ev = errorEvent(source, err, extra);
   track(ev.name, ev.fields, { level: ev.level, msg: ev.msg });
 }
@@ -120,7 +130,9 @@ export function installTelemetry(router: Router, app: App): void {
   window.fetch = (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (isSameOrigin(url, origin)) {
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
       headers.set(PAGE_HEADER, page.process_id);
       init = { ...init, headers };
     }

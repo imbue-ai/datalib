@@ -54,15 +54,11 @@ test.afterEach(async ({ page }) => {
   await expect(gate(page)).toHaveCount(0);
 });
 
-test("a broken entry costs that entry, and nothing else", async ({
-  page,
-  request,
-}) => {
+test("a broken entry costs that entry, and nothing else", async ({ page, request }) => {
   // A step the loader must reject, appended to a config that is
   // otherwise entirely fine. `title` is the exact key from 00633dd5.
   writeConfig(
-    `${original}\n[[steps]]\nid = "broken/ingest"\n` +
-      `command = "fetch-pdf"\ntitle = "nope"\n`,
+    `${original}\n[[steps]]\nid = "broken/ingest"\n` + `command = "fetch-pdf"\ntitle = "nope"\n`,
   );
 
   // The server still reads a usable config: it is a config (`parsed_ok`),
@@ -134,9 +130,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   writeConfig("[[steps]]\nid = = \n");
 
   await expect(gate(page)).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "This config file can’t be read" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This config file can’t be read" })).toBeVisible();
   // The tabs go with it: none of them can do anything now.
   await expect(tabs(page)).toHaveCount(0);
   // And the screen names the problem and where it is, rather than
@@ -161,10 +155,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await expect(tabs(page)).toBeVisible();
 });
 
-test("a config with no unified_index applet blocks too", async ({
-  page,
-  request,
-}) => {
+test("a config with no unified_index applet blocks too", async ({ page, request }) => {
   await page.goto("/sources2");
   await expect(tabs(page)).toBeVisible();
 

@@ -5,7 +5,14 @@
 // it.
 
 import { test, expect } from "@playwright/test";
-import { expandGroup, expectGridPainted, groupRow, MENU_DISABLED, TABLE_ROWS, menuEntry } from "./grid-helpers";
+import {
+  expandGroup,
+  expectGridPainted,
+  groupRow,
+  MENU_DISABLED,
+  TABLE_ROWS,
+  menuEntry,
+} from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
 

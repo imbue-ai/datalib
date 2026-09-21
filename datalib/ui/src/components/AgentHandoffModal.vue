@@ -46,9 +46,7 @@ const KIND_TEXT: Record<
   },
 };
 
-const text = computed(() =>
-  pendingHandoff.value ? KIND_TEXT[pendingHandoff.value.kind] : null,
-);
+const text = computed(() => (pendingHandoff.value ? KIND_TEXT[pendingHandoff.value.kind] : null));
 
 // Reset per hand-off, and focus the copy button (it's step 1, and a
 // focused descendant is what lets the overlay's keydown catch Escape).

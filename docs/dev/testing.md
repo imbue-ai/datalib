@@ -7,8 +7,12 @@ test surface.
 
 "Build green" means `bazelisk test //...` passes — nothing less. It runs the
 Rust unit + integration tests, the cross-language goldens, the `//:lint`
-gate (ruff / pyright / vue-tsc, all sandboxed), and the Playwright e2e suite,
-the same way CI does. Bazel's action cache makes re-runs cheap, so for a
+gate (ruff / pyright / vue-tsc / prettier, all sandboxed), and the Playwright
+e2e suite, the same way CI does. Formatting is checked in every language,
+never fixed by the gate: `cargo fmt` for Rust (or read the aspect's diff),
+`uv run ruff format .` for Python, and `pnpm exec prettier --write .` from
+`datalib/ui` for TypeScript and Vue — `.prettierrc` sets 100 columns and
+`.prettierignore` keeps it to what `//datalib/ui:format_test` checks. Bazel's action cache makes re-runs cheap, so for a
 tight inner loop narrow the *bazel* invocation to what you're touching
 (e.g. `bazelisk test //datalib/backend/etl/...`). Bazel is the only
 supported build/test driver — don't shell out to `cargo` / `pnpm`, which

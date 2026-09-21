@@ -26,13 +26,7 @@ import { test, expect } from "@playwright/test";
 
 // Compact tuple per row — enough to identify which entry shifted
 // without dragging the full SearchRow shape into the snapshot.
-type RowTuple = [
-  uuid: string,
-  source: string,
-  kind: string,
-  channel: string,
-  author: string,
-];
+type RowTuple = [uuid: string, source: string, kind: string, channel: string, author: string];
 
 interface SearchRow {
   uuid: string;
@@ -53,9 +47,7 @@ test("grid fixture row set matches the golden", async ({ request }) => {
   const data = (await resp.json()) as { rows: SearchRow[] };
 
   const tuples: RowTuple[] = data.rows
-    .map(
-      (r): RowTuple => [r.uuid, r.source, r.kind, r.channel, r.author],
-    )
+    .map((r): RowTuple => [r.uuid, r.source, r.kind, r.channel, r.author])
     // Sort by UUID for a stable, locale-independent ordering — the
     // backend's default `score` sort is request-time-relevance and
     // would flap on every fixture tweak that perturbs scoring.

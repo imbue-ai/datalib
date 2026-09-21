@@ -14,13 +14,10 @@ import { test, expect } from "@playwright/test";
 const CHECK = "✅";
 const CROSS = "❌";
 
-test("the applet reports the fixture's documents indexed and embedded", async ({
-  request,
-}) => {
+test("the applet reports the fixture's documents indexed and embedded", async ({ request }) => {
   const search = await request.get("/applet/unified_index/search?q=&limit=200");
   expect(search.ok(), `search API: HTTP ${search.status()}`).toBeTruthy();
-  const rows = ((await search.json()) as { rows: { markdown_uuid: string | null }[] })
-    .rows;
+  const rows = ((await search.json()) as { rows: { markdown_uuid: string | null }[] }).rows;
   const uuids = [...new Set(rows.map((r) => r.markdown_uuid).filter(Boolean))];
   expect(uuids.length, "fixture rows must carry markdown_uuids").toBeGreaterThan(0);
 
@@ -36,31 +33,22 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
 
   expect(state.index_present, "the e2e fixture root ships a qmd index").toBe(true);
   expect(state.summary.documents).toBeGreaterThan(0);
-  expect(
-    state.summary.embedded,
-    "the fixture embeds everything it indexes",
-  ).toBe(state.summary.documents);
+  expect(state.summary.embedded, "the fixture embeds everything it indexes").toBe(
+    state.summary.documents,
+  );
 
   // Every uuid we asked about comes back — no silent omissions.
   expect(Object.keys(state.docs).sort()).toEqual([...uuids].sort());
 
   const notIndexed = Object.entries(state.docs).filter(([, v]) => v.indexed !== true);
-  expect(
-    notIndexed,
-    "every fixture document should hash-match a qmd `documents` row",
-  ).toEqual([]);
+  expect(notIndexed, "every fixture document should hash-match a qmd `documents` row").toEqual([]);
   const notEmbedded = Object.entries(state.docs).filter(([, v]) => v.embedded !== true);
   expect(notEmbedded, "every fixture document should be embedded").toEqual([]);
 });
 
-test("the columns are off by default and render check marks once shown", async ({
-  page,
-}) => {
+test("the columns are off by default and render check marks once shown", async ({ page }) => {
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Off by default. This is the assertion that fails if someone drops
   // `hidden` — an easy thing to lose in a column edit, and one
@@ -69,15 +57,13 @@ test("the columns are off by default and render check marks once shown", async (
     page.locator('.grid-box .slick-header-column[col-id="qmd_indexed"]'),
     "Indexed must be hidden until asked for",
   ).toHaveCount(0);
-  await expect(
-    page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]')).toHaveCount(
+    0,
+  );
 
   // …but the summary line is on screen regardless, which is how a user
   // discovers the columns exist at all.
-  await expect(page.locator(".qmd-summary")).toContainText(
-    "documents searchable",
-  );
+  await expect(page.locator(".qmd-summary")).toContainText("documents searchable");
 
   // Turn them on the way the column picker does.
   await page.evaluate(() =>
@@ -87,27 +73,19 @@ test("the columns are off by default and render check marks once shown", async (
     ]),
   );
 
-  await expect(
-    page.locator('.grid-box .slick-header-column[col-id="qmd_indexed"]'),
-  ).toBeVisible();
-  await expect(
-    page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]'),
-  ).toBeVisible();
+  await expect(page.locator('.grid-box .slick-header-column[col-id="qmd_indexed"]')).toBeVisible();
+  await expect(page.locator('.grid-box .slick-header-column[col-id="qmd_embedded"]')).toBeVisible();
 
   // Showing a column is what triggers the per-document request, so the
   // cells start as the unknown em dash and resolve a beat later. Wait
   // for the resolution rather than asserting on the first paint —
   // which also pins that un-hiding actually fetches, instead of leaving
   // the columns permanently blank.
-  const firstIndexed = page
-    .locator('.grid-box .slick-row [col-id="qmd_indexed"]')
-    .first();
+  const firstIndexed = page.locator('.grid-box .slick-row [col-id="qmd_indexed"]').first();
   await expect(firstIndexed).toHaveText(CHECK, { timeout: 15_000 });
 
   for (const colId of ["qmd_indexed", "qmd_embedded"]) {
-    const cells = page.locator(
-      `.grid-box .slick-row [col-id="${colId}"]`,
-    );
+    const cells = page.locator(`.grid-box .slick-row [col-id="${colId}"]`);
     const texts = await cells.allInnerTexts();
     expect(texts.length, `${colId} cells rendered`).toBeGreaterThan(0);
     expect(

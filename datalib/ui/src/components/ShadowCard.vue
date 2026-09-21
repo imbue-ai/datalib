@@ -131,12 +131,10 @@ async function runCard() {
       const intro = document.createElement("div");
       div.appendChild(intro);
       if (!dev) {
-        intro.textContent =
-          "empty card — turn on dev mode to type source, or close it";
+        intro.textContent = "empty card — turn on dev mode to type source, or close it";
         return;
       }
-      intro.textContent =
-        "empty card — type source above and press Enter, e.g.:";
+      intro.textContent = "empty card — type source above and press Enter, e.g.:";
       const examples = [
         "gridView()",
         'documentView("uuid")',
@@ -172,9 +170,7 @@ async function runCard() {
     const div = document.createElement("div");
     div.style.cssText =
       "color:#e35d6a;padding:8px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap";
-    div.textContent =
-      "card error: " +
-      ((e as Error).stack ?? (e as Error).message ?? String(e));
+    div.textContent = "card error: " + ((e as Error).stack ?? (e as Error).message ?? String(e));
     root.appendChild(div);
   }
 }

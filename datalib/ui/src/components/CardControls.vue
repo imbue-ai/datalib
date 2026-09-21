@@ -121,12 +121,7 @@ function goForward() {
       </div>
     </div>
   </Teleport>
-  <button
-    class="card-control card-control--back"
-    :disabled="!canBack"
-    title="back"
-    @click="goBack"
-  >
+  <button class="card-control card-control--back" :disabled="!canBack" title="back" @click="goBack">
     ←
   </button>
   <button
@@ -146,11 +141,7 @@ function goForward() {
     title="open this card alone, in a new tab or window"
     >↗</a
   >
-  <button
-    class="card-control card-control--close"
-    title="close card"
-    @click="ctx.host.close()"
-  >
+  <button class="card-control card-control--close" title="close card" @click="ctx.host.close()">
     ✕
   </button>
 </template>
@@ -219,7 +210,10 @@ function goForward() {
   padding: 12px 16px;
   border-bottom: 1px solid var(--datalib-border);
 }
-.card-help-head h3 { margin: 0; font-size: 15px; }
+.card-help-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
 .card-help-close {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);
@@ -230,7 +224,15 @@ function goForward() {
   font-size: 12px;
   cursor: pointer;
 }
-.card-help-body { padding: 4px 16px 16px; font-size: 13px; line-height: 1.5; }
-.card-help-body p { margin: 10px 0; }
-.card-help-body code { font-size: 12px; }
+.card-help-body {
+  padding: 4px 16px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.card-help-body p {
+  margin: 10px 0;
+}
+.card-help-body code {
+  font-size: 12px;
+}
 </style>

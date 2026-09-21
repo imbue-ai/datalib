@@ -69,10 +69,7 @@ export function sourceDagView(): CardRender {
       // is topo-ordered, so one pass suffices.
       const layer = new Map<string, number>();
       for (const s of list) {
-        const l =
-          s.deps.length === 0
-            ? 0
-            : Math.max(...s.deps.map((d) => layer.get(d) ?? 0)) + 1;
+        const l = s.deps.length === 0 ? 0 : Math.max(...s.deps.map((d) => layer.get(d) ?? 0)) + 1;
         layer.set(s.id, l);
       }
       const perLayer = new Map<number, DagStep[]>();
@@ -83,10 +80,7 @@ export function sourceDagView(): CardRender {
       }
       const widths = new Map<number, number>();
       for (const [l, ss] of perLayer) {
-        widths.set(
-          l,
-          Math.max(...ss.map((s) => s.id.length * CHAR_W + 20), 60),
-        );
+        widths.set(l, Math.max(...ss.map((s) => s.id.length * CHAR_W + 20), 60));
       }
       const pos: NodePos[] = [];
       for (const [l, ss] of [...perLayer.entries()].sort((a, b) => a[0] - b[0])) {
@@ -184,7 +178,9 @@ export function sourceDagView(): CardRender {
         title.textContent = [
           p.step.id,
           `runs: ${p.step.command}`,
-          p.step.inputs.length ? `reads: ${p.step.inputs.join(", ")}` : "reads: (nothing — download step)",
+          p.step.inputs.length
+            ? `reads: ${p.step.inputs.join(", ")}`
+            : "reads: (nothing — download step)",
           `writes: ${p.step.outputs.join(", ")}`,
           state !== "todo" ? `state: ${state}` : "",
         ]

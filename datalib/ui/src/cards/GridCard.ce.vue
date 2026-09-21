@@ -41,12 +41,7 @@ import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
-import {
-  filePathFromUrl,
-  isDesktopApp,
-  revealActionLabel,
-  revealInFileManager,
-} from "@/desktop";
+import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { openExternal } from "@/externalLinks";
 import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
@@ -73,11 +68,7 @@ const query = ref(initialState.get("q") ?? props.q ?? "");
 
 // The card's chrome title tracks the live query, not just the factory
 // argument — searching from inside the card retitles it.
-watch(
-  query,
-  (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"),
-  { immediate: true },
-);
+watch(query, (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"), { immediate: true });
 const rows = shallowRef<SearchRow[]>([]);
 /// The columns the applet declares for its rows — see `ColumnSpec`.
 const columns = ref<ColumnSpec[]>([]);
@@ -194,10 +185,7 @@ function qmdDocState(row: SearchRow | null | undefined): QmdDocState | undefined
   return qmdState.value.get(row.markdown_uuid);
 }
 
-function qmdFlagTooltip(
-  row: SearchRow | null | undefined,
-  which: "indexed" | "embedded",
-): string {
+function qmdFlagTooltip(row: SearchRow | null | undefined, which: "indexed" | "embedded"): string {
   if (!row) return "";
   if (!row.markdown_uuid) return "This row has no rendered document.";
   const st = qmdState.value.get(row.markdown_uuid);
@@ -305,7 +293,9 @@ function readLayout(): Layout {
     ...(c.hidden ? { hidden: true } : {}),
     ...(c.width ? { width: c.width } : {}),
   }));
-  const sort = grid.getSortColumns().map((s) => ({ id: String(s.columnId), asc: s.sortAsc !== false }));
+  const sort = grid
+    .getSortColumns()
+    .map((s) => ({ id: String(s.columnId), asc: s.sortAsc !== false }));
   const group = groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
   return { cols, ...(sort.length ? { sort } : {}), ...(group.length ? { group } : {}) };
 }
@@ -362,8 +352,7 @@ function rowKey(row: SearchRow): string {
 /// or its totals — the data view hands those out as items too.
 function rowData(row: number): SearchRow | null {
   const item = vueGrid?.dataView.getItem(row) as
-    | (SearchRow & { __group?: boolean; __groupTotals?: boolean })
-    | undefined;
+    (SearchRow & { __group?: boolean; __groupTotals?: boolean }) | undefined;
   if (!item || item.__group || item.__groupTotals) return null;
   return item;
 }
@@ -451,9 +440,7 @@ function appendFilterToQuery(token: string) {
   query.value = withToken(query.value, token);
 }
 
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Compose `slug-uuid` (Notion URL pattern). When `slug` is empty (no display
 // label available) or `uuid` is not UUID-shaped, falls back to just `uuid`.
@@ -567,8 +554,7 @@ async function runSearch(q: string) {
     }
     rows.value = r.rows;
     total.value = r.total_estimated;
-    const qe =
-      typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
+    const qe = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdError.value = qe;
     cachePut(q, { rows: r.rows, total: r.total_estimated, qmdError: qe });
     shownQuery.value = q;
@@ -981,7 +967,9 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const anchor = args.row != null ? rowData(args.row) : null;
   const colId = String((args.column as Column | undefined)?.id ?? "");
   const el =
-    args.row != null && args.cell != null ? (args.grid.getCellNode(args.row, args.cell) ?? null) : null;
+    args.row != null && args.cell != null
+      ? (args.grid.getCellNode(args.row, args.cell) ?? null)
+      : null;
   const cell = colId ? { column: colId, cellValue: el?.textContent?.trim() ?? "", el } : null;
   const targets = resolveTargetRows(anchor);
   const filterCtx = anchor ? buildFilterCtx(colId, anchor) : null;
@@ -1014,9 +1002,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     notion: notionCtx ? keepExcludeEntries(notionCtx) : [],
     links: {
       web: linked.filter((r) => !filePathFromUrl(linkOf(r))),
-      local: linked
-        .map((r) => filePathFromUrl(linkOf(r)))
-        .filter((p): p is string => p !== null),
+      local: linked.map((r) => filePathFromUrl(linkOf(r))).filter((p): p is string => p !== null),
     },
   };
 }
@@ -1054,11 +1040,27 @@ function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
 // the grouping commands). Each entry decides for itself whether the
 // cell under the click gives it anything to do.
 const menuItems: (MenuCommandItem | "divider")[] = [
-  entry("keep", (m) => m.filter[0]?.label ?? null, (m) => appendFilterToQuery(m.filter[0].token)),
-  entry("exclude", (m) => m.filter[1]?.label ?? null, (m) => appendFilterToQuery(m.filter[1].token)),
+  entry(
+    "keep",
+    (m) => m.filter[0]?.label ?? null,
+    (m) => appendFilterToQuery(m.filter[0].token),
+  ),
+  entry(
+    "exclude",
+    (m) => m.filter[1]?.label ?? null,
+    (m) => appendFilterToQuery(m.filter[1].token),
+  ),
   dividerAfter((m) => m.filter.length > 0),
-  entry("keep-notion", (m) => m.notion[0]?.label ?? null, (m) => appendFilterToQuery(m.notion[0].token)),
-  entry("exclude-notion", (m) => m.notion[1]?.label ?? null, (m) => appendFilterToQuery(m.notion[1].token)),
+  entry(
+    "keep-notion",
+    (m) => m.notion[0]?.label ?? null,
+    (m) => appendFilterToQuery(m.notion[0].token),
+  ),
+  entry(
+    "exclude-notion",
+    (m) => m.notion[1]?.label ?? null,
+    (m) => appendFilterToQuery(m.notion[1].token),
+  ),
   dividerAfter((m) => m.notion.length > 0),
   entry(
     "copy-uuids",
@@ -1130,8 +1132,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   "divider",
 ];
 
-const GROUP_HINT =
-  "Drag columns here to group rows by them — source, then type, say";
+const GROUP_HINT = "Drag columns here to group rows by them — source, then type, say";
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === "dark";
@@ -1369,7 +1370,10 @@ let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
   themeWatch = new MutationObserver(() => vueGrid?.setDarkMode(isDark()));
-  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  themeWatch.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
 });
 onBeforeUnmount(() => {
   themeWatch?.disconnect();
@@ -1412,8 +1416,7 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="qmdError" class="qmd-error" role="alert">
-      qmd search failed — results below are from a degraded SQL-LIKE
-      fallback: {{ qmdError }}
+      qmd search failed — results below are from a degraded SQL-LIKE fallback: {{ qmdError }}
     </p>
 
     <p v-if="error" class="error">error: {{ error }}</p>
@@ -1433,9 +1436,7 @@ onBeforeUnmount(() => {
         <div class="grid-spinner__label">searching…</div>
       </div>
     </div>
-    <p v-if="!loading && rows.length === 0 && !error" class="empty">
-      no matches.
-    </p>
+    <p v-if="!loading && rows.length === 0 && !error" class="empty">no matches.</p>
 
     <FeedbackModal
       :open="feedbackOpen"
@@ -1574,7 +1575,9 @@ onBeforeUnmount(() => {
   color: var(--datalib-muted);
 }
 @keyframes datalib-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
 

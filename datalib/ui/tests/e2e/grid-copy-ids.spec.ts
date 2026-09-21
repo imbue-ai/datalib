@@ -25,17 +25,12 @@ function menuItem(page: import("@playwright/test").Page, name: RegExp) {
   return page.locator(".slick-context-menu .slick-menu-content").filter({ hasText: name });
 }
 
-test("a row with an upstream id offers both copies, and they differ", async ({
-  page,
-  request,
-}) => {
+test("a row with an upstream id offers both copies, and they differ", async ({ page, request }) => {
   const all = await rows(request);
   // A row whose native id is genuinely NOT its uuid — otherwise the
   // "they differ" assertion below could pass for the wrong reason on a
   // provider that still passes the upstream id through.
-  const row = all.find(
-    (r) => r.upstream_id && r.upstream_id !== r.uuid,
-  );
+  const row = all.find((r) => r.upstream_id && r.upstream_id !== r.uuid);
   expect(
     row,
     "fixture must contain a row whose upstream_id differs from its uuid " +
@@ -43,10 +38,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({
   ).toBeTruthy();
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   const readClipboard = await stubClipboard(page);
   await contextMenuRowByUuid(page, row!.uuid);
@@ -62,31 +54,20 @@ test("a row with an upstream id offers both copies, and they differ", async ({
   // ...and the other action still yields OUR id, not the upstream one.
   await contextMenuRowByUuid(page, row!.uuid);
   await menuItem(page, /^Copy UUID$/).click();
-  await expect
-    .poll(readClipboard, { message: "clipboard after Copy UUID" })
-    .toBe(row!.uuid);
+  await expect.poll(readClipboard, { message: "clipboard after Copy UUID" }).toBe(row!.uuid);
 });
 
-test("a row with no upstream id hides the upstream-id action", async ({
-  page,
-  request,
-}) => {
+test("a row with no upstream id hides the upstream-id action", async ({ page, request }) => {
   const all = await rows(request);
   // Message-level rows carry no native id yet — per-item ids land with
   // the per-provider `datalib_id` port. When that lands and every row
   // has one, this test should start failing to find a subject; delete
   // it then rather than weakening it.
   const row = all.find((r) => !r.upstream_id);
-  expect(
-    row,
-    "fixture must contain a row with no upstream_id",
-  ).toBeTruthy();
+  expect(row, "fixture must contain a row with no upstream_id").toBeTruthy();
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   await contextMenuRowByUuid(page, row!.uuid);
   await expect(menuItem(page, /^Copy UUID$/)).toBeVisible();

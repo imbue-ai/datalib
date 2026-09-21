@@ -10,11 +10,7 @@
 // transient "what should this card be?" step, not a lingering column.
 import { watch } from "vue";
 import type { CardRender } from "../types";
-import {
-  ensureFrontend,
-  frontendManifest,
-  gallerySource,
-} from "../frontendRegistry";
+import { ensureFrontend, frontendManifest, gallerySource } from "../frontendRegistry";
 import { createComponentWithAgent } from "@/handoff";
 import { devMode } from "@/devMode";
 
@@ -35,7 +31,8 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
   {
     source: "sourcesView()",
     title: "Sources",
-    description: "Every source and step your config declares: sync them, edit them, read their logs.",
+    description:
+      "Every source and step your config declares: sync them, edit them, read their logs.",
   },
   {
     source: "configView()",
@@ -60,8 +57,7 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
   {
     source: "sourceDagView()",
     title: "Pipeline DAG",
-    description:
-      "See your sources' step graph and watch syncs flow through it live.",
+    description: "See your sources' step graph and watch syncs flow through it live.",
   },
   {
     source: 'tableView({ url: "/api/manage/rows" })',
@@ -99,10 +95,7 @@ export function galleryView(): CardRender {
     wrap.className = "gv";
     root.appendChild(wrap);
 
-    function paint([manifest, dev]: [
-      Map<string, Map<string, import("@/api").Meta>>,
-      boolean,
-    ]) {
+    function paint([manifest, dev]: [Map<string, Map<string, import("@/api").Meta>>, boolean]) {
       wrap.replaceChildren();
       const head = document.createElement("div");
       head.className = "gv-head";
@@ -132,12 +125,7 @@ export function galleryView(): CardRender {
         }
       }
 
-      function addRow(
-        title: string,
-        description: string,
-        src: string | null,
-        onPick: () => void,
-      ) {
+      function addRow(title: string, description: string, src: string | null, onPick: () => void) {
         const row = document.createElement("div");
         row.className = "gv-row";
         row.addEventListener("click", onPick);

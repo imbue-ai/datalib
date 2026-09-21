@@ -19,12 +19,13 @@ import {
 
 const ids = (node: TileNode): string[] => listTiles(node).map((p) => p.id);
 
-const split = (
-  id: string,
-  dir: Dir,
-  children: TileNode[],
-  weight = 1,
-): TileSplit => ({ kind: "split", id, dir, weight, children });
+const split = (id: string, dir: Dir, children: TileNode[], weight = 1): TileSplit => ({
+  kind: "split",
+  id,
+  dir,
+  weight,
+  children,
+});
 
 // A horizontal root container, like the live tree (the one split that
 // is allowed a single child and never collapses).
@@ -68,11 +69,7 @@ describe("deleteNode + collapse rule", () => {
   });
 
   it("never collapses the root, even down to a single child", () => {
-    const out = deleteNode(
-      root([makeTile("a", "x"), makeTile("b", "y")]),
-      "b",
-      blank,
-    ) as TileSplit;
+    const out = deleteNode(root([makeTile("a", "x"), makeTile("b", "y")]), "b", blank) as TileSplit;
     expect(out.kind).toBe("split");
     expect(out.dir).toBe("h");
     expect(ids(out)).toEqual(["a"]);
@@ -91,8 +88,7 @@ describe("deleteNode + collapse rule", () => {
   it("promotes a nested split when its parent collapses", () => {
     const inner = split("s1", "v", [makeTile("b", "y"), makeTile("c", "z")]);
     const tree = root([split("s0b", "h", [makeTile("a", "x"), inner], 4)]);
-    const promoted = (deleteNode(tree, "a", blank) as TileSplit)
-      .children[0] as TileSplit;
+    const promoted = (deleteNode(tree, "a", blank) as TileSplit).children[0] as TileSplit;
     expect(promoted.id).toBe("s1");
     expect(promoted.dir).toBe("v");
     expect(promoted.weight).toBe(4);
@@ -128,11 +124,7 @@ describe("appendChild (the add button)", () => {
 
 describe("moveNodeToContainer (drop on an add area)", () => {
   it("reorders to the end within the same parent", () => {
-    const out = moveNodeToContainer(
-      root([makeTile("a", "x"), makeTile("b", "y")]),
-      "a",
-      "root",
-    );
+    const out = moveNodeToContainer(root([makeTile("a", "x"), makeTile("b", "y")]), "a", "root");
     expect(ids(out)).toEqual(["b", "a"]);
   });
 
@@ -154,12 +146,7 @@ describe("moveNodeToContainer (drop on an add area)", () => {
 
 describe("dropOntoLeaf (drop on a card)", () => {
   it("replaces the target with a split perpendicular to its parent, target first", () => {
-    const out = dropOntoLeaf(
-      root([makeTile("a", "x"), makeTile("b", "y")]),
-      "a",
-      "b",
-      "ns",
-    );
+    const out = dropOntoLeaf(root([makeTile("a", "x"), makeTile("b", "y")]), "a", "b", "ns");
     const ns = (out as TileSplit).children[0] as TileSplit;
     // parent of b is the horizontal root → the new split is vertical.
     expect(ns.id).toBe("ns");
@@ -183,11 +170,7 @@ describe("dropOntoLeaf (drop on a card)", () => {
 
 describe("tab splits", () => {
   it("keeps active pointing at the same surviving tab", () => {
-    const tabs = split("t", "tab", [
-      makeTile("a", "x"),
-      makeTile("b", "y"),
-      makeTile("c", "z"),
-    ]);
+    const tabs = split("t", "tab", [makeTile("a", "x"), makeTile("b", "y"), makeTile("c", "z")]);
     tabs.active = 2; // "c"
     const out = deleteNode(root([tabs]), "a", blank);
     const t = (out as TileSplit).children[0] as TileSplit;

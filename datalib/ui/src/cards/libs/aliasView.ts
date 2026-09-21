@@ -5,11 +5,7 @@
 // rendering it with its own stored arguments.
 import { watch } from "vue";
 import type { CardRender } from "../types";
-import {
-  ensureFrontend,
-  frontendManifest,
-  gallerySource,
-} from "../frontendRegistry";
+import { ensureFrontend, frontendManifest, gallerySource } from "../frontendRegistry";
 import type { Meta } from "@/api";
 
 export function aliasView(): CardRender {
@@ -42,9 +38,7 @@ export function aliasView(): CardRender {
       for (const [ns, entries] of manifest) {
         for (const [name, meta] of entries) rows.push({ ns, name, meta });
       }
-      rows.sort((a, b) =>
-        `${a.ns}.${a.name}`.localeCompare(`${b.ns}.${b.name}`),
-      );
+      rows.sort((a, b) => `${a.ns}.${a.name}`.localeCompare(`${b.ns}.${b.name}`));
 
       const head = document.createElement("div");
       head.className = "av-head";
