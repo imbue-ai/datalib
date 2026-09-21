@@ -18,6 +18,19 @@
 # tag, and on demand — as
 # `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>`, `:X.Y.Z` and
 # `:latest`. It does not wait on any other release job.
+#
+# Node and bun come out of their official images rather than from
+# `curl | bash` installers: a digest-pinned image is verified by Docker
+# on pull, the way the uv binary below already arrives. The tag is
+# documentation; the digest is what is fetched. A bump moves both, and
+# the version check after each COPY fails the build if only one moved.
+ARG NODE_VERSION=22.23.1
+ARG NODE_IMAGE_DIGEST=sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+ARG BUN_VERSION=1.4.0
+ARG BUN_IMAGE_DIGEST=sha256:e0ee68d16ccb9927bf02aa7dd8fd4bf3369ee6d46da04faa72b05ce8bfd135f6
+FROM node:${NODE_VERSION}-bookworm-slim@${NODE_IMAGE_DIGEST} AS node_dist
+FROM oven/bun:${BUN_VERSION}-slim@${BUN_IMAGE_DIGEST} AS bun_dist
+
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -52,25 +65,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
-# Node, the same major the prod image ships, and latchkey at the same
-# pin: `//tools:version_pins_test` holds both in step with
-# `datalib/docker/Dockerfile`. Playwright's installer below needs `npx`;
+# Node, the same major Bazel resolves in `MODULE.bazel`
+# (`//tools:version_pins_test` holds the two in step), and latchkey at
+# the same pin as the app. Playwright's installer below needs `npx`;
 # everything else that runs Node under `bazel test` uses Bazel's own.
-ARG NODE_MAJOR=22
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && node --version && npm --version
+ARG NODE_VERSION
+COPY --from=node_dist /usr/local/bin/node /usr/local/bin/node
+COPY --from=node_dist /usr/local/lib/node_modules /usr/local/lib/node_modules
+# The image's npm/npx are symlinks into node_modules; COPY of a named
+# symlink copies its target instead, so they are made here.
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && test "$(node --version)" = "v${NODE_VERSION}" \
+    || { echo "node is $(node --version), not v${NODE_VERSION}: NODE_IMAGE_DIGEST and NODE_VERSION moved apart" >&2; exit 1; } \
+    && npm --version
 ARG LATCHKEY_VERSION=3.14.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
 # bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
-ARG BUN_VERSION=1.4.0
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
-    && mv /root/.bun/bin/bun /usr/local/bin/bun \
-    && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
-    && rm -rf /root/.bun \
-    && bun --version
+ARG BUN_VERSION
+COPY --from=bun_dist /usr/local/bin/bun /usr/local/bin/bun
+RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
+    && test "$(bun --version)" = "${BUN_VERSION}" \
+    || { echo "bun is $(bun --version), not ${BUN_VERSION}: BUN_IMAGE_DIGEST and BUN_VERSION moved apart" >&2; exit 1; }
 
 # Playwright's browsers + their OS libraries, for `//datalib/ui:e2e_test`.
 # Both engines the suite drives: Chromium runs the bulk of it, WebKit the
@@ -92,21 +110,31 @@ RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webki
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # uv — `//:lint` drives ruff / pyright through it. The static binary from
-# astral's image: no curl-to-bash, one tag to bump.
+# astral's image, the same way Node and bun arrive above.
 COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
 # bazelisk reads `.bazelversion` and downloads the matching bazel. Its
 # download cache is pinned to a path outside $HOME so the bazel binary
 # baked below is found whatever HOME a CI runner forces.
+#
+# The binary that drives every build in this image is verified against
+# a sha256 pinned here, one per arch — the `.sha256` files beside the
+# release assets come from the same place as the assets, so they only
+# catch a bad download, not a substituted one. A bump moves the version
+# and both digests together, or the build fails on the mismatch.
 ARG BAZELISK_VERSION=1.29.0
+ARG BAZELISK_SHA256_AMD64=5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992
+ARG BAZELISK_SHA256_ARM64=e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010
 ARG TARGETARCH
-RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-            amd64) echo amd64 ;; \
-            arm64) echo arm64 ;; \
-            *) echo "unknown arch: ${TARGETARCH:-$(dpkg --print-architecture)}" >&2; exit 1 ;; \
-        esac) \
+RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "$ARCH" in \
+            amd64) SHA="$BAZELISK_SHA256_AMD64" ;; \
+            arm64) SHA="$BAZELISK_SHA256_ARM64" ;; \
+            *) echo "unknown arch: $ARCH" >&2; exit 1 ;; \
+        esac \
     && curl -fsSL -o /usr/local/bin/bazelisk \
         "https://github.com/bazelbuild/bazelisk/releases/download/v${BAZELISK_VERSION}/bazelisk-linux-${ARCH}" \
+    && echo "${SHA}  /usr/local/bin/bazelisk" | sha256sum -c - \
     && chmod +x /usr/local/bin/bazelisk \
     && ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
 ENV BAZELISK_HOME=/opt/bazel/bazelisk

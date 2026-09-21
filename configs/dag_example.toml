@@ -98,8 +98,9 @@ inputs = ["slack/ingest"]
 # ── claude ─────────────────────────────────────────────────────────
 # Prerequisite (one-time): register claude.ai with latchkey and
 # supply your sessionKey cookie (DevTools → Application → Cookies):
-#   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
-#   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+#   latchkey services register claude-ai --base-api-url="https://claude.ai/"
+#   latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+# (`latchkey` is the launcher the datalib installer puts on your PATH.)
 # See docs/user/getting_your_data.md for the full walkthrough.
 [[groups]]
 id = "claude"
