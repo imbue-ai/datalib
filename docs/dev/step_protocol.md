@@ -370,11 +370,12 @@ the view shows `file:line` as text. Lines from different builds sit in
 one store — the server restarts between versions — which is why the
 commit belongs to the process and not to the store.
 
-**Reading the log.** The log panel's unit is a process: it opens on a
+**Reading the log.** The log card's unit is a process: it opens on a
 step's newest attempt (its own output and what the runner said about
 it), on the runner, on the launch of the server serving the page, or
 on a whole run; `GET /api/processes` lists them and `GET /api/log`
-takes `run`, `step` + `attempt`, or `process`. The search bar's keys
+takes `run`, `step` + `attempt`, or `process`. A selected line opens
+in full in the card beside it (`GET /api/log/{seq}`). The search bar's keys
 are the columns — `run`, `process`, `commit`, `step`, `level`,
 `stream`, `target`, `thread`, `msg` — plus `min_level:info`, this level
 and above, which is where the panel starts so `debug` is there when

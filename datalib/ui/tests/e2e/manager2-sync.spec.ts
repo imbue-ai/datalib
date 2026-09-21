@@ -553,8 +553,10 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     ).toHaveAttribute("title", "Failed — flaky/ingest: double-click to open the log at the error");
 
     await cell.dblclick();
-    const dialog = page.getByRole("dialog", { name: "Step log" });
+    // The log is the column after the Manage card.
+    const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
     await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".miller-col-title")).toHaveText("Log · flaky/ingest");
     // Opened on the step's attempt — a process of the run, with how it
     // ended in its name — and on the whole of it: the step's own words
     // and the runner's about it.
