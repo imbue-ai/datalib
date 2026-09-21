@@ -37,7 +37,9 @@ if [[ $# -ne 1 ]]; then
     echo "usage: $0 <dest>" >&2
     exit 2
 fi
-dest="$1"
+# Absolute: `cargo about` below runs from datalib/backend, where a
+# relative <dest> names the wrong place.
+dest="$(mkdir -p "$1" && cd -- "$1" && pwd -P)"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$script_dir/.."
