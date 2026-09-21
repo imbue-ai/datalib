@@ -40,13 +40,6 @@ sh_test(
         "//third-party/latchkey/runtime:latchkey_tree",
         "//third-party/qmd/runtime:qmd_tree",
     ],
-    # The smoke test has node-llama-cpp spawn a child process to probe
-    # its native binding, which Bazel's Linux sandbox refuses; the
-    # release runner it mirrors is not sandboxed either.
-    tags = [
-        "no-remote-exec",
-        "no-sandbox",
-    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 

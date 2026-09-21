@@ -156,12 +156,15 @@ fi
 # symlinks (`--no-symlinks` rewrites the tree afterwards, once every
 # prune is done), `--delete` clears whatever a previous stage left
 # behind, and `--chmod` makes the copy writable since Bazel's outputs
-# are read-only and codesign has to rewrite them.
+# are read-only and codesign has to rewrite them. `--copy-unsafe-links`
+# is for a runfiles tree, where every package directory is an absolute
+# link into bazel-out: those are copied for real, so the staged tree
+# is one, while bazel-bin's own links are all relative and untouched.
 stage_tree() { # kind, version, source node_modules dir
     local dest="$runtime_dir/$1/$2/node_modules"
     log "staging $1@$2"
     mkdir -p "$dest"
-    rsync -a --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
+    rsync -a --copy-unsafe-links --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
 }
 
 # Drop a package we deliberately do not ship, and any symlink left
@@ -185,10 +188,10 @@ prune_pkg() { # dest root, store glob
 
 log "staging node"
 mkdir -p "$runtime_dir/node/bin"
-rsync -a --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+rsync -aL --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
 # Node's own notice travels with the binary; the release's full set of
 # third-party notices is scripts/third_party_notices.sh's job.
-rsync -a --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
+rsync -aL --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
 
 stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
@@ -278,16 +281,25 @@ done
 # there: `getLlama` with `build: "never"` either opens a prebuilt
 # library or throws, and never reaches for cmake. `gpu: "auto"` is what
 # qmd asks for — Metal on a mac, else the CPU binding once the pruned
-# GPU packages fail to import. Run from the real package directory so
-# the bare `node-llama-cpp` import resolves the way qmd's own does.
+# GPU packages fail to import. The script sits inside the real package
+# directory so the bare `node-llama-cpp` import resolves the way qmd's
+# own does, and it is a file rather than `node -e`: on Linux
+# node-llama-cpp probes a prebuilt binding by fork()ing a child that
+# inherits `process.execArgv`, and a child started with
+# `--input-type=module` refuses to run a file.
 qmd_pkg="$(cd -P "$qmd_modules/@tobilu/qmd" && pwd -P)"
-log "smoke: loading the $cpu_binding binding"
-(cd "$qmd_pkg" && "$runtime_dir/node/bin/node" --input-type=module -e '
+smoke="$qmd_pkg/.stage_runtime_smoke.mjs"
+cat > "$smoke" <<'EOF'
 const { getLlama } = await import("node-llama-cpp");
 const llama = await getLlama({ build: "never", gpu: "auto", progressLogs: false, logLevel: "error" });
 console.error(`>>> stage_runtime: node-llama-cpp loaded (gpu=${llama.gpu}, ${llama.cpuMathCores} math cores)`);
 await llama.dispose();
-') || fail "the staged node-llama-cpp binding does not load"
+EOF
+log "smoke: loading the $cpu_binding binding"
+smoke_ok=1
+"$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
+rm -f "$smoke"
+[[ -n "$smoke_ok" ]] || fail "the staged node-llama-cpp binding does not load"
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight.
