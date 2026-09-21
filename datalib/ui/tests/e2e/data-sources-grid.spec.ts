@@ -12,7 +12,7 @@ test("the Pipeline table paints at full height", async ({ page }) => {
   await expect(page.locator(TABLE_ROWS)).not.toHaveCount(0, { timeout: 10_000 });
 
   // The check: the grid occupies real space on screen.
-  await expectGridPainted(page.locator(".tg-grid .slickgrid-container"), "Manager2 grid");
+  await expectGridPainted(page.locator(".tg-grid .slickgrid-container"), "sources card grid");
 
   // Headers too — they live in their own header viewport, and a
   // container that collapses takes both with it.

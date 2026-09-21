@@ -25,6 +25,6 @@ test("the grid populates with rows from the fixture", async ({ page, request }) 
   // with `.grid`'s fix reverted — an absolutely-positioned
   // `.card-app-root` above it makes the percentage resolvable — so this
   // is a forward guard on the surface, not a reproduction of the bug.
-  // manager2-grid.spec.ts is the spec that fails without its fix.
+  // data-sources-grid.spec.ts is the spec that fails without its fix.
   await expectGridPainted(page.locator(".grid-box .slickgrid-container").first(), "Explore grid");
 });

@@ -159,8 +159,8 @@ command = "'${APPLET_BIN}' unified_index"
   return root;
 }
 const ROOT_OF: Record<string, (prefix: string) => string> = {
-  "manager2-streaming": bareRoot,
-  "manager2-control": bareRoot,
+  "data-sources-streaming": bareRoot,
+  "data-sources-control": bareRoot,
 };
 
 // What a sandbox's backend gets in its environment beyond the common
@@ -174,7 +174,7 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // handful of conversations then lasts several seconds, long enough
   // for it to seal checkpoints mid-run and for the spec to watch the
   // rows arrive downstream while it is still going.
-  "manager2-streaming": PLAYBACK_DIR
+  "data-sources-streaming": PLAYBACK_DIR
     ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "1500" }
     : {},
   // The control spec starts, stops and restarts those same downloads
@@ -183,7 +183,7 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // request waits, and the spec removes it when it is done acting. A
   // delay was a window — 2.5 s per request was eaten by a config save's
   // remount on a CI runner, 5 s made two tapes 75 s of sleeping.
-  "manager2-control": PLAYBACK_DIR
+  "data-sources-control": PLAYBACK_DIR
     ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_HOLD: playbackHold() }
     : {},
 };
@@ -495,8 +495,8 @@ export default defineConfig({
         /dactal-sandbox\.spec\.ts/,
         // /data_sources — the sources card's Pipeline table, and the
         // commit-history grid it opens in a modal.
-        /manager2-grid\.spec\.ts/,
-        /manager2-history\.spec\.ts/,
+        /data-sources-grid\.spec\.ts/,
+        /data-sources-history\.spec\.ts/,
         // The run-log panel's grid, menu and drag-to-group bar.
         /run-log\.spec\.ts/,
       ],

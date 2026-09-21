@@ -68,7 +68,7 @@ async function writeConfig(page: Page, text: string) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
   // Remount, so the rows are painted from the config and the runner's
-  // record together — see manager2-sync.spec.ts for the frame this
+  // record together — see data-sources-sync.spec.ts for the frame this
   // avoids.
   await openManager(page);
 }

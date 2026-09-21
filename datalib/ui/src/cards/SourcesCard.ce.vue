@@ -360,7 +360,7 @@ function onGridReady(api: TableGridApi<Row>) {
 ///
 /// Not theoretical: a job list fetched before a sync was enqueued but landing
 /// after it drops the new job, and the row reads as *never synced* one frame
-/// after being queued. `manager2-sync`'s monotonicity test catches it.
+/// after being queued. `data-sources-sync`'s monotonicity test catches it.
 function freshest<T>(commit: (value: T) => void) {
   let issued = 0;
   let committed = 0;
@@ -877,7 +877,7 @@ async function loadConfig() {
       // The inspector is the only channel when someone hits this in the
       // desktop app and can't copy text out of a banner.
       console.warn(
-        "manager2: parsed 0 entries from a config the server reads",
+        "sources card: parsed 0 entries from a config the server reads",
         cfg.source_count,
         "sources from —",
         { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },

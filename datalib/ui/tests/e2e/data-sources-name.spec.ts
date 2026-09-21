@@ -1,4 +1,4 @@
-// Manager2: one row per group with its steps under it, and the one
+// The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
 import { test, expect, type Page } from "@playwright/test";
 import {

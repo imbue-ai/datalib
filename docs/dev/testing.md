@@ -71,11 +71,34 @@ insta_update(
 
 ## The Playwright suite runs in two engines
 
-`//datalib/ui:e2e_test` has two projects (see
+`//datalib/ui:e2e_test`'s projects (see
 [`/datalib/ui/playwright.config.ts`](/datalib/ui/playwright.config.ts)):
 
-* **`chromium`** — every spec.
+* **`chromium`** — every spec that leaves the config alone, against
+  the one shared fixture root.
+* **`chromium-<spec>`** — one project per spec that rewrites its
+  config (`CONFIG_MUTATING` in `tests/e2e/config-mutating.ts`: the
+  `data-sources-*` specs and a few more), each against a backend and
+  root of its own, so no two specs ever share a queue.
 * **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
+* **`warmup`** — qmd's cold model load, paid once before `chromium`
+  and `webkit` start.
+
+### Running one spec, and running it several times
+
+`bazelisk run //datalib/ui:e2e -- <playwright args>` runs the suite
+from the source tree with every backend the config spawns; `--project
+<name>` and `--grep <pattern>` narrow it. To hunt a flake, repeat it:
+
+```bash
+bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-sync --repeat-each 3 --workers 1
+```
+
+**`--repeat-each` needs `--workers 1`.** Without it Playwright spreads
+the copies across workers, and a config-mutating spec then runs beside
+a copy of itself on the same backend and root: the copies rewrite each
+other's config and start each other's syncs, and the failures read as
+the spec's own, not as a collision.
 
 The second one exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a
@@ -182,7 +205,7 @@ so the larger budget costs nothing.
 
 ## Watching a sync stream
 
-[`manager2-streaming.spec.ts`](/datalib/ui/tests/e2e/manager2-streaming.spec.ts)
+[`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
 is the one spec that watches a sync *while it runs*, and the place to
 look when the question is "does streaming actually reach the screen".
 Two API-backed sources (`chatgpt`, `claude`) replay playback tapes with a
@@ -195,7 +218,7 @@ the download that produced them has finished. Its console output is the
 table's every frame, so a run can be read without the trace viewer:
 
 ```bash
-bazelisk run //datalib/ui:e2e -- --project chromium-manager2-streaming
+bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
 ```
 
 Three pieces make that possible, and each is small:
@@ -207,7 +230,7 @@ Three pieces make that possible, and each is small:
   time. Its sibling `DATALIB_HTTP_PLAYBACK_HOLD` names a file: while it
   exists no replayed request is answered at all, and removing it lets
   the download run on. That is what a spec uses when it has to *act* on
-  a download in flight (`manager2-control.spec.ts` adds and stops
+  a download in flight (`data-sources-control.spec.ts` adds and stops
   sources beside one) — a hold is released when the spec is done, where
   a delay is a window that a slow runner can miss.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at

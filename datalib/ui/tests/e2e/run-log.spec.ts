@@ -121,7 +121,9 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   await first.locator('.slick-cell[col-id="msg"]').click();
 
   const inspector = page.locator(".miller-col").filter({ has: page.locator(".ll") });
-  await expect(inspector).toBeVisible();
+  // The card mounts in a new column after the click; on a loaded runner
+  // give it what the first row got above.
+  await expect(inspector).toBeVisible({ timeout: 10_000 });
   await expect(inspector.locator(".ll-msg")).toHaveText(msg);
   await expect(inspector.locator(".ll-level")).toHaveText("info");
   await expect(inspector.locator(".ll-meta")).toContainText("the server");

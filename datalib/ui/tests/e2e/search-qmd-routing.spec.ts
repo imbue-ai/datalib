@@ -23,7 +23,7 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
 
 test.describe("free-text search routes through qmd", () => {
   // The `warmup` project pays the cold start before any spec runs, but
-  // the applet restarts on config changes and `manager2-sync` (which
+  // the applet restarts on config changes and `data-sources-sync` (which
   // sorts earlier) rewrites config.toml wholesale — so the first query
   // here may still pay a qmd model load. See `SEARCH_SETTLE`.
   test.setTimeout(180_000);

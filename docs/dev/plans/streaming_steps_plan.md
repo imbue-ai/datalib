@@ -940,7 +940,7 @@ Each of these is a reviewable PR that leaves the tree green.
    from the scheduler), so every download's checkpoint count read
    double.
 
-   **Watched end to end** by `manager2-streaming.spec.ts`; see
+   **Watched end to end** by `data-sources-streaming.spec.ts`; see
    `docs/dev/testing.md` §"Watching a sync stream". Both fixes above
    were watched failing it before they were kept.
 

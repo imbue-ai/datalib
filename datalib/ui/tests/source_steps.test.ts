@@ -547,7 +547,7 @@ describe("removeSteps / replaceSteps", () => {
 
   /// Deleting a fetch step alone leaves its render step naming an input
   /// that no longer exists, which the loader refuses outright — a whole
-  /// config broken by a partial delete. Manager2 deletes the pair, and
+  /// config broken by a partial delete. The sources card deletes the pair, and
   /// the group with them, taking its divider comment along.
   it("removes a pair and its group together, leaving a config that still parses", () => {
     const both = listSteps(PAIR).filter((s) => s.group === "slack");

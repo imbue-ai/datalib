@@ -229,8 +229,7 @@ export const MENU_DISABLED = /slick-menu-item-disabled/;
 /// A row the grid has selected: its cells carry the class.
 export const SELECTED_ROWS = `${TABLE_ROWS}:has(.slick-cell.selected)`;
 
-/// Manager2 with the config editor (`.m2-editor`) open beside the
-/// sources card. `/data_sources` opens the sources card alone, which is
+/// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
@@ -549,6 +548,18 @@ export async function settleRows(
   const out: Record<string, string> = {};
   for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
   await settleRunner(page, timeout);
+  // The remount paints the shell first and the rows after it; a caller
+  // reading a settled row straight away would read it on the way to
+  // being painted, and see nothing.
+  for (const id of ids) {
+    await expect
+      .poll(() => statusOf(page, id), {
+        timeout,
+        intervals: [200],
+        message: `${id} was not painted again after the remount`,
+      })
+      .not.toBeNull();
+  }
   return out;
 }
 

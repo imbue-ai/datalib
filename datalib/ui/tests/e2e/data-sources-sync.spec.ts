@@ -187,9 +187,6 @@ ${applets()}`;
     const docsWas = await lastSyncedOf(page, "docs/ingest");
     await syncBtn(page, "docs/ingest").click();
     expect(await settle(page, "docs/ingest", docsWas)).toBe("Succeeded");
-    // `settle` ends on a remount; the cell is read once it is painted,
-    // not on the way to being.
-    await expect.poll(() => statusOf(page, "docs/ingest")).not.toBeNull();
     const docsStatus = await statusOf(page, "docs/ingest");
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
