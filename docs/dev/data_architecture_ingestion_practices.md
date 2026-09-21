@@ -251,9 +251,13 @@ Two halves to this:
     The principle we want: **additive schema changes (new columns,
     new tables, new fields) are no-downtime, no-refetch.**
     Subtractive changes (renames, removals, type changes) get an
-    explicit, named migration step. We aren't there yet;
-    [`plans/schema_migrations.md`](plans/schema_migrations.md) audits
-    what each store does today and plans the rest.
+    explicit, named migration step. That is now how it works: an
+    additive change lands by `ADD COLUMN`, anything else refuses the
+    open until the provider declares a rung on its migration ladder —
+    [`etl/README.md`](../../datalib/backend/etl/README.md) §"Schema
+    self-healing" and §"The migration ladder";
+    [`plans/completed/schema_migrations.md`](plans/completed/schema_migrations.md)
+    is the record of how it got there.
 
     The pattern that gets us closest, today: when the new "column"
     is derivable from the payload (which is most of them — see

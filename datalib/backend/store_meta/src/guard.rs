@@ -2,7 +2,7 @@
 //! datalib wrote. An older build's reconcile would drop the columns it
 //! does not know, and take the rows with them (`doltlite_raw`'s
 //! drop-and-recreate), so the open is refused before anything touches
-//! the file. docs/dev/plans/schema_migrations.md §3.4.
+//! the file. docs/dev/plans/completed/schema_migrations.md §3.4.
 //!
 //! "Newer" is by `major.minor`: a patch release never changes a store's
 //! shape (`docs/dev/release_steps.md`), so a store written by 0.36.3
