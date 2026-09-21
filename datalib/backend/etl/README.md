@@ -279,28 +279,55 @@ Two recoveries, both available:
   what one run writes together", and `docs/dev/entity_ids.md` for the
   time-prefixed `entity_id` proposal.
 
-## Schema self-healing, and why the DDL runs in two passes
+## Schema self-healing: additive changes land, anything else refuses
 
-`open` applies `CREATE TABLE`s, reconciles each table against its DDL
-(`reconcile_table_schema`: add missing columns, else drop and recreate), then
-applies indexes.
+`open` plans every declared table against the file before it touches
+anything (`plan_table_schema`), then applies the plans, then the indexes.
+A table is compared on its whole shape — each column's name, declared
+type, nullability, default, place in the primary key and whether it is
+generated — not on its column names.
 
-The order is load-bearing. An index over a column introduced by a later
-schema change cannot be created against an older store, so a single pass
-fails with `no such column` and returns before the reconcile that would have
-added it — leaving every older store unopenable.
+- **Absent**: created. If the store already had other tables, its
+  cursors are cleared (below), because the new table is as empty as a
+  recreated one.
+- **Additive** — every difference is a declared column the file lacks,
+  and each can go through `ALTER TABLE … ADD COLUMN` (no key, no
+  `NOT NULL` without a default, no STORED generated column; a VIRTUAL
+  generated column is fine): added, with the clause verbatim from the
+  DDL. Rows and cursors are kept.
+- **Anything else** — a column removed, renamed or retyped, a key or a
+  `NOT NULL` changed: the open **refuses** (`SchemaBreak`, naming every
+  such table and what differs) and the file is exactly as it was. A raw
+  store's rows may be the only copy — an export whose source is gone, a
+  window upstream no longer serves — so nothing is dropped on the way
+  in. The refusal names the two ways out: a migration
+  (`docs/dev/plans/schema_migrations.md` §3.3, not built yet) or
+  `datalib-dag --reset-and-redownload --sync <source>/ingest`, which
+  runs the open as `OnSchemaBreak::Rebuild`: drop, recreate, clear the
+  cursors, refill. Derived stores (`open_derived`: render, index, CAS)
+  always rebuild, since every row is a function of another store.
 
-Dropping and recreating is safe here specifically because raw-store rows are
-a cache of upstream, re-fetched on the next sync, and doltlite keeps the
-dropped rows in history. "Re-fetched" has to be made true, though: a cursor
-that says "read through here" would let the next run resume past rows the
-recreated table no longer has, and the table would stay empty until upstream
-changed, with nothing saying why. So a recreate also clears every store-wide
-cursor (`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
+The two-pass order is load-bearing. An index over a column introduced by
+a later schema change cannot be created against an older store, so a
+single pass fails with `no such column` before the column it needs is
+added — leaving every older store unopenable.
+
+A cursor is only valid under the schema that set it. A recreated or
+newly created table is empty, and a cursor that says "read through
+here" would let the next run resume past rows the table does not have,
+and the table would stay empty until upstream changed, with nothing
+saying why. So either clears every store-wide cursor
+(`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
 that it did; the next run walks from the start, and the tables that kept
 their rows absorb it as no-op upserts. Per-row cursors — a sidecar's
-`last_ts_ms`, an address book's `ctag` — live on the table that holds them
-and go with it.
+`last_ts_ms`, an address book's `ctag` — live on the table that holds
+them and go with it.
+
+Not checked: a table in the file that no DDL declares. The mirror
+engine writes exactly such tables, so "undeclared" is normal in a store
+and cannot be a warning. A renamed table is therefore an orphan plus a
+new empty table — and the new table clears the cursors, which is what
+keeps the rename from being silent.
 
 `declared_columns` learns a DDL's columns by parsing it into a probe table in
 an **in-memory** database. Never against the store being opened: a

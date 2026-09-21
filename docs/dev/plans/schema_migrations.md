@@ -1,9 +1,10 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21); §3.1 and §3.4 are built,
-the rest is not.** §1 and §2 describe what the tree did at `a5f04141`,
-checked by reading the code, not the prose; §3.1 and §3.4 say what
-landed. Where this doc and the tree disagree, the tree wins.
+**Status: audit and proposal (2026-09-21); §3.1, §3.2 and §3.4 are
+built, §3.3 and §3.5 are not.** §1 and §2 describe what the tree did at
+`a5f04141`, checked by reading the code, not the prose; each built
+section says what landed. Where this doc and the tree disagree, the
+tree wins.
 
 ## 0. Why now
 
@@ -367,7 +368,32 @@ uses.
 
 ### 3.2 PR 2 — the reconcile compares shape, refuses by class, and reaches the render cursor
 
-Three changes to `doltlite_raw`:
+**Built**, with two departures from the text below, both deliberate:
+
+- Orphans are not reported. The SQLite-mirror providers write tables no
+  DDL declares, so "undeclared" is normal in a raw store and cannot be
+  a warning. The rename hazard (§1.2(c)) is closed the other way: a
+  table that *appears* in a store that already had others clears the
+  cursors, the same as a recreate, so the new empty table is refilled
+  rather than skipped past.
+- The render cursor is not added to the forget list. Instead the
+  render store's DDL hash is a render param (`_store_schema`, §3.6's
+  suggestion), so any change to a render-store table — additive or not
+  — re-renders every source. That closes both halves of §1.2(d) at once
+  and needs no bump. The grid index already rebuilt on drift; it now
+  compares full shape too.
+
+As landed: `open` plans every table against the file before touching
+it, on the whole column shape (name, type, nullability, default, key
+position, generated); additive changes are applied by `ADD COLUMN` with
+the clause verbatim from the DDL (a VIRTUAL generated column included);
+anything else is a `SchemaBreak` under `OnSchemaBreak::Refuse`, which
+names every such table and leaves the file as it was, or a drop-and-
+recreate under `Rebuild`. Raw stores refuse unless `datalib-step` is a
+`--reset-and-redownload` run; derived stores rebuild. `etl/README.md`
+§"Schema self-healing" is the reference.
+
+The text as planned:
 
 - **Compare the full column shape.** `ColumnInfo` already carries
   `decl_type`, `not_null`, `default` and `generated`; the comparison
