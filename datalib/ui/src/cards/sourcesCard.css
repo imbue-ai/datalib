@@ -109,7 +109,6 @@
 }
 /* The log panel is a grid and wants the room: wide for its columns,
    tall enough that following a run is not a keyhole. */
-.m2-runlog { width: min(1400px, 100%); height: min(85vh, 100%); }
 .m2-logs-head {
   display: flex;
   align-items: flex-start;

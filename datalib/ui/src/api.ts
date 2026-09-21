@@ -1146,6 +1146,13 @@ export function fetchLog(
   return fetchLogLines(`/api/log?${params.toString()}`, signal);
 }
 
+// One line in full, with the process that wrote it — for the inspector.
+export type LogLineResponse = { line: RunLogLine; process: ProcessInfo | null };
+
+export function fetchLogLine(seq: number, signal?: AbortSignal): Promise<LogLineResponse> {
+  return getJson<LogLineResponse>(`/api/log/${seq}`, signal);
+}
+
 // A query the log cannot read comes back 400 with a sentence for the
 // search bar; that sentence is the whole error, shown where the lines
 // would be rather than toasted with the URL in front of it.

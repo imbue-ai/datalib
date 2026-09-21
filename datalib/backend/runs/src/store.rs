@@ -270,21 +270,7 @@ pub async fn processes(
     .await
     .unwrap_or_default();
     pool.close().await;
-    rows.iter()
-        .map(|r| ProcessRow {
-            process_id: r.get("process_id"),
-            process: r.get("process"),
-            run_id: r.get("run_id"),
-            step: r.get("step"),
-            attempt: r.get("attempt"),
-            started_at_utc: r.get("started_at_utc"),
-            finished_at_utc: r.get("finished_at_utc"),
-            exit_code: r.get("exit_code"),
-            signal: r.get("signal"),
-            tz_offset: r.get("tz_offset"),
-            git_hash: r.get("git_hash"),
-        })
-        .collect()
+    rows.iter().map(process_row_from).collect()
 }
 
 /// Recent runs, newest first. With `step`, only the runs that step took
@@ -481,6 +467,64 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         last_log_at,
         recent_samples,
     })
+}
+
+/// One line by its `seq`, with what its process says about it.
+pub async fn log_line(data_root: &Path, seq: i64) -> Option<LogLine> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return None;
+    }
+    let pool = open_existing(&path).await.ok()?;
+    // Audited: the column list is this module's own constant.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+         WHERE l.seq = ?"
+    )))
+    .bind(seq)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+    pool.close().await;
+    row.as_ref().map(log_line_from)
+}
+
+/// One process by id.
+pub async fn process(data_root: &Path, process_id: &str) -> Option<ProcessRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return None;
+    }
+    let pool = open_existing(&path).await.ok()?;
+    let row = sqlx::query(
+        "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
+           exit_code, signal, tz_offset, git_hash \
+         FROM processes WHERE process_id = ?",
+    )
+    .bind(process_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+    pool.close().await;
+    row.as_ref().map(process_row_from)
+}
+
+fn process_row_from(r: &sqlx::sqlite::SqliteRow) -> ProcessRow {
+    ProcessRow {
+        process_id: r.get("process_id"),
+        process: r.get("process"),
+        run_id: r.get("run_id"),
+        step: r.get("step"),
+        attempt: r.get("attempt"),
+        started_at_utc: r.get("started_at_utc"),
+        finished_at_utc: r.get("finished_at_utc"),
+        exit_code: r.get("exit_code"),
+        signal: r.get("signal"),
+        tz_offset: r.get("tz_offset"),
+        git_hash: r.get("git_hash"),
+    }
 }
 
 /// Log lines of one run after `after_seq`, oldest first, at most `limit`.

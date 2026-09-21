@@ -180,6 +180,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
+        .route("/api/log/{seq}", get(log_line))
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
@@ -1586,6 +1587,27 @@ async fn runs_list(
 ) -> Json<Vec<datalib_runs::RunRow>> {
     let limit = p.limit.unwrap_or(50).clamp(1, 1000);
     Json(datalib_runs::runs(&s.root, p.step.as_deref(), limit).await)
+}
+
+/// One log line in full, for the inspector: the line, and the process
+/// that wrote it.
+#[derive(Debug, Serialize)]
+pub struct LogLineResponse {
+    pub line: datalib_runs::LogLine,
+    pub process: Option<datalib_runs::ProcessRow>,
+}
+
+/// `GET /api/log/{seq}` — one line by its store sequence number; 404
+/// when the store no longer has it.
+async fn log_line(
+    State(s): State<AppState>,
+    Path(seq): Path<i64>,
+) -> Result<Json<LogLineResponse>, StatusCode> {
+    let line = datalib_runs::log_line(&s.root, seq)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let process = datalib_runs::process(&s.root, &line.process_id).await;
+    Ok(Json(LogLineResponse { line, process }))
 }
 
 #[derive(Debug, Deserialize)]
