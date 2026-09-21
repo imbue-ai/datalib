@@ -126,10 +126,12 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // ── 3. landing in Manager2 ───────────────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
-    // The scaffold's one group is the table's whole content, and its
-    // three entries are under it.
+    // The scaffold's one group, and the System group every root has,
+    // are the table's whole content; the scaffold's three entries are
+    // under it.
     await expect(groupRow(page, "unified_index")).toContainText("Unified Index");
-    await expect(page.locator(TABLE_ROWS)).toHaveCount(1);
+    await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
+    await expect(row(page, "system")).toContainText("System");
     await expandGroup(page, "unified_index");
     for (const id of ["unified_index/grid_index", "unified_index/qmd_index", "unified_index"]) {
       await expect(row(page, id)).toHaveCount(1);
