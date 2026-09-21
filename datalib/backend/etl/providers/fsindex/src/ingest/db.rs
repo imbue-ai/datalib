@@ -145,8 +145,8 @@ impl RawDb {
     /// The one version-control commit per scan. Seals the whole
     /// truncate-and-rebuild working set into a single `dolt_log` entry,
     /// so `dolt diff HEAD^ HEAD` is exactly "what this scan changed,"
-    /// and — crucially — the next [`RawDb::open`] sees a clean tree and
-    /// skips the rescue commit. Returns the wall time.
+    /// and — crucially — nothing is left dirty for the next
+    /// [`RawDb::open`] to discard. Returns the wall time.
     pub async fn commit(&self, msg: &str) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
         sqlx::query("SELECT dolt_commit('-Am', ?)")

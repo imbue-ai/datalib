@@ -40,9 +40,9 @@ impl RawDb {
 
     /// Read-only open, for render, pinned to the store's current HEAD.
     ///
-    /// The write path's `open` rescue-commits, reconciles the schema and
-    /// commits with `-Am` — three writes to a store the render step does
-    /// not own. See #312.
+    /// The write path's `open` discards a dirty working set, reconciles
+    /// the schema and commits with `-Am` — three writes to a store the
+    /// render step does not own. See #312.
     ///
     /// **`None` means the store cannot be read**, not that it is empty —
     /// no commit to pin, or a build without the dolt extensions. The

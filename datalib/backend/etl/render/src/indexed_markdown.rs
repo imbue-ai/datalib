@@ -9,7 +9,7 @@
 //! state a consumer may read — a document whole with its rows, edges and
 //! problems, never a document with its rows deleted and not yet re-inserted.
 //! That is what lets a doltlite commit land at any moment between them
-//! (checkpoint, Ctrl-C, rescue, end of run) without anyone checking what is
+//! (a checkpoint, the end of the run) without anyone checking what is
 //! in it. How many documents share one transaction is a throughput choice
 //! ([`IndexedMarkdownStore::begin_batch`]); doltlite charges ~50ms per
 //! statement outside one. See `docs/dev/plans/one_mode.md`.

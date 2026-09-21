@@ -336,8 +336,8 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
 /// for writing.
 ///
 /// Through [`datalib_etl::doltlite_raw::open_derived`] for what every
-/// writer gets there — a crashed run's dirty rows sealed into their own
-/// rescue commit, one connection never recycled — and with no DDL of
+/// writer gets there — a crashed run's dirty rows discarded, one
+/// connection never recycled — and with no DDL of
 /// its own, because the index reconciles its schema by
 /// [`init_schema`]'s all-or-nothing rule rather than `open`'s per-table
 /// one. The schema is then committed here, as `open` would have: a
@@ -701,9 +701,8 @@ pub async fn build_grid_index_for(
         stanzas.dedup();
         for (stanza, rendered_root) in stanzas {
             // Read-only: the render step owns this store, and an ordinary
-            // open would rescue-commit and schema-commit into it — writing to
-            // a file we do not own, and (once producers stream) committing
-            // the renderer's in-flight rows on its behalf.
+            // open would discard the renderer's in-flight rows and
+            // schema-commit into it — writing to a file we do not own.
             // Pinned at open: the diff below and the rows behind it name
             // one commit, and the views exist before either query runs.
             let Some(store) = crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(

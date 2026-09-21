@@ -273,8 +273,8 @@ recoverability on the others, because the only reader was the next run
 of the same step. Here every commit has readers at once. Two places
 the tree has to change to honour it:
 
-- **The rescue commit goes.** A writer's `open` that finds a crashed
-  predecessor's dirty rows *seals them into a rescue commit*
+- **The rescue commit goes** (landed: #600). A writer's `open` that
+  finds a crashed predecessor's dirty rows *sealed them into a rescue commit*
   (`doltlite_raw.rs::rescue_dirty_working_tree`, etl README § One
   writer per file). That is a torn state committed for everyone to
   read, and its own fallback says the rest: "the next ETL commit will
@@ -500,7 +500,7 @@ already pretending the batch runner was.
 
 Each slice lands green and the app works after each.
 
-0. **The rescue commit goes** (§2.5). `RawDb::open` discards a dirty
+0. **The rescue commit goes** (§2.5) — landed in #600. `RawDb::open` discards a dirty
    working set instead of sealing it; the interrupt hooks are audited
    for a commit outside a seal boundary. `doltlite_raw.rs`'s "phase 2"
    test, which today asserts the rescue swept the orphaned writes,
