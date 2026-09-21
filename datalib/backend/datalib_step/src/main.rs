@@ -184,6 +184,11 @@ fn env_flag(name: &str) -> bool {
     )
 }
 
+/// How long a step may keep running after SIGINT before it is exited
+/// without its final commit. Inside the runner's 15s (`CANCEL_GRACE`),
+/// with room for the commit itself.
+const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -275,14 +280,25 @@ async fn main() {
     let emitter = Emitter::new(step_id);
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel):
-    // report a `cancelled` outcome and exit 130. Nothing is committed on
-    // the way out. The last seal stands; whatever a download wrote after
-    // it is not at a boundary the provider chose — an entity row whose
-    // blobs are still in flight, half a channel — and the next writer's
-    // `open` discards it. Idempotency refetches it from the cursor.
+    // raise the stop flag and let the step end at a boundary of its own
+    // choosing — a fetch loop stops taking units, the seal path seals at
+    // the next consistent point, `finish` commits — then report
+    // `cancelled`. Nothing is committed *from here*: a commit made by a
+    // signal handler publishes whatever is half-written. A step that has
+    // not ended by the grace is exited anyway; the runner kills what is
+    // left at `CANCEL_GRACE` (15s), so this stays inside that.
+    let stop = datalib_etl::stop::StopFlag::new();
+    let sig_stop = stop.clone();
     let sig_emitter = emitter.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
+            sig_stop.request();
+            tracing::info!("interrupted; stopping at the next consistent point");
+            tokio::time::sleep(INTERRUPT_GRACE).await;
+            tracing::warn!(
+                "still running {}s after the interrupt; exiting without a final commit",
+                INTERRUPT_GRACE.as_secs()
+            );
             sig_emitter.outcome(&[], Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
@@ -303,9 +319,25 @@ async fn main() {
         reset_and_redownload: cli.reset_and_redownload || env_flag(ENV_RESET_AND_REDOWNLOAD),
         refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),
         checkpoint_cadence: checkpoint_cadence(),
+        stop: stop.clone(),
     };
 
     match run(cli, &data_root, &now, &control, &emitter).await {
+        // A run that ended because it was asked to is not a success, even
+        // though it committed: it did not finish, and saying so is how the
+        // runner knows not to mark it done. What it committed stands.
+        Ok(_) if stop.requested() => {
+            emitter.outcome(&[], Some(FailureKind::Cancelled));
+            std::process::exit(130);
+        }
+        // Likewise an error after the stop: the transport refuses new
+        // requests once the flag is up, so a phase that does not read the
+        // flag ends with `Interrupted`. That is the stop, not a failure.
+        Err(e) if stop.requested() => {
+            tracing::info!("stopped: {e:#}");
+            emitter.outcome(&[], Some(FailureKind::Cancelled));
+            std::process::exit(130);
+        }
         Ok(outputs) => {
             emitter.outcome(&outputs, None);
         }

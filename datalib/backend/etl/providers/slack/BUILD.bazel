@@ -157,6 +157,21 @@ rust_test(
 )
 
 rust_test(
+    name = "slack_interrupt",
+    srcs = ["tests/interrupt.rs"],
+    crate_root = "tests/interrupt.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_slack",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/pin:datalib_pin",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
     name = "slack_probe",
     srcs = ["tests/probe.rs"],
     crate_root = "tests/probe.rs",

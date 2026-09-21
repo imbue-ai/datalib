@@ -31,4 +31,10 @@ pub struct DownloadControl {
     /// [`reset_and_redownload`](Self::reset_and_redownload) overrides it: see
     /// `RunCtx::checkpoint_policy`.
     pub checkpoint_cadence: Option<crate::checkpointer::Cadence>,
+
+    /// Raised when the step has been asked to stop (SIGINT). A fetch loop
+    /// checks it before starting a unit of work and ends the run early;
+    /// the seal path seals at the next consistent point regardless of
+    /// cadence; a backoff sleep returns at once. See [`crate::stop`].
+    pub stop: crate::stop::StopFlag,
 }

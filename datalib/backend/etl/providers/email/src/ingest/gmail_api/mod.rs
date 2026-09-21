@@ -92,6 +92,9 @@ pub struct FetchSummary {
     /// True when the run stopped at `message_budget` with more to fetch.
     /// A partial backfill is a successful outcome, not a failure.
     pub budget_exhausted: bool,
+    /// True when the step was asked to stop with more to fetch. Holds the
+    /// cursor exactly as `budget_exhausted` does.
+    pub interrupted: bool,
     /// True when there was no usable cursor — none stored, `full_resync`
     /// set, or one that aged out — and the whole filter was re-enumerated.
     pub full_sync: bool,
@@ -181,7 +184,12 @@ impl FetchSummary {
     /// either after a partial one tells the next run "caught up", and an
     /// incremental run never re-lists what this one skipped.
     pub fn drained(&self) -> bool {
-        !self.budget_exhausted && self.messages_failed == 0
+        !self.stopped_early() && self.messages_failed == 0
+    }
+
+    /// The run ended before the walk did, on purpose.
+    pub fn stopped_early(&self) -> bool {
+        self.budget_exhausted || self.interrupted
     }
 }
 
@@ -360,7 +368,7 @@ async fn run_sync(
         if plan.history.is_some() {
             summary.backfilled_labels = plan.backfilled_labels.clone();
         }
-        let enumerated = if summary.budget_exhausted {
+        let enumerated = if summary.stopped_early() {
             None
         } else {
             full_sync(
@@ -416,6 +424,7 @@ async fn run_sync(
             fetched = summary.emails_upserted,
             failed = summary.messages_failed,
             budget_exhausted = summary.budget_exhausted,
+            interrupted = summary.interrupted,
             "work this run did not do; leaving the cursor so the next run resumes",
         );
     } else if let Some(h) = &next_cursor {
@@ -667,7 +676,7 @@ async fn full_sync(
                 more = page.next_page_token.is_some(),
                 "walked one messages.list page",
             );
-            if summary.budget_exhausted {
+            if summary.stopped_early() {
                 return Ok(None);
             }
             match page.next_page_token {
@@ -712,6 +721,18 @@ async fn fetch_ids(
         if state.known_gmail_ids.contains(id) {
             summary.messages_already_had += 1;
             continue;
+        }
+        // Asked to stop: the same partial result a spent budget gives —
+        // what was flushed is sealed, the cursor is held, the next run
+        // resumes.
+        if opts.control.stop.requested() {
+            summary.interrupted = true;
+            info!(
+                event = "gmail_interrupted",
+                fetched = state.fetched,
+                "stopping with a partial result; the cursor is held so the next run resumes",
+            );
+            return Ok(());
         }
         if state.budget.is_some_and(|b| state.fetched >= b) {
             summary.budget_exhausted = true;

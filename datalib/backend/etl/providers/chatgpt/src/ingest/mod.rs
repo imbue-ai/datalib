@@ -183,6 +183,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if !opts.conv_uuids.is_empty() {
             opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
             for raw in &opts.conv_uuids {
+                if opts.control.stop.requested() {
+                    info!(event = "chatgpt_interrupted");
+                    break;
+                }
                 opts.progress.inc(1);
                 opts.progress.set_message(raw);
                 let target = datalib_etl::ids::normalize_id_token(raw);
@@ -329,6 +333,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
         opts.progress.set_length(Some(ordered.len() as u64));
         for item in ordered {
+            // Asked to stop: the conversation that just landed sealed with
+            // its blobs, so end here.
+            if opts.control.stop.requested() {
+                info!(event = "chatgpt_interrupted");
+                break;
+            }
             opts.progress.inc(1);
             if let Some(limit) = opts.limit {
                 if summary.fetched + summary.errors >= limit {
