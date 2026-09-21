@@ -1,10 +1,9 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21); §3.1, §3.2 and §3.4 are
-built, §3.3 and §3.5 are not.** §1 and §2 describe what the tree did at
-`a5f04141`, checked by reading the code, not the prose; each built
-section says what landed. Where this doc and the tree disagree, the
-tree wins.
+**Status: audit and proposal (2026-09-21); §3.1–§3.4 are built, §3.5
+is not.** §1 and §2 describe what the tree did at `a5f04141`, checked
+by reading the code, not the prose; each built section says what
+landed. Where this doc and the tree disagree, the tree wins.
 
 ## 0. Why now
 
@@ -437,8 +436,21 @@ orphan report.
 
 ### 3.3 PR 3 — a migration ladder for raw and app stores
 
-Where a non-additive change is wanted rather than refused, it is
-written as a step on a ladder:
+**Built**, smaller than written here. `datalib_store_meta::ladder` is
+the whole mechanism: `Migration { version, name, apply }`, `pending`,
+`apply` (the body and the `schema_version` bump in one transaction),
+`top`, and `AheadOfLadder` for a store a longer ladder migrated. A raw
+store passes its ladder to `doltlite_raw::open_migrating`; the app
+stores' ladders are in `app_store_migrate.rs`, where the stamp rename
+is rung 1 of each, keyed on the version rather than on a column probe
+(the probe stays inside the rung, so a store made after the rename
+passes through it unchanged). Each rung is its own dolt commit.
+`etl/README.md` §"The migration ladder" is the reference.
+
+Left out on purpose: `resets_cursors` (a rung deletes a cursor table
+itself), the `lint_repo` check (a forgotten rung is a `SchemaBreak` on
+the next open, which is loud enough), and `BoxFuture` (`Apply` is a
+std pinned-box alias). The text as planned:
 
 ```rust
 pub struct Migration {

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
-pub use datalib_store_meta::StoreKind;
+pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
@@ -456,18 +456,31 @@ pub fn rebuild_raw_stores_on_schema_break() {
 /// Always [`OnSchemaBreak::Rebuild`]: every row is a function of some
 /// other store, so a rebuild costs a pass over that store.
 pub async fn open_derived(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Rebuild).await
+    open_inner(db_path, ddl, false, kind, OnSchemaBreak::Rebuild, &[]).await
 }
 
-/// A raw store, for the process that owns it. [`OnSchemaBreak::Refuse`]
-/// unless this is a reset run ([`rebuild_raw_stores_on_schema_break`]).
+/// A raw store, for the process that owns it, with no migrations.
+/// [`OnSchemaBreak::Refuse`] unless this is a reset run
+/// ([`rebuild_raw_stores_on_schema_break`]).
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
+    open_migrating(db_path, extra_ddl, &[]).await
+}
+
+/// [`open`] for a provider whose `schema_raw.rs` keeps a migration
+/// ladder: the rungs above the store's `schema_version` run first, one
+/// commit each, and the DDL is compared to the result. A ladder is how
+/// a non-additive change reaches an existing store without a refusal.
+pub async fn open_migrating(
+    db_path: &Path,
+    extra_ddl: &[&str],
+    ladder: &[Migration],
+) -> Result<SqlitePool> {
     let policy = if REBUILD_RAW_STORES.load(std::sync::atomic::Ordering::Relaxed) {
         OnSchemaBreak::Rebuild
     } else {
         OnSchemaBreak::Refuse
     };
-    open_with(db_path, extra_ddl, policy).await
+    open_inner(db_path, extra_ddl, true, StoreKind::Raw, policy, ladder).await
 }
 
 /// [`open`] with the policy said rather than taken from the process.
@@ -476,7 +489,7 @@ pub async fn open_with(
     extra_ddl: &[&str],
     on_break: OnSchemaBreak,
 ) -> Result<SqlitePool> {
-    open_inner(db_path, extra_ddl, true, StoreKind::Raw, on_break).await
+    open_inner(db_path, extra_ddl, true, StoreKind::Raw, on_break, &[]).await
 }
 
 /// The error [`OnSchemaBreak::Refuse`] fails an open with: every table
@@ -502,9 +515,9 @@ impl std::fmt::Display for SchemaBreak {
         }
         write!(
             f,
-            "Either write a migration for it (docs/dev/plans/schema_migrations.md §3.3), \
-             or — if upstream still has the data — re-download this source: \
-             `datalib-dag --reset-and-redownload --sync <source>/ingest <config>`."
+            "Either add a rung to the provider's migration ladder (etl/README.md §\"The \
+             migration ladder\"), or — if upstream still has the data — re-download this \
+             source: `datalib-dag --reset-and-redownload --sync <source>/ingest <config>`."
         )
     }
 }
@@ -609,6 +622,7 @@ async fn open_inner(
     include_shared: bool,
     kind: StoreKind,
     on_break: OnSchemaBreak,
+    ladder: &[Migration],
 ) -> Result<SqlitePool> {
     // Logged at every call so a stray second pool against an already-open
     // file is attributable: with max_connections=1 it surfaces only as
@@ -635,6 +649,34 @@ async fn open_inner(
     // writer left in the working set was never at a seal boundary, and every
     // reader pins commits, so nobody was promised it.
     discard_dirty_working_tree(&pool, db_path).await?;
+    // The ladder, before the DDL is compared to anything: a rung is how
+    // the store gets from the shape an older build left to the one this
+    // DDL declares. Each rung is its own commit, so a crash between two
+    // leaves a store the next open resumes from.
+    let stored_version = datalib_store_meta::ladder::stored_version(&pool).await?;
+    let top = datalib_store_meta::ladder::top(ladder);
+    if stored_version > top {
+        pool.close().await;
+        return Err(
+            anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder {
+                stored: stored_version,
+                top,
+            })
+            .context(format!("open {}", db_path.display())),
+        );
+    }
+    for rung in datalib_store_meta::ladder::pending(ladder, stored_version)? {
+        // The meta table has to exist for the rung to bump the version;
+        // a store from before the table is at version 0 and gets it here.
+        sqlx::query(datalib_store_meta::DDL)
+            .execute(&pool)
+            .await
+            .context("create _datalib_meta before migrating")?;
+        datalib_store_meta::ladder::apply(&pool, rung).await?;
+        commit_run(&pool, &format!("migrate v{}: {}", rung.version, rung.name))
+            .await
+            .with_context(|| format!("commit migration v{}", rung.version))?;
+    }
     // Tables, then indexes — see the README for why the order is
     // load-bearing. `parse_create_table_name` returns `None` for exactly
     // the statements that must wait.
@@ -713,7 +755,7 @@ async fn open_inner(
         &pool,
         kind,
         &datalib_store_meta::schema_hash(ddl().copied()),
-        0,
+        top,
     )
     .await
     .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
@@ -2776,6 +2818,86 @@ mod tests {
             .unwrap();
         assert_eq!(n, 0);
         pool.close().await;
+    }
+
+    /// A rename the reconcile would refuse goes through when the owner
+    /// declares it as a rung: the rung runs against the old shape, the
+    /// rows survive, the store records the version and the commit, the
+    /// DDL then matches, and a second open runs nothing. A store already
+    /// above the ladder's top is refused — a newer build migrated it.
+    #[tokio::test]
+    async fn a_ladder_carries_a_store_across_a_rename() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("ladder.doltlite_db");
+        const V0: &str = "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, n TEXT)";
+        const V1: &str = "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY, m TEXT)";
+        const LADDER: &[Migration] = &[Migration {
+            version: 1,
+            name: "t.n becomes t.m",
+            apply: |c| {
+                Box::pin(async move {
+                    sqlx::query("ALTER TABLE t RENAME COLUMN n TO m")
+                        .execute(&mut *c)
+                        .await?;
+                    Ok(())
+                })
+            },
+        }];
+        {
+            let pool = open(&p, &[V0]).await.unwrap();
+            sqlx::query("INSERT INTO t VALUES ('a', 'kept')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            commit_run(&pool, "rows").await.unwrap();
+            pool.close().await;
+        }
+
+        let pool = open_migrating(&p, &[V1], LADDER)
+            .await
+            .expect("the rung carries it");
+        let m: String = sqlx::query_scalar("SELECT m FROM t WHERE id = 'a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(m, "kept");
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.schema_version, 1);
+        let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("migrate v1: t.n becomes t.m")),
+            "{messages:?}"
+        );
+        let commits = messages.len();
+        pool.close().await;
+
+        // Again: nothing pending, nothing committed.
+        let pool = open_migrating(&p, &[V1], LADDER).await.unwrap();
+        let again: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(again as usize, commits);
+        pool.close().await;
+
+        // A build whose ladder is shorter than the store's version.
+        let err = match open(&p, &[V1]).await {
+            Ok(pool) => {
+                pool.close().await;
+                panic!("a store above the ladder must refuse");
+            }
+            Err(e) => e,
+        };
+        assert!(
+            err.downcast_ref::<datalib_store_meta::ladder::AheadOfLadder>()
+                .is_some(),
+            "{err:#}"
+        );
     }
 
     /// Every non-additive change refuses, and the message says which:
