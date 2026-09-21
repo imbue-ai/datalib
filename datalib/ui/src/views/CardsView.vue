@@ -5,11 +5,12 @@
 // switching back doesn't lose its cards. The data root and its size
 // are the app-wide `RootStorageBar` below this; a grid card carries
 // its own row count.
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
 import { devMode } from "@/devMode";
+import { surface, type SurfaceCommands } from "@/surface";
 
 type Layout = "columns" | "tree" | "tiling";
 const layout = ref<Layout>("columns");
@@ -21,13 +22,32 @@ function setLayout(next: Layout) {
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
 }
+
+// The toolbar's commands go to whichever layout is showing.
+const miller = useTemplateRef<SurfaceCommands>("miller");
+const tree = useTemplateRef<SurfaceCommands>("tree");
+const tiling = useTemplateRef<SurfaceCommands>("tiling");
+function active(): SurfaceCommands | null {
+  if (layout.value === "tree") return tree.value;
+  if (layout.value === "tiling") return tiling.value;
+  return miller.value;
+}
+onMounted(() => {
+  surface.value = {
+    addCard: () => active()?.addCard(),
+    showCard: (source) => active()?.showCard(source),
+  };
+});
+onBeforeUnmount(() => {
+  surface.value = null;
+});
 </script>
 
 <template>
   <div class="cards-root">
-    <MillerView v-show="layout === 'columns'" />
-    <TreeView v-if="treeMounted" v-show="layout === 'tree'" />
-    <TilingView v-if="tilingMounted" v-show="layout === 'tiling'" />
+    <MillerView ref="miller" v-show="layout === 'columns'" />
+    <TreeView v-if="treeMounted" ref="tree" v-show="layout === 'tree'" />
+    <TilingView v-if="tilingMounted" ref="tiling" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
       <button
         class="cards-dev-toggle"

@@ -1,7 +1,7 @@
 // The page's one live connection to the server.
 //
 // Every consumer used to call `openJobStream` and get an `EventSource`
-// of its own. The header's sync indicator is always mounted, the open
+// of its own. The toolbar's sync indicator is always mounted, the open
 // view has one, and each `sourceDagView` card adds another — so three
 // or four connections to the same origin, each holding a socket open
 // forever. Browsers allow six per origin over HTTP/1.1, and an SSE

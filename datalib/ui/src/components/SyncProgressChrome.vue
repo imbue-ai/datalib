@@ -1,15 +1,14 @@
 <script setup lang="ts">
-// Lightweight sync indicator for the app header: a pulsing dot +
-// "syncing" while any job is active, sitting in the header's flexible
-// space so it never shifts the page layout. Per-job progress lives in
-// the Sources tab; this only answers "is something running?". Click
-// navigates there; the tooltip lists the active jobs.
+// Lightweight sync indicator for the toolbar: a pulsing dot +
+// "syncing" while any job is active, sitting in the toolbar's flexible
+// space so it never shifts the page layout. Per-job progress lives on
+// the sources card; this only answers "is something running?". Click
+// reveals that card; the tooltip lists the active jobs.
 import { computed, ref, onMounted, onUnmounted } from "vue";
-import { useRouter } from "vue-router";
 import { fetchActiveJobs, type SyncJob, type JobProgressEvent } from "@/api";
 import { subscribeLive } from "@/live";
+import { showDataSources } from "@/surface";
 
-const router = useRouter();
 // Active jobs, keyed by id for O(1) patching from the SSE stream.
 const active = ref<Map<string, SyncJob>>(new Map());
 let unsubscribe: (() => void) | null = null;
@@ -56,10 +55,6 @@ function onProgress(ev: JobProgressEvent) {
   active.value = new Map(m);
 }
 
-function goSources() {
-  router.push({ name: "sources" });
-}
-
 onMounted(() => {
   seed();
   unsubscribe = subscribeLive({ job: onProgress, resync: seed });
@@ -76,7 +71,7 @@ onUnmounted(() => {
     v-if="count > 0"
     class="sync-indicator"
     :title="tooltip"
-    @click="goSources"
+    @click="showDataSources"
   >
     <span class="dot" />
     syncing{{ count > 1 ? ` (${count})` : "" }}
@@ -89,7 +84,6 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.4rem;
   padding: 0.15rem 0.6rem;
-  margin-bottom: 0.45rem;
   border: 1px solid var(--datalib-accent);
   border-radius: 9999px;
   background: transparent;

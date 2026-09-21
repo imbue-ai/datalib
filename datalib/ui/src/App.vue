@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { RouterView, RouterLink } from "vue-router";
+import { RouterView } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
@@ -9,6 +9,7 @@ import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
+import { newCard, showDataSources } from "@/surface";
 
 // The gate in front of the whole app, for the two states where showing
 // the app would be a lie.
@@ -55,19 +56,17 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <header class="datalib-header">
-      <h1>datalib</h1>
-      <nav v-if="!gate" class="datalib-tabs" aria-label="Navigation">
-        <RouterLink class="datalib-tab" to="/">Explore</RouterLink>
-        <!-- The old Manage screen is hidden, not gone: `/sources` still
-             serves SourcesView.vue, and this link brings it back. -->
-        <!-- <RouterLink class="datalib-tab" to="/sources">Manage</RouterLink> -->
-      </nav>
+    <!-- The toolbar: the two places a person starts from. The old
+         Manage screen is hidden, not gone — `/sources` still serves
+         SourcesView.vue; a link here brings it back. -->
+    <nav v-if="!gate" class="datalib-toolbar" aria-label="Cards">
+      <button class="datalib-tool" @click="showDataSources">Data sources</button>
+      <button class="datalib-tool" @click="newCard">＋ New card</button>
       <div class="datalib-spacer" />
-      <!-- Lightweight sync indicator in the header's flexible space —
+      <!-- Lightweight sync indicator in the toolbar's flexible space —
            appearing/disappearing never shifts the page layout. -->
       <SyncProgressChrome />
-    </header>
+    </nav>
 
     <FirstRunView
       v-if="gate === 'first-run' && config"
@@ -81,7 +80,7 @@ onUnmounted(() => stop?.());
     <RootStorageBar v-if="!gate && checked" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
-         the card surface and the Manage tab's config editor. -->
+         the card surface and the config editor. -->
     <AgentHandoffModal />
   </main>
 </template>
@@ -140,7 +139,7 @@ a {
 }
 
 .datalib-shell {
-  /* Viewport-pinned flex column: the header takes its natural height
+  /* Viewport-pinned flex column: the toolbar takes its natural height
      and the routed view flexes into the rest, so full-height views
      (MillerView) reach the bottom without guessing the chrome height.
      min-height (not height) so taller views (sync) still
@@ -151,56 +150,33 @@ a {
   box-sizing: border-box;
   padding: 1rem;
 }
-.datalib-header {
+/* A band across the top: tinted, hairline below, full-bleed by
+   countering the shell's 1rem padding. */
+.datalib-toolbar {
   flex: 0 0 auto;
-}
-
-/* Browser-style tab band: the header sits on a tinted strip and the
-   active tab is cut from the page background, flowing into the
-   content below with no separating line under it. Negative margins
-   counter the shell's 1rem padding so the band runs full-bleed. */
-.datalib-header {
   display: flex;
-  align-items: flex-end;
-  gap: 0.6rem;
+  align-items: center;
+  gap: 0.4rem;
   margin: -1rem -1rem 0.75rem;
-  padding: 0.5rem 1rem 0;
+  padding: 0.4rem 1rem;
   background: var(--datalib-card-bg);
   border-bottom: 1px solid var(--datalib-border);
-}
-.datalib-header h1 {
-  margin: 0 0 0.45rem 0;
-  font-size: 1.25rem;
 }
 .datalib-spacer {
   flex: 1;
 }
-.datalib-tabs {
-  display: flex;
-  gap: 2px;
-  margin-left: 0.75rem;
-}
-/* The active tab is cut from the page background; border-bottom: none
-   plus the -1px overlap lets its background erase the band's hairline
-   so tab and page read as one surface. */
-.datalib-tab {
-  padding: 0.35rem 0.95rem;
-  margin-bottom: -1px;
+.datalib-tool {
+  padding: 0.25rem 0.75rem;
   border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  color: var(--datalib-muted);
-  text-decoration: none;
-  line-height: 1.4;
-}
-.datalib-tab:hover {
-  background: var(--datalib-hover);
+  border-radius: 4px;
+  background: transparent;
   color: var(--datalib-fg);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
 }
-.datalib-tab.router-link-active {
-  background: var(--datalib-bg);
+.datalib-tool:hover {
+  background: var(--datalib-hover);
   border-color: var(--datalib-border);
-  color: var(--datalib-accent);
-  font-weight: 600;
 }
 </style>

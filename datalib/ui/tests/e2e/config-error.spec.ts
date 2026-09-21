@@ -36,7 +36,7 @@ const configPath = () => `${dataRoot()}/config.toml`;
 const readConfig = () => readFileSync(configPath(), "utf8");
 const writeConfig = (text: string) => writeFileSync(configPath(), text);
 
-const tabs = (page: Page) => page.getByRole("link", { name: "Explore" });
+const tabs = (page: Page) => page.getByRole("button", { name: "Data sources" });
 const gate = (page: Page) => page.locator(".cfg-error");
 
 let original = "";

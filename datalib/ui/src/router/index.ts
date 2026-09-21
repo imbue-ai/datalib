@@ -16,6 +16,9 @@ import { createRouter, createWebHistory } from "vue-router";
 /// width. The config editor is a click away from that card, not open
 /// beside it — the first thing to do on the screen is add a source.
 export const MANAGE_STACK = encodeColumns([{ code: "sourcesView()", size: 1.6, state: "" }]);
+/// The new-card gallery alone: where the toolbar's "New card" lands
+/// when no card surface is showing.
+export const NEW_CARD_STACK = encodeColumns([{ code: "galleryView()", size: null, state: "" }]);
 
 const router = createRouter({
   history: createWebHistory(),
