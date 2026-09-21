@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
 use datalib_runs::{
-    canonical_labels, LiveState, LogRow, MetricRow, Retention, RunWriter, StepRunRow,
+    canonical_labels, LiveState, LogRow, MetricRow, Process, ProcessRow, Retention, RunWriter,
+    StepRunRow,
 };
 
 use crate::events::{Event, EventSink, LogLevel};
@@ -22,6 +23,9 @@ use crate::step::StepId;
 #[derive(Default, Clone)]
 struct Acc {
     row: StepRunRow,
+    /// The attempt's process: what came out of the step's pipes is its,
+    /// and how it ended goes on it.
+    process: Option<ProcessRow>,
     /// The sugar accumulators: increments so far, and the announced total.
     done: u64,
     total: Option<u64>,
@@ -32,6 +36,8 @@ struct Acc {
 pub struct RunStoreSink {
     writer: Arc<RunWriter>,
     steps: Mutex<HashMap<StepId, Acc>>,
+    /// The runner's commit, which a built-in step's attempt shares.
+    git_hash: Option<String>,
 }
 
 /// The store's clock: UTC, with the runner's offset beside it.
@@ -56,10 +62,11 @@ impl RunStoreSink {
                 data_root,
                 run_id,
                 started_at_utc,
-                git_hash,
+                git_hash.clone(),
                 retention,
             )?),
             steps: Mutex::new(HashMap::new()),
+            git_hash,
         })
     }
 
@@ -107,6 +114,18 @@ impl RunStoreSink {
             .unwrap_or(0)
     }
 
+    /// The process of the step's current attempt, for a line that came
+    /// out of it; empty — the writer's own — for a step never started.
+    fn process_of(&self, step: &StepId) -> String {
+        self.steps
+            .lock()
+            .expect("run store sink mutex")
+            .get(step)
+            .and_then(|a| a.process.as_ref())
+            .map(|p| p.process_id.clone())
+            .unwrap_or_default()
+    }
+
     /// The sugar: `done` is the increments so far, `queued` what the
     /// announced total leaves. A step that never announced a total gets
     /// `done` alone, which a bar cannot be drawn from and a count can.
@@ -137,17 +156,36 @@ impl EventSink for RunStoreSink {
             // A retry re-runs the step from zero, so the counters reset
             // with it — otherwise attempt 2 would appear to start
             // wherever attempt 1 died.
-            Event::StepStart { step, attempt } => self.update(step, |a| {
-                *a = Acc {
-                    row: StepRunRow {
-                        state: LiveState::Running.as_str().into(),
-                        attempt: *attempt as i64,
-                        started_at_utc: Some(now().0),
-                        ..Default::default()
-                    },
+            Event::StepStart {
+                step,
+                attempt,
+                builtin,
+            } => {
+                let (started_at_utc, tz_offset) = now();
+                let process = ProcessRow {
+                    process_id: datalib_runs::new_process_id(),
+                    process: Process::Step.as_str().into(),
+                    step: Some(step.clone()),
+                    attempt: Some(*attempt as i64),
+                    started_at_utc: started_at_utc.clone(),
+                    tz_offset,
+                    git_hash: builtin.then(|| self.git_hash.clone()).flatten(),
                     ..Default::default()
-                }
-            }),
+                };
+                self.writer.process(process.clone());
+                self.update(step, |a| {
+                    *a = Acc {
+                        row: StepRunRow {
+                            state: LiveState::Running.as_str().into(),
+                            attempt: *attempt as i64,
+                            started_at_utc: Some(started_at_utc),
+                            ..Default::default()
+                        },
+                        process: Some(process),
+                        ..Default::default()
+                    }
+                })
+            }
             // The reason a step ended badly is a log line too, so the
             // log panel has a line to jump to: the last error-level line
             // of a failed step is why it failed, the last warn-level one
@@ -156,12 +194,25 @@ impl EventSink for RunStoreSink {
                 step,
                 status,
                 error,
+                exit_code,
+                signal,
             } => {
+                let finished_at_utc = now().0;
+                let mut ended = None;
                 self.update(step, |a| {
                     a.row.state = status.as_str().into();
-                    a.row.finished_at_utc = Some(now().0);
+                    a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
+                    if let Some(p) = a.process.as_mut() {
+                        p.finished_at_utc = Some(finished_at_utc.clone());
+                        p.exit_code = exit_code.map(i64::from);
+                        p.signal = signal.map(i64::from);
+                        ended = Some(p.clone());
+                    }
                 });
+                if let Some(p) = ended {
+                    self.writer.process(p);
+                }
                 if let Some(error) = error {
                     let level = if *status == RunState::Stopped {
                         LogLevel::Warn
@@ -249,9 +300,16 @@ impl EventSink for RunStoreSink {
                     Some(own) => split_stamp(own),
                     None => now(),
                 };
+                // A line from the step's pipe is the step's; one the
+                // runner wrote about the step is the runner's.
+                let process_id = match stream {
+                    Some(_) => self.process_of(step),
+                    None => String::new(),
+                };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     attempt: self.attempt_of(step),
+                    process_id,
                     ts_utc,
                     tz_offset,
                     stream: stream.map(|s| s.as_str().to_string()),
@@ -288,7 +346,7 @@ impl EventSink for RunStoreSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_runs::{log_after, snapshot, Snapshot};
+    use datalib_runs::{log_after, processes, snapshot, Snapshot, Stream};
 
     async fn run(events: &[Event]) -> (tempfile::TempDir, Snapshot) {
         let td = tempfile::tempdir().unwrap();
@@ -325,12 +383,105 @@ mod tests {
 
     /// The sugar. The stream carries increments; the store must carry a
     /// position, or coalescing would drop work.
-    /// The commit the runner came from rides on the run row, for the log
-    /// view to link a line's file and line back to.
+    /// The runner is a process the run points at, and every line the
+    /// run stores reads the runner's commit through it.
     #[tokio::test]
-    async fn the_run_records_its_commit() {
-        let (_td, snap) = run(&[]).await;
-        assert_eq!(snap.git_hash.as_deref(), Some("ae2d52f0"));
+    async fn the_run_and_its_lines_name_the_runners_process() {
+        let (td, snap) = run(&[Event::Log {
+            step: "slack/raw".into(),
+            level: LogLevel::Info,
+            msg: "hello".into(),
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        }])
+        .await;
+        let runner = processes(td.path(), None, None, 10)
+            .await
+            .into_iter()
+            .find(|p| p.process == "dag")
+            .expect("the runner is a process of the run");
+        assert_eq!(runner.run_id.as_deref(), Some("run-1"));
+        assert_eq!(runner.git_hash.as_deref(), Some("ae2d52f0"));
+        assert_eq!(snap.run_id.as_deref(), Some("run-1"));
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].process_id, runner.process_id);
+        assert_eq!(lines[0].process.as_deref(), Some("dag"));
+        assert_eq!(lines[0].git_hash.as_deref(), Some("ae2d52f0"));
+    }
+
+    /// Each attempt of a step is a process of the run: what came out of
+    /// its pipes is its, the runner's commit is its when it runs the
+    /// built-in program, and how it ended goes on it.
+    #[tokio::test]
+    async fn a_step_attempt_is_a_process_with_its_lines_and_its_exit() {
+        let (td, _snap) = run(&[
+            Event::StepStart {
+                step: "slack/raw".into(),
+                attempt: 1,
+                builtin: true,
+            },
+            Event::Log {
+                step: "slack/raw".into(),
+                level: LogLevel::Info,
+                msg: "from the pipe".into(),
+                ts: None,
+                stream: Some(Stream::Stderr),
+                target: None,
+                thread: None,
+                fields: None,
+            },
+            Event::StepFinish {
+                step: "slack/raw".into(),
+                status: RunState::Failed,
+                error: Some("exited 3".into()),
+                exit_code: Some(3),
+                signal: None,
+            },
+            Event::StepStart {
+                step: "slack/raw".into(),
+                attempt: 2,
+                builtin: true,
+            },
+            Event::StepFinish {
+                step: "slack/raw".into(),
+                status: RunState::Succeeded,
+                error: None,
+                exit_code: Some(0),
+                signal: None,
+            },
+        ])
+        .await;
+        let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
+            .await
+            .into_iter()
+            .filter(|p| p.process == "step")
+            .collect();
+        attempts.sort_by_key(|p| p.attempt);
+        assert_eq!(attempts.len(), 2, "{attempts:?}");
+        assert_eq!(attempts[0].step.as_deref(), Some("slack/raw"));
+        assert_eq!(attempts[0].run_id.as_deref(), Some("run-1"));
+        assert_eq!(attempts[0].exit_code, Some(3));
+        assert!(attempts[0].finished_at_utc.is_some());
+        assert_eq!(attempts[0].git_hash.as_deref(), Some("ae2d52f0"));
+        assert_eq!(attempts[1].exit_code, Some(0));
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let piped = lines
+            .iter()
+            .find(|l| l.msg == "from the pipe")
+            .expect("the pipe's line");
+        assert_eq!(piped.process_id, attempts[0].process_id);
+        assert_eq!(piped.process.as_deref(), Some("step"));
+        // The runner's own line about the failure is the runner's.
+        let reason = lines
+            .iter()
+            .find(|l| l.msg == "exited 3")
+            .expect("the reason");
+        assert_ne!(reason.process_id, attempts[0].process_id);
+        assert_eq!(reason.process.as_deref(), Some("dag"));
     }
 
     #[tokio::test]
@@ -339,6 +490,7 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
+                builtin: true,
             },
             Event::ProgressLength {
                 step: "slack/raw".into(),
@@ -369,6 +521,7 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
+                builtin: true,
             },
             Event::ProgressLength {
                 step: "slack/raw".into(),
@@ -378,6 +531,7 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 2,
+                builtin: true,
             },
             inc("slack/raw", 1),
         ])
@@ -451,6 +605,7 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
+                builtin: true,
             },
             Event::ProgressMessage {
                 step: "slack/raw".into(),
@@ -460,6 +615,8 @@ mod tests {
                 step: "slack/raw".into(),
                 status: RunState::Failed,
                 error: Some("boom".into()),
+                exit_code: None,
+                signal: None,
             },
         ])
         .await;
@@ -482,11 +639,15 @@ mod tests {
                 step: "slack/raw".into(),
                 status: RunState::Stopped,
                 error: Some("stopped when asked to".into()),
+                exit_code: None,
+                signal: None,
             },
             Event::StepFinish {
                 step: "slack/rendered_md".into(),
                 status: RunState::Succeeded,
                 error: None,
+                exit_code: None,
+                signal: None,
             },
         ])
         .await;
@@ -503,6 +664,7 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 2,
+                builtin: true,
             },
             Event::ProgressMessage {
                 step: "slack/raw".into(),
