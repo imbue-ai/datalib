@@ -488,8 +488,14 @@ async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_tim
             ..metric("a", "stale", 100)
         });
         w.log(line("a", "info", "first"));
-        // Past the flush interval, inside the sample floor.
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        // The first value has to reach the store before the second is
+        // published, or the two coalesce in the writer's batch and the
+        // series gets one sample. Waited for, not slept for: the
+        // writer's first flush follows an open that a loaded runner can
+        // stretch past any interval chosen here.
+        wait_for_metric(td.path(), "a", "rows", 1).await;
+        // Inside the sample floor: the second value is the run's last,
+        // which the final flush samples.
         w.metric(MetricRow {
             updated_at_utc: recent(20),
             ..metric("a", "rows", 7)
@@ -563,6 +569,25 @@ async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
         assert!(
             std::time::Instant::now() < deadline,
             "log line {msg:?} never reached the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_for_metric(root: &std::path::Path, step: &str, name: &str, value: i64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let snap = snapshot(root).await;
+        if snap
+            .metrics
+            .iter()
+            .any(|m| m.step == step && m.name == name && m.value == value)
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "metric {step}/{name}={value} never reached the store"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
