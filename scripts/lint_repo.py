@@ -122,6 +122,11 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/backend/http:applet_proxy_test": (
         "starts applet subprocesses and binds loopback ports"
     ),
+    # Mirrors the release's `runtime` job, whose node-llama-cpp smoke
+    # spawns a child process to probe its native binding.
+    "tools:stage_runtime_test": (
+        "node-llama-cpp's binding probe spawns a subprocess the Linux sandbox refuses"
+    ),
 }
 
 # Regex matching tag-list entries that include `no-sandbox`. The tag
