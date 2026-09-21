@@ -117,7 +117,10 @@ rust_binary(
 
 rust_test(
     name = "datalib_step_unittests",
-    size = "small",
+    # 37s on a CI runner that is also running the e2e suite (7s on a
+    # warm mac), which is past a third of `small`'s 60s and timed out
+    # once (#627). `medium` is 300s.
+    size = "medium",
     crate = ":datalib_step",
     # The checked-in example configs, which `config_examples_test.rs`
     # loads and plans through the real dispatcher so the docs can't drift
