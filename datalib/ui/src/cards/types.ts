@@ -148,4 +148,18 @@ export type ViewLibs = {
   sourcesView: () => CardRender;
   // config.toml itself, edited directly.
   configView: () => CardRender;
+  // The run log: one process's lines — a step's newest attempt, the
+  // runner, a launch of the server — or a whole run's, with pickers
+  // to move between them. Selecting a line opens `logLineView` beside
+  // it. See cards/LogCard.ce.vue.
+  logView: (opts?: {
+    run?: string | null;
+    step?: string | null;
+    launch?: string | null;
+    q?: string;
+    jumpToEnd?: boolean;
+  }) => CardRender;
+  // One log line in full — its message, fields, source and process —
+  // by its store sequence number. See cards/LogLineCard.ce.vue.
+  logLineView: (seq: number) => CardRender;
 };

@@ -1,7 +1,8 @@
-// The run-log panel: the Manage screen's "Server log" opens the lines
-// of the server launch serving the page, a right-click on a cell
-// narrows the query to that cell's value (and clears it again), and
-// the bar above the grid groups the lines by a column.
+// The run-log card: the Manage screen's "Server log" opens the lines
+// of the server launch serving the page in a column beside it, a
+// right-click on a cell narrows the query to that cell's value (and
+// clears it again), the bar above the grid groups the lines by a
+// column, and a selected line opens in full in the next column.
 //
 // The grid is built straight on the vanilla SlickGrid bundle, like the
 // cards' grids; this is the one place its menu, grouping bar and query
@@ -17,11 +18,14 @@ const GIT_HASH = process.env.DATALIB_GIT_HASH;
 
 const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 
+/// The log opens as the column after the Manage card, titled for
+/// what it shows.
 async function openServerLog(page: Page) {
   await page.goto("/sources2");
   await page.getByRole("button", { name: "Server log" }).click();
-  const dialog = page.getByRole("dialog", { name: "Server log" });
+  const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
 }
@@ -98,6 +102,37 @@ test("a line's source links to its file and line at the server's commit", async 
     `https://github.com/imbue-ai/datalib/blob/${GIT_HASH}/${m![1]}#L${m![2]}`,
   );
   await expect(link).toHaveAttribute("target", "_blank");
+});
+
+// A selected line opens in full in the column after the log — the
+// grid's own row-to-document pattern — and the inspector's "keep"
+// narrows the log through the bus.
+test("a selected line opens in full beside the log, and can narrow it", async ({ page }) => {
+  const dialog = await openServerLog(page);
+  const first = dialog.locator(ROWS).first();
+  const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
+  await first.locator('.slick-cell[col-id="msg"]').click();
+
+  const inspector = page.locator(".miller-col").filter({ has: page.locator(".ll") });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.locator(".ll-msg")).toHaveText(msg);
+  await expect(inspector.locator(".ll-level")).toHaveText("info");
+  await expect(inspector.locator(".ll-meta")).toContainText("the server");
+  // The source link, at the server's commit.
+  await expect(inspector.locator(".ll-meta a.ll-link").first()).toHaveAttribute(
+    "href",
+    new RegExp(`^https://github.com/imbue-ai/datalib/blob/${GIT_HASH}/datalib/backend/`),
+  );
+
+  // "keep" on the thread chip narrows the log beside it.
+  await inspector.locator(".ll-meta").getByRole("button", { name: /^main$/ }).click();
+  await expect(dialog.locator(".rl-search")).toHaveValue("min_level:info thread:main");
+
+  // The arrow key moves the selection, and the inspector follows.
+  await dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]').click();
+  await page.keyboard.press("ArrowDown");
+  const second = (await dialog.locator(ROWS).nth(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
+  await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
 });
 
 // Grouping goes through the panel's `__fwRunLogApi.groupBy`, which
