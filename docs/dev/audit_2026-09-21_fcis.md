@@ -1,10 +1,8 @@
 # Audit: the tree against "functional core, imperative shell"
 
 A record, not reference. The tree at `220566f8` (after #626) read
-against the rule [`style.md` § Functional core, imperative
-shell](style.md) states: a decision is a pure function over values,
-and the I/O around it is a thin layer that does nothing else. Every
-claim below was checked against the tree — the function outlines,
+against [`style.md` § Functional core, imperative shell](style.md).
+Every claim below was checked against the tree — the function outlines,
 the test lists, and whether a pure function is called from a test or
 only through the shell around it — not against a commit message or
 a comment.
