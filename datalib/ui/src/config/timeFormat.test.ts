@@ -122,16 +122,11 @@ describe("ordering by when, not by how it reads", () => {
     const nineUtc = "2026-09-01T09:00:00+00:00";
     const elevenUtcWrittenLocal = "2026-09-01T04:00:00-07:00";
     expect(elevenUtcWrittenLocal < nineUtc, "premise: text order disagrees").toBe(true);
-    expect(sorted([elevenUtcWrittenLocal, nineUtc])).toEqual([
-      nineUtc,
-      elevenUtcWrittenLocal,
-    ]);
+    expect(sorted([elevenUtcWrittenLocal, nineUtc])).toEqual([nineUtc, elevenUtcWrittenLocal]);
   });
 
   it("treats the same instant in two offsets as equal", () => {
-    expect(
-      compareStamps("2026-09-01T13:00:00+02:00", "2026-09-01T04:00:00-07:00"),
-    ).toBe(0);
+    expect(compareStamps("2026-09-01T13:00:00+02:00", "2026-09-01T04:00:00-07:00")).toBe(0);
   });
 
   it("sorts 'never run' as forever ago, so reversing really reverses", () => {

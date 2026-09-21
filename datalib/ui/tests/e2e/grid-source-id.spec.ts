@@ -22,10 +22,7 @@ async function distinctSourceCells(page: Page): Promise<string[]> {
 
 async function openGrid(page: Page) {
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 }
 
 /// Replace config.toml through the Manage screen's Advanced editor,
@@ -84,33 +81,25 @@ test("the Source column shows the configured name, and source_id: filters by id"
   // prefix test on qmd_path, not a substring match on anything.
   await searchAndSettle(page, "source_id:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
-  expect(
-    await distinctSourceCells(page),
-  ).toEqual(["slack"]);
+  expect(await distinctSourceCells(page)).toEqual(["slack"]);
 
   // `source_name:` is the spelling this filter had before a source had
   // a name to collide with, so it is in saved queries and in people's
   // fingers. It has to keep landing on the same rows.
   await searchAndSettle(page, "source_name:slack");
-  expect(
-    await distinctSourceCells(page),
-  ).toEqual(["slack"]);
+  expect(await distinctSourceCells(page)).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
   await searchAndSettle(page, "source_id:claude-api");
-  expect(
-    await distinctSourceCells(page),
-  ).toEqual(["claude-api"]);
+  expect(await distinctSourceCells(page)).toEqual(["claude-api"]);
 
   // Datalib's own rows — every source's storage report — are filed
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
   await searchAndSettle(page, "source_id:datalib");
-  expect(
-    await distinctSourceCells(page),
-  ).toEqual(["Datalib"]);
+  expect(await distinctSourceCells(page)).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
   // The fixture root already declares `slack` (see
@@ -121,9 +110,7 @@ test("the Source column shows the configured name, and source_id: filters by id"
 
   await openGrid(page);
   await searchAndSettle(page, "source_id:slack");
-  expect(
-    await distinctSourceCells(page),
-  ).toEqual(["Work Slack"]);
+  expect(await distinctSourceCells(page)).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.

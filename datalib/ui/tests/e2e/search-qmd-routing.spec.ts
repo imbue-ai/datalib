@@ -10,10 +10,7 @@ import { searchAndSettle } from "./grid-helpers";
 
 async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
   // by qmd-routed rows, so once the grid is painting this query its
   // presence *is* the routing assertion — no timeout needed, and a
@@ -21,9 +18,7 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   // of after a 90s wait indistinguishable from a slow daemon.
   await searchAndSettle(page, q);
   await expect(page.locator('.grid-box .slick-header-column[col-id="score"]')).toBeVisible();
-  await expect(
-    page.locator(".grid-box .slick-row").first(),
-  ).toBeVisible();
+  await expect(page.locator(".grid-box .slick-row").first()).toBeVisible();
 }
 
 test.describe("free-text search routes through qmd", () => {
@@ -33,9 +28,7 @@ test.describe("free-text search routes through qmd", () => {
   // here may still pay a qmd model load. See `SEARCH_SETTLE`.
   test.setTimeout(180_000);
 
-  test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({
-    page,
-  }) => {
+  test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({ page }) => {
     await qmdSearch(page, "grey earl");
   });
 
@@ -43,9 +36,7 @@ test.describe("free-text search routes through qmd", () => {
     await qmdSearch(page, 'qmd:"earl grey"');
   });
 
-  test('qmd_vsearch:"..." predicate routes to vector-only mode', async ({
-    page,
-  }) => {
+  test('qmd_vsearch:"..." predicate routes to vector-only mode', async ({ page }) => {
     await qmdSearch(page, 'qmd_vsearch:"earl grey"');
   });
 });

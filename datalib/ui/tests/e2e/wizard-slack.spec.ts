@@ -6,9 +6,7 @@ import { MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 const field = (page: Page, caption: string) =>
-  wizard(page)
-    .locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`)
-    .first();
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-input`).first();
 const toggle = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) .wiz-bool`);
 const picker = (page: Page, caption: string) =>
@@ -32,13 +30,58 @@ const SLACK_SERVICE = {
 /// per DM, titled the way the sync will title it.
 const SLACK_PROBE = {
   mode: "api",
-  account: { id: "U_PICARD", address: null, display_name: "picard in Enterprise", message_estimate: null },
+  account: {
+    id: "U_PICARD",
+    address: null,
+    display_name: "picard in Enterprise",
+    message_estimate: null,
+  },
   items: [
-    { path: "bridge", kind: "channel", title: null, role: null, messages: null, members: 12, updated_at: null },
-    { path: "engineering", kind: "channel", title: null, role: "private", messages: null, members: 4, updated_at: null },
-    { path: "ten-forward", kind: "channel", title: null, role: "not a member", messages: null, members: 40, updated_at: null },
-    { path: "D_RIKER", kind: "conversation", title: "@William Riker", role: null, messages: null, members: null, updated_at: null },
-    { path: "G_AWAYTEAM", kind: "conversation", title: "@William Riker, Worf", role: "group", messages: null, members: 2, updated_at: null },
+    {
+      path: "bridge",
+      kind: "channel",
+      title: null,
+      role: null,
+      messages: null,
+      members: 12,
+      updated_at: null,
+    },
+    {
+      path: "engineering",
+      kind: "channel",
+      title: null,
+      role: "private",
+      messages: null,
+      members: 4,
+      updated_at: null,
+    },
+    {
+      path: "ten-forward",
+      kind: "channel",
+      title: null,
+      role: "not a member",
+      messages: null,
+      members: 40,
+      updated_at: null,
+    },
+    {
+      path: "D_RIKER",
+      kind: "conversation",
+      title: "@William Riker",
+      role: null,
+      messages: null,
+      members: null,
+      updated_at: null,
+    },
+    {
+      path: "G_AWAYTEAM",
+      kind: "conversation",
+      title: "@William Riker, Worf",
+      role: "group",
+      messages: null,
+      members: 2,
+      updated_at: null,
+    },
   ],
   notes: [],
 };
@@ -83,9 +126,7 @@ test.afterEach(async ({ page }) => {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
-test("a probe fills the channel picker, and ticking rows writes `channels`", async ({
-  page,
-}) => {
+test("a probe fills the channel picker, and ticking rows writes `channels`", async ({ page }) => {
   await pickSlack(page);
 
   // Nothing to pick from until the workspace has been asked.
@@ -153,9 +194,7 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   await toggle(page, "Download direct messages").check();
   // The link `Copy link` hands out resolves to its id; a person's
   // handle is not a conversation and would mirror nothing.
-  await field(page, "Only these DMs").fill(
-    "https://enterprise.slack.com/archives/D_RIKER, @riker",
-  );
+  await field(page, "Only these DMs").fill("https://enterprise.slack.com/archives/D_RIKER, @riker");
   await wizard(page).getByRole("button", { name: "Test connection" }).click();
 
   await expect(wizard(page).getByText(/Not on this account: bridg\./)).toBeVisible();

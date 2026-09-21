@@ -3,10 +3,7 @@ import { expectGridPainted } from "./grid-helpers";
 
 // Smoke test: the grid actually renders rows from the TNG fixture.
 
-test("the grid populates with rows from the fixture", async ({
-  page,
-  request,
-}) => {
+test("the grid populates with rows from the fixture", async ({ page, request }) => {
   // Backend has rows.
   const resp = await request.get("/applet/unified_index/search?q=&limit=50");
   expect(resp.ok()).toBeTruthy();
@@ -15,14 +12,10 @@ test("the grid populates with rows from the fixture", async ({
 
   // Grid surfaces them.
   await page.goto("/");
-  const firstRow = page
-    .locator(".grid-box .slick-row")
-    .first();
+  const firstRow = page.locator(".grid-box .slick-row").first();
   await expect(firstRow).toBeVisible({ timeout: 10_000 });
 
-  const rowCount = await page
-    .locator(".grid-box .slick-row")
-    .count();
+  const rowCount = await page.locator(".grid-box .slick-row").count();
   expect(rowCount).toBeGreaterThan(0);
 
   // …and the grid they're in has real height. Rows stay in the DOM when

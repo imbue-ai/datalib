@@ -51,8 +51,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
   return path.slice(0, path.lastIndexOf("/"));
 }
 
-const syncBtn = (page: Page, id: string) =>
-  row(page, id).getByRole("button", { name: "Sync now" });
+const syncBtn = (page: Page, id: string) => row(page, id).getByRole("button", { name: "Sync now" });
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
@@ -181,9 +180,7 @@ command = "'${STEP_BIN}'"
 path = "${dataRoot}/fsindex_scan"
 ${applets()}`;
 
-  test("syncing one source leaves another source's history untouched", async ({
-    page,
-  }) => {
+  test("syncing one source leaves another source's history untouched", async ({ page }) => {
     await writeConfigAndOpenGroups(page, config());
 
     // Give docs a real history to protect.
@@ -211,9 +208,7 @@ ${applets()}`;
     ).toBe(docsSynced);
   });
 
-  test("the row shows the sync happening, and never goes backwards", async ({
-    page,
-  }) => {
+  test("the row shows the sync happening, and never goes backwards", async ({ page }) => {
     await writeConfigAndOpenGroups(page, config());
 
     // Watch the row the way the grid paints it, from before the click
@@ -256,10 +251,9 @@ ${applets()}`;
       })
       .toBeGreaterThan(beforeDown);
     const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
-    expect(
-      statusWord(downstream[0]),
-      `downstream sequence was ${JSON.stringify(downstream)}`,
-    ).toBe("Queued");
+    expect(statusWord(downstream[0]), `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
+      "Queued",
+    );
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
 
@@ -315,10 +309,9 @@ ${applets()}`;
       return rank[s];
     };
     for (let i = 1; i < seen.length; i++) {
-      expect(
-        rankOf(seen[i]),
-        `went backwards: ${JSON.stringify(seen)}`,
-      ).toBeGreaterThanOrEqual(rankOf(seen[i - 1]));
+      expect(rankOf(seen[i]), `went backwards: ${JSON.stringify(seen)}`).toBeGreaterThanOrEqual(
+        rankOf(seen[i - 1]),
+      );
     }
 
     // The render step follows the download it depends on: it may not
@@ -374,10 +367,9 @@ ${applets()}`;
     // countup ever comes back.
     for (let i = 0; i < 4; i++) {
       await page.waitForTimeout(700);
-      expect(
-        (await cell.textContent())?.trim(),
-        "Last synced ticked while nothing happened",
-      ).toBe("seconds ago");
+      expect((await cell.textContent())?.trim(), "Last synced ticked while nothing happened").toBe(
+        "seconds ago",
+      );
     }
 
     // NOT asserted here: the crossing to "1 minute ago", which is now
@@ -394,15 +386,11 @@ ${applets()}`;
     // to reveal. `unsynced/ingest` exists in the config for exactly this:
     // the data root is shared by every test in this file, so any step
     // one of them syncs would make this order-dependent.
-    await expect(
-      row(page, "unsynced/ingest").locator('[col-id="last_synced"]'),
-    ).toHaveText("—");
+    await expect(row(page, "unsynced/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
     expect(await lastSyncedOf(page, "unsynced/ingest")).toBeNull();
   });
 
-  test("sorting Last synced orders by time, not by how the cell reads", async ({
-    page,
-  }) => {
+  test("sorting Last synced orders by time, not by how the cell reads", async ({ page }) => {
     // The column shows "5 minutes ago" and sorts on the underlying
     // stamp. Those two orders genuinely disagree here, which is what
     // makes this worth asserting through the real header rather than
@@ -413,7 +401,11 @@ ${applets()}`;
     // Two rows with a real gap between them, so the orders differ. Each
     // sync must be finished before the next begins, or the stamps can
     // land in either order — which is the thing being sorted.
-    const sortWas = await stampsBefore(page, ["docs/ingest", "pdfs/ingest", "pdfs/render_markdown"]);
+    const sortWas = await stampsBefore(page, [
+      "docs/ingest",
+      "pdfs/ingest",
+      "pdfs/render_markdown",
+    ]);
     await syncBtn(page, "docs/ingest").click();
     expect(await settle(page, "docs/ingest", sortWas["docs/ingest"])).toBe("Succeeded");
     await syncBtn(page, "pdfs/ingest").click();
@@ -437,9 +429,11 @@ ${applets()}`;
           )
           .map((r) => ({
             id: r.getAttribute("data-key") ?? "",
-            level: Number(/slick-tree-level-(\d+)/.exec(r.querySelector(".tg-tree")?.className ?? "")?.[1] ?? "0"),
-            stamp:
-              r.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
+            level: Number(
+              /slick-tree-level-(\d+)/.exec(r.querySelector(".tg-tree")?.className ?? "")?.[1] ??
+                "0",
+            ),
+            stamp: r.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
           })),
       );
 
@@ -543,7 +537,10 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     await expandGroup(page, "flaky");
 
     const cell = row(page, "flaky/ingest").locator('[col-id="status"] .tg-status');
-    await expect(cell).toHaveAttribute("title", "Failed — double-click to open the log at the error");
+    await expect(cell).toHaveAttribute(
+      "title",
+      "Failed — double-click to open the log at the error",
+    );
     // The group reads its failed child's status, and names it.
     await expect(
       page.locator(`${TABLE_ROWS}[data-key="group:flaky"] [col-id="status"] .tg-status`),
@@ -558,7 +555,9 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     // ended in its name — and on the whole of it: the step's own words
     // and the runner's about it.
     const which = dialog.getByLabel("Which process of the run");
-    await expect(which.locator("option:checked")).toHaveText(/^flaky\/ingest · attempt 1 · exited 1$/);
+    await expect(which.locator("option:checked")).toHaveText(
+      /^flaky\/ingest · attempt 1 · exited 1$/,
+    );
     // The line the panel opened on is the runner's word on how the step
     // ended, marked, with the step's own last words above it.
     const jumped = dialog.locator('.rl-grid .slick-cell.rl-jumped[col-id="msg"]');
@@ -566,7 +565,9 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     await expect(jumped).toHaveText(/^step flaky\/ingest exited with exit status: 1: /);
     await expect(jumped).toContainText("listing failed: 429 too many requests");
     await expect(jumped).toHaveClass(/rl-error/);
-    const messages = dialog.locator('.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]');
+    const messages = dialog.locator(
+      '.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]',
+    );
     await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
   });
 

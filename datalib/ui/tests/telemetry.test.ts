@@ -26,7 +26,10 @@ beforeEach(() => {
 
 afterEach(async () => {
   // Drain anything a test left queued so it cannot leak into the next.
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 204 })),
+  );
   await flush();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -67,7 +70,11 @@ describe("track", () => {
     expect(body.page).toEqual(page);
     expect(body.closing).toBe(false);
     expect(body.events).toHaveLength(2);
-    expect(body.events[0]).toMatchObject({ name: "navigate", msg: "/cards", fields: { path: "/cards" } });
+    expect(body.events[0]).toMatchObject({
+      name: "navigate",
+      msg: "/cards",
+      fields: { path: "/cards" },
+    });
   });
 
   it("sends a full batch at once", async () => {

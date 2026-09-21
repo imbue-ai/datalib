@@ -46,9 +46,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
 
   // The Sources screens: the config editor and the pipeline table.
   await page.goto("/sources");
-  await expect(
-    page.getByRole("heading", { name: "Configure data sources" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
   expect(await violations(page)).toEqual([]);
 
   await page.goto("/data_sources");
@@ -63,11 +61,9 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   // the listener records.
   const injected = await page.evaluate(async () => {
     const seen = new Promise<string>((resolve) =>
-      document.addEventListener(
-        "securitypolicyviolation",
-        (e) => resolve(e.violatedDirective),
-        { once: true },
-      ),
+      document.addEventListener("securitypolicyviolation", (e) => resolve(e.violatedDirective), {
+        once: true,
+      }),
     );
     const s = document.createElement("script");
     s.textContent = "window.__cspBypassed = true";

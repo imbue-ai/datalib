@@ -223,8 +223,7 @@ export function perseusView(): CardRender {
     }
 
     // --- opening panels ---
-    const enabledVersions = (): Version[] =>
-      sortedVersions.filter((v) => enabled.has(v.id));
+    const enabledVersions = (): Version[] => sortedVersions.filter((v) => enabled.has(v.id));
 
     function openChapter(c: ChapterNode) {
       const sources = enabledVersions()
@@ -270,11 +269,8 @@ export function perseusView(): CardRender {
       const tw = document.createElement("span");
       const interactive = opts.twiddle !== "leaf" && !!opts.onToggle;
       tw.className =
-        "sv-tw" +
-        (opts.twiddle === "leaf" ? " leaf" : "") +
-        (interactive ? " toggle" : "");
-      tw.textContent =
-        opts.twiddle === "open" ? "▾" : opts.twiddle === "closed" ? "▸" : "•";
+        "sv-tw" + (opts.twiddle === "leaf" ? " leaf" : "") + (interactive ? " toggle" : "");
+      tw.textContent = opts.twiddle === "open" ? "▾" : opts.twiddle === "closed" ? "▸" : "•";
       if (interactive) {
         tw.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -319,8 +315,7 @@ export function perseusView(): CardRender {
       enabledVersions().some((v) => c.byVer[v.id] !== undefined);
     const sectionShown = (s: SectionNode): boolean =>
       enabledVersions().some((v) => s.byVer[v.id] !== undefined);
-    const bookShown = (b: BookNode): boolean =>
-      [...b.chapters.values()].some(chapterShown);
+    const bookShown = (b: BookNode): boolean => [...b.chapters.values()].some(chapterShown);
 
     function paintTree(): HTMLElement {
       const tree = document.createElement("div");

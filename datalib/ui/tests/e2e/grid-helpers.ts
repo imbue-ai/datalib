@@ -41,8 +41,8 @@ export type GridApi = {
 /// would otherwise move out from under `.first()`.
 export async function firstRowUuid(page: Page): Promise<string> {
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
-  const uuid = await page.evaluate(
-    () => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
+  const uuid = await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
   );
   expect(uuid, "the grid must have a first row").toBeTruthy();
   return uuid!;
@@ -59,11 +59,7 @@ const rowLocator = (page: Page, rowIndex: number): Locator =>
 // `colId` nudges the horizontal axis too. The grid virtualizes both, so
 // a caller that wants to read one particular cell has to name its
 // column — otherwise the row is there and the cell it came for is not.
-const nudgeRowIntoView = (
-  page: Page,
-  uuid: string,
-  colId?: string,
-): Promise<number | null> =>
+const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<number | null> =>
   page.evaluate(
     ({ uuid, colId }) => {
       const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
@@ -85,11 +81,7 @@ const nudgeRowIntoView = (
 // viewport did not end up where the call asked (a re-layout, a grid
 // that has just been resized), waiting alone never converges. So the
 // nudge is inside the poll, and gets repeated until the row is there.
-async function scrollRowIntoView(
-  page: Page,
-  uuid: string,
-  colId?: string,
-): Promise<number> {
+async function scrollRowIntoView(page: Page, uuid: string, colId?: string): Promise<number> {
   const rowIndex = await nudgeRowIntoView(page, uuid, colId);
   expect(rowIndex, `row for uuid=${uuid} found in grid`).not.toBeNull();
   await expect
@@ -163,9 +155,7 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
 // node to dispatch at — but opens the context menu instead of
 // selecting.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  await actOnRowByUuid(page, uuid, (row) =>
-    row.click({ button: "right", timeout: 3_000 }),
-  );
+  await actOnRowByUuid(page, uuid, (row) => row.click({ button: "right", timeout: 3_000 }));
   await expect(page.locator(SEARCH_MENU)).toBeVisible({ timeout: 5_000 });
 }
 
@@ -189,17 +179,11 @@ export async function stubClipboard(page: Page) {
     });
   });
   return async () =>
-    page.evaluate(
-      () => (window as unknown as { __copied?: string }).__copied ?? null,
-    );
+    page.evaluate(() => (window as unknown as { __copied?: string }).__copied ?? null);
 }
 
 // Assert that a grid actually *painted*, not merely mounted.
-export async function expectGridPainted(
-  grid: Locator,
-  what: string,
-  timeout = 10_000,
-) {
+export async function expectGridPainted(grid: Locator, what: string, timeout = 10_000) {
   await expect(grid).toBeVisible({ timeout });
   await expect
     .poll(async () => (await grid.boundingBox())?.height ?? 0, {
@@ -306,13 +290,16 @@ export async function pickRowMenu(
   entry: string | RegExp,
   effect: Locator,
 ): Promise<void> {
-  await expect(async () => {
-    if (await effect.isVisible()) return;
-    await page.keyboard.press("Escape");
-    const option = await rowMenuEntry(page, row, entry).open();
-    await option.click({ timeout: 2_000 });
-    await expect(effect).toBeVisible({ timeout: 2_000 });
-  }, `${String(entry)} never took`).toPass({
+  await expect(
+    async () => {
+      if (await effect.isVisible()) return;
+      await page.keyboard.press("Escape");
+      const option = await rowMenuEntry(page, row, entry).open();
+      await option.click({ timeout: 2_000 });
+      await expect(effect).toBeVisible({ timeout: 2_000 });
+    },
+    `${String(entry)} never took`,
+  ).toPass({
     timeout: 15_000,
     intervals: [250, 500, 1_000],
   });
@@ -340,7 +327,6 @@ export async function stampOf(page: Page, id: string): Promise<string | null> {
 
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted|Stopped)$/;
-
 
 /// How long a row may take to settle: a real `datalib-dag` run over the
 /// fixture corpus on a cold action cache.

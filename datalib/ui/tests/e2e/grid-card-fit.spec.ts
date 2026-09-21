@@ -65,13 +65,13 @@ test("the filter row narrows the rows to the typed value", async ({ page }) => {
 
   // Every row left is the provider asked for — read off the grid's
   // filtered rows, not the few painted.
-  const providers = await page.evaluate(() =>
-    [...new Set(
+  const providers = await page.evaluate(() => [
+    ...new Set(
       (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
         .filteredRows()
         .map((r) => r.source as string),
-    )],
-  );
+    ),
+  ]);
   expect(providers).toEqual(["Slack"]);
 });
 

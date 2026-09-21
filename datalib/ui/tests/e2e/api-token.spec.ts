@@ -18,10 +18,7 @@ const TOKEN = process.env.DATALIB_TOKEN;
 // No ambient Authorization header: this file is about the cookie.
 test.use({ extraHTTPHeaders: {} });
 
-test("no token means no app, on the page and on the API", async ({
-  page,
-  request,
-}) => {
+test("no token means no app, on the page and on the API", async ({ page, request }) => {
   const resp = await page.goto("/");
   expect(resp?.status()).toBe(401);
   await expect(page.getByText("This browser isn't authenticated")).toBeVisible();
@@ -30,10 +27,7 @@ test("no token means no app, on the page and on the API", async ({
   expect(api.status()).toBe(401);
 });
 
-test("?token= mints a session cookie, then the app runs on it", async ({
-  page,
-  context,
-}) => {
+test("?token= mints a session cookie, then the app runs on it", async ({ page, context }) => {
   expect(TOKEN, "playwright.config.ts should have pinned DATALIB_TOKEN").toBeTruthy();
 
   const resp = await page.goto(`/?token=${TOKEN}`);
@@ -42,9 +36,7 @@ test("?token= mints a session cookie, then the app runs on it", async ({
   // and so not in history or a Referer either.
   expect(new URL(page.url()).search).toBe("");
 
-  const cookie = (await context.cookies()).find((c) =>
-    c.name.startsWith("datalib_token_"),
-  );
+  const cookie = (await context.cookies()).find((c) => c.name.startsWith("datalib_token_"));
   expect(cookie, "the load should have minted a session cookie").toBeTruthy();
   expect(cookie?.httpOnly).toBe(true);
   expect(cookie?.sameSite).toBe("Lax");

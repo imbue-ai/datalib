@@ -125,15 +125,9 @@ function withChildren(node: TileSplit, children: TileNode[]): TileSplit {
 // Sibling: insert `newTile` immediately after the target tile within
 // its parent split, reusing the parent's arrangement. The new tile
 // matches the target's weight; in a tab parent it becomes active.
-export function addSibling(
-  node: TileNode,
-  tileId: string,
-  newTile: TileLeaf,
-): TileNode {
+export function addSibling(node: TileNode, tileId: string, newTile: TileLeaf): TileNode {
   if (node.kind === "leaf") return node;
-  const idx = node.children.findIndex(
-    (c) => c.kind === "leaf" && c.id === tileId,
-  );
+  const idx = node.children.findIndex((c) => c.kind === "leaf" && c.id === tileId);
   if (idx !== -1) {
     const target = node.children[idx] as TileLeaf;
     const children = node.children.slice();
@@ -156,11 +150,7 @@ export function addSibling(
 // Append `child` as the last child of the container `containerId`
 // (the container's "add" end). The child's weight resets to 1; in a
 // tab container it becomes the active tab.
-export function appendChild(
-  node: TileNode,
-  containerId: string,
-  child: TileNode,
-): TileNode {
+export function appendChild(node: TileNode, containerId: string, child: TileNode): TileNode {
   if (node.kind === "leaf") return node;
   if (node.id === containerId) {
     const children = [...node.children, { ...child, weight: 1 }];
@@ -181,11 +171,7 @@ export function appendChild(
 // Move an existing direct child of `containerId` to the end of that
 // container (used when a node is dragged onto its own parent's add
 // area — a reorder, no detach/collapse).
-function reorderToEnd(
-  node: TileNode,
-  containerId: string,
-  childId: string,
-): TileNode {
+function reorderToEnd(node: TileNode, containerId: string, childId: string): TileNode {
   if (node.kind === "leaf") return node;
   if (node.id === containerId) {
     const idx = node.children.findIndex((c) => c.id === childId);
@@ -238,7 +224,10 @@ function replaceLeafWithSplit(
 // Detach the node `id` from the tree, returning the remaining tree
 // (with single-child splits collapsed, the root excepted) and the
 // removed node.
-function detach(tree: TileNode, id: string): {
+function detach(
+  tree: TileNode,
+  id: string,
+): {
   tree: TileNode;
   node: TileNode | null;
 } {
@@ -293,11 +282,7 @@ export function dropOntoLeaf(
 // *is* the target. A non-root split left with one child collapses to
 // that child (which inherits the split's weight). The root is exempt:
 // it keeps its single remaining child (or none — see deleteNode).
-function removeNode(
-  node: TileNode,
-  id: string,
-  isRoot: boolean,
-): TileNode | null {
+function removeNode(node: TileNode, id: string, isRoot: boolean): TileNode | null {
   if (node.id === id) return null;
   if (node.kind === "leaf") return node;
   let changed = false;
@@ -317,11 +302,7 @@ function removeNode(
 // Delete a node — a tile, or an entire split subtree — by id,
 // collapsing now-single-child splits (root excepted). Emptying the
 // root yields a fresh blank tile so the tree is never empty.
-export function deleteNode(
-  node: TileNode,
-  id: string,
-  blank: () => TileLeaf,
-): TileNode {
+export function deleteNode(node: TileNode, id: string, blank: () => TileLeaf): TileNode {
   const next = removeNode(node, id, true) ?? node;
   if (next.kind === "split" && next.children.length === 0) {
     return { ...next, children: [blank()] };

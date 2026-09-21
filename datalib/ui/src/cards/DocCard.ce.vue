@@ -21,11 +21,7 @@ import {
 } from "@/feedback/context";
 import { chatHrefFromClick } from "./chatLink";
 import { problemLabel } from "./problems";
-import {
-  TOPIC_EDGE_HOVER,
-  type CardCtx,
-  type EdgeHoverPayload,
-} from "./types";
+import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -97,9 +93,7 @@ function isEdgeHoverTarget(p: unknown): p is NonNullable<EdgeHoverPayload> {
 const unsubHover = props.ctx.bus.subscribe(TOPIC_EDGE_HOVER, (payload) => {
   const t = isEdgeHoverTarget(payload) ? payload : null;
   hoverAnchor.value =
-    t && props.markdownUuid && t.markdownUuid === props.markdownUuid
-      ? t.sectionUuid
-      : null;
+    t && props.markdownUuid && t.markdownUuid === props.markdownUuid ? t.sectionUuid : null;
 });
 onBeforeUnmount(unsubHover);
 
@@ -262,11 +256,9 @@ function onFeedback() {
     feedbackContext.value = buildContext({
       surface: "preview_selection",
       anchor: t.anchor,
-      targetUuids: [
-        t.conv,
-        t.sel.start_message_uuid,
-        t.sel.end_message_uuid,
-      ].filter((v, i, a) => a.indexOf(v) === i),
+      targetUuids: [t.conv, t.sel.start_message_uuid, t.sel.end_message_uuid].filter(
+        (v, i, a) => a.indexOf(v) === i,
+      ),
       payload: t.sel,
     });
     feedbackSurfaceLabel.value = "Selected text";
@@ -334,9 +326,7 @@ watch(
     :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
   >
-    <p v-if="!markdownUuid" class="empty">
-      Select a row to preview the conversation.
-    </p>
+    <p v-if="!markdownUuid" class="empty">Select a row to preview the conversation.</p>
     <p v-else-if="loading && !chat" class="empty">loading…</p>
     <p v-else-if="error" class="error">error: {{ error }}</p>
     <template v-else-if="chat">
@@ -370,13 +360,9 @@ watch(
         >
           <span class="problem-severity">{{ p.severity }}</span>
           <span class="problem-text">
-            <a
-              v-if="p.item_uuid"
-              class="problem-jump"
-              href="#"
-              @click.prevent="onProblemJump(p)"
-              >{{ problemLabel(p) }}</a
-            >
+            <a v-if="p.item_uuid" class="problem-jump" href="#" @click.prevent="onProblemJump(p)">{{
+              problemLabel(p)
+            }}</a>
             <template v-else>{{ problemLabel(p) }}</template>
             <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
           </span>
@@ -402,9 +388,7 @@ watch(
             :title="e.dst_title ?? e.dst_markdown_uuid"
             >{{ e.label || e.dst_title || e.dst_markdown_uuid }}</a
           >
-          <span
-            v-if="e.label && e.dst_title && e.label !== e.dst_title"
-            class="edge-dst-title"
+          <span v-if="e.label && e.dst_title && e.label !== e.dst_title" class="edge-dst-title"
             >({{ e.dst_title }})</span
           >
         </li>
@@ -506,11 +490,23 @@ watch(
   text-transform: uppercase;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
-.problem-error .problem-severity { color: var(--datalib-log-error); }
-.problem-warning .problem-severity { color: var(--datalib-log-warn); }
-.problem-info .problem-severity { color: var(--datalib-muted); }
-.problem-text { flex: 1 1 auto; min-width: 0; }
-.problem-jump { color: inherit; text-decoration: underline dotted; }
+.problem-error .problem-severity {
+  color: var(--datalib-log-error);
+}
+.problem-warning .problem-severity {
+  color: var(--datalib-log-warn);
+}
+.problem-info .problem-severity {
+  color: var(--datalib-muted);
+}
+.problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.problem-jump {
+  color: inherit;
+  text-decoration: underline dotted;
+}
 .problem-sample {
   display: inline-block;
   margin-left: 0.4rem;

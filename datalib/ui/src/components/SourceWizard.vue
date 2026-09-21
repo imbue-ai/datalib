@@ -204,7 +204,11 @@ const orphanRender = computed<string | null>(() =>
 const groups = computed(() => {
   const matches = filterCatalog(query.value);
   return (["api", "export", "local"] as const)
-    .map((kind) => ({ kind, label: KIND_LABELS[kind], entries: matches.filter((e) => e.kind === kind) }))
+    .map((kind) => ({
+      kind,
+      label: KIND_LABELS[kind],
+      entries: matches.filter((e) => e.kind === kind),
+    }))
     .filter((g) => g.entries.length > 0);
 });
 
@@ -318,8 +322,7 @@ const idError = computed(() => {
   if (n.startsWith("-")) return "The id must not start with '-'.";
   if (!/^[A-Za-z0-9._-]+$/.test(n))
     return "Use only letters, digits, '.', '_' and '-' — the id becomes a directory.";
-  if (mode.value === "create" && props.takenIds.has(n))
-    return `"${n}" is already configured.`;
+  if (mode.value === "create" && props.takenIds.has(n)) return `"${n}" is already configured.`;
   return null;
 });
 
@@ -444,8 +447,7 @@ const showAccountPicker = computed(() => !chosen.value?.credentialRegister);
 const accountField = computed(() =>
   showAccountPicker.value
     ? (downloadFields.value.find((f) => f.kind === "text" && f.latchkey) as
-        | (Field & { kind: "text" })
-        | undefined)
+        (Field & { kind: "text" }) | undefined)
     : undefined,
 );
 
@@ -499,8 +501,7 @@ const wouldRegister = computed(() =>
 /// like a bug in datalib.
 const canConnect = computed(
   () =>
-    !gateway.value &&
-    (authOptions.value.includes("browser") || !!chosen.value?.credentialRegister),
+    !gateway.value && (authOptions.value.includes("browser") || !!chosen.value?.credentialRegister),
 );
 
 /// A service latchkey holds that cannot do a browser login. Its owner
@@ -556,7 +557,10 @@ async function connectViaLatchkey() {
     showConversion.value = true;
     return;
   }
-  connect.value = { state: "running", message: "A browser window should open. Finish the login there." };
+  connect.value = {
+    state: "running",
+    message: "A browser window should open. Finish the login there.",
+  };
   try {
     // A cookie capture has to watch a real sign-in happen. latchkey
     // otherwise restores the session it saved last time, so the browser
@@ -596,7 +600,10 @@ async function connectViaLatchkey() {
             : "Connected. The account list below is refreshed.",
         };
       } else {
-        connect.value = { state: "failed", message: status.output || "The login did not complete." };
+        connect.value = {
+          state: "failed",
+          message: status.output || "The login did not complete.",
+        };
       }
       return;
     }
@@ -619,7 +626,6 @@ const probe = ref<{
   message: string;
   report: ProbeReport | null;
 }>({ state: "idle", message: "", report: null });
-
 
 /// Can "Test connection" be offered here at all?
 const canProbe = computed(() => !!chosen.value?.canProbe && !!probeParams.value);
@@ -772,7 +778,12 @@ function submit() {
        click beside a half-filled form would discard every field in it
        with nothing to undo it. The × and Cancel are the ways out. -->
   <div class="wiz-backdrop">
-    <div class="wiz" role="dialog" aria-modal="true" :aria-label="isEdit ? 'Edit source' : 'Add data source'">
+    <div
+      class="wiz"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="isEdit ? 'Edit source' : 'Add data source'"
+    >
       <header class="wiz-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
         <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
@@ -798,7 +809,9 @@ function submit() {
               class="wiz-tile"
               :class="{ soon: !e.wizard, cursor: flat[cursor] === e }"
               :disabled="!e.wizard"
-              :title="e.wizard ? e.blurb : 'No guided setup yet — add this one in the config editor.'"
+              :title="
+                e.wizard ? e.blurb : 'No guided setup yet — add this one in the config editor.'
+              "
               @click="choose(e)"
             >
               <img v-if="iconUrl(e.icon)" :src="iconUrl(e.icon)!" alt="" class="wiz-icon" />
@@ -821,9 +834,7 @@ function submit() {
             <b>{{ chosen.label }}</b>
             <small>{{ chosen.blurb }}</small>
           </div>
-          <button v-if="mode === 'create'" class="btn ghost" @click="stage = 'pick'">
-            Change
-          </button>
+          <button v-if="mode === 'create'" class="btn ghost" @click="stage = 'pick'">Change</button>
         </div>
 
         <!-- Connection: the account the ingest step authenticates as. -->
@@ -842,15 +853,32 @@ function submit() {
                    back empty must not be the only way in. -->
               <select
                 class="wiz-input wiz-select wiz-accountpick"
-                :value="accounts?.some((a) => a.account === accountValue) ? accountValue : '__other'"
-                @change="values[accountField.target] = ($event.target as HTMLSelectElement).value === '__other' ? '' : ($event.target as HTMLSelectElement).value"
+                :value="
+                  accounts?.some((a) => a.account === accountValue) ? accountValue : '__other'
+                "
+                @change="
+                  values[accountField.target] =
+                    ($event.target as HTMLSelectElement).value === '__other'
+                      ? ''
+                      : ($event.target as HTMLSelectElement).value
+                "
               >
                 <option value="__other">
                   {{ accounts === null ? "Loading accounts…" : "Type an account…" }}
                 </option>
-                <option v-for="a in accounts ?? []" :key="a.account || '(default)'" :value="a.account">
+                <option
+                  v-for="a in accounts ?? []"
+                  :key="a.account || '(default)'"
+                  :value="a.account"
+                >
                   {{ a.account || "(latchkey’s default account)" }}
-                  {{ a.credential_status === "valid" ? "✓" : a.credential_status === "invalid" ? "— expired" : "" }}
+                  {{
+                    a.credential_status === "valid"
+                      ? "✓"
+                      : a.credential_status === "invalid"
+                        ? "— expired"
+                        : ""
+                  }}
                 </option>
               </select>
               <input
@@ -866,8 +894,8 @@ function submit() {
               {{ canConnect ? "Connect below." : "" }}
             </small>
             <small v-if="accountsError" class="wiz-help">
-              Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the
-              account name — the sync uses latchkey directly and is unaffected by this.
+              Couldn’t ask latchkey which accounts it holds ({{ accountsError }}). Type the account
+              name — the sync uses latchkey directly and is unaffected by this.
             </small>
           </label>
 
@@ -892,17 +920,14 @@ function submit() {
             </button>
           </div>
 
-          <p
-            v-if="canConnect && chosen.credentialConnectWarning"
-            class="wiz-help wiz-conn-note"
-          >
+          <p v-if="canConnect && chosen.credentialConnectWarning" class="wiz-help wiz-conn-note">
             {{ chosen.credentialConnectWarning }}
           </p>
           <!-- Under a gateway the login happens on the gateway's side,
                and every command the button would run is refused. -->
           <p v-if="gateway" class="wiz-help wiz-conn-note">
-            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code>). Sign in
-            where that gateway is managed, then press <b>Test connection</b>.
+            Credentials are held by a latchkey gateway (<code>{{ gateway }}</code
+            >). Sign in where that gateway is managed, then press <b>Test connection</b>.
           </p>
           <!-- What the button says on a service that has no browser
                login. Shown rather than done: latchkey refuses to
@@ -911,9 +936,11 @@ function submit() {
           <div v-if="showConversion" class="wiz-conn-note wiz-convert">
             <p class="wiz-help wiz-convert-head">
               latchkey holds <code>{{ service }}</code> without a browser login, and won’t add one
-              to a name it already has. Adding one means taking the service apart and
-              registering it again — which <b>deletes every credential stored under
-              <code>{{ service }}</code></b>, so it is yours to run, not this dialog’s:
+              to a name it already has. Adding one means taking the service apart and registering it
+              again — which
+              <b
+                >deletes every credential stored under <code>{{ service }}</code></b
+              >, so it is yours to run, not this dialog’s:
             </p>
             <pre class="wiz-probe-detail">{{ conversionCommands }}</pre>
             <p class="wiz-help">
@@ -934,7 +961,10 @@ function submit() {
           <!-- The verdict is a mark before the words — the Manage
                screen's own tick and "!", in its colours — so the eye
                gets the answer before reading what it was. -->
-          <div v-if="probe.state === 'failed'" class="wiz-conn-note wiz-probe-note wiz-probe-failed">
+          <div
+            v-if="probe.state === 'failed'"
+            class="wiz-conn-note wiz-probe-note wiz-probe-failed"
+          >
             <p class="wiz-error wiz-probe-headline">
               <svg class="wiz-probe-mark" viewBox="0 0 24 24" role="img" aria-label="Failed">
                 <path :d="STATUS_GLYPHS.failed" fill="currentColor" />
@@ -961,9 +991,7 @@ function submit() {
             }}</b
             ><!-- A message estimate is only shown when the provider gave
                   one for free: Gmail's profile carries it, JMAP's
-                  session does not. --><template
-              v-if="probe.report.account.message_estimate"
-            >
+                  session does not. --><template v-if="probe.report.account.message_estimate">
               — about {{ probe.report.account.message_estimate.toLocaleString() }} messages,
               {{ probeSummary }}.</template
             ><template v-else> — {{ probeSummary }}.</template>
@@ -980,10 +1008,11 @@ function submit() {
           <span class="wiz-label">Name</span>
           <input v-model="name" class="wiz-input" />
           <small class="wiz-help">
-            What this source is called on screen — anything you like, spaces and capitals
-            included: <b>{{ nameHint }}</b>, say. Change it whenever you like: nothing on
-            disk moves and no step re-runs. Leave it blank to be shown as
-            <code>{{ groupId || "…" }}</code>.
+            What this source is called on screen — anything you like, spaces and capitals included:
+            <b>{{ nameHint }}</b
+            >, say. Change it whenever you like: nothing on disk moves and no step re-runs. Leave it
+            blank to be shown as <code>{{ groupId || "…" }}</code
+            >.
           </small>
         </label>
 
@@ -1008,8 +1037,8 @@ function submit() {
         </label>
         <p v-else class="wiz-help wiz-fixed-id">
           Writes under <code>{{ groupId }}/</code> — this source’s folder on disk, and the path the
-          search index has already recorded for every document in it, so it can’t change here.
-          Use <b>Name</b> above for something you can.
+          search index has already recorded for every document in it, so it can’t change here. Use
+          <b>Name</b> above for something you can.
         </p>
         <!-- With no Id field there is nowhere for its validator to
              speak, and `canSubmit` still consults it — so a bad
@@ -1050,10 +1079,10 @@ function submit() {
               <span class="wiz-label">Render this source into markdown</span>
               <input v-model="renderWanted" type="checkbox" class="wiz-bool" />
               <small class="wiz-help">
-                A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code>, turns
-                what this brings in into markdown and makes it searchable. It runs on its own and
-                can be re-run without fetching anything again. Turn it off and the data is still
-                mirrored, but nothing about it reaches the grid or the search index.<template
+                A second step, <code>{{ stepIdFor(groupId || "…", "render") }}</code
+                >, turns what this brings in into markdown and makes it searchable. It runs on its
+                own and can be re-run without fetching anything again. Turn it off and the data is
+                still mirrored, but nothing about it reaches the grid or the search index.<template
                   v-if="renderWanted && section.fields.length === 0"
                 >
                   It has no settings of its own.</template
@@ -1131,12 +1160,7 @@ function submit() {
                 spellcheck="false"
                 @input="values[f.target] = ($event.target as HTMLInputElement).value"
               />
-              <button
-                v-if="canPick"
-                type="button"
-                class="btn ghost wiz-browse"
-                @click="browse(f)"
-              >
+              <button v-if="canPick" type="button" class="btn ghost wiz-browse" @click="browse(f)">
                 {{ f.picks === "file" ? "Choose file…" : "Choose folder…" }}
               </button>
             </span>
@@ -1158,9 +1182,8 @@ function submit() {
                 @update:model-value="values[f.target] = $event"
               />
               <small v-if="f.probe && unknownValues(f).length" class="wiz-error">
-                Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be mirrored
-                for a name the account doesn’t have — check the spelling, or tick it in the
-                list.
+                Not on this account: {{ unknownValues(f).join(", ") }}. Nothing can be mirrored for
+                a name the account doesn’t have — check the spelling, or tick it in the list.
               </small>
               <small v-else-if="f.probe && !probe.report" class="wiz-help">
                 Run “Test connection” to pick from this account’s real
@@ -1187,9 +1210,9 @@ function submit() {
           <span class="wiz-label">Description</span>
           <input v-model="description" class="wiz-input" />
           <small class="wiz-help">
-            Optional. A sentence on what this source holds and what it is to you, for
-            telling it apart from another of the same kind. Kept with the source's
-            settings; nothing reads it yet. Change it whenever you like: nothing re-runs.
+            Optional. A sentence on what this source holds and what it is to you, for telling it
+            apart from another of the same kind. Kept with the source's settings; nothing reads it
+            yet. Change it whenever you like: nothing re-runs.
           </small>
         </label>
 
@@ -1246,9 +1269,18 @@ function submit() {
   gap: 12px;
   padding: 14px 18px;
 }
-.wiz-head { border-bottom: 1px solid var(--datalib-border); }
-.wiz-foot { border-top: 1px solid var(--datalib-border); justify-content: flex-end; }
-.wiz-head h2 { margin: 0; font-size: 17px; flex: 1; }
+.wiz-head {
+  border-bottom: 1px solid var(--datalib-border);
+}
+.wiz-foot {
+  border-top: 1px solid var(--datalib-border);
+  justify-content: flex-end;
+}
+.wiz-head h2 {
+  margin: 0;
+  font-size: 17px;
+  flex: 1;
+}
 .wiz-x {
   background: none;
   border: none;
@@ -1257,7 +1289,10 @@ function submit() {
   line-height: 1;
   cursor: pointer;
 }
-.wiz-body { padding: 16px 18px; overflow-y: auto; }
+.wiz-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
 
 .wiz-filter,
 .wiz-input {
@@ -1269,21 +1304,38 @@ function submit() {
   color: var(--datalib-fg);
   font: inherit;
 }
-.wiz-filter { margin-bottom: 16px; }
+.wiz-filter {
+  margin-bottom: 16px;
+}
 /* A bool field's own checkbox, sized as a box rather than stretched to
    the field's width like a text input. */
-.wiz-bool { width: 16px; height: 16px; }
+.wiz-bool {
+  width: 16px;
+  height: 16px;
+}
 /* Wide enough for the counts anyone types here, instead of stretching
    across the dialog the way a text field does. */
-.wiz-num { width: 7em; }
+.wiz-num {
+  width: 7em;
+}
 /* Amount and unit read as one control: the boxes touch, and only the
    outer corners are rounded. */
-.wiz-bytes { display: inline-flex; }
-.wiz-bytes .wiz-num { border-radius: 5px 0 0 5px; }
-.wiz-unit { width: auto; border-radius: 0 5px 5px 0; border-left: none; }
+.wiz-bytes {
+  display: inline-flex;
+}
+.wiz-bytes .wiz-num {
+  border-radius: 5px 0 0 5px;
+}
+.wiz-unit {
+  width: auto;
+  border-radius: 0 5px 5px 0;
+  border-left: none;
+}
 /* Shares `.wiz-input`'s box; keeps the platform disclosure arrow so it
    doesn't read as a text field you can type into. */
-.wiz-select { cursor: pointer; }
+.wiz-select {
+  cursor: pointer;
+}
 
 .wiz-group h3 {
   font-size: 11px;
@@ -1292,7 +1344,11 @@ function submit() {
   color: var(--datalib-muted);
   margin: 16px 0 8px;
 }
-.wiz-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.wiz-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
 .wiz-tile {
   display: flex;
   align-items: center;
@@ -1306,12 +1362,30 @@ function submit() {
   cursor: pointer;
   font: inherit;
 }
-.wiz-tile:hover:not(:disabled) { background: var(--datalib-hover); }
-.wiz-tile.cursor { outline: 2px solid var(--datalib-accent); outline-offset: -1px; }
-.wiz-tile.soon { opacity: 0.55; cursor: not-allowed; }
-.wiz-tile-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.wiz-tile-text b { font-size: 14px; }
-.wiz-tile-text small { color: var(--datalib-muted); font-size: 11.5px; }
+.wiz-tile:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.wiz-tile.cursor {
+  outline: 2px solid var(--datalib-accent);
+  outline-offset: -1px;
+}
+.wiz-tile.soon {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.wiz-tile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.wiz-tile-text b {
+  font-size: 14px;
+}
+.wiz-tile-text small {
+  color: var(--datalib-muted);
+  font-size: 11.5px;
+}
 .wiz-soon {
   font-size: 10px;
   color: var(--datalib-muted);
@@ -1320,8 +1394,16 @@ function submit() {
   padding: 1px 4px;
   white-space: nowrap;
 }
-.wiz-icon { width: 22px; height: 22px; flex: none; }
-.wiz-icon-fallback { color: var(--datalib-muted); font-size: 18px; text-align: center; }
+.wiz-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+.wiz-icon-fallback {
+  color: var(--datalib-muted);
+  font-size: 18px;
+  text-align: center;
+}
 
 .wiz-chosen {
   display: flex;
@@ -1333,8 +1415,15 @@ function submit() {
   background: var(--datalib-card-bg);
   margin-bottom: 14px;
 }
-.wiz-chosen div { flex: 1; display: flex; flex-direction: column; }
-.wiz-chosen small { color: var(--datalib-muted); font-size: 11.5px; }
+.wiz-chosen div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.wiz-chosen small {
+  color: var(--datalib-muted);
+  font-size: 11.5px;
+}
 
 .wiz-cred {
   font-size: 12.5px;
@@ -1344,32 +1433,71 @@ function submit() {
   margin: 0 0 16px;
 }
 
-.wiz-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+.wiz-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
 /* Label and control on one line, with the help text wrapping to its own
    full-width row beneath them. */
-.wiz-field.wiz-inline { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.wiz-field.wiz-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
 .wiz-field.wiz-inline .wiz-help,
-.wiz-field.wiz-inline .wiz-error { flex: 1 0 100%; }
+.wiz-field.wiz-inline .wiz-error {
+  flex: 1 0 100%;
+}
 /* A tickbox reads as "[x] thing", not "thing [x]". */
-.wiz-field.wiz-inline .wiz-bool { order: -1; }
-.wiz-label { font-size: 12.5px; font-weight: 600; }
-.wiz-nofields { margin: 0 0 16px; }
+.wiz-field.wiz-inline .wiz-bool {
+  order: -1;
+}
+.wiz-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.wiz-nofields {
+  margin: 0 0 16px;
+}
 /* The id where it is a fact rather than a field, and the id error that
    then has nowhere else to go. Both sit in the form's flow. */
-.wiz-fixed-id { margin: 0 0 16px; }
-.wiz-help { color: var(--datalib-muted); font-size: 11.5px; line-height: 1.45; }
-.wiz-error { color: #b8481a; font-size: 11.5px; }
-.wiz-permanent { color: #b8481a; }
-.wiz-probe-headline { margin: 0 0 4px; }
+.wiz-fixed-id {
+  margin: 0 0 16px;
+}
+.wiz-help {
+  color: var(--datalib-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.wiz-error {
+  color: #b8481a;
+  font-size: 11.5px;
+}
+.wiz-permanent {
+  color: #b8481a;
+}
+.wiz-probe-headline {
+  margin: 0 0 4px;
+}
 .wiz-probe-mark {
   width: 14px;
   height: 14px;
   vertical-align: -3px;
   margin-right: 3px;
 }
-.wiz-probe-ok .wiz-probe-mark { color: var(--datalib-log-ok); }
-.wiz-probe-failed .wiz-probe-mark { color: var(--datalib-log-error); }
-.wiz-probe-aside { display: block; margin-top: 2px; }
+.wiz-probe-ok .wiz-probe-mark {
+  color: var(--datalib-log-ok);
+}
+.wiz-probe-failed .wiz-probe-mark {
+  color: var(--datalib-log-error);
+}
+.wiz-probe-aside {
+  display: block;
+  margin-top: 2px;
+}
 /* The step's recipe, in the shape it was written: numbered steps and
    shell commands, which reflowed into a paragraph are unreadable. */
 .wiz-probe-detail {
@@ -1384,12 +1512,16 @@ function submit() {
   font-size: 11px;
   line-height: 1.5;
 }
-.wiz-probe-note details > summary { cursor: pointer; }
+.wiz-probe-note details > summary {
+  cursor: pointer;
+}
 .wiz-convert {
   border-left: 3px solid var(--datalib-border);
   padding-left: 10px;
 }
-.wiz-convert-head { margin: 0; }
+.wiz-convert-head {
+  margin: 0;
+}
 .wiz-req {
   font-style: normal;
   font-weight: 400;
@@ -1399,12 +1531,28 @@ function submit() {
   color: var(--datalib-muted);
   margin-left: 6px;
 }
-.wiz-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.wiz-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
 /* The input takes the slack so the button keeps its label on one line. */
-.wiz-pathrow { display: flex; gap: 8px; align-items: center; }
-.wiz-pathrow .wiz-input { flex: 1; min-width: 0; }
-.wiz-browse { white-space: nowrap; }
-.wiz-foot-note { margin-right: auto; font-size: 12px; color: var(--datalib-muted); }
+.wiz-pathrow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.wiz-pathrow .wiz-input {
+  flex: 1;
+  min-width: 0;
+}
+.wiz-browse {
+  white-space: nowrap;
+}
+.wiz-foot-note {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--datalib-muted);
+}
 
 /* The Rendering heading: a rule and a small-caps title, so the render
    step's settings read as a second part of one form rather than a
@@ -1423,7 +1571,9 @@ function submit() {
   color: var(--datalib-muted);
 }
 /* The section's own toggle sits flush under its heading. */
-.wiz-section > .wiz-field { margin-bottom: 0; }
+.wiz-section > .wiz-field {
+  margin-bottom: 0;
+}
 
 /* The Connection block: latchkey account + the two buttons. Boxed
    because it is about the *account*, not about one setting — the
@@ -1435,17 +1585,42 @@ function submit() {
   padding: 12px 14px 4px;
   margin-bottom: 16px;
 }
-.wiz-conn-intro { margin: 0 0 12px; }
-.wiz-conn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.wiz-conn-note { margin: 0 0 10px; }
+.wiz-conn-intro {
+  margin: 0 0 12px;
+}
+.wiz-conn-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.wiz-conn-note {
+  margin: 0 0 10px;
+}
 /* Dropdown over box, not side by side: an account is an email address
    and both halves need the width. */
-.wiz-accountrow { display: flex; flex-direction: column; gap: 6px; }
-.wiz-accountpick { max-width: 100%; }
+.wiz-accountrow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wiz-accountpick {
+  max-width: 100%;
+}
 
-.wiz-listfield { display: flex; flex-direction: column; gap: 6px; }
-.wiz-review { margin-top: 8px; }
-.wiz-review summary { cursor: pointer; font-size: 12.5px; color: var(--datalib-muted); }
+.wiz-listfield {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wiz-review {
+  margin-top: 8px;
+}
+.wiz-review summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--datalib-muted);
+}
 .wiz-review pre {
   margin: 8px 0 0;
   padding: 10px;
@@ -1464,8 +1639,19 @@ function submit() {
   font: inherit;
   cursor: pointer;
 }
-.btn:hover:not(:disabled) { background: var(--datalib-hover); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn.primary { background: var(--datalib-accent); border-color: var(--datalib-accent); color: #fff; }
-.btn.ghost { background: none; }
+.btn:hover:not(:disabled) {
+  background: var(--datalib-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+  color: #fff;
+}
+.btn.ghost {
+  background: none;
+}
 </style>

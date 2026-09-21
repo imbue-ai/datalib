@@ -84,9 +84,7 @@ function sameSpecs(a: ColumnSpec[], b: ColumnSpec[]): boolean {
     a.length === b.length &&
     a.every(
       (x, i) =>
-        x.code === b[i].code &&
-        (x.size ?? null) === (b[i].size ?? null) &&
-        x.state === b[i].state,
+        x.code === b[i].code && (x.size ?? null) === (b[i].size ?? null) && x.state === b[i].state,
     )
   );
 }
@@ -103,9 +101,7 @@ function syncUrl() {
 
 function slotsFromSpecs(specs: ColumnSpec[]): Slot[] {
   if (specs.length === 0) return [newSlot("gridView()")];
-  return specs.map((c) =>
-    newSlot(c.code, c.state, c.size != null ? c.size * DEFAULT_WIDTH : null),
-  );
+  return specs.map((c) => newSlot(c.code, c.state, c.size != null ? c.size * DEFAULT_WIDTH : null));
 }
 
 setSlots(slotsFromSpecs(decodeColumns(route.path)));
@@ -296,10 +292,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
         :data-slot-id="slot.id"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
-        <div
-          class="miller-col-chrome"
-          :class="{ 'miller-col-chrome--title': !devMode }"
-        >
+        <div class="miller-col-chrome" :class="{ 'miller-col-chrome--title': !devMode }">
           <textarea
             v-if="devMode"
             v-auto-grow
@@ -315,11 +308,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
           </div>
           <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
         </div>
-        <ShadowCard
-          class="miller-col-card"
-          :source="slot.source"
-          :ctx="ctxFor(slot)"
-        />
+        <ShadowCard class="miller-col-card" :source="slot.source" :ctx="ctxFor(slot)" />
         <div
           class="miller-col-resize"
           role="separator"
@@ -400,7 +389,10 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 }
 .miller-col-source {
   flex: 1 1 auto;
-  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  font:
+    12px/1.5 ui-monospace,
+    Menlo,
+    monospace;
   padding: 0.2rem 0.4rem;
   border: none;
   border-radius: 3px;

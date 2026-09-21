@@ -21,9 +21,7 @@ export async function compileCardSource(source: string): Promise<CompiledCard> {
   const factory = new Function(...names, `"use strict"; return (${source});`);
   const render = factory(...names.map((n) => scope.get(n)));
   if (typeof render !== "function") {
-    throw new Error(
-      `card source must evaluate to a render function, got ${typeof render}`,
-    );
+    throw new Error(`card source must evaluate to a render function, got ${typeof render}`);
   }
   return { render: render as CardRender };
 }

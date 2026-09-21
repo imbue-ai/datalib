@@ -27,18 +27,13 @@ const DACTAL_PAGE = "/dactal/index.html";
 const MAX_LIMIT = 2000;
 
 type FrameMessage =
-  | { type: "dactal:ready" }
-  | { type: "dactal:search"; id: number; q: string; limit?: number };
+  { type: "dactal:ready" } | { type: "dactal:search"; id: number; q: string; limit?: number };
 
 function isFrameMessage(data: unknown): data is FrameMessage {
   if (!data || typeof data !== "object") return false;
   const m = data as { type?: unknown; id?: unknown; q?: unknown };
   if (m.type === "dactal:ready") return true;
-  return (
-    m.type === "dactal:search" &&
-    typeof m.id === "number" &&
-    typeof m.q === "string"
-  );
+  return m.type === "dactal:search" && typeof m.id === "number" && typeof m.q === "string";
 }
 
 export function dactalView(opts?: { load?: string; q?: string }): CardRender {
@@ -51,8 +46,7 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
     // whole thing the sandbox is for.
     frame.setAttribute("sandbox", "allow-scripts");
     frame.src = DACTAL_PAGE;
-    frame.style.cssText =
-      "width:100%;height:100%;border:0;display:block;background:#fff";
+    frame.style.cssText = "width:100%;height:100%;border:0;display:block;background:#fff";
     root.appendChild(frame);
 
     // "*" because the frame's origin is opaque and cannot be named. The
@@ -68,10 +62,7 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
         reply({ type: "dactal:init", load: opts?.load ?? "", dq: opts?.q ?? "" });
         return;
       }
-      const limit = Math.min(
-        Math.max(1, Math.floor(msg.limit ?? 500)),
-        MAX_LIMIT,
-      );
+      const limit = Math.min(Math.max(1, Math.floor(msg.limit ?? 500)), MAX_LIMIT);
       fetchSearch(msg.q, limit).then(
         (resp) => reply({ type: "dactal:rows", id: msg.id, rows: resp.rows }),
         (err: unknown) =>

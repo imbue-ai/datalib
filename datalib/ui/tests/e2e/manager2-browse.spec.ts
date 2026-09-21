@@ -7,7 +7,14 @@
 // with that type's columns. Every link is in a different file.
 
 import { test, expect, type Page } from "@playwright/test";
-import { searchAndSettle, SEARCH_ROWS, TABLE_ROWS, searchHeader, type GridApi, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import {
+  searchAndSettle,
+  SEARCH_ROWS,
+  TABLE_ROWS,
+  searchHeader,
+  type GridApi,
+  MANAGE_WITH_CONFIG,
+} from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
 const SEARCH = '[data-testid="search-input"]';

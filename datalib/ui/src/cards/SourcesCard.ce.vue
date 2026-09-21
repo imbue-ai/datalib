@@ -160,12 +160,10 @@ const sources = ref<ConfiguredStep[]>([]);
 /// and for taking a group with its last step.
 const configGroups = ref<ConfiguredGroup[]>([]);
 
-
 // Resolved once — the desktop bridge either exists for this window or
 // it doesn't, and the label depends only on the platform.
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
-
 
 const wizardOpen = ref(false);
 /// Bumped on every opening, and bound to the dialog's `key`, so a
@@ -203,9 +201,7 @@ const takenIds = computed(
   () =>
     new Set([
       ...configGroups.value.map((g) => g.id),
-      ...sources.value
-        .filter((s) => s.kind === "step")
-        .map((s) => s.group ?? s.id),
+      ...sources.value.filter((s) => s.kind === "step").map((s) => s.group ?? s.id),
     ]),
 );
 
@@ -382,10 +378,10 @@ function freshest<T>(commit: (value: T) => void) {
   return run as typeof run & { invalidate: () => void };
 }
 
-  // ── One step's log. A red Status says *that* a step failed; the next
-  // question is always what it was doing. Double-clicking the cell opens
-  // the run store's lines for that step, in the run it last took part in
-  // — or the one in flight — as a grid that follows the run while it goes.
+// ── One step's log. A red Status says *that* a step failed; the next
+// question is always what it was doing. Double-clicking the cell opens
+// the run store's lines for that step, in the run it last took part in
+// — or the one in flight — as a grid that follows the run while it goes.
 
 /// The run whose log answers "what was this step doing": the one in
 /// flight if the step is in it, else the one its record names, else —
@@ -405,9 +401,7 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean } | null
 /// bar.
 function openServerLog() {
   const launch = healthSnapshot()?.process_id ?? null;
-  props.ctx.host.openCards(
-    logSource(launch ? { launch } : { q: "process:http min_level:info" }),
-  );
+  props.ctx.host.openCards(logSource(launch ? { launch } : { q: "process:http min_level:info" }));
 }
 
 /// A step's log as a card beside this one. With `runId`, that run's;
@@ -552,7 +546,6 @@ function openRunLog(row: HistoryRow) {
 // the selection stays as it was. An entry that does not apply stays,
 // disabled, with the reason as its tooltip — see `config/rowMenu.ts`.
 
-
 /// The rows a right-click acts on, in table order: the selection when
 /// the row under the pointer is in it, that row alone when it is not.
 /// The selection itself is never touched — as in Lightroom, a
@@ -622,7 +615,10 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       return;
     case "copy_path":
       await copyToClipboard(
-        targets.map((t) => t.reveal_path).filter((p): p is string => !!p).join("\n"),
+        targets
+          .map((t) => t.reveal_path)
+          .filter((p): p is string => !!p)
+          .join("\n"),
       );
       return;
     case "log": {
@@ -651,7 +647,10 @@ async function renameRow(row: Row, name: string) {
   if (row.kind !== "group") return;
   const next = renameGroup(configText.value, row.id, name);
   if (next === configText.value) return;
-  await writeConfig(next, name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`);
+  await writeConfig(
+    next,
+    name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
+  );
 }
 
 /// The history panel's columns: what each is, by type, and how the
@@ -717,10 +716,26 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
       return wrap;
     },
   },
-  rows: { width: 100, minWidth: 100, formatter: (_r, _c, value) => formatCount(value as number | null) },
-  added: { width: 90, minWidth: 90, formatter: (_r, _c, value) => formatDelta(value as number | null, "+") },
-  deleted: { width: 90, minWidth: 90, formatter: (_r, _c, value) => formatDelta(value as number | null, "−") },
-  modified: { width: 96, minWidth: 96, formatter: (_r, _c, value) => formatDelta(value as number | null, "~") },
+  rows: {
+    width: 100,
+    minWidth: 100,
+    formatter: (_r, _c, value) => formatCount(value as number | null),
+  },
+  added: {
+    width: 90,
+    minWidth: 90,
+    formatter: (_r, _c, value) => formatDelta(value as number | null, "+"),
+  },
+  deleted: {
+    width: 90,
+    minWidth: 90,
+    formatter: (_r, _c, value) => formatDelta(value as number | null, "−"),
+  },
+  modified: {
+    width: 96,
+    minWidth: 96,
+    formatter: (_r, _c, value) => formatDelta(value as number | null, "~"),
+  },
   run: {
     width: 120,
     minWidth: 120,
@@ -778,7 +793,6 @@ function copyIdButton(id: string, label: string): HTMLButtonElement {
   return btn;
 }
 
-
 const COUNT_FMT = new Intl.NumberFormat();
 function formatCount(n: number | null | undefined): string {
   return typeof n === "number" ? COUNT_FMT.format(n) : "";
@@ -798,7 +812,9 @@ function readExpanded(): Set<string> {
   try {
     const raw = localStorage.getItem(EXPANDED_STORE);
     const list: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
+    return new Set(
+      Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [],
+    );
   } catch {
     return new Set();
   }
@@ -1092,8 +1108,7 @@ async function deleteSource(id: string) {
   const goneIds = new Set(doomed.map((d) => d.id));
   const emptied = configGroups.value.filter(
     (g) =>
-      step.group === g.id &&
-      !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
+      step.group === g.id && !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
   );
   // Cut first: the entries' offsets are into the text as parsed, and
   // unwiring a fan-in above the source would shift them. Unwiring is a
@@ -1249,9 +1264,7 @@ function adoptJob(job: SyncJob) {
   commitJobs.invalidate();
   const at = jobs.value.findIndex((j) => j.id === job.id);
   jobs.value =
-    at >= 0
-      ? [...jobs.value.slice(0, at), job, ...jobs.value.slice(at + 1)]
-      : [job, ...jobs.value];
+    at >= 0 ? [...jobs.value.slice(0, at), job, ...jobs.value.slice(at + 1)] : [job, ...jobs.value];
   repaint();
 }
 
@@ -1436,8 +1449,8 @@ onUnmounted(() => {
       <b>datalib won’t run this config.</b>
       <span>{{ configError }}</span>
       <span class="m2-invalid-why">
-        It parses as TOML, so the table below still reflects it — but nothing will sync, and
-        applets won’t start, until this is fixed. Open the config to edit it.
+        It parses as TOML, so the table below still reflects it — but nothing will sync, and applets
+        won’t start, until this is fixed. Open the config to edit it.
       </span>
       <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
@@ -1452,9 +1465,10 @@ onUnmounted(() => {
         {{ droppedRows.length === 1 ? "entry isn’t" : "entries aren’t" }} in the pipeline.
       </b>
       <span class="m2-invalid-why">
-        The rest of this config loaded and still syncs. These are in the file and were not
-        loaded — each one’s Status cell says why. Open the config to fix them, or
-        run <code>datalib-dag --check {{ configPath }}</code>.
+        The rest of this config loaded and still syncs. These are in the file and were not loaded —
+        each one’s Status cell says why. Open the config to fix them, or run
+        <code>datalib-dag --check {{ configPath }}</code
+        >.
       </span>
       <ul class="m2-dropped">
         <li v-for="r in droppedRows" :key="r.id">
@@ -1490,75 +1504,76 @@ onUnmounted(() => {
     </div>
 
     <div class="m2-foot">
-    <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
-      <b>This table is empty, and it shouldn’t be.</b>
-      <span>{{ emptyDiagnosis }}</span>
-      <button class="m2-btn" @click="openConfig">Show the config</button>
-    </div>
-    <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
-      Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
-    </p>
+      <div v-if="emptyDiagnosis && !parseError" class="m2-msg bad m2-invalid">
+        <b>This table is empty, and it shouldn’t be.</b>
+        <span>{{ emptyDiagnosis }}</span>
+        <button class="m2-btn" @click="openConfig">Show the config</button>
+      </div>
+      <p v-else-if="rows.length === 0 && !parseError" class="m2-empty">
+        Nothing configured yet. The <b>+ Data Source</b> button walks you through one.
+      </p>
     </div>
 
     <!-- The panels, out of the shadow root: their components' scoped
          styles live in the head, and a modal belongs over the whole
          page anyway. -->
     <Teleport to="body">
-    <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
-      <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
-        <header class="m2-logs-head">
-          <div>
-            <h3>{{ historyTitle }} — commit history</h3>
-            <p>
-              Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
-              each table.
-              <span v-if="historyTruncated.length">
-                Only the newest commits are shown for
-                <code>{{ historyTruncated.join(", ") }}</code>.
-              </span>
-            </p>
-          </div>
-          <button class="m2-btn" @click="historyFor = []">Close</button>
-        </header>
+      <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
+        <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
+          <header class="m2-logs-head">
+            <div>
+              <h3>{{ historyTitle }} — commit history</h3>
+              <p>
+                Each commit in {{ historyStoreNote }}, newest first; open one for what it did to
+                each table.
+                <span v-if="historyTruncated.length">
+                  Only the newest commits are shown for
+                  <code>{{ historyTruncated.join(", ") }}</code
+                  >.
+                </span>
+              </p>
+            </div>
+            <button class="m2-btn" @click="historyFor = []">Close</button>
+          </header>
 
-        <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
-          Reading the commit log…
-        </p>
-        <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
-        <p v-else-if="historyLines.length === 0" class="m2-logs-note">
-          No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
-          run has written nothing, and the QMD index keeps no store of its own.
-        </p>
-        <div v-else class="m2-history-grid">
-          <!-- The stores' commit log as a tree: stores open, commits
+          <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
+            Reading the commit log…
+          </p>
+          <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
+          <p v-else-if="historyLines.length === 0" class="m2-logs-note">
+            No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
+            run has written nothing, and the QMD index keeps no store of its own.
+          </p>
+          <div v-else class="m2-history-grid">
+            <!-- The stores' commit log as a tree: stores open, commits
                closed until asked. -->
-          <TableGrid
-            :columns="historyColumns"
-            :rows="historyLines"
-            :tree="true"
-            :openByDefault="(r: HistoryRow) => r.level === 'store'"
-            :columnOverrides="historyOverrides"
-          />
+            <TableGrid
+              :columns="historyColumns"
+              :rows="historyLines"
+              :tree="true"
+              :openByDefault="(r: HistoryRow) => r.level === 'store'"
+              :columnOverrides="historyOverrides"
+            />
+          </div>
         </div>
       </div>
-    </div>
 
-    <SourceWizard
-      v-if="wizardOpen"
-      :key="wizardKey"
-      :taken-ids="takenIds"
-      :editing="editing"
-      @close="closeWizard"
-      @submit="onWizardSubmit"
-    />
-    <CompareDialog
-      v-if="compareFor"
-      :key="compareFor.id"
-      :source="compareFor"
-      :taken-ids="takenIds"
-      @close="compareFor = null"
-      @submit="onCompareSubmit"
-    />
+      <SourceWizard
+        v-if="wizardOpen"
+        :key="wizardKey"
+        :taken-ids="takenIds"
+        :editing="editing"
+        @close="closeWizard"
+        @submit="onWizardSubmit"
+      />
+      <CompareDialog
+        v-if="compareFor"
+        :key="compareFor.id"
+        :source="compareFor"
+        :taken-ids="takenIds"
+        @close="compareFor = null"
+        @submit="onCompareSubmit"
+      />
     </Teleport>
   </section>
 </template>

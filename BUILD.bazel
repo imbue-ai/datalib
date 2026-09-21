@@ -107,6 +107,7 @@ sh_binary(
 test_suite(
     name = "lint",
     tests = [
+        "//datalib/ui:format_test",
         "//datalib/ui:typecheck_test",
         "//tools:ruff_test",
         "//tools/lint:pyright_test",

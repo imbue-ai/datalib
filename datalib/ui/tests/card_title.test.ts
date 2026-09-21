@@ -13,8 +13,6 @@ describe("displayTitle", () => {
     expect(displayTitle("   ", null)).toBe("new card");
   });
   it("labels other expressions generically", () => {
-    expect(displayTitle('(root) => { root.textContent = "hi" }', null)).toBe(
-      "custom card",
-    );
+    expect(displayTitle('(root) => { root.textContent = "hi" }', null)).toBe("custom card");
   });
 });

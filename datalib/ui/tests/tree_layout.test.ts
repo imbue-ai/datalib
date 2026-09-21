@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { layoutTree, type LayoutNode } from "@/views/treeLayout";
 
-function node(
-  id: string,
-  parentId: string | null,
-  width = 100,
-  height = 50,
-): LayoutNode {
+function node(id: string, parentId: string | null, width = 100, height = 50): LayoutNode {
   return { id, parentId, width, height };
 }
 
@@ -26,10 +21,7 @@ describe("layoutTree", () => {
   });
 
   it("stacks siblings with vGap and centers the parent on their span", () => {
-    const rects = layoutTree(
-      [node("a", null), node("b", "a"), node("c", "a")],
-      OPTS,
-    );
+    const rects = layoutTree([node("a", null), node("b", "a"), node("c", "a")], OPTS);
     // children span = 50 + 10 + 50 = 110
     expect(rects.get("b")).toEqual({ x: 120, y: 0, width: 100, height: 50 });
     expect(rects.get("c")).toEqual({ x: 120, y: 60, width: 100, height: 50 });
@@ -37,10 +29,7 @@ describe("layoutTree", () => {
   });
 
   it("centers children on a parent taller than their span", () => {
-    const rects = layoutTree(
-      [node("a", null, 100, 200), node("b", "a")],
-      OPTS,
-    );
+    const rects = layoutTree([node("a", null, 100, 200), node("b", "a")], OPTS);
     expect(rects.get("a")!.y).toBe(0);
     expect(rects.get("b")!.y).toBe((200 - 50) / 2);
   });
@@ -49,13 +38,7 @@ describe("layoutTree", () => {
     // b has two children (band 110 tall), its sibling c must start
     // below b's whole band, not just below b.
     const rects = layoutTree(
-      [
-        node("a", null),
-        node("b", "a"),
-        node("c", "a"),
-        node("b1", "b"),
-        node("b2", "b"),
-      ],
+      [node("a", null), node("b", "a"), node("c", "a"), node("b1", "b"), node("b2", "b")],
       OPTS,
     );
     expect(rects.get("c")!.y).toBe(110 + 10);

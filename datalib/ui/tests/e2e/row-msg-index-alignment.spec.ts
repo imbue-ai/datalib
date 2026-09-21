@@ -35,10 +35,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   const data = (await resp.json()) as { rows: Row[] };
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Build the set of rows we'll exercise: every non-Chat row whose
   // rendered section actually exists in the conversation body (the

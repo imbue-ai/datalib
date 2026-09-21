@@ -21,15 +21,18 @@ const needed = () =>
     <div class="card">
       <h2>This data root was written by a newer datalib</h2>
       <p>
-        You are running datalib <code>{{ newer().running }}</code>, and stores
-        under <code class="root">{{ config.path.replace(/\/config\.toml$/, "") }}</code>
-        were last written by datalib <code>{{ needed() }}</code>. An older build
-        can’t open a store a newer one wrote without losing what the newer one
+        You are running datalib <code>{{ newer().running }}</code
+        >, and stores under
+        <code class="root">{{ config.path.replace(/\/config\.toml$/, "") }}</code> were last written
+        by datalib <code>{{ needed() }}</code
+        >. An older build can’t open a store a newer one wrote without losing what the newer one
         knew, so nothing here has been touched.
       </p>
       <p class="lead" role="alert">
-        <strong>Run datalib {{ needed() }} or later against this root, or point
-        this datalib at a different data root.</strong>
+        <strong
+          >Run datalib {{ needed() }} or later against this root, or point this datalib at a
+          different data root.</strong
+        >
       </p>
       <ul class="stores">
         <li v-for="s in newer().stores" :key="s.store">

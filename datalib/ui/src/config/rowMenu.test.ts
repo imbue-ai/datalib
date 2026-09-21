@@ -46,12 +46,12 @@ describe("rowMenu", () => {
     const menu = rowMenu([target({ kind: "applet", func: null, statusFrom: null })], opts);
     expect(entry(menu, "history").disabled).toBe("An applet writes no store");
     expect(entry(menu, "log").disabled).toBe("An applet runs no step");
-    expect(entry(rowMenu([target({ kind: "step", func: "qmd_index" })], opts), "history").disabled).toBe(
-      "The QMD index keeps no doltlite store",
-    );
-    expect(entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled).toBe(
-      "Not in the pipeline",
-    );
+    expect(
+      entry(rowMenu([target({ kind: "step", func: "qmd_index" })], opts), "history").disabled,
+    ).toBe("The QMD index keeps no doltlite store");
+    expect(
+      entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
+    ).toBe("Not in the pipeline");
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {
@@ -69,7 +69,10 @@ describe("rowMenu", () => {
       "The run log is plain SQLite, with no commit history",
     );
     // Several rows with the system row among them: the reason names it.
-    const mixed = rowMenu([target(), target({ id: "system", name: "System", kind: "system" })], opts);
+    const mixed = rowMenu(
+      [target(), target({ id: "system", name: "System", kind: "system" })],
+      opts,
+    );
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
   });
 
@@ -86,9 +89,9 @@ describe("rowMenu", () => {
 
   it("offers Compare on a source, and says why not on anything else", () => {
     expect(entry(rowMenu([target()], opts), "compare").disabled).toBeNull();
-    expect(entry(rowMenu([target({ kind: "step", func: "ingest" })], opts), "compare").disabled).toBe(
-      "Compare a source, not a step under it",
-    );
+    expect(
+      entry(rowMenu([target({ kind: "step", func: "ingest" })], opts), "compare").disabled,
+    ).toBe("Compare a source, not a step under it");
     expect(entry(rowMenu([target({ type: null })], opts), "compare").disabled).toBe(
       "The index mirrors nothing to compare",
     );
@@ -102,7 +105,10 @@ describe("rowMenu", () => {
 
   it("turns Sync into Stop only when every target is claimed", () => {
     expect(entry(rowMenu([target({ stopJobId: "j1" })], opts), "stop").name).toBe("Stop the sync");
-    const mixed = rowMenu([target({ stopJobId: "j1" }), target({ id: "mail", name: "Mail" })], opts);
+    const mixed = rowMenu(
+      [target({ stopJobId: "j1" }), target({ id: "mail", name: "Mail" })],
+      opts,
+    );
     expect(entry(mixed, "sync").disabled).toMatch(/already syncing/);
   });
 
@@ -111,15 +117,21 @@ describe("rowMenu", () => {
     expect(name[0]).toMatchObject({ action: "rename", disabled: null });
     expect(name[1]).toMatchObject({ action: "copy_id", name: "Copy id" });
     expect(name[2]).toEqual({ separator: true });
-    expect(entry(rowMenu([target({ kind: "step" })], { ...opts, column: "name" }), "rename").disabled).toBe(
-      "Only a group has a name",
-    );
+    expect(
+      entry(rowMenu([target({ kind: "step" })], { ...opts, column: "name" }), "rename").disabled,
+    ).toBe("Only a group has a name");
     const bytes = rowMenu([target(), target({ id: "b", name: "B", revealPath: null })], {
       ...opts,
       column: "bytes",
     });
-    expect(bytes[0]).toMatchObject({ action: "copy_path", name: "Copy 2 paths", disabled: "B: Nothing on disk yet" });
-    expect(rowMenu([target()], opts).some((m) => !m.separator && m.action === "rename")).toBe(false);
+    expect(bytes[0]).toMatchObject({
+      action: "copy_path",
+      name: "Copy 2 paths",
+      disabled: "B: Nothing on disk yet",
+    });
+    expect(rowMenu([target()], opts).some((m) => !m.separator && m.action === "rename")).toBe(
+      false,
+    );
   });
 
   it("omits Reveal where the host cannot reveal", () => {

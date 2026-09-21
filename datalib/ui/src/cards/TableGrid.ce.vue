@@ -203,7 +203,14 @@ function buildColumns(): Column<T>[] {
   if (!props.tree) return typed;
   return [
     ...typed,
-    { id: ORDER, field: ORDER as Column<T>["field"], name: "", hidden: true, type: "number", excludeFromColumnPicker: true },
+    {
+      id: ORDER,
+      field: ORDER as Column<T>["field"],
+      name: "",
+      hidden: true,
+      type: "number",
+      excludeFromColumnPicker: true,
+    },
   ];
 }
 
@@ -264,7 +271,9 @@ function options(): GridOption {
     dataItemColumnValueExtractor: (item, col) => {
       const field = String(col.field ?? "");
       if (!field.includes(".")) return item[field];
-      return field.split(".").reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
+      return field
+        .split(".")
+        .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
     },
     ...(props.tree
       ? {
@@ -309,13 +318,18 @@ function onCellChange(_e: SlickEventData, args: OnCellChangeEventArgs) {
 }
 
 function readPath(item: unknown, field: string): unknown {
-  return field.split(".").reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
+  return field
+    .split(".")
+    .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
 }
 
 function writePath(item: unknown, field: string, value: unknown) {
   const parts = field.split(".");
   const last = parts.pop()!;
-  const target = parts.reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
+  const target = parts.reduce<unknown>(
+    (v, k) => (v as Record<string, unknown> | undefined)?.[k],
+    item,
+  );
   if (target && typeof target === "object") (target as Record<string, unknown>)[last] = value;
 }
 
@@ -346,7 +360,12 @@ function createGrid() {
   const opts = options();
   const root = boxEl.value.getRootNode();
   if (root instanceof ShadowRoot) opts.shadowRoot = root;
-  const b = new SlickVanillaGridBundle<T>(boxEl.value, buildColumns(), opts, annotate(props.rows)) as Grid;
+  const b = new SlickVanillaGridBundle<T>(
+    boxEl.value,
+    buildColumns(),
+    opts,
+    annotate(props.rows),
+  ) as Grid;
   bundle = b;
   // The grid, reachable from its element for anyone debugging in the
   // inspector.
@@ -370,7 +389,10 @@ function createGrid() {
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);
-  b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>("onTreeItemToggled", onTreeToggled);
+  b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
+    "onTreeItemToggled",
+    onTreeToggled,
+  );
   emit("ready", api);
 }
 
@@ -397,7 +419,10 @@ onMounted(() => {
   createGrid();
   relativePoll = setInterval(tickRelative, 1000);
   themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
-  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  themeWatch.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
 });
 onBeforeUnmount(() => {
   if (relativePoll) clearInterval(relativePoll);

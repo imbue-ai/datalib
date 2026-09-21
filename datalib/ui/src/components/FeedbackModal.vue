@@ -106,12 +106,7 @@ function onKeydown(ev: KeyboardEvent) {
 
 <template>
   <Teleport to="body">
-    <div
-      v-if="open"
-      class="fb-overlay"
-      @click.self="onCancel"
-      @keydown="onKeydown"
-    >
+    <div v-if="open" class="fb-overlay" @click.self="onCancel" @keydown="onKeydown">
       <div
         class="fb-modal"
         role="dialog"
@@ -155,20 +150,10 @@ function onKeydown(ev: KeyboardEvent) {
           Filed as <code>{{ successUuid }}</code>
         </div>
         <footer class="fb-footer">
-          <button
-            type="button"
-            class="fb-btn fb-cancel"
-            :disabled="submitting"
-            @click="onCancel"
-          >
+          <button type="button" class="fb-btn fb-cancel" :disabled="submitting" @click="onCancel">
             Cancel
           </button>
-          <button
-            type="button"
-            class="fb-btn fb-submit"
-            :disabled="!canSubmit"
-            @click="onSubmit"
-          >
+          <button type="button" class="fb-btn fb-submit" :disabled="!canSubmit" @click="onSubmit">
             {{ submitting ? "Submitting…" : "Submit" }}
           </button>
         </footer>

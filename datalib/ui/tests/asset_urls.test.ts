@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assetUrl,
-  isAbsoluteOrUrl,
-  rewriteIframeSrcs,
-} from "../src/cards/asset_urls";
+import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "../src/cards/asset_urls";
 
 describe("isAbsoluteOrUrl", () => {
   it("recognizes things that must not be rewritten", () => {
@@ -53,8 +49,7 @@ describe("rewriteIframeSrcs", () => {
   });
 
   it("rewrites several frames in one chunk", () => {
-    const html =
-      '<iframe src="plots/a.html"></iframe><iframe src="plots/b.html"></iframe>';
+    const html = '<iframe src="plots/a.html"></iframe><iframe src="plots/b.html"></iframe>';
     const out = rewriteIframeSrcs(html, uuid);
     expect(out).toContain(`/applet/unified_index/asset/${uuid}/plots/a.html`);
     expect(out).toContain(`/applet/unified_index/asset/${uuid}/plots/b.html`);

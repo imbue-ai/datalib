@@ -203,7 +203,5 @@ function startDirectory(typed: string | undefined): string | undefined {
   const t = typed?.trim();
   if (!t || t.startsWith("~")) return undefined;
   // POSIX absolute, or a Windows drive/UNC path.
-  return t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\")
-    ? t
-    : undefined;
+  return t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\") ? t : undefined;
 }

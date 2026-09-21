@@ -29,7 +29,10 @@ export function withToken(query: string, token: string): string {
 /// put where the first of them was — for a key that means one thing at
 /// a time, like a minimum level, which a control sets rather than adds.
 export function replaceToken(query: string, key: string, token: string | null): string {
-  const words = query.trim().split(/\s+/).filter((w) => w.length > 0);
+  const words = query
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
   const prefix = `${key}:`;
   let placed = false;
   const kept: string[] = [];
@@ -75,6 +78,9 @@ export function keepExcludeEntries(opts: {
   const shown = opts.shown ?? opts.value;
   return [
     { label: `Keep only ${opts.header}=${shown}`, token: filterToken(opts.key, opts.value, false) },
-    { label: `Exclude all ${opts.header}=${shown}`, token: filterToken(opts.key, opts.value, true) },
+    {
+      label: `Exclude all ${opts.header}=${shown}`,
+      token: filterToken(opts.key, opts.value, true),
+    },
   ];
 }

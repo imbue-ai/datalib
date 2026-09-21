@@ -39,9 +39,7 @@ const configPath = ref("");
 const existed = ref(false);
 const loadError = ref<string | null>(null);
 // Result of the last Save attempt (null = unsaved edits or never saved).
-const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | null>(
-  null,
-);
+const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | null>(null);
 const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("latchkey");
@@ -223,9 +221,7 @@ function toggleSelected(id: string) {
 // Only selections that are still syncable count (present in the saved
 // config and still in the table).
 const selectedSyncable = computed(() =>
-  [...selected.value].filter(
-    (n) => serverIds.value.has(n) && rows.value.some((r) => r.id === n),
-  ),
+  [...selected.value].filter((n) => serverIds.value.has(n) && rows.value.some((r) => r.id === n)),
 );
 
 // Per-job log viewer. `expandedId` is the job whose detail row is open;
@@ -412,12 +408,10 @@ onUnmounted(() => {
 
     <div v-if="diskChanged" class="migrate-banner">
       <span>
-        The config file changed on disk (an agent saving?), but you have
-        unsaved edits here. Saving keeps your version.
+        The config file changed on disk (an agent saving?), but you have unsaved edits here. Saving
+        keeps your version.
       </span>
-      <button class="btn" @click="reloadFromDisk">
-        Load the disk version (discard my edits)
-      </button>
+      <button class="btn" @click="reloadFromDisk">Load the disk version (discard my edits)</button>
     </div>
 
     <!-- Raw config (left) and table side by side — two views of the
@@ -482,11 +476,7 @@ onUnmounted(() => {
             "
             @click="syncSelected"
           >
-            {{
-              busySelected
-                ? "Queuing…"
-                : `Sync selected (${selectedSyncable.length})`
-            }}
+            {{ busySelected ? "Queuing…" : `Sync selected (${selectedSyncable.length})` }}
           </button>
           <button
             class="btn btn-sync"
@@ -517,25 +507,23 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="(r, idx) in rows"
-              :key="idx"
-              :class="{ 'row-selected': selected.has(r.id) }"
-            >
+            <tr v-for="(r, idx) in rows" :key="idx" :class="{ 'row-selected': selected.has(r.id) }">
               <td class="check-cell">
                 <input
                   type="checkbox"
                   :checked="selected.has(r.id)"
                   :disabled="!serverIds.has(r.id)"
-                  :title="
-                    !serverIds.has(r.id) ? 'Not in the saved config yet' : ''
-                  "
+                  :title="!serverIds.has(r.id) ? 'Not in the saved config yet' : ''"
                   @change="toggleSelected(r.id)"
                 />
               </td>
               <td>{{ r.id || "(unnamed)" }}</td>
               <td class="actions-cell src-actions">
-                <button class="btn" title="Select this step in the config file" @click="selectSource(idx)">
+                <button
+                  class="btn"
+                  title="Select this step in the config file"
+                  @click="selectSource(idx)"
+                >
                   Locate config
                 </button>
               </td>
@@ -593,7 +581,9 @@ onUnmounted(() => {
       <tbody>
         <template v-for="j in jobs" :key="j.id">
           <tr :class="{ 'row-failed': j.state === 'failed' }">
-            <td><code>{{ j.id.slice(0, 8) }}</code></td>
+            <td>
+              <code>{{ j.id.slice(0, 8) }}</code>
+            </td>
             <td>{{ j.kind }}</td>
             <td>{{ j.source_ids || "" }}</td>
             <td>
@@ -608,22 +598,16 @@ onUnmounted(() => {
               <button class="btn btn-log" @click="toggleLog(j)">
                 {{ expandedId === j.id ? "Hide log" : "Log" }}
               </button>
-              <button
-                v-if="isActive(j)"
-                class="btn btn-cancel"
-                @click="onCancel(j)"
-              >
-                Cancel
-              </button>
+              <button v-if="isActive(j)" class="btn btn-cancel" @click="onCancel(j)">Cancel</button>
             </td>
           </tr>
           <tr v-if="expandedId === j.id" class="detail-row">
             <td colspan="8">
-              <div v-if="j.error" class="job-error">
-                <strong>error:</strong> {{ j.error }}
-              </div>
+              <div v-if="j.error" class="job-error"><strong>error:</strong> {{ j.error }}</div>
               <div class="log-head">
-                <span>log · run <code>{{ j.id }}</code></span>
+                <span
+                  >log · run <code>{{ j.id }}</code></span
+                >
                 <button class="btn btn-mini" :disabled="logLoading" @click="loadLog(j.id)">
                   {{ logLoading ? "…" : "Refresh" }}
                 </button>

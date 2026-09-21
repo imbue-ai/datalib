@@ -1,6 +1,7 @@
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//datalib/ui:prettier/package_json.bzl", prettier_bin = "bin")
 load("@npm//datalib/ui:vite/package_json.bzl", vite_bin = "bin")
 load("@npm//datalib/ui:vitest/package_json.bzl", vitest_bin = "bin")
 load("@npm//datalib/ui:vue-tsc/package_json.bzl", vue_tsc_bin = "bin")
@@ -348,6 +349,44 @@ vue_tsc_bin.vue_tsc_test(
     data = [
         ":node_modules",
         ":typecheck_inputs",
+    ],
+)
+
+# Formatting, checked the way rustfmt and `ruff format` are for the
+# other two languages. `.ts` and `.vue` only: the JSON under `src/` is
+# generated, the goldens are fixtures. To fix rather than check, from
+# `datalib/ui`: `pnpm exec prettier --write .`
+copy_to_bin(
+    name = "format_inputs",
+    srcs = glob(
+        [
+            "src/**/*.ts",
+            "src/**/*.vue",
+            "tests/**/*.ts",
+            "tools/**/*.ts",
+            "*.ts",
+        ],
+        allow_empty = False,
+    ) + [
+        ".prettierrc",
+        "package.json",
+    ],
+)
+
+prettier_bin.prettier_test(
+    name = "format_test",
+    args = [
+        "--check",
+        "src/**/*.ts",
+        "src/**/*.vue",
+        "tests/**/*.ts",
+        "tools/**/*.ts",
+        "*.ts",
+    ],
+    chdir = package_name(),
+    data = [
+        ":format_inputs",
+        ":node_modules",
     ],
 )
 

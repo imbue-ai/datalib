@@ -11,7 +11,12 @@
 // the field says separately that the account does not have it.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
-import type { Column, GridOption, OnSelectedRowsChangedEventArgs, SlickEventData } from "@slickgrid-universal/common";
+import type {
+  Column,
+  GridOption,
+  OnSelectedRowsChangedEventArgs,
+  SlickEventData,
+} from "@slickgrid-universal/common";
 import type { ProbeItem, ProbeItemKind } from "@/api";
 import { stampRowKeys } from "@/grid/rowKeys";
 
@@ -47,9 +52,23 @@ type Layout = { placeholder: string; columns: Column<ProbeItem>[] };
 const LABELS: Layout = {
   placeholder: "Search these labels…",
   columns: [
-    { id: "path", name: "Label", field: "path", width: 260, minWidth: 200, formatter: (_r, _c, v) => text(v) },
+    {
+      id: "path",
+      name: "Label",
+      field: "path",
+      width: 260,
+      minWidth: 200,
+      formatter: (_r, _c, v) => text(v),
+    },
     { id: "role", name: "Role", field: "role", width: 110, formatter: (_r, _c, v) => text(v) },
-    { id: "messages", name: "Messages", field: "messages", width: 110, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
+    {
+      id: "messages",
+      name: "Messages",
+      field: "messages",
+      width: 110,
+      cssClass: "tg-right",
+      formatter: (_r, _c, v) => text(v),
+    },
   ],
 };
 
@@ -72,7 +91,14 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       // A Slack DM carries a `group` tag and a head-count, a Claude
       // chat a date; whichever a source leaves empty is pruned below.
       { id: "role", name: "", field: "role", width: 80, formatter: (_r, _c, v) => text(v) },
-      { id: "members", name: "People", field: "members", width: 90, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
+      {
+        id: "members",
+        name: "People",
+        field: "members",
+        width: 90,
+        cssClass: "tg-right",
+        formatter: (_r, _c, v) => text(v),
+      },
       {
         id: "updated_at",
         name: "Updated",
@@ -94,7 +120,14 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
         formatter: (_r, _c, _v, _col, item) => ({ text: item ? `#${item.path}` : "" }),
       },
       { id: "role", name: "Notes", field: "role", width: 180, formatter: (_r, _c, v) => text(v) },
-      { id: "members", name: "Members", field: "members", width: 110, cssClass: "tg-right", formatter: (_r, _c, v) => text(v) },
+      {
+        id: "members",
+        name: "Members",
+        field: "members",
+        width: 110,
+        cssClass: "tg-right",
+        formatter: (_r, _c, v) => text(v),
+      },
     ],
   },
 };
@@ -227,12 +260,7 @@ watch(() => props.modelValue, applySelection, { deep: true });
 
 <template>
   <div class="pick">
-    <input
-      v-model="query"
-      class="pick-filter"
-      type="search"
-      :placeholder="layout.placeholder"
-    />
+    <input v-model="query" class="pick-filter" type="search" :placeholder="layout.placeholder" />
     <div class="pick-grid">
       <div ref="boxEl" class="pick-box" />
     </div>
@@ -240,7 +268,11 @@ watch(() => props.modelValue, applySelection, { deep: true });
 </template>
 
 <style scoped>
-.pick { display: flex; flex-direction: column; gap: 6px; }
+.pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .pick-filter {
   width: 100%;
   padding: 6px 8px;
@@ -254,6 +286,13 @@ watch(() => props.modelValue, applySelection, { deep: true });
 /* Tall enough to show that the account really is being read, short
    enough that the rest of the form stays on screen. The grid scrolls
    inside it. */
-.pick-grid { height: 260px; width: 100%; position: relative; }
-.pick-box { position: absolute; inset: 0; }
+.pick-grid {
+  height: 260px;
+  width: 100%;
+  position: relative;
+}
+.pick-box {
+  position: absolute;
+  inset: 0;
+}
 </style>

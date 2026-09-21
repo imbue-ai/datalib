@@ -36,8 +36,8 @@ describe("problemLabel", () => {
   });
   it("shows a word it does not know rather than hiding it", () => {
     // A store written by a newer build can carry a reason this one lacks.
-    expect(
-      problemLabel({ field: null, reason: "brand_new" as never, rule: null }),
-    ).toBe("this record: brand_new");
+    expect(problemLabel({ field: null, reason: "brand_new" as never, rule: null })).toBe(
+      "this record: brand_new",
+    );
   });
 });

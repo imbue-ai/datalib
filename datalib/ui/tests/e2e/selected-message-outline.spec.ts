@@ -8,10 +8,7 @@ import { clickRowByUuid } from "./grid-helpers";
 // restored; this test pins the outline so it doesn't silently
 // regress again.
 
-test("selected message has a visible accent-colored outline", async ({
-  page,
-  request,
-}) => {
+test("selected message has a visible accent-colored outline", async ({ page, request }) => {
   const resp = await request.get("/applet/unified_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
@@ -22,16 +19,11 @@ test("selected message has a visible accent-colored outline", async ({
       message_index: number | null;
     }[];
   };
-  const pick = data.rows.find(
-    (r) => r.kind !== "Chat" && r.message_index != null,
-  );
+  const pick = data.rows.find((r) => r.kind !== "Chat" && r.message_index != null);
   expect(pick, "fixture must contain a message row").not.toBeUndefined();
 
   await page.goto("/");
-  await page
-    .locator(".grid-box .slick-row")
-    .first()
-    .waitFor({ timeout: 10_000 });
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
 
   // Match on row uuid, not (conversation_uuid, message_index). Some
   // providers shard a conversation into multiple rendered files
@@ -41,9 +33,7 @@ test("selected message has a visible accent-colored outline", async ({
   // assert against.
   await clickRowByUuid(page, pick!.uuid);
 
-  const selected = page.locator(
-    `.chat-preview [data-section-uuid="${pick!.uuid}"].selected`,
-  );
+  const selected = page.locator(`.chat-preview [data-section-uuid="${pick!.uuid}"].selected`);
   await expect(selected).toBeVisible({ timeout: 10_000 });
 
   // Verify the outline is actually drawn — non-zero width and a
@@ -61,16 +51,13 @@ test("selected message has a visible accent-colored outline", async ({
   });
   expect(outline.style, `outline-style should not be 'none'`).not.toBe("none");
   const widthPx = parseFloat(outline.width);
-  expect(widthPx, `outline-width should be > 0px (got ${outline.width})`)
-    .toBeGreaterThan(0);
+  expect(widthPx, `outline-width should be > 0px (got ${outline.width})`).toBeGreaterThan(0);
   // outlineColor as RGB: e.g. "rgb(99, 102, 241)" — make sure it's not
   // transparent. Any solid color is fine.
   expect(outline.color).not.toMatch(/rgba?\([^)]*,\s*0\s*\)$/);
 
   // And: a sibling un-selected section must NOT have the outline.
-  const other = page.locator(
-    `.chat-preview [data-section-uuid]:not(.selected)`,
-  );
+  const other = page.locator(`.chat-preview [data-section-uuid]:not(.selected)`);
   if ((await other.count()) > 0) {
     // Browsers report a default `outline-width: medium` (≈3px) even
     // when `outline-style: none` — the actual line is only drawn when

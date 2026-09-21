@@ -1,7 +1,13 @@
 // Manager2: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
 import { test, expect, type Page } from "@playwright/test";
-import { expandGroup, groupRow, pickRowMenu, pipelineRow as row, MANAGE_WITH_CONFIG } from "./grid-helpers";
+import {
+  expandGroup,
+  groupRow,
+  pickRowMenu,
+  pipelineRow as row,
+  MANAGE_WITH_CONFIG,
+} from "./grid-helpers";
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
@@ -51,9 +57,7 @@ test.afterEach(async ({ page }) => {
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
-test("one dialog writes a group and two steps: one row, with two under it", async ({
-  page,
-}) => {
+test("one dialog writes a group and two steps: one row, with two under it", async ({ page }) => {
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
 
@@ -73,7 +77,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // asserting it. Claude's render step has no settings, so the heading
   // is followed by a sentence and no fields.
   await expect(wizard(page).locator(".wiz-section-head")).toHaveText("Rendering");
-  await expect(wizard(page).locator(".wiz-section")).toContainText("personal-claude/render_markdown");
+  await expect(wizard(page).locator(".wiz-section")).toContainText(
+    "personal-claude/render_markdown",
+  );
   await expect(wizard(page).locator(".wiz-section")).toContainText("no settings of its own");
   await wizard(page).getByText("Review the TOML this writes").click();
   const preview = wizard(page).locator(".wiz-review pre");
@@ -177,7 +183,9 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
 
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
-  await expect(page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]')).toHaveCount(0);
+  await expect(
+    page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]'),
+  ).toHaveCount(0);
 
   // A step under a group edits its source: the step row's button opens
   // the same dialog the group row's does, name box and all.
@@ -217,7 +225,9 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
-  await expect(page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]')).toHaveCount(0);
+  await expect(
+    page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
+  ).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
   await expect(editor).not.toHaveValue(/no-render\/render_markdown/);
@@ -254,7 +264,10 @@ test("a provider with render options writes them on the render step, from the on
 
   await expandGroup(page, "signal-work");
   await expect(row(page, "signal-work/render_markdown")).toBeVisible();
-  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute("aria-label", "Render");
+  await expect(stepMark(page, "signal-work/render_markdown")).toHaveAttribute(
+    "aria-label",
+    "Render",
+  );
 
   await expect(editor).toHaveValue(/group = "signal-work"/);
   const text = await editor.inputValue();
@@ -300,7 +313,9 @@ test("a hand-written render step under a download-only type is called out, then 
   await expect(wizard(page)).toContainText("Lightroom renders nothing. Saving removes it");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Photos.")).toBeVisible();
-  await expect(page.locator('.tg-grid .slick-row[data-key="photos/render_markdown"]')).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="photos/render_markdown"]')).toHaveCount(
+    0,
+  );
   await expect(editor).not.toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   await expect(editor).toHaveValue(/group = "photos"\nfunction = "ingest"/);
 });
@@ -330,7 +345,9 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
 
   // The group went with its last step, so its row is gone too.
   await expect(page.locator('.tg-grid .slick-row[data-key="doomed/ingest"]')).toHaveCount(0);
-  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(
+    0,
+  );
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);

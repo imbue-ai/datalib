@@ -17,18 +17,18 @@ type FieldBase = {
 
 export type Field =
   | ({ kind: "text" } & FieldBase & {
-      required?: boolean;
-      /// Renders as the latchkey-account control rather than a bare
-      /// text box: a dropdown of the accounts latchkey has stored for
-      /// the entry's `credentialService`, a "Latchkey auth" button,
-      /// and — still — somewhere to type.
-      ///
-      /// Typing matters. latchkey may hold an account this server
-      /// can't enumerate (no keyring access, latchkey not installed),
-      /// and a dropdown that came back empty must not be the only way
-      /// in. The value written is the account string either way.
-      latchkey?: boolean;
-    })
+        required?: boolean;
+        /// Renders as the latchkey-account control rather than a bare
+        /// text box: a dropdown of the accounts latchkey has stored for
+        /// the entry's `credentialService`, a "Latchkey auth" button,
+        /// and — still — somewhere to type.
+        ///
+        /// Typing matters. latchkey may hold an account this server
+        /// can't enumerate (no keyring access, latchkey not installed),
+        /// and a dropdown that came back empty must not be the only way
+        /// in. The value written is the account string either way.
+        latchkey?: boolean;
+      })
   /// A path on the machine running the backend.
   ///
   /// **A path field must offer a native OS picker** — the rule, and
@@ -39,16 +39,16 @@ export type Field =
   /// `GET /api/fs/browse` endpoint exists — `<input type=file>` is no
   /// substitute, since a browser never yields a filesystem path.
   | ({ kind: "path" } & FieldBase & {
-      required?: boolean;
-      picks?: "file" | "dir";
-      /// Dialog title. Name the thing being chosen ("Choose your
-      /// WhatsApp backup folder"), not the widget ("Select folder").
-      pickTitle?: string;
-      /// `picks: "file"` only — extensions to filter on, no dot. The
-      /// typed input stays the escape hatch for anything the filter
-      /// wrongly excludes.
-      extensions?: string[];
-    })
+        required?: boolean;
+        picks?: "file" | "dir";
+        /// Dialog title. Name the thing being chosen ("Choose your
+        /// WhatsApp backup folder"), not the widget ("Select folder").
+        pickTitle?: string;
+        /// `picks: "file"` only — extensions to filter on, no dot. The
+        /// typed input stays the escape hatch for anything the filter
+        /// wrongly excludes.
+        extensions?: string[];
+      })
   /// A closed set of values — one Rust enum, one dropdown. Prefer this
   /// over `text` whenever the backend parses the string against a fixed
   /// list: a typo becomes unreachable rather than a sync-time error,
@@ -59,9 +59,9 @@ export type Field =
   /// so the value is always written explicitly — there is no "unset"
   /// choice. Keep it equal to the backend's own default.
   | ({ kind: "select" } & FieldBase & {
-      options: { value: string; label: string }[];
-      default: string;
-    })
+        options: { value: string; label: string }[];
+        default: string;
+      })
   | ({ kind: "date" } & FieldBase)
   | ({ kind: "bool" } & FieldBase & { default?: boolean })
   /// `default` pre-fills the box on a **new** source only, and is
@@ -72,13 +72,13 @@ export type Field =
   /// count zeros. The label should therefore not say "(bytes)".
   | ({ kind: "bytes" } & FieldBase & { default?: number })
   | ({ kind: "string_list" } & FieldBase & {
-      /// Offer a picker built from `POST /api/probe`, alongside the
-      /// comma-separated box. Names *which* of the probe's items this
-      /// field takes: every label, only the ones a render filter can
-      /// match, an account's conversations (a Claude chat, a Slack
-      /// DM), or a workspace's channels.
-      probe?: ProbeNoun;
-    });
+        /// Offer a picker built from `POST /api/probe`, alongside the
+        /// comma-separated box. Names *which* of the probe's items this
+        /// field takes: every label, only the ones a render filter can
+        /// match, an account's conversations (a Claude chat, a Slack
+        /// DM), or a workspace's channels.
+        probe?: ProbeNoun;
+      });
 
 /// What a `probe:` field is a picker *of*: which of the probe's items
 /// it takes. The wizard says `labels` and `mailboxes` in the source's
@@ -385,9 +385,45 @@ export const CATALOG: CatalogEntry[] = [
   },
 
   // Listed for completeness; no form yet.
-  { type: "github", method: "api", label: "GitHub", blurb: "Mirror pull requests and their review threads.", keywords: ["github", "pr", "code", "review"], kind: "api", icon: "github", defaultName: "github", nameHint: "Work GitHub", wizard: false, credentialService: "github" },
-  { type: "gitlab", method: "api", label: "GitLab", blurb: "Mirror merge requests and their discussions.", keywords: ["gitlab", "mr", "code"], kind: "api", icon: "gitlab", defaultName: "gitlab", nameHint: "Work GitLab", wizard: false, credentialService: "gitlab" },
-  { type: "notion", method: "api", label: "Notion", blurb: "Mirror pages and comment threads.", keywords: ["notion", "wiki", "docs", "pages"], kind: "api", icon: "notion", defaultName: "notion", nameHint: "Team Notion", wizard: false, credentialService: "notion" },
+  {
+    type: "github",
+    method: "api",
+    label: "GitHub",
+    blurb: "Mirror pull requests and their review threads.",
+    keywords: ["github", "pr", "code", "review"],
+    kind: "api",
+    icon: "github",
+    defaultName: "github",
+    nameHint: "Work GitHub",
+    wizard: false,
+    credentialService: "github",
+  },
+  {
+    type: "gitlab",
+    method: "api",
+    label: "GitLab",
+    blurb: "Mirror merge requests and their discussions.",
+    keywords: ["gitlab", "mr", "code"],
+    kind: "api",
+    icon: "gitlab",
+    defaultName: "gitlab",
+    nameHint: "Work GitLab",
+    wizard: false,
+    credentialService: "gitlab",
+  },
+  {
+    type: "notion",
+    method: "api",
+    label: "Notion",
+    blurb: "Mirror pages and comment threads.",
+    keywords: ["notion", "wiki", "docs", "pages"],
+    kind: "api",
+    icon: "notion",
+    defaultName: "notion",
+    nameHint: "Team Notion",
+    wizard: false,
+    credentialService: "notion",
+  },
 
   // ── the two `email` variants ──────────────────────────────────────
   //
@@ -491,8 +527,7 @@ export const CATALOG: CatalogEntry[] = [
         latchkey: true,
         target: "latchkey_settings.account",
         label: "Fastmail account",
-        help:
-          "Which stored Fastmail login to mirror. Leave it empty if latchkey holds only one.",
+        help: "Which stored Fastmail login to mirror. Leave it empty if latchkey holds only one.",
       },
       {
         kind: "string_list",
@@ -539,14 +574,44 @@ export const CATALOG: CatalogEntry[] = [
   // the two above does — an mbox source, or a JMAP server that is not
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
-  { type: "email", label: "Email (mbox or other server)", blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.", keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"], kind: "api", icon: "email", defaultName: "email", nameHint: "Old mail archive", wizard: false },
-  { type: "contacts", label: "Contacts", blurb: "Mirror contacts from a CardDAV server or .vcf files.", keywords: ["contacts", "carddav", "vcard", "address book"], kind: "api", icon: "contacts", defaultName: "contacts", nameHint: "Phone contacts", wizard: false },
+  {
+    type: "email",
+    label: "Email (mbox or other server)",
+    blurb: "A Google Takeout .mbox, or a JMAP server other than Fastmail.",
+    keywords: ["email", "mail", "jmap", "imap", "mbox", "takeout"],
+    kind: "api",
+    icon: "email",
+    defaultName: "email",
+    nameHint: "Old mail archive",
+    wizard: false,
+  },
+  {
+    type: "contacts",
+    label: "Contacts",
+    blurb: "Mirror contacts from a CardDAV server or .vcf files.",
+    keywords: ["contacts", "carddav", "vcard", "address book"],
+    kind: "api",
+    icon: "contacts",
+    defaultName: "contacts",
+    nameHint: "Phone contacts",
+    wizard: false,
+  },
   {
     type: "garmin",
     method: "api",
     label: "Garmin",
     blurb: "Weight, sleep, heart rate, activities and FIT files from Garmin Connect.",
-    keywords: ["garmin", "connect", "watch", "forerunner", "fenix", "running", "weight", "sleep", "fitness"],
+    keywords: [
+      "garmin",
+      "connect",
+      "watch",
+      "forerunner",
+      "fenix",
+      "running",
+      "weight",
+      "sleep",
+      "fitness",
+    ],
     kind: "api",
     icon: "garmin",
     defaultName: "garmin",
@@ -588,7 +653,18 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "yolink", method: "api", label: "YoLink", blurb: "Per-device temperature, humidity and water history.", keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"], kind: "api", icon: "yolink", defaultName: "yolink", nameHint: "House sensors", wizard: false },
+  {
+    type: "yolink",
+    method: "api",
+    label: "YoLink",
+    blurb: "Per-device temperature, humidity and water history.",
+    keywords: ["yolink", "sensor", "temperature", "iot", "yosmart"],
+    kind: "api",
+    icon: "yolink",
+    defaultName: "yolink",
+    nameHint: "House sensors",
+    wizard: false,
+  },
 
   {
     type: "claude",
@@ -624,7 +700,8 @@ export const CATALOG: CatalogEntry[] = [
     // transcripts under ~/.claude/projects.
     method: "sessions",
     label: "Claude Code",
-    blurb: "Mirror your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
+    blurb:
+      "Mirror your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
     keywords: ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"],
     kind: "local",
     icon: "claude_code",
@@ -646,7 +723,17 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "google_takeout", label: "Google Takeout", blurb: "Google Chat, Voice, Maps and YouTube from an export.", keywords: ["google", "takeout", "chat", "voice", "youtube"], kind: "export", icon: "google_takeout", defaultName: "google-takeout", nameHint: "My Google Takeout", wizard: false },
+  {
+    type: "google_takeout",
+    label: "Google Takeout",
+    blurb: "Google Chat, Voice, Maps and YouTube from an export.",
+    keywords: ["google", "takeout", "chat", "voice", "youtube"],
+    kind: "export",
+    icon: "google_takeout",
+    defaultName: "google-takeout",
+    nameHint: "My Google Takeout",
+    wizard: false,
+  },
   {
     type: "facebook",
     label: "Facebook",
@@ -666,14 +753,24 @@ export const CATALOG: CatalogEntry[] = [
         target: "export.path",
         label: "Export folder",
         help:
-          "The unzipped \"Download your information\" export, requested in JSON format — a " +
+          'The unzipped "Download your information" export, requested in JSON format — a ' +
           "folder like ~/Downloads/facebook-<id>-<date>, " +
           "the folder holding your_facebook_activity/, connections/ and the rest. " +
           "The HTML format is not read.",
       },
     ],
   },
-  { type: "linkedin", label: "LinkedIn", blurb: "Messages and connections from a data export.", keywords: ["linkedin", "export", "connections"], kind: "export", icon: "linkedin", defaultName: "linkedin", nameHint: "My LinkedIn", wizard: false },
+  {
+    type: "linkedin",
+    label: "LinkedIn",
+    blurb: "Messages and connections from a data export.",
+    keywords: ["linkedin", "export", "connections"],
+    kind: "export",
+    icon: "linkedin",
+    defaultName: "linkedin",
+    nameHint: "My LinkedIn",
+    wizard: false,
+  },
   {
     type: "signal",
     label: "Signal",
@@ -753,8 +850,29 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "sms_backup_restore", label: "SMS & calls", blurb: "Android SMS Backup & Restore XML exports.", keywords: ["sms", "mms", "calls", "android", "texts"], kind: "export", icon: "sms", defaultName: "sms", nameHint: "Texts and calls", wizard: false },
-  { type: "beeper", label: "Beeper", blurb: "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.", keywords: ["beeper", "matrix", "chat", "imessage"], kind: "export", icon: "beeper", defaultName: "beeper", nameHint: "Beeper on this Mac", wizard: false },
+  {
+    type: "sms_backup_restore",
+    label: "SMS & calls",
+    blurb: "Android SMS Backup & Restore XML exports.",
+    keywords: ["sms", "mms", "calls", "android", "texts"],
+    kind: "export",
+    icon: "sms",
+    defaultName: "sms",
+    nameHint: "Texts and calls",
+    wizard: false,
+  },
+  {
+    type: "beeper",
+    label: "Beeper",
+    blurb:
+      "Read Beeper Texts' local store across its networks. Poorly supported — expect rough edges.",
+    keywords: ["beeper", "matrix", "chat", "imessage"],
+    kind: "export",
+    icon: "beeper",
+    defaultName: "beeper",
+    nameHint: "Beeper on this Mac",
+    wizard: false,
+  },
 
   {
     type: "pdf",
@@ -981,7 +1099,7 @@ export const CATALOG: CatalogEntry[] = [
           "The chat.db the Messages app keeps at ~/Library/Messages; press Cmd-Shift-G in the " +
           "picker and paste that path to reach it. Choose it with the picker rather than " +
           "typing the path: macOS protects the folder, and picking the file is what lets Datalib " +
-          "read it. If a sync still fails with \"Operation not permitted\", grant Datalib " +
+          'read it. If a sync still fails with "Operation not permitted", grant Datalib ' +
           "Full Disk Access in System Settings. Attachments (photos, videos, files) are " +
           "listed by name and path only — their bytes are not copied, since picking " +
           "chat.db grants access to that one file.",
@@ -1044,7 +1162,7 @@ export const CATALOG: CatalogEntry[] = [
           "database/Photos.sqlite is what gets mirrored. Choose it " +
           "with the picker rather than typing the path: macOS protects the library, and " +
           "picking it is what lets Datalib read it. If a sync still fails with " +
-          "\"Operation not permitted\", grant Datalib Full Disk Access in System Settings.",
+          '"Operation not permitted", grant Datalib Full Disk Access in System Settings.',
       },
       {
         kind: "bool",
@@ -1075,7 +1193,18 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  { type: "perseus", method: "github", label: "Perseus library", blurb: "Classical texts from the Perseus Digital Library.", keywords: ["perseus", "greek", "latin", "classics", "sample"], kind: "local", icon: "perseus", defaultName: "perseus", nameHint: "Greek and Latin texts", wizard: false },
+  {
+    type: "perseus",
+    method: "github",
+    label: "Perseus library",
+    blurb: "Classical texts from the Perseus Digital Library.",
+    keywords: ["perseus", "greek", "latin", "classics", "sample"],
+    kind: "local",
+    icon: "perseus",
+    defaultName: "perseus",
+    nameHint: "Greek and Latin texts",
+    wizard: false,
+  },
 ];
 
 export const KIND_LABELS: Record<CatalogEntry["kind"], string> = {
