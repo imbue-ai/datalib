@@ -163,7 +163,8 @@ fetch, which is findings 2 and 6, not to the fetching.
 
 ## Todo
 
-In priority order. Each is one PR.
+In priority order. Each is one PR. Tracked as
+[#633](https://github.com/imbue-ai/datalib/issues/633).
 
 - [ ] **Slack walk plan** (finding 2): `walk_passes` as a value with
       table tests; `export_channel` loops over it. Then survey email,
