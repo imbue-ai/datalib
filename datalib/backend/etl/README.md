@@ -380,8 +380,8 @@ unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
-predates the table. `docs/dev/plans/schema_migrations.md` is the plan
-this is the first step of.
+predates the table. `docs/dev/plans/completed/schema_migrations.md`
+is the record of the program this was the first step of.
 
 ## Writes: one UPSERT shape, everywhere
 

@@ -1,9 +1,12 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21); §3.1–§3.4 are built, §3.5
-is not.** §1 and §2 describe what the tree did at `a5f04141`, checked
-by reading the code, not the prose; each built section says what
-landed. Where this doc and the tree disagree, the tree wins.
+**Status: landed (2026-09-21), kept as the record.** §3.1–§3.4 are
+built (#625, #627, #631, #634); §3.5 was punted, not built — see its
+note. §1 and §2 describe what the tree did at `a5f04141`, before any
+of it; each §3 section says what landed and where the reference for it
+now lives (`etl/README.md` §"Schema self-healing" and §"The migration
+ladder", `app_stores.md`, `release_steps.md`). Where this doc and the
+tree disagree, the tree wins.
 
 ## 0. Why now
 
@@ -528,6 +531,14 @@ landed (`datalib_store_meta::guard`):
   ladder's top is not checked yet; there is no ladder (§3.3).
 
 ### 3.5 PR 5 — a source says whether it can be fetched again
+
+**Punted (2026-09-21), not built.** Once §3.2 landed strict for every
+raw store, this flag would only have changed what the refusal *offers*
+— a one-click reset for a refetchable source — and that was not
+obviously worth a config key, a wizard question and a per-source
+class to keep true. The refusal message names both ways out for every
+store, and a person knows which applies. Revisit if the reset ever
+needs to be a button rather than a flag. The text as planned:
 
 The class in §2.1 is per source. Two ways to get it:
 

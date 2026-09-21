@@ -2,8 +2,9 @@
 //! cannot get it there. A store owner declares its migrations in order;
 //! `_datalib_meta.schema_version` says how many have run; an open runs
 //! the rest, one at a time, each in its own transaction and — for a
-//! doltlite store — its own commit. docs/dev/plans/schema_migrations.md
-//! §3.3.
+//! doltlite store — its own commit. The reference is etl/README.md
+//! §"The migration ladder"; the design record is
+//! docs/dev/plans/completed/schema_migrations.md §3.3.
 
 use std::future::Future;
 use std::pin::Pin;
