@@ -10,7 +10,7 @@ page is the map.
 ## One store
 
 Everything any datalib process says lands in one file,
-`<data_root>/system/runs.sqlite` — plain SQLite in WAL mode, so
+`<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
 `sqlite3` opens it and two writers share it through SQLite's own
 locking. The runner writes it during a run; `datalib-http` writes it
 for the life of the server. The tables:
@@ -133,7 +133,7 @@ the SSE `table_changed: log` frame.
 **From a shell**, since it is plain SQLite:
 
 ```sh
-sqlite3 <root>/system/runs.sqlite \
+sqlite3 <root>/system/runs/runs.sqlite \
   "SELECT l.ts_utc, p.process, l.level, l.target, l.msg
      FROM log l LEFT JOIN processes p USING (process_id)
     ORDER BY l.seq DESC LIMIT 50"

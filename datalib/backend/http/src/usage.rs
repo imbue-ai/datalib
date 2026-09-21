@@ -411,7 +411,7 @@ fn prune(history: &mut VecDeque<UsageSample>) {
 pub fn measured_trees(config_path: &Path) -> Vec<String> {
     let mut trees = declared_trees(config_path);
     trees.push(datalib_core::layout::SYSTEM_DIR.to_string());
-    trees.push(datalib_runs::RUNS_DIR_REL_PATH.to_string());
+    trees.push(datalib_core::layout::RUNS_DIR_REL.to_string());
     trees
 }
 

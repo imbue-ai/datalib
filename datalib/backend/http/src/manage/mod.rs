@@ -433,7 +433,7 @@ impl Snapshot<'_> {
     /// directory inside it.
     fn system_rows(&self) -> [ManageRow; 2] {
         let dir = datalib_core::layout::SYSTEM_DIR;
-        let log = datalib_runs::RUNS_DIR_REL_PATH;
+        let log = datalib_core::layout::RUNS_DIR_REL;
         let dir_tree = self.outputs.iter().find(|o| o.path == dir);
         let log_tree = self.outputs.iter().find(|o| o.path == log);
         let dir_disk = dir_tree.filter(|t| t.present);

@@ -141,7 +141,7 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     }
     // `runs.sqlite-wal` / `-journal` are the same write as the
     // database itself, so match on the stem rather than equality.
-    if path.parent() == Some(root.join(datalib_runs::RUNS_DIR_REL_PATH).as_path())
+    if path.parent() == Some(root.join(datalib_core::layout::RUNS_DIR_REL).as_path())
         && name.starts_with("runs.sqlite")
     {
         return Some(Moved::RunStore);
@@ -269,7 +269,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let _ = std::fs::create_dir_all(&system);
     let frontend = system.join("frontend");
     let _ = std::fs::create_dir_all(&frontend);
-    let runs = root.join(datalib_runs::RUNS_DIR_REL_PATH);
+    let runs = root.join(datalib_core::layout::RUNS_DIR_REL);
     let _ = std::fs::create_dir_all(&runs);
 
     // Resolve symlinks once, and classify against the resolved form.

@@ -495,7 +495,7 @@ landed (`datalib_store_meta::guard`):
   changes a store's shape. A store with no meta passes: it predates
   every build that can ask. The run store keeps its delete-and-remake.
 - `datalib-dag` inspects the whole root (`inspect_root`: every
-  `*.doltlite_db` to three levels down, plus `system/runs.sqlite`)
+  `*.doltlite_db` to three levels down, plus `system/runs/runs.sqlite`)
   right after the config loads and before the runner lock or
   `dag_state.json` — an older build rewriting that file drops the
   fields it does not know. Both `--check` and a run fail with the

@@ -121,7 +121,7 @@ pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     walk(root, 1, &mut out);
-    let runs = datalib_runtime::layout::system_dir(root).join("runs.sqlite");
+    let runs = datalib_runtime::layout::runs_db(root);
     if runs.is_file() {
         out.push(runs);
     }
@@ -183,7 +183,7 @@ mod tests {
         let root = td.path();
         let files = [
             "system/feedback.doltlite_db",
-            "system/runs.sqlite",
+            "system/runs/runs.sqlite",
             "system/feedback.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
@@ -210,7 +210,7 @@ mod tests {
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/feedback.doltlite_db",
-                "system/runs.sqlite",
+                "system/runs/runs.sqlite",
                 "unified_index/grid_index/db.doltlite_db",
             ]
         );
