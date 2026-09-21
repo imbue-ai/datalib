@@ -347,6 +347,35 @@ impl ArtifactState {
 pub struct StepOutcome {
     #[serde(default)]
     pub outputs: Vec<ArtifactState>,
+    /// How the step's process ended, when it was one (an in-process
+    /// step has no exit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Exit>,
+}
+
+/// How a subprocess ended: an exit code when it exited, the signal
+/// when one ended it. What the runner saw in `wait(2)`, kept apart from
+/// the failure's classification so the record says both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+impl From<std::process::ExitStatus> for Exit {
+    fn from(status: std::process::ExitStatus) -> Self {
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            status.signal()
+        };
+        #[cfg(not(unix))]
+        let signal = None;
+        Exit {
+            code: status.code(),
+            signal,
+        }
+    }
 }
 
 /// Failure classification — the part of a failure the scheduler acts
@@ -402,6 +431,8 @@ pub struct StepError {
     pub kind: FailureKind,
     pub error: anyhow::Error,
     pub outputs: Vec<ArtifactState>,
+    /// See [`StepOutcome::exit`].
+    pub exit: Option<Exit>,
 }
 
 impl StepError {
@@ -410,10 +441,15 @@ impl StepError {
             kind,
             error: error.into(),
             outputs: Vec::new(),
+            exit: None,
         }
     }
     pub fn with_outputs(mut self, outputs: Vec<ArtifactState>) -> Self {
         self.outputs = outputs;
+        self
+    }
+    pub fn with_exit(mut self, exit: Exit) -> Self {
+        self.exit = Some(exit);
         self
     }
 }

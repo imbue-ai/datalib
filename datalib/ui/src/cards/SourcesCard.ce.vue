@@ -9,7 +9,7 @@ import {
   fetchAllJobs,
   fetchManageRows,
   fetchRuns,
-  type RunInfo,
+  healthSnapshot,
   fetchTreeHistory,
   enqueueJob,
   cancelJob,
@@ -46,7 +46,8 @@ import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
 import { browseColumns, browseQuery } from "@/config/browsePresets";
-import RunLogPanel from "@/components/RunLogPanel.vue";
+import { logSource } from "./libs/logView";
+import { pushToast } from "@/toasts";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
 import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
@@ -376,82 +377,48 @@ function freshest<T>(commit: (value: T) => void) {
   // the run store's lines for that step, in the run it last took part in
   // — or the one in flight — as a grid that follows the run while it goes.
 
-/// What the log panel is showing, or null when it is closed. A null
-/// `row` is the server's own log: every run at once, narrowed by the
-/// query bar to what `datalib-http` wrote rather than to a step.
-const logFor = ref<{
-  row: Row | null;
-  runId: string;
-  live: boolean;
-  startedAt: string | null;
-  /// Open at the line that says how the step ended, for a row whose
-  /// status is the outcome of a run — the hover on Failed or Stopped
-  /// promises exactly that.
-  jumpToEnd?: boolean;
-} | null>(null);
-const logError = ref<string | null>(null);
-/// What `logFor.runId` holds while the panel shows every run at once.
-const ALL_RUNS_LOG = "*";
-/// The run the panel was opened on. Its picker can move to another run,
-/// which updates `logFor` for the header but must not remount the panel.
-const logOpenedOn = ref("");
-
-/// The picker in the panel moved: say so in the header.
-function onLogRunChanged(run: RunInfo | null) {
-  if (!logFor.value) return;
-  logFor.value = run
-    ? {
-        ...logFor.value,
-        runId: run.run_id,
-        live: run.finished_at_utc == null,
-        startedAt: run.started_at_utc,
-      }
-    : { ...logFor.value, runId: ALL_RUNS_LOG, live: logFor.value.live, startedAt: null };
-}
-
 /// The run whose log answers "what was this step doing": the one in
 /// flight if the step is in it, else the one its record names, else —
 /// for a record from before runs had ids — the newest run the store says
 /// it took part in.
-async function runFor(row: Row): Promise<{ runId: string; live: boolean; startedAt: string | null } | null> {
-  if (row.live_run_id) {
-    return { runId: row.live_run_id, live: true, startedAt: manage.value?.run?.started_at ?? null };
-  }
-  if (row.last_run_id) {
-    return { runId: row.last_run_id, live: false, startedAt: row.last_synced };
-  }
+async function runFor(row: Row): Promise<{ runId: string; live: boolean } | null> {
+  if (row.live_run_id) return { runId: row.live_run_id, live: true };
+  if (row.last_run_id) return { runId: row.last_run_id, live: false };
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
-  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc, startedAt: newest.started_at_utc } : null;
+  return newest ? { runId: newest.run_id, live: !newest.finished_at_utc } : null;
 }
 
 /// The server's log — what `datalib-http` itself said: the worker, the
-/// applets, every request that failed. Always live: the server writing
-/// it is the one serving this page.
+/// applets, every request that failed — as a card beside this one,
+/// opened on the launch serving this page; when the server is
+/// recording nothing (no store), on everything, narrowed by the query
+/// bar.
 function openServerLog() {
-  logError.value = null;
-  logFor.value = { row: null, runId: ALL_RUNS_LOG, live: true, startedAt: null };
-  logOpenedOn.value = ALL_RUNS_LOG;
+  const launch = healthSnapshot()?.process_id ?? null;
+  props.ctx.host.openCards(
+    logSource(launch ? { launch } : { q: "process:http min_level:info" }),
+  );
 }
 
-/// With `runId`, the log of that one run; without, the run in flight if
-/// the step is in it, else the one it last took part in.
+/// A step's log as a card beside this one. With `runId`, that run's;
+/// without, the run in flight if the step is in it, else the one it
+/// last took part in.
 async function openStepLog(row: Row, runId: string | null = null) {
-  logError.value = null;
   try {
     const run = runId
-      ? { runId, live: !!manage.value?.run?.live && manage.value.run.run_id === runId, startedAt: null }
+      ? { runId, live: !!manage.value?.run?.live && manage.value.run.run_id === runId }
       : await runFor(row);
     if (!run) {
-      logError.value = "This step has not taken part in any run the store remembers.";
-      logFor.value = { row, runId: "", live: false, startedAt: null };
+      pushToast("This step has not taken part in any run the store remembers.");
       return;
     }
+    // Open at the line that says how the step ended, for a row whose
+    // status is the outcome of a run — the hover on Failed or Stopped
+    // promises exactly that.
     const jumpToEnd = !run.live && !runId && ["failed", "stopped"].includes(row.status.key);
-    logFor.value = { row, ...run, jumpToEnd };
-    logOpenedOn.value = run.runId;
+    props.ctx.host.openCards(logSource({ run: run.runId, step: row.id, jumpToEnd }));
   } catch (e) {
-    logError.value = (e as Error).message;
-    logFor.value = { row, runId: "", live: false, startedAt: null };
+    pushToast((e as Error).message);
   }
 }
 
@@ -845,13 +812,11 @@ function onRowGroupOpened(row: Row, expanded: boolean) {
   }
 }
 
-/// Escape closes whichever panel is open, which is what a modal owes
-/// its reader. Innermost first: the log panel can be opened from behind
-/// the help panel, so one Escape should not close both.
+/// Escape closes the commit history, which is what a modal owes its
+/// reader.
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
-  if (logFor.value) logFor.value = null;
-  else if (historyFor.value.length) historyFor.value = [];
+  if (historyFor.value.length) historyFor.value = [];
 }
 
 function reparse() {
@@ -1529,52 +1494,6 @@ onUnmounted(() => {
          styles live in the head, and a modal belongs over the whole
          page anyway. -->
     <Teleport to="body">
-    <div v-if="logFor" class="m2-logs-backdrop" @click.self="logFor = null">
-      <div
-        class="m2-logs m2-runlog"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="logFor.row ? 'Step log' : 'Server log'"
-      >
-        <header class="m2-logs-head">
-          <div v-if="!logFor.row">
-            <h3>Server log</h3>
-            <p>
-              What <code>datalib-http</code> wrote — its own lines and its applets’ — beside
-              every run the store holds. Clear <code>process:http</code> from the search to see
-              the runs’ lines too.
-            </p>
-          </div>
-          <div v-else>
-            <h3>{{ logFor.row.name.label }}</h3>
-            <p>
-              <code>{{ logFor.row.id }}</code>
-              <span v-if="logFor.runId === ALL_RUNS_LOG"> · every run the store holds</span>
-              <span v-else-if="logFor.runId">
-                · {{ logFor.live ? "a run in flight" : "a past run" }}<span
-                  v-if="logFor.startedAt"
-                  :title="formatStamp(logFor.startedAt)"
-                >, started {{ formatRelative(logFor.startedAt, Date.now()) }}</span>
-                · run <code>{{ logFor.runId }}</code>
-              </span>
-            </p>
-          </div>
-          <button class="m2-btn" @click="logFor = null">Close</button>
-        </header>
-        <p v-if="logError" class="m2-logs-note bad">{{ logError }}</p>
-        <RunLogPanel
-          v-else-if="logFor.runId"
-          :key="logOpenedOn + '/' + (logFor.row?.id ?? '')"
-          :run-id="logOpenedOn"
-          :step="logFor.row?.id ?? null"
-          :live="logFor.live"
-          :initial-query="logFor.row ? undefined : 'process:http'"
-          :jump-to-end="logFor.jumpToEnd"
-          @run-changed="onLogRunChanged"
-        />
-      </div>
-    </div>
-
     <div v-if="historyFor.length" class="m2-logs-backdrop" @click.self="historyFor = []">
       <div class="m2-logs m2-history" role="dialog" aria-modal="true" aria-label="Commit history">
         <header class="m2-logs-head">

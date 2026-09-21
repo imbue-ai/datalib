@@ -35,6 +35,24 @@ export function inRepo(file: string): boolean {
   return !file.startsWith("/") && !file.startsWith("external/") && !file.startsWith("..");
 }
 
+/// The fields JSON with `filename` and `line_number` taken out, for the
+/// Fields column beside a Source column that shows them; empty when
+/// nothing else was there.
+export function fieldsWithoutSource(fields: string | null): string {
+  if (!fields) return "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fields);
+  } catch {
+    return fields;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return fields;
+  const rest = { ...(parsed as Record<string, unknown>) };
+  delete rest.filename;
+  delete rest.line_number;
+  return Object.keys(rest).length === 0 ? "" : JSON.stringify(rest);
+}
+
 export function sourceLabel(src: Source): string {
   return src.line == null ? src.file : `${src.file}:${src.line}`;
 }

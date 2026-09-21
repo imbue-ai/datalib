@@ -10,7 +10,9 @@
 <data_root>/system/jobs.doltlite_db               the sync job queue
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/runs.sqlite                    every run's step states, log lines and
-                                                  metrics, plus the app server's own log
+                                                  metrics, plus the app server's own log;
+                                                  every process — runner, step attempt,
+                                                  server launch — a row in `processes`
                                                   (plain SQLite; any sqlite3 opens it)
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
@@ -36,6 +38,14 @@ table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in WAL mode, written by both the runner (its runs) and the server
 (its own log), which SQLite's own locking makes ordinary.
+
+The server's log includes one line per request it answered — method,
+path, query, status and milliseconds, under the tracing target
+`http.request` (`datalib/backend/http/src/request_log.rs`) — so
+`target:http.request` in the log panel is the record of what the app
+asked for. A read of the log itself is the one request that leaves no
+line: the panel refetches whenever the log moves, and a line per
+refetch would keep it moving.
 
 ## The three stores `datalib-http` owns
 

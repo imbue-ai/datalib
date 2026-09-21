@@ -346,18 +346,40 @@ upserted, a request being retried, each with its numbers in the
 sentence — and the runner stores a `DEBUG` envelope as a `debug` row
 rather than rounding it up to `info`.
 
-**Where a line came from.** `filename` is the repo-relative path rustc
-saw and `line_number` the line, so the log view can show `file:line`
-and link it to GitHub at the commit the binaries came from. That
-commit is recorded at run time, never compiled in (a build stamp costs
-a rebuild of everything downstream on every commit): `datalib_runs::git_hash`
+**Every process is a row.** `processes` has one row per process that
+took part: a run of the runner, each attempt of each step it spawned,
+and each launch of the app server — with when it started and ended,
+and, for a step attempt, how: the `exit_code` it exited with, or the
+`signal` that ended it, as the runner saw in `wait(2)`. (The runner and
+the server record themselves, and a process cannot see its own end.)
+Every log line names the process that wrote it: a step attempt's for
+what came out of the step's pipes, the runner's for its own lines —
+including what it says *about* a step, which is why a line also keeps
+its subject, `step` and `attempt`. A process records the commit it was
+built from, once, so a line's `filename` (the repo-relative path rustc
+saw) and `line_number` can be shown as `file:line` and linked to
+GitHub at that commit; a step attempt that runs the built-in step
+program shares the runner's, a custom command has none. The commit is
+resolved at run time, never compiled in (a build stamp costs a rebuild
+of everything downstream on every commit): `datalib_runs::git_hash`
 reads `DATALIB_GIT_HASH` from the environment — the dev launchers set
 it from the checkout — else a `git-hash` file beside the binaries,
 which the release tarball and the .app carry the way they carry
-`runtime.manifest`. The runner writes it on the run's row; the app
-server writes it on each of its own lines, because the server restarts
-between versions while the store keeps its lines. A binary that can
-say neither records nothing, and the view shows `file:line` as text.
+`runtime.manifest`. A binary that can say neither records nothing, and
+the view shows `file:line` as text. Lines from different builds sit in
+one store — the server restarts between versions — which is why the
+commit belongs to the process and not to the store.
+
+**Reading the log.** The log card's unit is a process: it opens on a
+step's newest attempt (its own output and what the runner said about
+it), on the runner, on the launch of the server serving the page, or
+on a whole run; `GET /api/processes` lists them and `GET /api/log`
+takes `run`, `step` + `attempt`, or `process`. A selected line opens
+in full in the card beside it (`GET /api/log/{seq}`). The search bar's keys
+are the columns — `run`, `process`, `commit`, `step`, `level`,
+`stream`, `target`, `thread`, `msg` — plus `min_level:info`, this level
+and above, which is where the panel starts so `debug` is there when
+asked for and not otherwise.
 
 ## Signals: graceful cancellation (optional)
 

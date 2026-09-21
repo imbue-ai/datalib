@@ -20,12 +20,14 @@ rust_library(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-subscriber",
+        "@datalib_crates//:uuid",
     ],
 )
 
