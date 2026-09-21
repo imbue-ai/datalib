@@ -4,7 +4,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { expandGroup, MANAGE_WITH_CONFIG } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
-// Structural, matching manager2-name.spec.ts: each field's <label>
+// Structural, matching data-sources-name.spec.ts: each field's <label>
 // wraps its help paragraph, so the accessible name is caption + prose.
 const field = (page: Page, caption: string) =>
   wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) > .wiz-input`);

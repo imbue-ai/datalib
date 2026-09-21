@@ -1070,7 +1070,7 @@ mod tests {
         }
     }
 
-    /// The frame `manager2-sync.spec.ts` caught intermittently as
+    /// The frame `data-sources-sync.spec.ts` caught intermittently as
     /// `went backwards: ["Queued","Succeeded","Running","Succeeded"]`.
     mod second_sync {
         use super::*;

@@ -121,7 +121,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("heading", { name: "Set up a data library" })).toBeVisible();
     await page.getByRole("button", { name: "Initialize empty data library" }).click();
 
-    // ── 3. landing in Manager2 ───────────────────────────────────────
+    // ── 3. landing on the sources card ───────────────────────────────
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     expect(decodeURIComponent(new URL(page.url()).pathname)).toContain("sourcesView()");
     // The scaffold's one group, and the System group every root has,

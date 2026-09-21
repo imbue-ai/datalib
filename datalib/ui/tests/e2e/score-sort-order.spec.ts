@@ -17,7 +17,7 @@ import { searchAndSettle } from "./grid-helpers";
 
 test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
   // The `warmup` project pays the qmd cold start before any spec runs,
-  // but the applet restarts on config changes and `manager2-sync`
+  // but the applet restarts on config changes and `data-sources-sync`
   // (which sorts earlier) rewrites config.toml — so this may still land
   // on a freshly respawned daemon and pay the model load again. See
   // `SEARCH_SETTLE`.

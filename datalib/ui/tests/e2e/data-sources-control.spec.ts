@@ -98,7 +98,7 @@ async function writeConfig(page: Page, text: string) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
   // Remount, so the rows are painted from the config and the runner's
-  // record together — see manager2-sync.spec.ts for the frame this
+  // record together — see data-sources-sync.spec.ts for the frame this
   // avoids.
   await openManager(page);
 }
@@ -197,7 +197,7 @@ async function dumpStopEvidence(request: APIRequestContext, why: string): Promis
       name: string;
       log: string;
     }[];
-    const mine = servers.find((s) => s.name === "sandbox-manager2-control");
+    const mine = servers.find((s) => s.name === "sandbox-data-sources-control");
     if (!mine) return;
     const tail = readFileSync(mine.log, "utf8").split("\n").slice(-80).join("\n");
     console.warn(`[e2e] ${why}: backend log tail:\n${tail}`);
