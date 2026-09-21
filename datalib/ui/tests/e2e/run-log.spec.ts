@@ -34,7 +34,7 @@ const lineCount = (page: Page) =>
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
   const dialog = await openServerLog(page);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue("process:http");
+  await expect(query).toHaveValue("process:http min_level:info");
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -46,7 +46,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, "Exclude all Thread=main")).toBeVisible();
   await menuEntry(page, "Keep only Thread=main").click();
 
-  await expect(query).toHaveValue("process:http thread:main");
+  await expect(query).toHaveValue("process:http min_level:info thread:main");
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect.poll(async () => {
@@ -66,6 +66,15 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // With no query at all, every line in the store — at least the
   // server's own.
   await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);
+
+  // The level picker writes its word into the query, where it can be
+  // read back, edited or cleared like anything typed.
+  const level = dialog.getByLabel("Lowest level to show");
+  await expect(level).toHaveValue("trace");
+  await level.selectOption("warn");
+  await expect(query).toHaveValue("min_level:warn");
+  await level.selectOption("trace");
+  await expect(query).toHaveValue("");
 });
 
 // A tracing line carries the file and line that wrote it; the Source

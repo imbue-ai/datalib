@@ -343,18 +343,28 @@ upserted, a request being retried, each with its numbers in the
 sentence — and the runner stores a `DEBUG` envelope as a `debug` row
 rather than rounding it up to `info`.
 
-**Where a line came from.** `filename` is the repo-relative path rustc
-saw and `line_number` the line, so the log view can show `file:line`
-and link it to GitHub at the commit the binaries came from. That
-commit is recorded at run time, never compiled in (a build stamp costs
-a rebuild of everything downstream on every commit): `datalib_runs::git_hash`
-reads `DATALIB_GIT_HASH` from the environment — the dev launchers set
-it from the checkout — else a `git-hash` file beside the binaries,
-which the release tarball and the .app carry the way they carry
-`runtime.manifest`. The runner writes it on the run's row; the app
-server writes it on each of its own lines, because the server restarts
-between versions while the store keeps its lines. A binary that can
-say neither records nothing, and the view shows `file:line` as text.
+**Where a line came from.** Every writer of the store is a process —
+a row in `processes`: a run of the runner, or a launch of the app
+server — and every log line names the process that wrote it, the
+runner's for its own lines and its steps'. A process records which
+program it was and the commit it was built from, once, so a line's
+`filename` (the repo-relative path rustc saw) and `line_number` can be
+shown as `file:line` and linked to GitHub at that commit. The commit
+is resolved at run time, never compiled in (a build stamp costs a
+rebuild of everything downstream on every commit):
+`datalib_runs::git_hash` reads `DATALIB_GIT_HASH` from the environment
+— the dev launchers set it from the checkout — else a `git-hash` file
+beside the binaries, which the release tarball and the .app carry the
+way they carry `runtime.manifest`. A binary that can say neither
+records nothing, and the view shows `file:line` as text. Lines from
+different builds sit in one store — the server restarts between
+versions — which is why the commit belongs to the process and not to
+the store.
+
+**Reading the log.** The search bar's keys are the columns — `run`,
+`process`, `commit`, `step`, `level`, `stream`, `target`, `thread`,
+`msg` — plus `min_level:info`, this level and above, which is where the
+panel starts so `debug` is there when asked for and not otherwise.
 
 ## Signals: graceful cancellation (optional)
 

@@ -1626,7 +1626,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
             finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
-            git_hash: snap.git_hash,
+            process_id: snap.process_id.unwrap_or_default(),
         }),
         steps,
     })
@@ -1651,7 +1651,7 @@ async fn run_log(
     State(s): State<AppState>,
     Path(run): Path<String>,
     Query(p): Query<RunLogParams>,
-) -> Json<Vec<datalib_runs::LogRow>> {
+) -> Json<Vec<datalib_runs::LogLine>> {
     let limit = p.limit.unwrap_or(2000).clamp(1, 20_000);
     Json(
         datalib_runs::log_after(
@@ -1688,7 +1688,7 @@ struct LogParams {
 async fn log_lines(
     State(s): State<AppState>,
     Query(p): Query<LogParams>,
-) -> Result<Json<Vec<datalib_runs::LogRow>>, (StatusCode, String)> {
+) -> Result<Json<Vec<datalib_runs::LogLine>>, (StatusCode, String)> {
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
     let q = datalib_runs::LogQuery {
         run: p.run.as_deref(),

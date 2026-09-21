@@ -11,7 +11,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::{is_terminal, runs_path, Retention, INDEXES, SCHEMA_VERSION};
 use app_schema::runs::{
-    LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, StorePart,
+    LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow, StorePart,
 };
 
 /// How often the writer thread flushes. 200ms is under the threshold
@@ -184,7 +184,7 @@ pub struct Snapshot {
     pub started_at_utc: Option<String>,
     pub finished_at_utc: Option<String>,
     pub tz_offset: Option<String>,
-    pub git_hash: Option<String>,
+    pub process_id: Option<String>,
     pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
@@ -250,7 +250,7 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset, r.git_hash FROM runs r \
+        "SELECT r.run_id, r.process_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
          ORDER BY r.started_at_utc DESC LIMIT ?",
@@ -265,10 +265,10 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
     rows.iter()
         .map(|r| RunRow {
             run_id: r.get("run_id"),
+            process_id: r.get("process_id"),
             started_at_utc: r.get("started_at_utc"),
             finished_at_utc: r.get("finished_at_utc"),
             tz_offset: r.get("tz_offset"),
-            git_hash: r.get("git_hash"),
         })
         .collect()
 }
@@ -326,7 +326,7 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, git_hash FROM runs \
+        "SELECT run_id, process_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
          WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
     )
     .bind(run_id)
@@ -428,7 +428,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         started_at_utc: run.get("started_at_utc"),
         finished_at_utc: run.get("finished_at_utc"),
         tz_offset: run.get("tz_offset"),
-        git_hash: run.get("git_hash"),
+        process_id: run.get("process_id"),
         steps,
         metrics,
         errors,
@@ -446,7 +446,7 @@ pub async fn log_after(
     step: Option<&str>,
     after_seq: i64,
     limit: i64,
-) -> Vec<LogRow> {
+) -> Vec<LogLine> {
     log_where(data_root, Some(run_id), step, after_seq, limit).await
 }
 
@@ -456,7 +456,7 @@ async fn log_where(
     step: Option<&str>,
     after_seq: i64,
     limit: i64,
-) -> Vec<LogRow> {
+) -> Vec<LogLine> {
     let path = runs_path(data_root);
     if !path.exists() {
         return Vec::new();
@@ -464,12 +464,12 @@ async fn log_where(
     let Ok(pool) = open_existing(&path).await else {
         return Vec::new();
     };
-    let rows = sqlx::query(
-        "SELECT seq, run_id, process, step, attempt, ts_utc, tz_offset, stream, level, target, \
-         thread, msg, fields, git_hash \
-         FROM log WHERE (? IS NULL OR run_id = ?) AND seq > ? AND (? IS NULL OR step = ?) \
-         ORDER BY seq LIMIT ?",
-    )
+    // Audited: the column list is this module's own constant.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+         WHERE (? IS NULL OR l.run_id = ?) AND l.seq > ? AND (? IS NULL OR l.step = ?) \
+         ORDER BY l.seq LIMIT ?"
+    )))
     .bind(run_id)
     .bind(run_id)
     .bind(after_seq)
@@ -480,24 +480,52 @@ async fn log_where(
     .await
     .unwrap_or_default();
     pool.close().await;
-    rows.iter().map(log_row_from).collect()
+    rows.iter().map(log_line_from).collect()
 }
 
-pub(crate) fn log_row_from(r: &sqlx::sqlite::SqliteRow) -> LogRow {
-    LogRow {
-        seq: r.get("seq"),
-        run_id: r.get("run_id"),
+/// A log line as a reader sees it: the row, with what its process says
+/// about it — which program wrote it and from which commit. Both
+/// `None` for a line whose process the store no longer has.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct LogLine {
+    #[serde(flatten)]
+    pub row: LogRow,
+    /// A [`Process`] word.
+    pub process: Option<String>,
+    pub git_hash: Option<String>,
+}
+
+impl std::ops::Deref for LogLine {
+    type Target = LogRow;
+    fn deref(&self) -> &LogRow {
+        &self.row
+    }
+}
+
+/// The columns [`log_line_from`] reads, for a query that selects them
+/// itself: `log` as `l`, joined to `processes` as `p`.
+pub(crate) const LOG_LINE_COLUMNS: &str = "l.seq, l.run_id, l.process_id, l.step, l.attempt, \
+     l.ts_utc, l.tz_offset, l.stream, l.level, l.target, l.thread, l.msg, l.fields, \
+     p.process, p.git_hash";
+
+pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
+    LogLine {
+        row: LogRow {
+            seq: r.get("seq"),
+            run_id: r.get("run_id"),
+            process_id: r.get("process_id"),
+            step: r.get("step"),
+            attempt: r.get("attempt"),
+            ts_utc: r.get("ts_utc"),
+            tz_offset: r.get("tz_offset"),
+            stream: r.get("stream"),
+            level: r.get("level"),
+            target: r.get("target"),
+            thread: r.get("thread"),
+            msg: r.get("msg"),
+            fields: r.get("fields"),
+        },
         process: r.get("process"),
-        step: r.get("step"),
-        attempt: r.get("attempt"),
-        ts_utc: r.get("ts_utc"),
-        tz_offset: r.get("tz_offset"),
-        stream: r.get("stream"),
-        level: r.get("level"),
-        target: r.get("target"),
-        thread: r.get("thread"),
-        msg: r.get("msg"),
-        fields: r.get("fields"),
         git_hash: r.get("git_hash"),
     }
 }
@@ -568,7 +596,7 @@ impl Drop for Writer {
 /// Publishes one run to the store. Cheap to call; the work happens on
 /// its own thread. Every row it takes belongs to the run it was started
 /// for and was written by the runner, so a row's own `run_id` and
-/// `process` are ignored and those are bound instead.
+/// `process_id` are ignored and those are bound instead.
 pub struct RunWriter(Writer);
 
 impl RunWriter {
@@ -582,16 +610,30 @@ impl RunWriter {
         retention: Retention,
     ) -> Option<Self> {
         // The start stamp arrives as the runner wrote it, offset and
-        // all; the store keeps UTC and the offset apart.
+        // all; the store keeps UTC and the offset apart. The runner's
+        // process starts when its run does.
         let (started_at_utc, tz_offset) = split_stamp(started_at_utc);
+        let process = ProcessRow {
+            process_id: mint_process_id(),
+            process: Process::Dag.as_str().into(),
+            started_at_utc: started_at_utc.clone(),
+            tz_offset: tz_offset.clone(),
+            git_hash,
+        };
         let run = RunInfo {
             run_id: run_id.to_string(),
             started_at_utc,
             tz_offset,
-            git_hash,
-            retention,
         };
-        Writer::start(data_root, Scope::Run(run)).map(Self)
+        Writer::start(
+            data_root,
+            Scope {
+                process,
+                run: Some(run),
+                retention,
+            },
+        )
+        .map(Self)
     }
 
     pub fn step(&self, next: StepRunRow) {
@@ -629,10 +671,8 @@ impl LogSink for RunWriter {
 
 /// Publishes the log of a process that is not a run — the app's
 /// server — to the same table, with no `run_id`. The rows it takes are
-/// bound to `process` the way a [`RunWriter`]'s are to its run, and to
-/// `git_hash`: the commit the process came from ([`crate::git_hash`]),
-/// stamped on every line because the store outlives the process and
-/// the next one may be another build.
+/// bound to the process the way a [`RunWriter`]'s are to its run;
+/// `git_hash` is the commit the process came from ([`crate::git_hash`]).
 pub struct ProcessLogWriter(Writer);
 
 impl ProcessLogWriter {
@@ -642,11 +682,19 @@ impl ProcessLogWriter {
         git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
+        let (started_at_utc, tz_offset) = now_split();
+        let process = ProcessRow {
+            process_id: mint_process_id(),
+            process: process.as_str().into(),
+            started_at_utc,
+            tz_offset,
+            git_hash,
+        };
         Writer::start(
             data_root,
-            Scope::Process {
+            Scope {
                 process,
-                git_hash,
+                run: None,
                 retention,
             },
         )
@@ -668,50 +716,24 @@ struct RunInfo {
     run_id: String,
     started_at_utc: String,
     tz_offset: Option<String>,
-    git_hash: Option<String>,
-    retention: Retention,
 }
 
-/// What a writer thread is writing on behalf of.
-enum Scope {
-    Run(RunInfo),
-    Process {
-        process: Process,
-        git_hash: Option<String>,
-        retention: Retention,
-    },
+/// What a writer thread is writing on behalf of: always a process, and
+/// a run of it when the process is the runner.
+struct Scope {
+    process: ProcessRow,
+    run: Option<RunInfo>,
+    retention: Retention,
 }
 
 impl Scope {
     fn run_id(&self) -> Option<&str> {
-        match self {
-            Scope::Run(run) => Some(&run.run_id),
-            Scope::Process { .. } => None,
-        }
+        self.run.as_ref().map(|r| r.run_id.as_str())
     }
+}
 
-    /// What a log line records: a process's commit, and nothing for a
-    /// run, whose row carries it once.
-    fn line_git_hash(&self) -> Option<&str> {
-        match self {
-            Scope::Run(_) => None,
-            Scope::Process { git_hash, .. } => git_hash.as_deref(),
-        }
-    }
-
-    fn process(&self) -> Process {
-        match self {
-            Scope::Run(_) => Process::Dag,
-            Scope::Process { process, .. } => *process,
-        }
-    }
-
-    fn retention(&self) -> Retention {
-        match self {
-            Scope::Run(run) => run.retention,
-            Scope::Process { retention, .. } => *retention,
-        }
-    }
+fn mint_process_id() -> String {
+    uuid::Uuid::now_v7().to_string()
 }
 
 /// What the writer thread remembers per metric series, to decide when
@@ -736,11 +758,7 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
             return;
         }
     };
-    let opened = match &scope {
-        Scope::Run(run) => rt.block_on(begin_run(&pool, run)),
-        Scope::Process { retention, .. } => rt.block_on(prune_unowned_lines(&pool, *retention)),
-    };
-    if let Err(e) = opened {
+    if let Err(e) = rt.block_on(begin(&pool, &scope)) {
         tracing::warn!(error = %e, "run store: could not record the start");
     }
 
@@ -765,14 +783,14 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
         if done {
             break;
         }
-        if matches!(scope, Scope::Process { .. }) && last_prune.elapsed() >= PRUNE_EVERY {
-            if let Err(e) = rt.block_on(prune_unowned_lines(&pool, scope.retention())) {
+        if scope.run.is_none() && last_prune.elapsed() >= PRUNE_EVERY {
+            if let Err(e) = rt.block_on(prune_unowned(&pool, scope.retention)) {
                 tracing::warn!(error = %e, "run store: could not prune old lines");
             }
             last_prune = Instant::now();
         }
     }
-    if let Scope::Run(run) = &scope {
+    if let Some(run) = &scope.run {
         if let Err(e) = rt.block_on(end_run(&pool, &run.run_id)) {
             tracing::warn!(error = %e, "run store: could not close the run");
         }
@@ -798,47 +816,82 @@ pub fn now_split() -> (String, Option<String>) {
     (utc, Some(offset))
 }
 
-/// Record this run and apply retention. The run's own row goes in first
-/// so the count limit includes it.
-async fn begin_run(pool: &SqlitePool, run: &RunInfo) -> Result<(), sqlx::Error> {
+/// Record the process, and its run when it has one, and apply
+/// retention. Their own rows go in first so the count limit includes
+/// them.
+async fn begin(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
+    insert_process(&mut tx, &scope.process).await?;
+    if let Some(run) = &scope.run {
+        begin_run(&mut tx, run, &scope.process.process_id, scope.retention).await?;
+    }
+    tx.commit().await?;
+    prune_unowned(pool, scope.retention).await
+}
+
+/// Idempotent, and called again with every batch of lines: a process
+/// that outlives the age cutoff and has no lines left in the store
+/// is pruned, and must not then write lines that name no process.
+async fn insert_process(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    p: &ProcessRow,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO runs (run_id, started_at_utc, tz_offset, git_hash) VALUES (?, ?, ?, ?) \
-         ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
-           tz_offset = excluded.tz_offset, git_hash = excluded.git_hash, finished_at_utc = NULL",
+        "INSERT OR IGNORE INTO processes (process_id, process, started_at_utc, tz_offset, git_hash) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&p.process_id)
+    .bind(&p.process)
+    .bind(&p.started_at_utc)
+    .bind(&p.tz_offset)
+    .bind(&p.git_hash)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn begin_run(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    run: &RunInfo,
+    process_id: &str,
+    retention: Retention,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO runs (run_id, process_id, started_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(run_id) DO UPDATE SET process_id = excluded.process_id, \
+           started_at_utc = excluded.started_at_utc, tz_offset = excluded.tz_offset, \
+           finished_at_utc = NULL",
     )
     .bind(&run.run_id)
+    .bind(process_id)
     .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
-    .bind(&run.git_hash)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    let cutoff = age_cutoff(run.retention);
+    let cutoff = age_cutoff(retention);
     sqlx::query("DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?")
         .bind(&cutoff)
         .bind(&run.run_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query(
         "DELETE FROM runs WHERE run_id NOT IN \
          (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?)",
     )
-    .bind(run.retention.max_runs.max(1) as i64)
-    .execute(&mut *tx)
+    .bind(retention.max_runs.max(1) as i64)
+    .execute(&mut **tx)
     .await?;
     for table in ["step_runs", "log", "metrics", "metric_samples"] {
         // Safe: the four names are the literals above, never input.
         // `NOT IN` is false for a NULL `run_id`, so the lines outside
-        // any run are kept here and aged out below.
+        // any run are kept here and aged out by `prune_unowned`.
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM {table} WHERE run_id NOT IN (SELECT run_id FROM runs)"
         )))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    bump(&mut tx, StorePart::Runs).await?;
-    tx.commit().await?;
-    prune_unowned_lines(pool, run.retention).await
+    bump(tx, StorePart::Runs).await
 }
 
 /// Count one write to `what`, inside the transaction that made it.
@@ -863,10 +916,11 @@ async fn bump(
     Ok(())
 }
 
-/// Retention for the lines outside any run: their own, shorter age,
-/// and a row cap — a server at `debug` between syncs must not grow the
-/// file for a month.
-async fn prune_unowned_lines(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
+/// Retention for what belongs to no run: the lines have their own,
+/// shorter age and a row cap — a server at `debug` between syncs must
+/// not grow the file for a month — and a process goes once it is past
+/// that age with no run and no line left to name it.
+async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
     let cutoff = cutoff_days_ago(retention.process_log_days);
     sqlx::query("DELETE FROM log WHERE run_id IS NULL AND ts_utc < ?")
         .bind(&cutoff)
@@ -877,6 +931,14 @@ async fn prune_unowned_lines(pool: &SqlitePool, retention: Retention) -> Result<
          (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
     )
     .bind(retention.process_log_lines.max(1) as i64 - 1)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "DELETE FROM processes WHERE started_at_utc < ? \
+         AND process_id NOT IN (SELECT process_id FROM runs) \
+         AND process_id NOT IN (SELECT process_id FROM log)",
+    )
+    .bind(&cutoff)
     .execute(pool)
     .await?;
     Ok(())
@@ -919,16 +981,16 @@ async fn flush(
         return Ok(());
     }
     let run_id = scope.run_id();
-    let process = scope.process().as_str();
-    let line_git_hash = scope.line_git_hash();
+    let process_id = scope.process.process_id.as_str();
     let mut tx = pool.begin().await?;
     if !batch.steps.is_empty() {
         bump(&mut tx, StorePart::StepRuns).await?;
     }
     if !batch.logs.is_empty() {
-        let part = match scope {
-            Scope::Run(_) => StorePart::RunLog,
-            Scope::Process { .. } => StorePart::ProcessLog,
+        insert_process(&mut tx, &scope.process).await?;
+        let part = match scope.run {
+            Some(_) => StorePart::RunLog,
+            None => StorePart::ProcessLog,
         };
         bump(&mut tx, part).await?;
     }
@@ -962,12 +1024,12 @@ async fn flush(
     }
     for l in &batch.logs {
         sqlx::query(
-            "INSERT INTO log (run_id, process, step, attempt, ts_utc, tz_offset, stream, level, \
-                              target, thread, msg, fields, git_hash) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, stream, level, \
+                              target, thread, msg, fields) \
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(run_id)
-        .bind(process)
+        .bind(process_id)
         .bind(&l.step)
         .bind(l.attempt)
         .bind(&l.ts_utc)
@@ -978,7 +1040,6 @@ async fn flush(
         .bind(&l.thread)
         .bind(&l.msg)
         .bind(&l.fields)
-        .bind(line_git_hash)
         .execute(&mut *tx)
         .await?;
     }

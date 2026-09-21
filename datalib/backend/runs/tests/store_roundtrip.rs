@@ -3,7 +3,7 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, snapshot, versions, LogQuery, LogRow, MetricRow, Process,
+    log_after, log_query, runs, snapshot, versions, LogQuery, LogRow, MetricRow, Process,
     ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
 };
 
@@ -307,7 +307,7 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
 /// history and its E column are made of.
 #[tokio::test]
 async fn runs_can_be_listed_by_step_and_read_by_id() {
-    use datalib_runs::{runs, snapshot_of};
+    use datalib_runs::snapshot_of;
     let td = tempfile::tempdir().unwrap();
     let keep = Retention {
         max_runs: 100,
@@ -597,8 +597,14 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     // A second run under `max_runs: 1` sweeps run-1's rows; the
     // server's must stay, since they belong to no run.
     {
-        let w =
-            RunWriter::start(td.path(), "run-2", "2026-09-15T10:00:02+00:00", None, keep).unwrap();
+        let w = RunWriter::start(
+            td.path(),
+            "run-2",
+            "2026-09-15T10:00:02+00:00",
+            Some("f2068bc9".into()),
+            keep,
+        )
+        .unwrap();
         w.log(line("a", "info", "from run 2"));
     }
     server.log(LogRow {
@@ -621,28 +627,40 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     )
     .await
     .unwrap();
-    // A process's line carries the commit of the process that wrote it
-    // (the next server may be another build); a run's carries none, the
-    // run's row does.
-    let seen: Vec<(Option<&str>, &str, &str, Option<&str>)> = all
+    // Every line reads as its process says: which program wrote it and
+    // from which commit — the server's for the server's lines, the
+    // runner's for a run's.
+    let seen: Vec<String> = all
         .iter()
         .map(|l| {
-            (
-                l.run_id.as_deref(),
-                l.process.as_str(),
-                l.msg.as_str(),
-                l.git_hash.as_deref(),
+            format!(
+                "{} {} {} {}",
+                l.run_id.as_deref().unwrap_or("-"),
+                l.process.as_deref().unwrap_or("-"),
+                l.msg,
+                l.git_hash.as_deref().unwrap_or("-"),
             )
         })
         .collect();
     assert_eq!(
         seen,
         [
-            (None, "http", "ready", Some("ae2d52f0")),
-            (Some("run-2"), "dag", "from run 2", None),
-            (None, "http", "still here", Some("ae2d52f0")),
+            "- http ready ae2d52f0",
+            "run-2 dag from run 2 f2068bc9",
+            "- http still here ae2d52f0",
         ]
     );
+    // The server's two lines came from one launch; the run's from the
+    // runner's, which the run row names too.
+    let ids: Vec<&str> = all.iter().map(|l| l.process_id.as_str()).collect();
+    assert_eq!(ids[0], ids[2]);
+    assert_ne!(ids[0], ids[1]);
+    let run2 = runs(td.path(), None, 10)
+        .await
+        .into_iter()
+        .find(|r| r.run_id == "run-2")
+        .unwrap();
+    assert_eq!(run2.process_id, ids[1]);
 
     let servers_only = log_query(
         td.path(),
@@ -658,6 +676,42 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     .unwrap();
     assert_eq!(servers_only.len(), 2);
     assert!(servers_only.iter().all(|l| l.run_id.is_none()));
+
+    // `min_level:` is this level and above, across every writer.
+    let loud = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            step: None,
+            q: "min_level:warn",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        loud.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["still here"]
+    );
+
+    // `commit:` finds the lines of a build by a prefix of its commit.
+    let one_build = log_query(
+        td.path(),
+        &LogQuery {
+            run: None,
+            step: None,
+            q: "commit:f2068",
+            after_seq: 0,
+            limit: 100,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        one_build.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["from run 2"]
+    );
 }
 
 /// A line outside any run has its own age limit, shorter than a run's,
@@ -707,6 +761,55 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         all.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
         ["fresh"]
     );
+}
+
+/// A process row goes when nothing names it any more — no run, no line
+/// — and it is past the process-log age; never before, since the
+/// process may still be alive and about to write.
+#[tokio::test]
+async fn a_process_is_pruned_only_once_nothing_names_it() {
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        process_log_days: 3,
+        ..Retention::default()
+    };
+    {
+        let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap();
+        server.log(LogRow {
+            ts_utc: "2020-01-01T00:00:00.000000+00:00".into(),
+            level: "info".into(),
+            msg: "ancient".into(),
+            ..Default::default()
+        });
+        wait_for_log_line(td.path(), "ancient").await;
+    }
+    let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
+        .await
+        .unwrap();
+    // A launch from long ago whose every line has already aged out.
+    sqlx::query(
+        "INSERT INTO processes (process_id, process, started_at_utc, tz_offset, git_hash) \
+         VALUES ('old', 'http', '2020-01-01T00:00:00.000000+00:00', '+00:00', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    // The next writer applies retention: the ancient line goes, and
+    // with it nothing names `old`; the first server's row started just
+    // now and stays, lines or no lines.
+    drop(ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap());
+    let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
+        .await
+        .unwrap();
+    let left: Vec<(String, String)> =
+        sqlx::query_as("SELECT process_id, started_at_utc FROM processes ORDER BY started_at_utc")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|(id, _)| id != "old"), "{left:?}");
 }
 
 /// The server's lines are also capped by count, newest kept, so a

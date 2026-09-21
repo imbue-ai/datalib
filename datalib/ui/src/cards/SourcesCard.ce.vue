@@ -1568,7 +1568,7 @@ onUnmounted(() => {
           :run-id="logOpenedOn"
           :step="logFor.row?.id ?? null"
           :live="logFor.live"
-          :initial-query="logFor.row ? undefined : 'process:http'"
+          :initial-query="logFor.row ? undefined : 'process:http min_level:info'"
           :jump-to-end="logFor.jumpToEnd"
           @run-changed="onLogRunChanged"
         />

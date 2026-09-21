@@ -28,12 +28,12 @@ import type {
   SlickDraggableGrouping,
   SlickGrid,
 } from "@slickgrid-universal/common";
-import { filterToken, withToken } from "@/grid/query";
+import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
-import { sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
+import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { changed, subscribeLive } from "@/live";
 import {
   compareStamps,
@@ -85,9 +85,25 @@ const live = computed(() => {
 });
 
 const stepOnly = ref(true);
+/// The levels, quietest first — the order the picker offers and the
+/// order `min_level:` ranks.
+const LEVELS = ["trace", "debug", "info", "warn", "error"] as const;
+const MIN_LEVEL_KEY = "min_level";
+const DEFAULT_QUERY = `${MIN_LEVEL_KEY}:info`;
 /// The query bar. Sent to the server as typed; a change reloads from
 /// the start, since the lines it drops are exactly the ones wanted back.
-const query = ref(props.initialQuery ?? "");
+/// Starts at `info` and above: a step logs its commits and batches at
+/// `debug`, which is there when asked for and noise otherwise.
+const query = ref(props.initialQuery ?? DEFAULT_QUERY);
+/// What the picker shows: the query's own `min_level:` word, so typing
+/// one and picking one are the same thing; `trace` when there is none.
+const minLevel = computed(() => tokenValue(query.value, MIN_LEVEL_KEY) ?? "trace");
+
+function pickLevel(ev: Event) {
+  const level = (ev.target as HTMLSelectElement).value;
+  const token = level === "trace" ? null : `${MIN_LEVEL_KEY}:${level}`;
+  setQuery(replaceToken(query.value, MIN_LEVEL_KEY, token));
+}
 let queryTimer: ReturnType<typeof setTimeout> | null = null;
 /// How many lines the grid holds: the dataset lives in the grid, and a
 /// tail appends there rather than replacing it (see `load`).
@@ -220,10 +236,6 @@ function onQueryInput(ev: Event) {
 async function loadRuns() {
   try {
     runs.value = await fetchRuns({ step: props.step ?? undefined, limit: 30 });
-    // A run's lines link to source at the run's commit, which arrives
-    // here; lines drawn before it did are drawn again.
-    bundle?.slickGrid.invalidateAllRows();
-    bundle?.slickGrid.render();
   } catch {
     // The picker is a convenience; the opened run still shows.
   }
@@ -273,6 +285,19 @@ const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
   addClasses: levelClass(line),
 });
 
+/// The line's structured fields, less the two the Source column shows.
+const otherFields: Formatter<RunLogLine> = (_r, _c, value, _col, line) => {
+  const text = fieldsWithoutSource(value == null ? null : String(value));
+  return { text, toolTip: text, addClasses: levelClass(line) };
+};
+
+/// The commit's first ten characters; the whole hash on hover.
+const commitShort: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
+  text: value ? String(value).slice(0, 10) : "",
+  toolTip: value ? String(value) : "",
+  addClasses: levelClass(line),
+});
+
 const timeOfDay: Formatter<RunLogLine> = (_r, _c, value) => ({
   text: formatTimeOfDay(value ? String(value) : null),
   toolTip: value ? formatStamp(String(value)) : "",
@@ -283,14 +308,6 @@ const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
   toolTip: String(value ?? ""),
 });
 
-/// The commit a line's source is relative to: the line's own for a
-/// process's line, the run's for a run's, when either was known.
-function commitOf(line: RunLogLine): string | null {
-  if (line.git_hash) return line.git_hash;
-  if (line.run_id) return runs.value.find((r) => r.run_id === line.run_id)?.git_hash ?? null;
-  return null;
-}
-
 /// `file:line`, as a link to that line on GitHub at the right commit
 /// when one is known, else as text. Clipped from the left like Time:
 /// the file's name and the line tell the lines apart, the directories
@@ -299,7 +316,7 @@ const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
   const src = sourceOf(line?.fields);
   if (!src) return { text: "", toolTip: "", addClasses: levelClass(line) };
   const shown = sourceLabel(src);
-  const commit = line ? commitOf(line) : null;
+  const commit = line?.git_hash ?? null;
   const href = commit && sourceUrl(commit, src);
   if (!commit || !href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
   const a = document.createElement("a");
@@ -395,6 +412,18 @@ function columnSet(): Column<RunLogLine>[] {
     ...groupable("Process", "process"),
   },
   {
+    id: "git_hash",
+    name: "Commit",
+    field: "git_hash",
+    ...fixed(100),
+    // The lines of one run share one build; across runs, or the
+    // server's between restarts, they need not.
+    hidden: !allRuns.value && !!props.step,
+    formatter: commitShort,
+    sortable: true,
+    ...groupable("Commit", "git_hash"),
+  },
+  {
     id: "step",
     name: "Step",
     field: "step",
@@ -466,7 +495,7 @@ function columnSet(): Column<RunLogLine>[] {
     name: "Fields",
     field: "fields",
     ...fixed(220),
-    formatter: plain,
+    formatter: otherFields,
     sortable: true,
   },
   ];
@@ -479,6 +508,7 @@ function columnSet(): Column<RunLogLine>[] {
 const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
   run_id: "run",
   process: "process",
+  git_hash: "commit",
   step: "step",
   level: "level",
   stream: "stream",
@@ -661,6 +691,12 @@ onUnmounted(() => {
         :value="query"
         @input="onQueryInput"
       />
+      <label class="rl-level">
+        at least
+        <select class="rl-run" :value="minLevel" aria-label="Lowest level to show" @change="pickLevel">
+          <option v-for="l in LEVELS" :key="l" :value="l">{{ l }}</option>
+        </select>
+      </label>
       <button v-if="props.step && !allRuns" class="m2-btn" @click="toggleScope">
         {{ stepOnly ? "Show the whole run" : "Only this step" }}
       </button>
@@ -730,6 +766,14 @@ onUnmounted(() => {
   color: inherit;
   font: inherit;
   font-size: 13px;
+}
+.rl-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--datalib-muted);
+  white-space: nowrap;
 }
 .rl-count {
   font-size: 12px;

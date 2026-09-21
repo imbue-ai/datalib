@@ -997,29 +997,33 @@ export async function cancelJob(id: string, signal?: AbortSignal): Promise<void>
 // other vocabularies here. Every stamp is UTC (`…+00:00`), with the
 // offset it was written in beside it as `tz_offset` (`+02:00`).
 
-// Which datalib program put a log line in the store: the runner (its
-// own lines, and every step's), or the app's server (its own, and its
-// applets').
+// Which datalib program a process was: the runner (its own lines, and
+// every step's), or the app's server (its own, and its applets').
 export type LogProcess = "dag" | "http";
 
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
+  // The runner's launch (`processes`): where its commit is.
+  process_id: string;
   started_at_utc: string;
   finished_at_utc: string | null;
   tz_offset: string | null;
-  // The commit the runner was built from, when it knew.
-  git_hash: string | null;
 };
 
-// One log line.
+// One log line, with what the store knows about the process that wrote
+// it. Every writer is a process: a run is the runner's, the server's
+// launch is its own.
 export type RunLogLine = {
   // Assigned by the store, monotone within it; the tail cursor.
   seq: number;
   // Null for a line written outside any run: the server's own.
   run_id: string | null;
-  // A word this build may not know, like `level`.
-  process: LogProcess | string;
+  // The process that wrote it.
+  process_id: string;
+  // A word this build may not know, like `level`; null when the store
+  // no longer has the process.
+  process: LogProcess | string | null;
   // Null for a line about the run, or the server, rather than one step.
   step: string | null;
   attempt: number;
@@ -1036,9 +1040,8 @@ export type RunLogLine = {
   msg: string;
   // A JSON object, as text, when the line carried structured fields.
   fields: string | null;
-  // The commit the writing process came from, for a line outside any
-  // run (the server restarts between versions; the store keeps its
-  // lines). A run's lines carry it on the run (`RunInfo.git_hash`).
+  // The commit the writing process was built from, when it knew: what
+  // `filename` and `line_number` in `fields` are relative to.
   git_hash: string | null;
 };
 

@@ -10,6 +10,9 @@ pub struct RunRow {
     /// run — the same string every other table here keys on.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: String,
+    /// The runner's row in `processes` — where its commit is.
+    #[col(sql = "VARCHAR(64)")]
+    pub process_id: String,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
     pub started_at_utc: String,
@@ -19,8 +22,4 @@ pub struct RunRow {
     /// The runner's own offset when it stamped the two above (`+02:00`).
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
-    /// The commit the runner was built from (`datalib_runs::git_hash`),
-    /// when it knew: what a line's file and line number are relative to.
-    #[col(sql = "VARCHAR(64)")]
-    pub git_hash: Option<String>,
 }

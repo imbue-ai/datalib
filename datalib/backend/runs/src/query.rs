@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use app_schema::runs::LogRow;
+use app_schema::runs::LogLevel;
 use datalib_query::Token;
 
 use crate::runs_path;
-use crate::store::{log_row_from, open_existing};
+use crate::store::{log_line_from, open_existing, LogLine, LOG_LINE_COLUMNS};
 
 /// One read of the log. `run` and `step` narrow it the way the panel
 /// does; `q` is what was typed; `after_seq` is the tail cursor.
@@ -29,21 +29,44 @@ impl std::fmt::Display for QueryError {
     }
 }
 
-/// The keys a log query understands, each the column it names.
+/// The keys a log query understands, each the column it names — on the
+/// line (`l`), or on the process that wrote it (`p`).
 const KEYS: &[(&str, &str)] = &[
-    ("run", "run_id"),
-    ("process", "process"),
-    ("step", "step"),
-    ("level", "level"),
-    ("stream", "stream"),
-    ("target", "target"),
-    ("thread", "thread"),
-    ("msg", "msg"),
+    ("run", "l.run_id"),
+    ("process", "p.process"),
+    ("step", "l.step"),
+    ("level", "l.level"),
+    ("stream", "l.stream"),
+    ("target", "l.target"),
+    ("thread", "l.thread"),
+    ("msg", "l.msg"),
 ];
+
+/// `commit:0fc29cb` — the process's commit, by prefix, the way git
+/// names one. Not in [`KEYS`]: a prefix, not a column's text.
+const COMMIT_KEY: &str = "commit";
+
+/// `min_level:warn` — this level and above. Not in [`KEYS`]: its value
+/// is a rank, not a column's text. A level word this build does not
+/// know ranks above every known one, so a line from a newer build is
+/// shown rather than hidden.
+const MIN_LEVEL_KEY: &str = "min_level";
+const LEVEL_RANK: &str = "CASE l.level WHEN 'trace' THEN 0 WHEN 'debug' THEN 1 WHEN 'info' THEN 2 \
+     WHEN 'warn' THEN 3 WHEN 'error' THEN 4 ELSE 5 END";
+
+fn level_rank(level: LogLevel) -> i64 {
+    match level {
+        LogLevel::Trace => 0,
+        LogLevel::Debug => 1,
+        LogLevel::Info => 2,
+        LogLevel::Warn => 3,
+        LogLevel::Error => 4,
+    }
+}
 
 /// Where free text is looked for: the message, and the two columns a
 /// reader would otherwise have to open a line to see.
-const FREE_TEXT_COLUMNS: &[&str] = &["msg", "target", "fields"];
+const FREE_TEXT_COLUMNS: &[&str] = &["l.msg", "l.target", "l.fields"];
 
 #[derive(Debug)]
 enum Bound {
@@ -59,24 +82,49 @@ struct Compiled {
 
 fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
     let mut c = Compiled {
-        clauses: vec!["seq > ?".to_string()],
+        clauses: vec!["l.seq > ?".to_string()],
         binds: vec![Bound::Int(q.after_seq)],
     };
     if let Some(run) = q.run {
-        c.clauses.push("run_id = ?".to_string());
+        c.clauses.push("l.run_id = ?".to_string());
         c.binds.push(Bound::Text(run.to_string()));
     }
     if let Some(step) = q.step {
-        c.clauses.push("step = ?".to_string());
+        c.clauses.push("l.step = ?".to_string());
         c.binds.push(Bound::Text(step.to_string()));
     }
     for tok in datalib_query::parse(q.q) {
         match tok {
+            Token::Term(t) if t.key == COMMIT_KEY => {
+                c.clauses.push(if t.negate {
+                    "(p.git_hash IS NULL OR p.git_hash NOT LIKE ? ESCAPE '\\')".to_string()
+                } else {
+                    "p.git_hash LIKE ? ESCAPE '\\'".to_string()
+                });
+                c.binds.push(Bound::Text(format!(
+                    "{}%",
+                    escape_like(&t.value.to_ascii_lowercase())
+                )));
+            }
+            Token::Term(t) if t.key == MIN_LEVEL_KEY => {
+                let Some(level) = LogLevel::parse(&t.value) else {
+                    return Err(QueryError(format!(
+                        "`{MIN_LEVEL_KEY}:` wants a level — trace, debug, info, warn or error — not `{}`",
+                        t.value
+                    )));
+                };
+                c.clauses.push(if t.negate {
+                    format!("{LEVEL_RANK} < ?")
+                } else {
+                    format!("{LEVEL_RANK} >= ?")
+                });
+                c.binds.push(Bound::Int(level_rank(level)));
+            }
             Token::Term(t) => {
                 let Some((_, col)) = KEYS.iter().find(|(k, _)| *k == t.key) else {
                     let known: Vec<&str> = KEYS.iter().map(|(k, _)| *k).collect();
                     return Err(QueryError(format!(
-                        "`{}:` is not something a log line has; try one of {}",
+                        "`{}:` is not something a log line has; try one of {}, {COMMIT_KEY}, {MIN_LEVEL_KEY}",
                         t.key,
                         known.join(", ")
                     )));
@@ -124,7 +172,7 @@ fn escape_like(s: &str) -> String {
 /// Log lines matching `q`, oldest first, at most `limit`. Empty when the
 /// store does not exist yet; an error only for a query the vocabulary
 /// cannot read.
-pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>, QueryError> {
+pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine>, QueryError> {
     let compiled = compile(q)?;
     let path = runs_path(data_root);
     if !path.exists() {
@@ -134,8 +182,8 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>
         return Ok(Vec::new());
     };
     let sql = format!(
-        "SELECT seq, run_id, process, step, attempt, ts_utc, tz_offset, stream, level, target, \
-         thread, msg, fields, git_hash FROM log WHERE {} ORDER BY seq LIMIT ?",
+        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+         WHERE {} ORDER BY l.seq LIMIT ?",
         compiled.clauses.join(" AND ")
     );
     // Audited: every clause is assembled from the `&'static str` column
@@ -154,7 +202,7 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogRow>
         .await
         .unwrap_or_default();
     pool.close().await;
-    Ok(rows.iter().map(log_row_from).collect())
+    Ok(rows.iter().map(log_line_from).collect())
 }
 
 #[cfg(test)]
@@ -176,7 +224,11 @@ mod tests {
         let c = compile(&q("level:warn -target:sqlx")).unwrap();
         assert_eq!(
             c.clauses,
-            vec!["seq > ?", "level = ?", "(target IS NULL OR target != ?)"]
+            vec![
+                "l.seq > ?",
+                "l.level = ?",
+                "(l.target IS NULL OR l.target != ?)"
+            ]
         );
     }
 
@@ -184,8 +236,40 @@ mod tests {
     fn free_text_searches_the_line_and_escapes_like() {
         let c = compile(&q("50%")).unwrap();
         assert_eq!(c.clauses.len(), 2);
-        assert!(c.clauses[1].starts_with("(msg LIKE ?"));
+        assert!(c.clauses[1].starts_with("(l.msg LIKE ?"));
         assert!(matches!(&c.binds[1], Bound::Text(s) if s == "%50\\%%"));
+    }
+
+    /// `commit:` is a prefix: the column shows ten characters and git
+    /// names a commit by any unambiguous start.
+    #[test]
+    fn commit_matches_a_prefix() {
+        let c = compile(&q("commit:0FC29cb")).unwrap();
+        assert_eq!(c.clauses[1], "p.git_hash LIKE ? ESCAPE '\\'");
+        assert!(matches!(&c.binds[1], Bound::Text(s) if s == "0fc29cb%"));
+        let c = compile(&q("-commit:abc")).unwrap();
+        assert!(c.clauses[1].starts_with("(p.git_hash IS NULL OR"));
+    }
+
+    /// `min_level:` is a rank on the level word, and refuses a word
+    /// that is not a level rather than matching nothing.
+    #[test]
+    fn min_level_ranks_the_level_word() {
+        let c = compile(&q("min_level:warn")).unwrap();
+        assert!(c.clauses[1].ends_with("END >= ?"), "{}", c.clauses[1]);
+        assert!(matches!(c.binds[1], Bound::Int(3)));
+        let c = compile(&q("-min_level:info")).unwrap();
+        assert!(c.clauses[1].ends_with("END < ?"), "{}", c.clauses[1]);
+        let e = compile(&q("min_level:loud")).unwrap_err();
+        assert!(e.0.contains("`loud`"), "{e}");
+    }
+
+    /// `process:` names the program, which is the process's column,
+    /// not the line's.
+    #[test]
+    fn the_process_key_reads_the_process_row() {
+        let c = compile(&q("process:http")).unwrap();
+        assert_eq!(c.clauses[1], "p.process = ?");
     }
 
     #[test]
@@ -193,5 +277,6 @@ mod tests {
         let e = compile(&q("author:thad")).unwrap_err();
         assert!(e.0.contains("`author:`"), "{e}");
         assert!(e.0.contains("run, process, step, level"), "{e}");
+        assert!(e.0.ends_with("min_level"), "{e}");
     }
 }

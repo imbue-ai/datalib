@@ -325,12 +325,27 @@ mod tests {
 
     /// The sugar. The stream carries increments; the store must carry a
     /// position, or coalescing would drop work.
-    /// The commit the runner came from rides on the run row, for the log
-    /// view to link a line's file and line back to.
+    /// The runner is a process the run points at, and every line the
+    /// run stores reads the runner's commit through it.
     #[tokio::test]
-    async fn the_run_records_its_commit() {
-        let (_td, snap) = run(&[]).await;
-        assert_eq!(snap.git_hash.as_deref(), Some("ae2d52f0"));
+    async fn the_run_and_its_lines_name_the_runners_process() {
+        let (td, snap) = run(&[Event::Log {
+            step: "slack/raw".into(),
+            level: LogLevel::Info,
+            msg: "hello".into(),
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        }])
+        .await;
+        let process_id = snap.process_id.expect("the run names its process");
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].process_id, process_id);
+        assert_eq!(lines[0].process.as_deref(), Some("dag"));
+        assert_eq!(lines[0].git_hash.as_deref(), Some("ae2d52f0"));
     }
 
     #[tokio::test]

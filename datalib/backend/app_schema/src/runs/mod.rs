@@ -1,9 +1,10 @@
 // The run store, `system/runs.sqlite`: what every run did — each step's
 // state, its log lines and its metrics — kept across runs, plus the
-// app server's own log between them. One table per file below. The DAG
-// runner writes the run tables; `log` is written by the runner and by
-// `datalib-http`, which also reads all of it, as does anyone with
-// `sqlite3`.
+// app server's own log between them. One table per file below. Every
+// writer is a process (`processes`): a run is the runner's, and every
+// log line points at the process that wrote it. The DAG runner writes
+// the run tables; `log` is written by the runner and by `datalib-http`,
+// which also reads all of it, as does anyone with `sqlite3`.
 //
 // Every stamp is a `<x>_utc` column — UTC with a `+00:00` suffix — and
 // each table carries a `tz_offset` column holding the offset the stamp
@@ -22,6 +23,10 @@ pub mod metrics {
     include!("metrics.rs");
 }
 
+pub mod process {
+    include!("process.rs");
+}
+
 pub mod run {
     include!("run.rs");
 }
@@ -37,6 +42,7 @@ pub mod store_changes {
 pub use log::{LogLevel, LogRow, Process, Stream};
 pub use metric_samples::MetricSampleRow;
 pub use metrics::MetricRow;
+pub use process::ProcessRow;
 pub use run::RunRow;
 pub use step_runs::StepRunRow;
 pub use store_changes::{StoreChangeRow, StorePart};
@@ -44,6 +50,7 @@ pub use store_changes::{StoreChangeRow, StorePart};
 /// Every table's `CREATE TABLE`, in creation order.
 pub fn ddl() -> Vec<&'static str> {
     [
+        process::DDL,
         run::DDL,
         step_runs::DDL,
         log::DDL,
