@@ -711,7 +711,9 @@ export function fetchPipelineStorage(
   return getJson<PipelineStorage>(`/api/pipeline/storage${q}`, signal);
 }
 
-export type ManageRowKind = "group" | "step" | "applet";
+// `system` is the one row the config never named: `system/`, the run
+// log and the app's own stores.
+export type ManageRowKind = "group" | "step" | "applet" | "system";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
 // ── The column-type vocabulary ─────────────────────────────────────
