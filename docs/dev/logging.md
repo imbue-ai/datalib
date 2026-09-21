@@ -3,9 +3,9 @@
 Reference for the tree as of #626. The design record, with the
 arguments for each decision, is
 [`plans/completed/logs_and_metrics.md`](plans/completed/logs_and_metrics.md);
-the step-side details (pipes, envelopes, flushing) are in
-[`step_protocol.md`](step_protocol.md) § "stderr: logging" and
-§ "Every process is a row". This page is the map.
+the step-side details (pipes, envelopes, flushing, the error tail) are
+in [`step_protocol.md`](step_protocol.md) § "stderr: logging". This
+page is the map.
 
 ## One store
 
