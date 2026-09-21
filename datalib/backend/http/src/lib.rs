@@ -89,6 +89,10 @@ impl AppState {
 pub struct Health {
     pub ok: bool,
     pub version: &'static str,
+    /// This launch's row in the run store's `processes`, so the log
+    /// panel can open on the server serving the page; `None` when the
+    /// store could not be opened and nothing is being recorded.
+    pub process_id: Option<String>,
     pub root: String,
     pub root_exists: bool,
     /// Where this server published its API token. Surfaced so the UI
@@ -174,6 +178,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/{id}", get(sync_job_get))
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/runs", get(runs_list))
+        .route("/api/processes", get(processes_list))
         .route("/api/runs/{run}/steps", get(run_steps))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
@@ -219,6 +224,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
     Json(Health {
         ok: true,
         version: env!("CARGO_PKG_VERSION"),
+        process_id: crate::logging::process_id(),
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
         token_file: s.api_token.token_file().display().to_string(),
@@ -1579,6 +1585,30 @@ async fn runs_list(
     Json(datalib_runs::runs(&s.root, p.step.as_deref(), limit).await)
 }
 
+#[derive(Debug, Deserialize)]
+struct ProcessesParams {
+    /// Only the processes of this run: its runner and its steps'
+    /// attempts.
+    #[serde(default)]
+    run: Option<String>,
+    /// Only processes of this kind (`http` for the server's launches).
+    #[serde(default)]
+    process: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/processes` — every process the store holds, newest first:
+/// the server's launches, the runners, each step's attempts with how it
+/// ended. The log panel's unit: a line belongs to one of these.
+async fn processes_list(
+    State(s): State<AppState>,
+    Query(p): Query<ProcessesParams>,
+) -> Json<Vec<datalib_runs::ProcessRow>> {
+    let limit = p.limit.unwrap_or(200).clamp(1, 5000);
+    Json(datalib_runs::processes(&s.root, p.run.as_deref(), p.process.as_deref(), limit).await)
+}
+
 /// One step in one run: its row, and what it reported.
 #[derive(Debug, Serialize)]
 pub struct RunStepInfo {
@@ -1626,7 +1656,6 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
             finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
-            process_id: snap.process_id.unwrap_or_default(),
         }),
         steps,
     })
@@ -1669,8 +1698,14 @@ async fn run_log(
 struct LogParams {
     #[serde(default)]
     run: Option<String>,
+    /// One process's lines, by its id from `/api/processes`.
+    #[serde(default)]
+    process: Option<String>,
     #[serde(default)]
     step: Option<String>,
+    /// With `step`: one attempt of it.
+    #[serde(default)]
+    attempt: Option<i64>,
     /// The search bar, in the grammar every grid shares (`datalib_query`):
     /// `level:warn -target:sqlx "history"`.
     #[serde(default)]
@@ -1692,7 +1727,9 @@ async fn log_lines(
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
     let q = datalib_runs::LogQuery {
         run: p.run.as_deref(),
+        process: p.process.as_deref(),
         step: p.step.as_deref(),
+        attempt: p.attempt,
         q: &p.q,
         after_seq: p.after_seq.unwrap_or(0),
         limit,

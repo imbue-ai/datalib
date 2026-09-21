@@ -1,7 +1,7 @@
-// The run-log panel: the Manage screen's "Server log" opens the app
-// server's own lines in a grid, a right-click on a cell narrows the
-// query to that cell's value (and clears it again), and the bar above
-// the grid groups the lines by a column.
+// The run-log panel: the Manage screen's "Server log" opens the lines
+// of the server launch serving the page, a right-click on a cell
+// narrows the query to that cell's value (and clears it again), and
+// the bar above the grid groups the lines by a column.
 //
 // The grid is built straight on the vanilla SlickGrid bundle, like the
 // cards' grids; this is the one place its menu, grouping bar and query
@@ -33,8 +33,12 @@ const lineCount = (page: Page) =>
 
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
   const dialog = await openServerLog(page);
+  // Opened on this server's launch — a process, picked like a run.
+  const scope = dialog.getByLabel("Which run or launch");
+  await expect(scope).toHaveValue(/^launch:/);
+  await expect(scope.locator("option:checked")).toHaveText(/this server$/);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue("process:http min_level:info");
+  await expect(query).toHaveValue("min_level:info");
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -46,7 +50,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, "Exclude all Thread=main")).toBeVisible();
   await menuEntry(page, "Keep only Thread=main").click();
 
-  await expect(query).toHaveValue("process:http min_level:info thread:main");
+  await expect(query).toHaveValue("min_level:info thread:main");
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect.poll(async () => {
@@ -63,8 +67,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await dialog.locator(ROWS).first().click({ button: "right" });
   await menuEntry(page, "Clear the query").click();
   await expect(query).toHaveValue("");
-  // With no query at all, every line in the store — at least the
-  // server's own.
+  // With no query at all, every line this launch wrote.
   await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);
 
   // The level picker writes its word into the query, where it can be

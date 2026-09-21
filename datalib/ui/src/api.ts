@@ -253,6 +253,10 @@ export async function fetchQmdState(
 export type Health = {
   ok: boolean;
   version: string;
+  // This launch's row in the run store's `processes`, so the log panel
+  // can open on the server serving the page; null when nothing is
+  // being recorded.
+  process_id: string | null;
   root: string;
   root_exists: boolean;
   // Absolute path of the file the running server published its API token
@@ -1004,12 +1008,48 @@ export type LogProcess = "dag" | "http";
 // One run. A job started from the app has the job's id as its run id.
 export type RunInfo = {
   run_id: string;
-  // The runner's launch (`processes`): where its commit is.
-  process_id: string;
   started_at_utc: string;
   finished_at_utc: string | null;
   tz_offset: string | null;
 };
+
+// One process the store holds: a run of the runner, one attempt of one
+// of its steps, or a launch of the server. The log's unit — every line
+// belongs to one.
+export type ProcessInfo = {
+  process_id: string;
+  process: LogProcess | string;
+  // The run it belonged to; null for the server.
+  run_id: string | null;
+  // For a step's attempt: which step, which attempt.
+  step: string | null;
+  attempt: number | null;
+  started_at_utc: string;
+  // Null while it is going, or if nothing saw it end.
+  finished_at_utc: string | null;
+  // How it ended, when the runner watched it end: a step's exit code,
+  // or the signal that ended it.
+  exit_code: number | null;
+  signal: number | null;
+  tz_offset: string | null;
+  // The commit it was built from, when known.
+  git_hash: string | null;
+};
+
+// Processes newest first; `run` narrows to one run's (its runner and
+// its steps' attempts), `process` to one kind (`http`: the server's
+// launches).
+export function fetchProcesses(
+  opts: { run?: string; process?: string; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<ProcessInfo[]> {
+  const params = new URLSearchParams();
+  if (opts.run) params.set("run", opts.run);
+  if (opts.process) params.set("process", opts.process);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const q = params.toString();
+  return getJson<ProcessInfo[]>(`/api/processes${q ? `?${q}` : ""}`, signal);
+}
 
 // One log line, with what the store knows about the process that wrote
 // it. Every writer is a process: a run is the runner's, the server's
@@ -1081,12 +1121,25 @@ export function fetchRunLog(
 // does not have is a 400 whose text says so. Tails with `afterSeq` the
 // way `fetchRunLog` does: `seq` is monotone across runs too.
 export function fetchLog(
-  opts: { run?: string; step?: string; q?: string; afterSeq?: number; limit?: number },
+  opts: {
+    run?: string;
+    // The lines one process wrote, by id: a launch of the server, or
+    // the runner.
+    process?: string;
+    step?: string;
+    // With `step`: the lines about one attempt of it.
+    attempt?: number;
+    q?: string;
+    afterSeq?: number;
+    limit?: number;
+  },
   signal?: AbortSignal,
 ): Promise<RunLogLine[]> {
   const params = new URLSearchParams();
   if (opts.run) params.set("run", opts.run);
+  if (opts.process) params.set("process", opts.process);
   if (opts.step) params.set("step", opts.step);
+  if (opts.attempt != null) params.set("attempt", String(opts.attempt));
   if (opts.q) params.set("q", opts.q);
   if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
   if (opts.limit != null) params.set("limit", String(opts.limit));

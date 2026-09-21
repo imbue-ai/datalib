@@ -10,9 +10,6 @@ pub struct RunRow {
     /// run — the same string every other table here keys on.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: String,
-    /// The runner's row in `processes` — where its commit is.
-    #[col(sql = "VARCHAR(64)")]
-    pub process_id: String,
     /// UTC.
     #[col(sql = "VARCHAR(40)")]
     pub started_at_utc: String,

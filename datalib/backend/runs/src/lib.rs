@@ -17,8 +17,8 @@ pub use app_schema::runs::{
 pub use build_id::{git_hash, GIT_HASH_ENV};
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, latest_metric, log_after, open_or_create, runs, snapshot, snapshot_of,
-    versions, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot,
+    canonical_labels, latest_metric, log_after, new_process_id, open_or_create, processes, runs,
+    snapshot, snapshot_of, versions, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot,
 };
 pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
 
@@ -90,7 +90,7 @@ impl Default for Retention {
 /// version is deleted and remade rather than migrated: nothing in it is
 /// load-bearing, and a migration is code that would exist only to keep
 /// old log lines.
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

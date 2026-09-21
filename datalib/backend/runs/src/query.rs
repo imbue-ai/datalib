@@ -13,7 +13,13 @@ use crate::store::{log_line_from, open_existing, LogLine, LOG_LINE_COLUMNS};
 /// does; `q` is what was typed; `after_seq` is the tail cursor.
 pub struct LogQuery<'a> {
     pub run: Option<&'a str>,
+    /// The lines one process wrote: a launch of the server, or the
+    /// runner, picked from the list `processes` gives.
+    pub process: Option<&'a str>,
     pub step: Option<&'a str>,
+    /// With `step`: the lines about one attempt of it — what came out
+    /// of the attempt, and what the runner said about it.
+    pub attempt: Option<i64>,
     pub q: &'a str,
     pub after_seq: i64,
     pub limit: i64,
@@ -89,9 +95,17 @@ fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
         c.clauses.push("l.run_id = ?".to_string());
         c.binds.push(Bound::Text(run.to_string()));
     }
+    if let Some(process) = q.process {
+        c.clauses.push("l.process_id = ?".to_string());
+        c.binds.push(Bound::Text(process.to_string()));
+    }
     if let Some(step) = q.step {
         c.clauses.push("l.step = ?".to_string());
         c.binds.push(Bound::Text(step.to_string()));
+    }
+    if let Some(attempt) = q.attempt {
+        c.clauses.push("l.attempt = ?".to_string());
+        c.binds.push(Bound::Int(attempt));
     }
     for tok in datalib_query::parse(q.q) {
         match tok {
@@ -212,7 +226,9 @@ mod tests {
     fn q(s: &str) -> LogQuery<'_> {
         LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: s,
             after_seq: 0,
             limit: 10,

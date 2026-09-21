@@ -32,7 +32,15 @@ import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
-import { fetchLog, fetchRuns, type RunInfo, type RunLogLine } from "@/api";
+import {
+  fetchLog,
+  fetchProcesses,
+  fetchRuns,
+  healthSnapshot,
+  type ProcessInfo,
+  type RunInfo,
+  type RunLogLine,
+} from "@/api";
 import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { changed, subscribeLive } from "@/live";
 import {
@@ -43,11 +51,14 @@ import {
 } from "@/config/timeFormat";
 
 const props = defineProps<{
-  /// The run the panel opens on.
+  /// The run the panel opens on, or `*` for every run.
   runId: string;
-  /// The step the panel opens narrowed to. Cleared from the panel to see
-  /// the whole run.
+  /// The step the panel opens on: its newest attempt's process, once
+  /// the run has one, else its lines by name.
   step: string | null;
+  /// A launch of the server to open on instead of a run — the one
+  /// serving the page, for its own log.
+  launchId?: string | null;
   /// Whether that run may still be writing: tail while true.
   live: boolean;
   /// What the query bar starts with — `process:http` for the server's
@@ -59,32 +70,58 @@ const props = defineProps<{
   jumpToEnd?: boolean;
 }>();
 
+/// What the panel is showing, for the caller's header.
+export type LogScope =
+  | { kind: "all" }
+  | { kind: "run"; run: RunInfo; process: ProcessInfo | null }
+  | { kind: "launch"; launch: ProcessInfo };
+
 const emit = defineEmits<{
-  /// The picker moved to another run, so the caller can say which;
-  /// `null` when it moved to every run at once.
-  (e: "run-changed", run: RunInfo | null): void;
+  /// The pickers moved, so the caller can say what is on screen.
+  (e: "scope-changed", scope: LogScope): void;
 }>();
 
 /// The picker's "every run" entry. Not a run id: the store's ids are
 /// UUIDs, and the job ids that double as run ids are too.
 const ALL_RUNS = "*";
+const LAUNCH_PREFIX = "launch:";
 
-/// The run on screen; starts as the one opened, moves with the picker.
-const runId = ref(props.runId);
-const allRuns = computed(() => runId.value === ALL_RUNS);
+/// The first picker: a run, a launch of the server, or everything.
+/// A run's value is its id; a launch's is prefixed, since both are
+/// UUIDs.
+const picked = ref(props.launchId ? `${LAUNCH_PREFIX}${props.launchId}` : props.runId);
+const allRuns = computed(() => picked.value === ALL_RUNS);
+const launchId = computed(() =>
+  picked.value.startsWith(LAUNCH_PREFIX) ? picked.value.slice(LAUNCH_PREFIX.length) : null,
+);
+const runId = computed(() => (allRuns.value || launchId.value ? null : picked.value));
+/// The second picker, within a run: one of its processes — the runner
+/// or a step's attempt — or the whole run (`null`).
+const processId = ref<string | null>(null);
 /// The runs the picker offers: the ones this step took part in, newest
 /// first, or every recent run when the panel is not about one step.
 const runs = ref<RunInfo[]>([]);
-/// Whether the run on screen may still be writing. The opened run says
-/// so by prop; a picked one by whether the store has closed it.
+/// The server's launches, newest first.
+const launches = ref<ProcessInfo[]>([]);
+/// The processes of the run on screen: its runner and its steps'
+/// attempts, newest first.
+const runProcesses = ref<ProcessInfo[]>([]);
+const currentProcess = computed(
+  () => runProcesses.value.find((p) => p.process_id === processId.value) ?? null,
+);
+/// Whether what is on screen may still be writing. The opened run says
+/// so by prop; anything picked by whether the store has closed it.
 const live = computed(() => {
-  if (runId.value === props.runId) return props.live;
+  if (launchId.value) {
+    const l = launches.value.find((x) => x.process_id === launchId.value);
+    return !l || l.finished_at_utc == null;
+  }
   if (allRuns.value) return props.live || runs.value.some((x) => x.finished_at_utc == null);
+  if (currentProcess.value) return currentProcess.value.finished_at_utc == null;
+  if (runId.value === props.runId) return props.live;
   const r = runs.value.find((x) => x.run_id === runId.value);
   return !!r && r.finished_at_utc == null;
 });
-
-const stepOnly = ref(true);
 /// The levels, quietest first — the order the picker offers and the
 /// order `min_level:` ranks.
 const LEVELS = ["trace", "debug", "info", "warn", "error"] as const;
@@ -128,13 +165,6 @@ let inflight = false;
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
-/// The filter as sent to the server: the step while narrowed, none once
-/// widened. Widening restarts from the beginning, because the lines the
-/// narrow view skipped are exactly the ones wanted.
-function stepFilter(): string | undefined {
-  return stepOnly.value && props.step ? props.step : undefined;
-}
-
 async function load(fresh: boolean) {
   if (inflight) return;
   inflight = true;
@@ -145,9 +175,17 @@ async function load(fresh: boolean) {
   }
   error.value = null;
   try {
+    // A step's attempt is shown by subject — what came out of it and
+    // what the runner said about it; a launch or the runner by author.
+    // A step opened before its first attempt started has no process to
+    // pick yet; its lines are still its own by name.
+    const attempt = currentProcess.value?.step ? currentProcess.value : null;
+    const byName = runId.value && !processId.value && props.step && !runProcesses.value.length;
     const got = await fetchLog({
-      run: allRuns.value ? undefined : runId.value,
-      step: stepFilter(),
+      run: runId.value ?? undefined,
+      process: launchId.value ?? (attempt ? undefined : (processId.value ?? undefined)),
+      step: attempt?.step ?? (byName ? props.step! : undefined),
+      attempt: attempt?.attempt ?? undefined,
       q: query.value,
       afterSeq: lastSeq,
     });
@@ -216,11 +254,6 @@ function onScroll(_e: unknown, args: { grid: SlickGrid }) {
   atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
 }
 
-function toggleScope() {
-  stepOnly.value = !stepOnly.value;
-  void load(true);
-}
-
 function setQuery(q: string) {
   query.value = q;
   void load(true);
@@ -235,23 +268,80 @@ function onQueryInput(ev: Event) {
 
 async function loadRuns() {
   try {
-    runs.value = await fetchRuns({ step: props.step ?? undefined, limit: 30 });
+    [runs.value, launches.value] = await Promise.all([
+      fetchRuns({ step: props.step ?? undefined, limit: 30 }),
+      fetchProcesses({ process: "http", limit: 20 }),
+    ]);
   } catch {
-    // The picker is a convenience; the opened run still shows.
+    // The pickers are a convenience; the opened run still shows.
   }
 }
 
-function pickRun(ev: Event) {
-  runId.value = (ev.target as HTMLSelectElement).value;
-  if (allRuns.value) {
-    // Every run is only meaningful for one step.
-    stepOnly.value = true;
-    emit("run-changed", null);
-  } else {
-    const picked = runs.value.find((r) => r.run_id === runId.value);
-    if (picked) emit("run-changed", picked);
+/// The run's processes, and — on a run just picked, or opened on a
+/// step — which of them to show: the step's newest attempt.
+async function loadProcesses(pickStep: string | null) {
+  if (!runId.value) {
+    runProcesses.value = [];
+    return;
   }
+  try {
+    runProcesses.value = await fetchProcesses({ run: runId.value, limit: 1000 });
+  } catch {
+    runProcesses.value = [];
+  }
+  if (pickStep) {
+    processId.value = runProcesses.value.find((p) => p.step === pickStep)?.process_id ?? null;
+  } else if (processId.value && !currentProcess.value) {
+    processId.value = null;
+  }
+}
+
+function announce() {
+  if (launchId.value) {
+    const launch = launches.value.find((l) => l.process_id === launchId.value);
+    if (launch) emit("scope-changed", { kind: "launch", launch });
+    return;
+  }
+  const run = runs.value.find((r) => r.run_id === runId.value);
+  emit("scope-changed", run ? { kind: "run", run, process: currentProcess.value } : { kind: "all" });
+}
+
+async function pickScope(ev: Event) {
+  picked.value = (ev.target as HTMLSelectElement).value;
+  processId.value = null;
+  await loadProcesses(props.step);
+  announce();
   void load(true);
+}
+
+function pickProcess(ev: Event) {
+  const v = (ev.target as HTMLSelectElement).value;
+  processId.value = v === "" ? null : v;
+  announce();
+  void load(true);
+}
+
+/// How a process reads in its picker: which step and attempt, or the
+/// runner, and how it ended.
+function processLabel(p: ProcessInfo): string {
+  const who = p.step ? `${p.step} · attempt ${p.attempt ?? "?"}` : "the runner";
+  return `${who} · ${processEnd(p)}`;
+}
+
+function processEnd(p: ProcessInfo): string {
+  if (p.finished_at_utc == null) return "running";
+  if (p.signal != null) return `ended by signal ${p.signal}`;
+  if (p.exit_code != null) return p.exit_code === 0 ? "exited 0" : `exited ${p.exit_code}`;
+  return "finished";
+}
+
+/// How a launch reads: when it started, and whether it is the server
+/// serving this page.
+function launchLabel(l: ProcessInfo): string {
+  const when = formatRelative(l.started_at_utc, Date.now());
+  const state = l.finished_at_utc == null ? "running" : "ended";
+  const mine = l.process_id === healthSnapshot()?.process_id ? " · this server" : "";
+  return `server started ${when} · ${state}${mine}`;
 }
 
 /// The run id as the column shows it: the first block of the UUID, which
@@ -359,7 +449,12 @@ function groupable(name: string, field: keyof RunLogLine) {
   return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
 }
 
-watch([allRuns, stepOnly], () => {
+/// One process is one step (or the runner) on one build; the columns
+/// that would say so on every line are shown only when the grid holds
+/// more than one.
+const oneProcess = computed(() => !!launchId.value || !!processId.value);
+
+watch([allRuns, oneProcess], () => {
   if (bundle) bundle.columnDefinitions = buildColumns();
 });
 
@@ -404,9 +499,7 @@ function columnSet(): Column<RunLogLine>[] {
     name: "Process",
     field: "process",
     ...fixed(90),
-    // One step's lines are all the runner's; the column says something
-    // only once the server's can be in the grid too.
-    hidden: stepOnly.value && !!props.step,
+    hidden: oneProcess.value,
     formatter: plain,
     sortable: true,
     ...groupable("Process", "process"),
@@ -416,9 +509,7 @@ function columnSet(): Column<RunLogLine>[] {
     name: "Commit",
     field: "git_hash",
     ...fixed(100),
-    // The lines of one run share one build; across runs, or the
-    // server's between restarts, they need not.
-    hidden: !allRuns.value && !!props.step,
+    hidden: oneProcess.value,
     formatter: commitShort,
     sortable: true,
     ...groupable("Commit", "git_hash"),
@@ -428,7 +519,7 @@ function columnSet(): Column<RunLogLine>[] {
     name: "Step",
     field: "step",
     ...fixed(180),
-    hidden: stepOnly.value && !!props.step,
+    hidden: oneProcess.value,
     formatter: plain,
     sortable: true,
     ...groupable("Step", "step"),
@@ -652,15 +743,22 @@ function createGrid(first: RunLogLine[]) {
 /// The app's theme is an attribute on `<html>`; the grid's is an option.
 let themeWatch: MutationObserver | null = null;
 
-onMounted(() => {
+onMounted(async () => {
+  // The run's processes first, so a step opens on its attempt rather
+  // than on the run and then jumps; the pickers' lists with them, so
+  // the header can say what opened.
+  await Promise.all([loadProcesses(props.step), loadRuns()]);
+  announce();
   void load(true);
-  void loadRuns();
   unsubscribe = subscribeLive({
     root: (e) => {
       if (changed(e, "log") && live.value) void load(false);
+      // A step's new attempt is a new process for the picker to offer.
+      if (changed(e, "runs")) void loadProcesses(null);
     },
     resync: () => {
       void loadRuns();
+      void loadProcesses(null);
       if (live.value) void load(false);
     },
   });
@@ -697,20 +795,30 @@ onUnmounted(() => {
           <option v-for="l in LEVELS" :key="l" :value="l">{{ l }}</option>
         </select>
       </label>
-      <button v-if="props.step && !allRuns" class="m2-btn" @click="toggleScope">
-        {{ stepOnly ? "Show the whole run" : "Only this step" }}
-      </button>
+      <select class="rl-run" :value="picked" aria-label="Which run or launch" @change="pickScope">
+        <optgroup v-if="runs.length" label="Runs">
+          <option v-for="r in runs" :key="r.run_id" :value="r.run_id">
+            {{ runLabel(r) }}
+          </option>
+        </optgroup>
+        <optgroup v-if="launches.length" label="The server">
+          <option v-for="l in launches" :key="l.process_id" :value="LAUNCH_PREFIX + l.process_id">
+            {{ launchLabel(l) }}
+          </option>
+        </optgroup>
+        <option :value="ALL_RUNS">everything the store holds</option>
+      </select>
       <select
-        v-if="runs.length > 1 || props.step"
+        v-if="runId && runProcesses.length"
         class="rl-run"
-        :value="runId"
-        aria-label="Which run"
-        @change="pickRun"
+        :value="processId ?? ''"
+        aria-label="Which process of the run"
+        @change="pickProcess"
       >
-        <option v-for="r in runs" :key="r.run_id" :value="r.run_id">
-          {{ runLabel(r) }}
+        <option value="">the whole run</option>
+        <option v-for="p in runProcesses" :key="p.process_id" :value="p.process_id">
+          {{ processLabel(p) }}
         </option>
-        <option v-if="props.step" :value="ALL_RUNS">every run</option>
       </select>
       <span class="rl-count">
         {{ lineCount }} line{{ lineCount === 1 ? "" : "s" }}
@@ -722,8 +830,9 @@ onUnmounted(() => {
     <p v-else-if="lineCount === 0" class="rl-note">
       <template v-if="query.trim()">Nothing matches the query.</template>
       <template v-else>
-        Nothing logged yet<span v-if="!allRuns"> for this run</span
-        ><span v-if="stepOnly && props.step"> by this step</span>.
+        Nothing logged yet<span v-if="launchId"> by this server</span
+        ><span v-else-if="currentProcess"> by this process</span
+        ><span v-else-if="runId"> for this run</span>.
       </template>
     </p>
     <div v-show="lineCount > 0" class="rl-grid">
@@ -749,7 +858,7 @@ onUnmounted(() => {
 }
 .rl-search {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 180px;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
@@ -759,6 +868,8 @@ onUnmounted(() => {
   font-size: 13px;
 }
 .rl-run {
+  max-width: 28vw;
+  text-overflow: ellipsis;
   padding: 4px 8px;
   border: 1px solid var(--datalib-border);
   border-radius: 4px;

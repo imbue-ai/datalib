@@ -184,7 +184,6 @@ pub struct Snapshot {
     pub started_at_utc: Option<String>,
     pub finished_at_utc: Option<String>,
     pub tz_offset: Option<String>,
-    pub process_id: Option<String>,
     pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
@@ -239,6 +238,55 @@ pub async fn versions(data_root: &Path) -> BTreeMap<StorePart, i64> {
         .collect()
 }
 
+/// The processes the store holds, newest first: the server's launches,
+/// the runners and their steps' attempts — how a reader introspects
+/// the server's own log the way it does a run's. `run` narrows to one
+/// run's; `kind` to one [`Process`] word.
+pub async fn processes(
+    data_root: &Path,
+    run: Option<&str>,
+    kind: Option<&str>,
+    limit: i64,
+) -> Vec<ProcessRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
+           exit_code, signal, tz_offset, git_hash \
+         FROM processes WHERE (? IS NULL OR run_id = ?) AND (? IS NULL OR process = ?) \
+         ORDER BY started_at_utc DESC LIMIT ?",
+    )
+    .bind(run)
+    .bind(run)
+    .bind(kind)
+    .bind(kind)
+    .bind(limit)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| ProcessRow {
+            process_id: r.get("process_id"),
+            process: r.get("process"),
+            run_id: r.get("run_id"),
+            step: r.get("step"),
+            attempt: r.get("attempt"),
+            started_at_utc: r.get("started_at_utc"),
+            finished_at_utc: r.get("finished_at_utc"),
+            exit_code: r.get("exit_code"),
+            signal: r.get("signal"),
+            tz_offset: r.get("tz_offset"),
+            git_hash: r.get("git_hash"),
+        })
+        .collect()
+}
+
 /// Recent runs, newest first. With `step`, only the runs that step took
 /// part in — how a reader finds the run a step's log is in.
 pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRow> {
@@ -250,7 +298,7 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.process_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
+        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
          ORDER BY r.started_at_utc DESC LIMIT ?",
@@ -265,7 +313,6 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
     rows.iter()
         .map(|r| RunRow {
             run_id: r.get("run_id"),
-            process_id: r.get("process_id"),
             started_at_utc: r.get("started_at_utc"),
             finished_at_utc: r.get("finished_at_utc"),
             tz_offset: r.get("tz_offset"),
@@ -326,7 +373,7 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, process_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
+        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
          WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
     )
     .bind(run_id)
@@ -428,7 +475,6 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         started_at_utc: run.get("started_at_utc"),
         finished_at_utc: run.get("finished_at_utc"),
         tz_offset: run.get("tz_offset"),
-        process_id: run.get("process_id"),
         steps,
         metrics,
         errors,
@@ -535,6 +581,9 @@ pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
 #[derive(Default)]
 struct Pending {
     steps: BTreeMap<String, StepRunRow>,
+    /// The runner's steps, each attempt its own process: started, then
+    /// the same row again with its end. Newest wins.
+    processes: BTreeMap<String, ProcessRow>,
     logs: Vec<LogRow>,
     metrics: BTreeMap<(String, String, String), MetricRow>,
 }
@@ -553,6 +602,7 @@ pub trait LogSink: Send + Sync {
 /// — joining while still holding the sender waits forever on a thread
 /// that has not been told to stop.
 struct Writer {
+    process_id: String,
     pending: Shared,
     stop: Mutex<Option<mpsc::Sender<()>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -561,6 +611,7 @@ struct Writer {
 impl Writer {
     fn start(data_root: &Path, scope: Scope) -> Option<Self> {
         let path = runs_path(data_root);
+        let process_id = scope.process.process_id.clone();
         let pending: Shared = Default::default();
         let (tx, rx) = mpsc::channel();
         let handle = std::thread::Builder::new()
@@ -571,6 +622,7 @@ impl Writer {
             })
             .ok()?;
         Some(Self {
+            process_id,
             pending,
             stop: Mutex::new(Some(tx)),
             handle: Mutex::new(Some(handle)),
@@ -616,9 +668,11 @@ impl RunWriter {
         let process = ProcessRow {
             process_id: mint_process_id(),
             process: Process::Dag.as_str().into(),
+            run_id: Some(run_id.to_string()),
             started_at_utc: started_at_utc.clone(),
             tz_offset: tz_offset.clone(),
             git_hash,
+            ..Default::default()
         };
         let run = RunInfo {
             run_id: run_id.to_string(),
@@ -661,6 +715,29 @@ impl RunWriter {
             .metrics
             .insert(key, row);
     }
+
+    /// A process of this run other than the runner — a step attempt —
+    /// as it starts, and again as it ends with `finished_at_utc` and
+    /// the exit filled in. `run_id` is bound to this run whatever the
+    /// row says.
+    pub fn process(&self, row: ProcessRow) {
+        self.0
+            .pending
+            .lock()
+            .expect("run store mutex")
+            .processes
+            .insert(row.process_id.clone(), row);
+    }
+
+    /// The runner's own process id, for a line it writes about itself.
+    pub fn process_id(&self) -> &str {
+        &self.0.process_id
+    }
+}
+
+/// A fresh process id, for a runner naming a step it is about to spawn.
+pub fn new_process_id() -> String {
+    mint_process_id()
 }
 
 impl LogSink for RunWriter {
@@ -689,6 +766,7 @@ impl ProcessLogWriter {
             started_at_utc,
             tz_offset,
             git_hash,
+            ..Default::default()
         };
         Writer::start(
             data_root,
@@ -703,6 +781,12 @@ impl ProcessLogWriter {
 
     pub fn log(&self, row: LogRow) {
         self.0.log(row);
+    }
+
+    /// The row this launch writes under, for the server to say which
+    /// of the store's launches it is.
+    pub fn process_id(&self) -> &str {
+        &self.0.process_id
     }
 }
 
@@ -790,10 +874,8 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
             last_prune = Instant::now();
         }
     }
-    if let Some(run) = &scope.run {
-        if let Err(e) = rt.block_on(end_run(&pool, &run.run_id)) {
-            tracing::warn!(error = %e, "run store: could not close the run");
-        }
+    if let Err(e) = rt.block_on(end(&pool, &scope)) {
+        tracing::warn!(error = %e, "run store: could not close the record");
     }
     rt.block_on(pool.close());
 }
@@ -823,7 +905,7 @@ async fn begin(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     insert_process(&mut tx, &scope.process).await?;
     if let Some(run) = &scope.run {
-        begin_run(&mut tx, run, &scope.process.process_id, scope.retention).await?;
+        begin_run(&mut tx, run, scope.retention).await?;
     }
     tx.commit().await?;
     prune_unowned(pool, scope.retention).await
@@ -837,12 +919,47 @@ async fn insert_process(
     p: &ProcessRow,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT OR IGNORE INTO processes (process_id, process, started_at_utc, tz_offset, git_hash) \
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO processes \
+           (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
+            exit_code, signal, tz_offset, git_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)",
     )
     .bind(&p.process_id)
     .bind(&p.process)
+    .bind(&p.run_id)
+    .bind(&p.step)
+    .bind(p.attempt)
     .bind(&p.started_at_utc)
+    .bind(&p.tz_offset)
+    .bind(&p.git_hash)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// A step's process, as the runner reports it: the whole row at start,
+/// and the same row with its end and exit once it is over.
+async fn upsert_process(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    p: &ProcessRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO processes \
+           (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
+            exit_code, signal, tz_offset, git_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(process_id) DO UPDATE SET finished_at_utc = excluded.finished_at_utc, \
+           exit_code = excluded.exit_code, signal = excluded.signal",
+    )
+    .bind(&p.process_id)
+    .bind(&p.process)
+    .bind(&p.run_id)
+    .bind(&p.step)
+    .bind(p.attempt)
+    .bind(&p.started_at_utc)
+    .bind(&p.finished_at_utc)
+    .bind(p.exit_code)
+    .bind(p.signal)
     .bind(&p.tz_offset)
     .bind(&p.git_hash)
     .execute(&mut **tx)
@@ -853,17 +970,14 @@ async fn insert_process(
 async fn begin_run(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     run: &RunInfo,
-    process_id: &str,
     retention: Retention,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO runs (run_id, process_id, started_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
-         ON CONFLICT(run_id) DO UPDATE SET process_id = excluded.process_id, \
-           started_at_utc = excluded.started_at_utc, tz_offset = excluded.tz_offset, \
-           finished_at_utc = NULL",
+        "INSERT INTO runs (run_id, started_at_utc, tz_offset) VALUES (?, ?, ?) \
+         ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
+           tz_offset = excluded.tz_offset, finished_at_utc = NULL",
     )
     .bind(&run.run_id)
-    .bind(process_id)
     .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
     .execute(&mut **tx)
@@ -881,10 +995,11 @@ async fn begin_run(
     .bind(retention.max_runs.max(1) as i64)
     .execute(&mut **tx)
     .await?;
-    for table in ["step_runs", "log", "metrics", "metric_samples"] {
-        // Safe: the four names are the literals above, never input.
-        // `NOT IN` is false for a NULL `run_id`, so the lines outside
-        // any run are kept here and aged out by `prune_unowned`.
+    for table in ["processes", "step_runs", "log", "metrics", "metric_samples"] {
+        // Safe: the five names are the literals above, never input.
+        // `NOT IN` is false for a NULL `run_id`, so the server's
+        // processes and lines are kept here and aged out by
+        // `prune_unowned`.
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM {table} WHERE run_id NOT IN (SELECT run_id FROM runs)"
         )))
@@ -934,8 +1049,7 @@ async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sq
     .execute(pool)
     .await?;
     sqlx::query(
-        "DELETE FROM processes WHERE started_at_utc < ? \
-         AND process_id NOT IN (SELECT process_id FROM runs) \
+        "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? \
          AND process_id NOT IN (SELECT process_id FROM log)",
     )
     .bind(&cutoff)
@@ -957,15 +1071,25 @@ fn cutoff_days_ago(days: u32) -> String {
         .0
 }
 
-async fn end_run(pool: &SqlitePool, run_id: &str) -> Result<(), sqlx::Error> {
+/// The process is over, and its run with it. Counted as a change to
+/// the runs so a watcher redraws a run that just finished; a launch
+/// ending is nobody's live question.
+async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = now_split();
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
-        .bind(finished_at_utc)
-        .bind(run_id)
+    sqlx::query("UPDATE processes SET finished_at_utc = ? WHERE process_id = ?")
+        .bind(&finished_at_utc)
+        .bind(&scope.process.process_id)
         .execute(&mut *tx)
         .await?;
-    bump(&mut tx, StorePart::Runs).await?;
+    if let Some(run) = &scope.run {
+        sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
+            .bind(&finished_at_utc)
+            .bind(&run.run_id)
+            .execute(&mut *tx)
+            .await?;
+        bump(&mut tx, StorePart::Runs).await?;
+    }
     tx.commit().await
 }
 
@@ -976,13 +1100,26 @@ async fn flush(
     series: &mut HashMap<(String, String, String), SeriesState>,
     last: bool,
 ) -> Result<(), sqlx::Error> {
-    let empty = batch.steps.is_empty() && batch.logs.is_empty() && batch.metrics.is_empty();
+    let empty = batch.steps.is_empty()
+        && batch.processes.is_empty()
+        && batch.logs.is_empty()
+        && batch.metrics.is_empty();
     if empty && !last {
         return Ok(());
     }
     let run_id = scope.run_id();
-    let process_id = scope.process.process_id.as_str();
+    let own_process_id = scope.process.process_id.as_str();
     let mut tx = pool.begin().await?;
+    for p in batch.processes.values() {
+        upsert_process(
+            &mut tx,
+            &ProcessRow {
+                run_id: run_id.map(str::to_string),
+                ..p.clone()
+            },
+        )
+        .await?;
+    }
     if !batch.steps.is_empty() {
         bump(&mut tx, StorePart::StepRuns).await?;
     }
@@ -1023,6 +1160,11 @@ async fn flush(
         .await?;
     }
     for l in &batch.logs {
+        let process_id = if l.process_id.is_empty() {
+            own_process_id
+        } else {
+            l.process_id.as_str()
+        };
         sqlx::query(
             "INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, stream, level, \
                               target, thread, msg, fields) \

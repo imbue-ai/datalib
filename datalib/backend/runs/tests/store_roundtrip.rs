@@ -3,8 +3,8 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, runs, snapshot, versions, LogQuery, LogRow, MetricRow, Process,
-    ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
+    log_after, log_query, processes, runs, snapshot, versions, LogQuery, LogRow, MetricRow,
+    Process, ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -192,7 +192,9 @@ async fn log_query_spans_runs_and_reads_terms() {
                     &root,
                     &LogQuery {
                         run: None,
+                        process: None,
                         step: Some(step),
+                        attempt: None,
                         q: "",
                         after_seq,
                         limit,
@@ -228,7 +230,9 @@ async fn log_query_spans_runs_and_reads_terms() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: Some("a"),
+            attempt: None,
             q: "-run:run-1 sec",
             after_seq: 0,
             limit: 100,
@@ -242,7 +246,9 @@ async fn log_query_spans_runs_and_reads_terms() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "author:thad",
             after_seq: 0,
             limit: 100,
@@ -541,7 +547,9 @@ async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
             root,
             &LogQuery {
                 run: None,
+                process: None,
                 step: None,
+                attempt: None,
                 q: "",
                 after_seq: 0,
                 limit: 100,
@@ -619,7 +627,9 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "",
             after_seq: 0,
             limit: 100,
@@ -651,22 +661,28 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         ]
     );
     // The server's two lines came from one launch; the run's from the
-    // runner's, which the run row names too.
+    // runner's, a process of that run.
     let ids: Vec<&str> = all.iter().map(|l| l.process_id.as_str()).collect();
     assert_eq!(ids[0], ids[2]);
     assert_ne!(ids[0], ids[1]);
-    let run2 = runs(td.path(), None, 10)
+    let runner = processes(td.path(), None, None, 10)
         .await
         .into_iter()
-        .find(|r| r.run_id == "run-2")
+        .find(|p| p.process_id == ids[1])
         .unwrap();
-    assert_eq!(run2.process_id, ids[1]);
+    assert_eq!(runner.run_id.as_deref(), Some("run-2"));
+    assert!(
+        runner.finished_at_utc.is_some(),
+        "the writer closing is the process ending"
+    );
 
     let servers_only = log_query(
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,
@@ -682,7 +698,9 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "min_level:warn",
             after_seq: 0,
             limit: 100,
@@ -700,7 +718,9 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "commit:f2068",
             after_seq: 0,
             limit: 100,
@@ -749,7 +769,9 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,
@@ -840,7 +862,9 @@ async fn process_lines_past_the_cap_go_oldest_first() {
         td.path(),
         &LogQuery {
             run: None,
+            process: None,
             step: None,
+            attempt: None,
             q: "process:http",
             after_seq: 0,
             limit: 100,

@@ -1157,7 +1157,9 @@ fn accept_steps(
     (accepted, diags)
 }
 
-fn is_datalib_step(prog: &str) -> bool {
+/// Whether a command's program is the built-in step program: the same
+/// build as the runner, so the runner's commit is its commit.
+pub fn is_datalib_step(prog: &str) -> bool {
     prog == "datalib-step" || prog.ends_with("/datalib-step")
 }
 

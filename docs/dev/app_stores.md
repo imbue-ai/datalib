@@ -11,7 +11,8 @@
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/runs.sqlite                    every run's step states, log lines and
                                                   metrics, plus the app server's own log;
-                                                  each writer a row in `processes`
+                                                  every process — runner, step attempt,
+                                                  server launch — a row in `processes`
                                                   (plain SQLite; any sqlite3 opens it)
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks

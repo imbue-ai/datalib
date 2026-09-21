@@ -39,9 +39,9 @@ impl LogLevel {
     }
 }
 
-/// Which datalib program a process was: the runner (its own lines and
-/// everything it relayed from a step's pipes) or the app's server (its
-/// own lines and what its applets said).
+/// Which datalib program a process was: the runner (its own lines), a
+/// step it spawned (what came out of the step's pipes), or the app's
+/// server (its own lines and what its applets said).
 #[derive(
     Debug,
     Clone,
@@ -58,6 +58,7 @@ impl LogLevel {
 #[strum(serialize_all = "snake_case")]
 pub enum Process {
     Dag,
+    Step,
     Http,
 }
 
@@ -111,9 +112,10 @@ pub struct LogRow {
     /// `None` for a line written outside any run: the server's own.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: Option<String>,
-    /// The process that wrote it (`processes`): the runner's for its
-    /// own lines and its steps', the server's for its own. Bound by the
-    /// writer; a row handed in carries whatever, and it is ignored.
+    /// The process that wrote it (`processes`): a step's for what came
+    /// out of the step, the runner's for its own lines, the server's for
+    /// its own. A row handed to a writer with this empty gets the
+    /// writer's own.
     #[col(sql = "VARCHAR(64)")]
     pub process_id: String,
     /// `None` for a line about the run, or the server, rather than one
