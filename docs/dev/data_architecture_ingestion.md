@@ -256,6 +256,37 @@ A long chain of incremental syncs can in principle silently drop data (an upstre
 - **`--refetch-blobs`** clears only the `blake3` column on the edge tables, forcing the same re-download without touching the entities.
 - Pass `--reset-and-redownload` for a full reset; `--refetch-blobs` alone re-pulls the attachments of a store whose entities are fine. A reset that keeps the edge rows, so a gap check costs no blob bandwidth, would be a change to every provider's `reset()`; none makes it today.
 
+### A 200 can be wrong, and nothing in the store says so
+
+The quieter way to hold bad data is not a dropped row but a **degraded
+read**: the upstream answers `200` with a well-formed record that is
+missing something. The manual e2e bake of 2026-09-21 caught one —
+ChatGPT's `/backend-api/me` returned `first_name: null` on one fetch and
+`"Thad"` five minutes later, with every other field byte-identical. Not
+a profile change; a bad read on their side. To the pipeline the first
+response was a success: the row was written, the commit recorded it,
+and no error, no `problems` row, no sidecar field marks it as suspect,
+because there is nothing to detect it on. A partial record is
+indistinguishable from a record that really looks like that. It is not
+a one-off, either: the bake three days earlier had claude.ai return a
+conversation with `files[].size_bytes` null on one fetch and populated
+on the fetches either side of it, and that one *was* accepted into the
+goldens as a "modified" row before anyone read it as a bad read.
+
+Incrementality then preserves the mistake. A [listing-diff
+provider](#cursor--resume-strategy) re-fetches a record only when its
+listing stamp moves, and a degraded detail fetch does not move the
+stamp, so the stale field sits until the upstream edits that record for
+some other reason — possibly never. The `me` row healed on the next run
+only because it is one of the few fetched unconditionally every time.
+
+There is no signal to gate on, so the only check is to fetch again and
+let the diff say what changed: **`--reset-and-redownload`, run now and
+then rather than only when something looks wrong**. A field that
+"changes" across a reset on a record the upstream did not touch is the
+signature; the run-3 stability check in the manual e2e bake is the same
+test applied deliberately.
+
 The skip-check is keyed by the **upstream identifier** (known before fetch), not by content hash (only known after). The per-provider edge table is the cache index over the CAS.
 
 `cas_objects` has no reset path either way, and no garbage collector: bytes are byte-stable and nothing in the tree deletes them. Reclaiming CAS bytes today means deleting the file. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
