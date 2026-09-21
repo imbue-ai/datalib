@@ -147,9 +147,10 @@ mod tests {
             crate::doltlite_raw::bookkeeping_ddl_for("notes"),
         ];
         let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool = crate::doltlite_raw::open_derived(&db, &slices)
-            .await
-            .unwrap();
+        let pool =
+            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
+                .await
+                .unwrap();
         for (id, owner) in [("a", "x"), ("b", "x"), ("c", "y")] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
                 .bind(id)
@@ -195,9 +196,10 @@ mod tests {
             crate::doltlite_raw::bookkeeping_ddl_for("notes"),
         ];
         let slices: Vec<&str> = ddl.iter().map(String::as_str).collect();
-        let pool = crate::doltlite_raw::open_derived(&db, &slices)
-            .await
-            .unwrap();
+        let pool =
+            crate::doltlite_raw::open_derived(&db, &slices, crate::doltlite_raw::StoreKind::Raw)
+                .await
+                .unwrap();
         for id in ["a", "b"] {
             sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
                 .bind(id)

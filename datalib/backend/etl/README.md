@@ -308,6 +308,20 @@ create+drop nets to nothing in the working tree but has already appended
 chunks to the file, and nothing collects them, so every `open` cost bytes
 whether or not anything was ingested.
 
+## `_datalib_meta`: which build wrote this store
+
+`open` writes six rows into `_datalib_meta` before the schema commit:
+`datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
+(blake3 over the DDL it was opened with), `schema_version` (the
+migration ladder position, `0` until there is a ladder) and
+`store_kind`. Only a row whose value moved is rewritten, so an
+unchanged store costs no commit, and a schema commit that did move
+one is titled `schema: apply DDL (datalib <version>)`. The table is in
+`SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
+`datalib_store_meta::read` is how anyone asks; `None` means the store
+predates the table. `docs/dev/plans/schema_migrations.md` is the plan
+this is the first step of.
+
 ## Writes: one UPSERT shape, everywhere
 
 Every entity table is written the same way — `INSERT INTO <t> (id, …cols)

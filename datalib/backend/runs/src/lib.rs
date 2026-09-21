@@ -5,7 +5,6 @@
 //! tables are `app_schema::runs`; this crate is the writers and the
 //! reader over them, and the tracing layer that feeds a writer.
 
-pub mod build_id;
 pub mod query;
 pub mod store;
 pub mod tracing_layer;
@@ -13,7 +12,7 @@ pub mod tracing_layer;
 pub use app_schema::runs::{
     LogLevel, LogRow, MetricRow, MetricSampleRow, Process, RunRow, StepRunRow, StorePart, Stream,
 };
-pub use build_id::{git_hash, GIT_HASH_ENV};
+pub use datalib_runtime::build_id::{git_hash, GIT_HASH_ENV};
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
     canonical_labels, latest_metric, log_after, open_or_create, runs, snapshot, snapshot_of,

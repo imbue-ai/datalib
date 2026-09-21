@@ -1,9 +1,9 @@
 # Schema changes after there are users: an audit, and a plan
 
-**Status: audit and proposal (2026-09-21), nothing in §3 built.** §1
-and §2 describe what the tree does today and were checked against it
-at `a5f04141`, by reading the code, not the prose. Where this doc and
-the tree disagree, the tree wins.
+**Status: audit and proposal (2026-09-21); §3.1 is built, the rest is
+not.** §1 and §2 describe what the tree did at `a5f04141`, checked by
+reading the code, not the prose; §3.1 says what landed. Where this doc
+and the tree disagree, the tree wins.
 
 ## 0. Why now
 
@@ -317,6 +317,15 @@ on its own and lands something that is useful alone.
 
 ### 3.1 PR 1 — `_datalib_meta`: every store says who wrote it
 
+**Built.** `datalib_store_meta` (Bazel-only, a leaf) is the table;
+`doltlite_raw::open` and `open_derived` write it for raw, blob, render
+and index stores, `AppStore::open` for feedback, jobs and usage, and
+`datalib_runs` for `runs.sqlite`. `build_id` moved from `datalib_runs`
+to `datalib_runtime` so the ingest side can name the build without
+linking the run store, and `datalib_runtime` now carries the workspace
+`version` attr (`DATALIB_VERSION`), checked by
+`version_consistency_test`. What follows is the design as landed.
+
 One table in every doltlite store and the run store, written by the
 owner on every open, read by anyone:
 
@@ -331,19 +340,27 @@ CREATE TABLE IF NOT EXISTS _datalib_meta (
 --       schema_hash, schema_version, store_kind
 ```
 
-- `schema_hash` is blake3 over the DDL list the owner passed to
-  `open`, in order, after the reconcile ran. `store_kind` is
+- `schema_hash` is blake3 over the DDL list the owner opened with, in
+  order. `store_kind` is
   `raw | blobs | render | grid_index | feedback | jobs | usage | runs`.
   `schema_version` is the ladder position from §3.3, `0` until a
-  store has a ladder.
-- Written inside the schema commit `open` already makes, so it costs
-  no extra commit and rides in history: `dolt_log` on any store
-  becomes "which build wrote each commit". Excluded from
-  `SHARED_TABLES`' mirror/diff logic the same way the bookkeeping
-  tables are.
-- `schema_inventory` learns the table once; the golden moves once.
-- Readers get `datalib_etl::meta::read(pool) -> Option<Meta>`, which
-  is `None` on a store from before this PR.
+  store has a ladder — except the run store, whose ladder already
+  exists and whose position is `datalib_runs::SCHEMA_VERSION`.
+  `doltlite_version` is `dolt_version()`, `unknown` on a stock-SQLite
+  build and on the run store.
+- Only rows whose value moved are rewritten, so `written_at_utc` is
+  when this build first wrote the store, not when it last opened it,
+  and an unchanged store gets no commit. When a row did move, the
+  schema commit is `schema: apply DDL (datalib <version>)`, so
+  `dolt_log` reads as an upgrade history; feedback gets its own
+  `meta: written by datalib <version>` commit for the same reason.
+- `SHARED_TABLES` names it, so the mirror engine, the storage report
+  and the render contract test skip it like the bookkeeping tables.
+- `schema_inventory` records it under "every store" (and, while it was
+  there, the download bookkeeping under "every raw store", which the
+  golden had never listed).
+- Readers get `datalib_store_meta::read(pool) -> Option<Meta>`, which
+  is `None` on a store from before this landed.
 
 Nothing acts on it yet. This PR is the fact; the next ones are the
 uses.

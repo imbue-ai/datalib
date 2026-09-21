@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+pub use datalib_store_meta::StoreKind;
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
@@ -216,8 +217,11 @@ pub const SHARED_DDL: &[&str] = &[
 
 /// The tables every raw store has that are datalib's, not the
 /// source's: what a mirror must leave alone and a content diff must
-/// skip. Kept in step with [`SHARED_DDL`] by a test.
+/// skip. [`SHARED_DDL`]'s tables plus `_datalib_meta`, which every
+/// store gets whether or not it is a raw one; a test keeps the list in
+/// step with both.
 pub const SHARED_TABLES: &[&str] = &[
+    datalib_store_meta::TABLE,
     "sync_runs",
     "sync_scope_state",
     "sync_scope_config",
@@ -419,14 +423,15 @@ fn take_writer_lock(db_path: &Path) -> Result<FileLock> {
 }
 
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
-/// store — render output, an index — would otherwise get `sync_runs` and the
-/// scope tables as three empty tables suggesting a provenance it lacks.
-pub async fn open_derived(db_path: &Path, ddl: &[&str]) -> Result<SqlitePool> {
-    open_inner(db_path, ddl, false).await
+/// store — render output, an index, a blob CAS — would otherwise get
+/// `sync_runs` and the scope tables as three empty tables suggesting a
+/// provenance it lacks. `kind` is what its `_datalib_meta` names it.
+pub async fn open_derived(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Result<SqlitePool> {
+    open_inner(db_path, ddl, false, kind).await
 }
 
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
-    open_inner(db_path, extra_ddl, true).await
+    open_inner(db_path, extra_ddl, true, StoreKind::Raw).await
 }
 
 /// Open a store to read data somebody else owns.
@@ -525,6 +530,7 @@ async fn open_inner(
     db_path: &Path,
     extra_ddl: &[&str],
     include_shared: bool,
+    kind: StoreKind,
 ) -> Result<SqlitePool> {
     // Logged at every call so a stray second pool against an already-open
     // file is attributable: with max_connections=1 it surfaces only as
@@ -544,7 +550,10 @@ async fn open_inner(
     // order is load-bearing. `parse_create_table_name` returns `None` for
     // exactly the statements that must wait.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
-    let ddl = || extra_ddl.iter().chain(shared.iter());
+    // `_datalib_meta` first, in every store: it says which build wrote
+    // the file, and it rides in the same schema commit as the rest.
+    let meta_ddl: &[&str] = &[datalib_store_meta::DDL];
+    let ddl = || meta_ddl.iter().chain(extra_ddl).chain(shared);
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
     for stmt in ddl().filter(is_create_table) {
         // Audited: every DDL statement is built in a provider's `schema_raw.rs`
@@ -589,15 +598,34 @@ async fn open_inner(
                 )
             })?;
     }
-    // A caller with no DDL installs its schema itself and commits it
-    // itself (`open_index`); a commit here would be an empty one.
-    if ddl().next().is_none() {
+    // A caller with no DDL of its own installs its schema itself, writes
+    // the meta rows for it and commits it itself (`open_index`); a commit
+    // here would carry nothing it wants.
+    if extra_ddl.is_empty() && shared.is_empty() {
         return Ok(pool);
     }
+    let meta_moved = datalib_store_meta::write(
+        &pool,
+        kind,
+        &datalib_store_meta::schema_hash(ddl().copied()),
+        0,
+    )
+    .await
+    .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
     // Commit the schema before handing back the pool: doltlite only
     // materializes `dolt_diff_<table>` for tables that exist at HEAD, so an
     // uncommitted table makes the first sync's delta vanish with a warning.
-    commit_run(&pool, "schema: apply DDL")
+    // The message names the build when the meta rows moved — a new
+    // datalib, or a new shape — so `dolt_log` reads as an upgrade history.
+    let message = if meta_moved {
+        format!(
+            "schema: apply DDL (datalib {})",
+            datalib_runtime::build_id::DATALIB_VERSION
+        )
+    } else {
+        "schema: apply DDL".to_string()
+    };
+    commit_run(&pool, &message)
         .await
         .context("commit schema after DDL")?;
     // And check it took, unconditionally.
@@ -1890,9 +1918,9 @@ mod tests {
     /// by the next mirror run and recreated by the next open, forever.
     #[test]
     fn shared_tables_names_every_shared_ddl_table() {
-        let from_ddl: Vec<String> = SHARED_DDL
-            .iter()
-            .filter_map(|d| parse_create_table_name(d))
+        let from_ddl: Vec<String> = std::iter::once(datalib_store_meta::DDL)
+            .chain(SHARED_DDL.iter().copied())
+            .filter_map(parse_create_table_name)
             .collect();
         assert_eq!(from_ddl, SHARED_TABLES);
     }
@@ -3032,7 +3060,7 @@ mod tests {
         // rather than one onto the working set. `open_derived`, so the
         // shared bookkeeping tables do not get committed on the way in.
         let empty = tmp.path().join("empty.doltlite_db");
-        let w = open_derived(&empty, &[]).await.unwrap();
+        let w = open_derived(&empty, &[], StoreKind::Raw).await.unwrap();
         sqlx::query("CREATE TABLE u (id INTEGER PRIMARY KEY)")
             .execute(&w)
             .await
@@ -3090,7 +3118,13 @@ mod tests {
             .unwrap();
         a.close().await;
 
-        let b = open(&path, &[]).await.unwrap();
+        // The same owner, with the same DDL: nothing about the shape moved.
+        let b = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)"],
+        )
+        .await
+        .unwrap();
         let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
             .fetch_one(&b)
             .await
@@ -3124,6 +3158,74 @@ mod tests {
             "and nothing is left for the schema commit to sweep"
         );
         b.close().await;
+    }
+
+    /// Every store an owner opens says which build wrote it, committed
+    /// with its schema — so a pinned reader sees it at HEAD, and a store
+    /// from before the table existed reads as `None` rather than failing.
+    /// A shape change moves the hash and is committed under a message
+    /// that names the build; the same build with the same DDL commits
+    /// nothing.
+    #[tokio::test]
+    async fn every_store_names_the_build_that_wrote_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("meta.doltlite_db");
+        const T1: &str = "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)";
+        const T2: &str = "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)";
+
+        let a = open(&path, &[T1]).await.unwrap();
+        if !has_dolt_extensions(&a).await {
+            return;
+        }
+        let meta = datalib_store_meta::read(&a)
+            .await
+            .unwrap()
+            .expect("written at open");
+        assert_eq!(meta.store_kind, Some(StoreKind::Raw));
+        assert_eq!(
+            meta.datalib_version,
+            datalib_runtime::build_id::DATALIB_VERSION
+        );
+        let doltlite = meta.doltlite_version.as_deref().expect("dolt_version()");
+        assert!(
+            doltlite.split('.').count() == 3
+                && doltlite.chars().all(|c| c.is_ascii_digit() || c == '.'),
+            "dolt_version() is a dotted number, got {doltlite:?}"
+        );
+        let hash1 = meta.schema_hash.clone();
+        a.close().await;
+
+        // At HEAD, through a pinned reader: the rows rode the schema commit.
+        let reader = open_reader(&path, None).await.unwrap().expect("committed");
+        let pinned: i64 = sqlx::query_scalar("SELECT count(*) FROM pinned__datalib_meta")
+            .fetch_one(reader.pool())
+            .await
+            .unwrap();
+        assert_eq!(pinned, 6, "every meta row is at HEAD");
+        reader.close().await;
+
+        // The shape moves: the hash moves with it, and the commit says so.
+        let b = open(&path, &[T2]).await.unwrap();
+        let meta = datalib_store_meta::read(&b).await.unwrap().unwrap();
+        assert_ne!(meta.schema_hash, hash1, "a DDL change moves the hash");
+        // Newest first without an ORDER BY, as `head_commit` reads it:
+        // `date` is whole seconds and this test fits inside one.
+        let message: String = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 1")
+            .fetch_one(&b)
+            .await
+            .unwrap();
+        assert!(
+            message.starts_with("schema: apply DDL (datalib "),
+            "a commit that moved the meta names the build, got {message:?}"
+        );
+        b.close().await;
+
+        // A store from before the table existed reads as absent.
+        let old = tmp.path().join("old.doltlite_db");
+        let c = connect_pool(&old, Access::ReadWrite).await.unwrap();
+        sqlx::query(T1).execute(&c).await.unwrap();
+        assert_eq!(datalib_store_meta::read(&c).await.unwrap(), None);
+        c.close().await;
     }
 
     /// A schema commit carries schema and nothing else. `open` commits its

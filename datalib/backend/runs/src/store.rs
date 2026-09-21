@@ -105,7 +105,10 @@ fn remove_with_sidecars(path: &Path) {
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let why = match open_or_create(path).await {
         Ok(pool) => match schema_matches(&pool).await {
-            Ok(true) => return Ok(pool),
+            Ok(true) => {
+                write_meta(&pool).await?;
+                return Ok(pool);
+            }
             Ok(false) => {
                 pool.close().await;
                 "written by another schema version".to_string()
@@ -125,7 +128,28 @@ async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     remove_with_sidecars(path);
     let pool = open_or_create(path).await?;
     install_schema(&pool).await?;
+    write_meta(&pool).await?;
     Ok(pool)
+}
+
+/// Which build wrote this file, beside its tables. The ladder position
+/// is `SCHEMA_VERSION` itself: this store already has one, and
+/// `PRAGMA user_version` stays what `schema_matches` reads.
+async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let hash = datalib_store_meta::schema_hash(
+        app_schema::runs::ddl()
+            .into_iter()
+            .chain(INDEXES.iter().copied()),
+    );
+    datalib_store_meta::write(
+        pool,
+        datalib_store_meta::StoreKind::Runs,
+        &hash,
+        SCHEMA_VERSION as u32,
+    )
+    .await
+    .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+    Ok(())
 }
 
 /// `true` when the file carries this build's schema; `false` for another

@@ -87,9 +87,13 @@ impl BlobCas {
     /// without the download bookkeeping tables, which belong to the entity
     /// store beside it.
     pub async fn open(cas_path: &Path) -> Result<Self> {
-        let pool = crate::doltlite_raw::open_derived(cas_path, &[CAS_OBJECTS_DDL])
-            .await
-            .context("open blob cas")?;
+        let pool = crate::doltlite_raw::open_derived(
+            cas_path,
+            &[CAS_OBJECTS_DDL],
+            crate::doltlite_raw::StoreKind::Blobs,
+        )
+        .await
+        .context("open blob cas")?;
         Ok(Self { pool })
     }
 

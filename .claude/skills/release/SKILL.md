@@ -16,8 +16,9 @@ published from a local machine — the tag is the trigger.
 - Single source of truth: `[workspace.package].version` in
   `datalib/backend/Cargo.toml`.
 - Must match the `version = "..."` fields in
-  `datalib/backend/dag/BUILD.bazel` and
-  `datalib/backend/http/BUILD.bazel` — asserted by
+  `datalib/backend/dag/BUILD.bazel`,
+  `datalib/backend/http/BUILD.bazel` and
+  `datalib/backend/runtime/BUILD.bazel` — asserted by
   `//datalib/backend:version_consistency_test`, which names the
   offending file on failure. If that test's `data` list has grown, bump
   every file it checks.
@@ -52,7 +53,7 @@ published from a local machine — the tag is the trigger.
 2. Pick the version by reviewing what's shipping:
    `git log v<last>..origin/main --oneline` (find `<last>` with
    `git tag | sort -V | tail -1` — fetch tags first).
-3. Bump all three version fields: `Cargo.toml` and the two
+3. Bump all four version fields: `Cargo.toml` and the three
    `BUILD.bazel`.
 4. Run `tools/repin_cargo.sh` to refresh
    `datalib/backend/Cargo.lock`. Do **not** rely on
