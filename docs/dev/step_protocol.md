@@ -111,9 +111,12 @@ These are what the scheduler's correctness rests on:
   two ids coincide or nest.
 * **Be idempotent.** Retries and re-runs simply invoke you again; a
   re-run over unchanged inputs must be safe (and ideally cheap).
-* **Commit outputs atomically.** Don't leave a torn tree on the
-  success path; if you die mid-write, the next run must be able to
-  recover (the scheduler re-hashes outputs that made no claim).
+* **A commit is a correct state — never leave a torn tree on *any*
+  path**: success, failure, interrupt, or crash. Readers pin what you
+  committed and read it at once, so commit only at a boundary you
+  chose. Whatever you wrote after your last commit is discarded by the
+  next writer's `open`, never adopted; the next run refetches it from
+  your cursor, which is what idempotency is for.
 
 Everything else — resume cursors, dedup indexes, bookkeeping — is
 private to you. Keep it under your own output trees.
