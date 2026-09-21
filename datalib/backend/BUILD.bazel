@@ -2,7 +2,6 @@ load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([
-    "BUILD.bazel",  # read by //tools:dist_names_test
     "Cargo.toml",
     "Cargo.lock",
     # Wired into `bazelisk build --config=clippy` via .bazelrc — see
@@ -131,8 +130,9 @@ filegroup(
 #   bazelisk build //datalib/backend:bin
 #   bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 #
-# Keep the name mapping in sync with release.yml's stage step, which
-# performs the same rename when building the release tarball.
+# The one list of shipped binaries under their public names: what
+# `bazelisk build //datalib/backend:bin` stages for a local run, and
+# what scripts/release/stage_tarball.sh copies into the release tarball.
 copy_to_directory(
     name = "bin",
     srcs = [":dist"],

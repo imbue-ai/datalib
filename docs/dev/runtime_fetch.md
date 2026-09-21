@@ -42,7 +42,8 @@ that way (`datalib_qmd_models`); the runtime now does too.
 
 ## The assets
 
-The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` on
+The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` (through
+`scripts/release/stage_runtime_asset.sh`, the step as a script) on
 each host platform and publishes what it stages:
 
 ```

@@ -33,6 +33,20 @@ published from a local machine — the tag is the trigger.
 
 ## Procedure
 
+0. Run the release's own steps on Linux before anything is bumped —
+   `release.yml` runs the tag's tree, so a bug in a step costs a
+   release (v0.35.0 and v0.35.1 each lost their tarballs that way):
+
+   ```sh
+   bazelisk run //tools:release_steps_docker
+   ```
+
+   It runs `//tools:stage_runtime_test` and `//tools:stage_tarball_test`
+   in the devcontainer; the first run builds the image and the Linux
+   binaries cold (the better part of an hour), later ones take minutes.
+   `docs/dev/release_steps.md` says what it covers and what stays
+   release-only. A mac's `bazel test //...` has already run the same
+   tests under macOS and under `/bin/bash` 3.2.
 1. Start from a clean, current main:
    `git fetch origin && git checkout -b release-vX.Y.Z origin/main`.
 2. Pick the version by reviewing what's shipping:

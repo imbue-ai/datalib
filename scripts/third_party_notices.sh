@@ -47,30 +47,38 @@ repo_root="$script_dir/.."
 log() { printf '>>> third_party_notices: %s\n' "$*" >&2; }
 fail() { printf 'third_party_notices: error: %s\n' "$*" >&2; exit 1; }
 
-if command -v bazelisk >/dev/null 2>&1; then
-    bazel=bazelisk
-elif command -v bazel >/dev/null 2>&1; then
-    bazel=bazel
-else
-    fail "neither bazelisk nor bazel found on PATH"
-fi
-command -v cargo-about >/dev/null 2>&1 || fail "cargo-about not found on PATH (brew install cargo-about)"
+# //tools:stage_tarball_test hands the two Bazel outputs over as
+# runfiles and stands in for cargo-about, which cannot run in the
+# sandbox (it needs cargo and the crate sources).
+cargo_about="${CARGO_ABOUT:-cargo-about}"
+command -v "$cargo_about" >/dev/null 2>&1 || fail "cargo-about not found on PATH (brew install cargo-about)"
 
-log "building //third-party:bundled_licenses //datalib/ui:dist"
-(cd "$repo_root" && "$bazel" build //third-party:bundled_licenses //datalib/ui:dist >&2)
-bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+if [[ -n "${THIRD_PARTY_NOTICES_BAZEL_BIN:-}" ]]; then
+    bin="$THIRD_PARTY_NOTICES_BAZEL_BIN"
+else
+    if command -v bazelisk >/dev/null 2>&1; then
+        bazel=bazelisk
+    elif command -v bazel >/dev/null 2>&1; then
+        bazel=bazel
+    else
+        fail "neither bazelisk nor bazel found on PATH"
+    fi
+    log "building //third-party:bundled_licenses //datalib/ui:dist"
+    (cd "$repo_root" && "$bazel" build //third-party:bundled_licenses //datalib/ui:dist >&2)
+    bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
+fi
 
 rm -rf "$dest"
 mkdir -p "$dest"
 
 # Bazel outputs are read-only; the copies must not be, since codesign
 # and `tar` on the staging tree both expect to own their files.
-cp -R "$bin/third-party/bundled_licenses/." "$dest/"
-cp "$bin/datalib/ui/dist/THIRD_PARTY_NOTICES.md" "$dest/ui-bundle.md"
+cp -RL "$bin/third-party/bundled_licenses/." "$dest/"
+cp -L "$bin/datalib/ui/dist/THIRD_PARTY_NOTICES.md" "$dest/ui-bundle.md"
 chmod -R u+w "$dest"
 
 log "cargo about generate (datalib/backend)"
-(cd "$repo_root/datalib/backend" && cargo about generate --locked --workspace \
+(cd "$repo_root/datalib/backend" && "$cargo_about" about generate --locked --workspace \
     --fail -c about.toml about.hbs -o "$dest/rust-crates.md" >&2)
 
 cat > "$dest/README.md" <<'EOF'
