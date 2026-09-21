@@ -16,6 +16,7 @@ rust_test(
     env = {"INSTA_WORKSPACE_ROOT": "."},
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/beeper:datalib_etl_beeper",
         "//datalib/backend/etl/providers/chatgpt:datalib_etl_chatgpt",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
@@ -38,6 +39,7 @@ rust_test(
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
         "//datalib/backend/etl/providers/facebook:datalib_etl_facebook",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:insta",
     ],
 )

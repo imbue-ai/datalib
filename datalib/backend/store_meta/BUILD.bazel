@@ -1,0 +1,35 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# `_datalib_meta`: the table every store carries saying which build wrote
+# it and what shape it is in. A leaf crate so that every store owner can
+# write it — the ingest framework for raw, blob and render stores, the
+# app server for its three, the run store for itself — and any reader
+# can read it without linking an owner. Bazel-only, no `Cargo.toml`, like
+# `datalib_problems`. See src/lib.rs and
+# docs/dev/plans/schema_migrations.md §3.1.
+rust_library(
+    name = "datalib_store_meta",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_store_meta",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "store_meta_unittests",
+    size = "small",
+    crate = ":datalib_store_meta",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

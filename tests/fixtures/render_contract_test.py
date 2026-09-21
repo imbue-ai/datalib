@@ -46,8 +46,14 @@ _BAZEL_WORKSPACE_DIR = "_main"
 
 # Bookkeeping the ingest side owns and render never reads. Mutating it
 # proves nothing, and deleting `sync_runs` would only exercise the
-# framework's own skip.
-_SKIP_TABLES = ("sync_runs", "sync_scope_state", "sync_scope_config", "ingested_files")
+# framework's own skip. `_datalib_meta` is which build wrote the store.
+_SKIP_TABLES = (
+    "_datalib_meta",
+    "sync_runs",
+    "sync_scope_state",
+    "sync_scope_config",
+    "ingested_files",
+)
 _SKIP_SUFFIXES = ("_bookkeeping",)
 
 # Mutations under which a provider is known not to keep the contract

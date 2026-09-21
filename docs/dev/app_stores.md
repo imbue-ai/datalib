@@ -18,6 +18,13 @@
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
 ```
 
+Every store above carries a `_datalib_meta` table — which datalib and
+git commit wrote it, the doltlite it was written with, a hash of the
+DDL it was opened with, and its kind — written by the owner on open
+and committed with the schema (`datalib_store_meta`;
+`docs/dev/plans/schema_migrations.md` §3.1). A reader that wants to
+know what it is looking at reads that before its first query.
+
 One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
 commit each other's in-flight rows. The `ingest` step owns its group's

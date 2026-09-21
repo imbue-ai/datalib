@@ -136,6 +136,7 @@ rust_test(
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
+        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],

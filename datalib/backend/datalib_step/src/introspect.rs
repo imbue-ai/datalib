@@ -140,23 +140,12 @@ fn human_bytes(n: i64) -> String {
 /// table. Pinned against that generator by a test rather than trusted.
 const BOOKKEEPING_SUFFIX: &str = "_bookkeeping";
 
-/// The table `ddl` creates, for a `CREATE TABLE IF NOT EXISTS <name> (`.
-/// `None` for anything else, so a future statement this cannot read is
-/// skipped rather than silently mis-parsed into a name that excludes
-/// the wrong table.
-fn table_name_in(ddl: &str) -> Option<&str> {
-    ddl.trim()
-        .strip_prefix("CREATE TABLE IF NOT EXISTS ")?
-        .split(|c: char| c.is_whitespace() || c == '(')
-        .find(|s| !s.is_empty())
-}
-
 /// Datalib's own run bookkeeping, as opposed to the source's data.
 ///
-/// Read out of `doltlite_raw::SHARED_DDL` rather than listed here, so a
-/// table added to the framework is excluded without anyone remembering
-/// to come back — a hardcoded list would agree with itself forever
-/// while the framework moved underneath it.
+/// Read out of `doltlite_raw::SHARED_TABLES` rather than listed here, so
+/// a table added to the framework is excluded without anyone
+/// remembering to come back — a hardcoded list would agree with itself
+/// forever while the framework moved underneath it.
 ///
 /// Two reasons to leave these out. They are not content —
 /// `doltlite_raw`'s own words for `sync_runs` and `sync_scope_state`
@@ -169,11 +158,7 @@ fn table_name_in(ddl: &str) -> Option<&str> {
 /// so counting it would change the report on a pipeline where nothing
 /// changed and hand `grid_index` work forever.
 fn is_datalib_bookkeeping(table: &str) -> bool {
-    table.ends_with(BOOKKEEPING_SUFFIX)
-        || datalib_etl::doltlite_raw::SHARED_DDL
-            .iter()
-            .filter_map(|ddl| table_name_in(ddl))
-            .any(|shared| shared == table)
+    table.ends_with(BOOKKEEPING_SUFFIX) || datalib_etl::doltlite_raw::SHARED_TABLES.contains(&table)
 }
 
 async fn table_names(pool: &SqlitePool) -> Result<Vec<String>> {
@@ -486,6 +471,15 @@ pub fn counts_unchanged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The table `ddl` creates, for a `CREATE TABLE IF NOT EXISTS <name> (`;
+    /// `None` for anything else.
+    fn table_name_in(ddl: &str) -> Option<&str> {
+        ddl.trim()
+            .strip_prefix("CREATE TABLE IF NOT EXISTS ")?
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .find(|s| !s.is_empty())
+    }
 
     async fn commit(pool: &SqlitePool) {
         sqlx::query("SELECT dolt_commit('-Am', 'seed')")
@@ -900,7 +894,7 @@ mod tests {
             shared.contains(&"sync_runs"),
             "the run log is the one that must never be counted: {shared:?}"
         );
-        for table in &shared {
+        for table in shared.iter().chain([datalib_store_meta::TABLE].iter()) {
             assert!(is_datalib_bookkeeping(table), "{table} reached the report");
         }
     }

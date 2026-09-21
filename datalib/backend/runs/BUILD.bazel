@@ -17,6 +17,8 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/query:datalib_query",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
@@ -34,9 +36,6 @@ rust_test(
     size = "small",
     crate = ":datalib_runs",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )
 
 # The load-bearing experiment, run against the real engine: that
