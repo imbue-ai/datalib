@@ -500,12 +500,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // slack) so the current-org context stays visible.
         let total: usize = plans.iter().map(|p| p.ordered.len()).sum();
         opts.progress.set_length(Some(total as u64));
-        for plan in &plans {
+        'orgs: for plan in &plans {
             let inner = opts
                 .progress
                 .child(&format!("claude org: {}", plan.org_name));
             inner.set_length(Some(plan.ordered.len() as u64));
             for item in &plan.ordered {
+                // Asked to stop: the conversation that just landed sealed
+                // with its blobs, so end here.
+                if opts.control.stop.requested() {
+                    info!(event = "claude_interrupted", org = %plan.org_name);
+                    break 'orgs;
+                }
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };

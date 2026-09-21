@@ -106,7 +106,12 @@ Reach for the simplest existing provider that's shaped like yours,
 4. Implement `ingest::fetch(...)` and `<name>::render::...`. The
    render side hands each finished document to `ctx.emit_doc` as a
    [`RenderedMarkdown`](../../datalib/backend/etl/render/src/grid_index.rs);
-   the render step writes it into that source's store.
+   the render step writes it into that source's store. In `fetch`,
+   read `opts.control.stop` before starting each unit of work, and
+   write every claim of completeness — cursor, state token, scope
+   config — under one end-of-run predicate, never at the point the
+   value became available:
+   [A claim of completeness is written only by a walk that completed](data_architecture_ingestion.md#a-claim-of-completeness-is-written-only-by-a-walk-that-completed).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Wire the provider's `processor.rs` (`plan_ingest` / `plan_render`)
