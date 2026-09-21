@@ -263,7 +263,11 @@ bug), and what would make datalib easier to wield for whatever you and
 the user are trying to do with it — a surface that fought you, a query
 you had to work around, a use case it doesn't serve yet. Paste the
 `datalib-dag --check` output or the failing step's `step_finish` event
-where you have one; it saves a round-trip.
+where you have one; it saves a round-trip. **The tracker is public:
+keep the user's private data out of it.** Log lines and events can
+quote message text, email addresses, channel names and file paths —
+redact before pasting, and never attach a store or a rendered
+document.
 
 ## Troubleshooting quick hits
 

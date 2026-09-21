@@ -538,4 +538,7 @@ wanted: what exists and misbehaves (a typo in this guide, a sync that
 won't finish), and what would make datalib easier to wield for whatever
 you want to do with your data — a step that was harder than it should
 be, a use case it doesn't serve yet. For a bug, a copy of the error
-message and which source it happened on is plenty.
+message and which source it happened on is plenty. **The tracker is
+public: keep your private data out of it.** Error messages and logs
+can quote message text, email addresses and file paths — read what you
+paste and redact it, and never attach a store or a rendered document.
