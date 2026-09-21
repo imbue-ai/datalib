@@ -87,7 +87,7 @@ Checked against the tree. Most of the storage-side work is done.
   the *output*; the scheduler just happens to learn it from the one
   step allowed to produce it.
 - **The run store is SQLite and already carries what a step is doing**
-  (`system/runs.sqlite`: `step_runs`, `log`, `metrics`; pushed to the UI
+  (`system/runs/runs.sqlite`: `step_runs`, `log`, `metrics`; pushed to the UI
   as `table_changed` frames by `watch.rs`). `logs_and_metrics` moved
   progress and logs there, but not the scheduler's memory: versions,
   fingerprints and `current_run` are still `system/dag_state.json`,
@@ -389,7 +389,7 @@ about a unit this design does not have. `DATALIB_DAG_RUN_ID` becomes
 
 ### 2.7 One store, one writer, everything the UI shows
 
-`dag_state.json` goes. The supervisor's memory *is* `system/runs.sqlite`,
+`dag_state.json` goes. The supervisor's memory *is* `system/runs/runs.sqlite`,
 which it alone writes:
 
 | table | rows |
@@ -433,8 +433,8 @@ is not hypothetical — `agent_user.md` exists because agents already run
 syncs and read the mirror — and because a person and an agent will
 often be working the same root at once.
 
-**Observe.** `system/runs.sqlite` is plain SQLite, so an agent needs no
-datalib binary to read it: `sqlite3 system/runs.sqlite 'select id,
+**Observe.** `system/runs/runs.sqlite` is plain SQLite, so an agent needs no
+datalib binary to read it: `sqlite3 system/runs/runs.sqlite 'select id,
 state, state_detail from steps'` is the whole of the Manage screen's
 Status column; `invocations` joined to `log` is the per-step log the
 UI shows on double-click; `requests` joined to `request_steps` is the

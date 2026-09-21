@@ -27,7 +27,7 @@ const WITH_BROWSER = { ...SET_ONLY, auth_options: ["browser", "set"] };
 
 async function openChatgpt(page: Page, service: object) {
   await page.route("**/api/latchkey/chatgpt", (route) => route.fulfill({ json: service }));
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await page.getByRole("button", { name: "+ Data Source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: "Mirror your ChatGPT conversations" }).click();
 }

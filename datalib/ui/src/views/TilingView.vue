@@ -248,6 +248,16 @@ function addCard(containerId: string) {
   root.value = appendChild(root.value, containerId, makeTile(freshId(), "galleryView()"));
 }
 
+// The toolbar's "Data sources". Every tile is on screen, so a tile
+// already showing the source needs nothing; otherwise one joins the
+// root container.
+function showCard(source: string) {
+  if (listTiles(root.value).some((t) => t.source === source)) return;
+  root.value = appendChild(root.value, root.value.id, makeTile(freshId(), source));
+}
+
+defineExpose({ addCard: () => addCard(root.value.id), showCard });
+
 // What's being dragged, and where the pointer currently hovers — a
 // container's add area or a card to split onto. Both drive highlights.
 const draggingId = ref<string | null>(null);

@@ -1081,7 +1081,7 @@ pub struct DagStepInfo {
     pub progress: Option<DagStepProgress>,
 }
 
-/// A step's live numbers and words, from `system/runs.sqlite`.
+/// A step's live numbers and words, from `system/runs/runs.sqlite`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DagStepProgress {
     /// The step's own words: "conversations.list", "3 of 9 channels".
@@ -1638,7 +1638,7 @@ struct RunsParams {
     limit: Option<i64>,
 }
 
-/// `GET /api/runs` — recent runs from `system/runs.sqlite`, newest first,
+/// `GET /api/runs` — recent runs from `system/runs/runs.sqlite`, newest first,
 /// as `app_schema::runs::RunRow`.
 async fn runs_list(
     State(s): State<AppState>,

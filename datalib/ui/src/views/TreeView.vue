@@ -346,6 +346,21 @@ function addRootCard() {
   void nextTick(() => revealNode(node.id));
 }
 
+// The toolbar's "Data sources": the node already showing that source,
+// or a new root node.
+function showCard(source: string) {
+  const existing = nodes.value.find((n) => n.source === source);
+  if (existing) {
+    revealNode(existing.id);
+    return;
+  }
+  const node = newNode(source, null);
+  nodes.value = [...nodes.value, node];
+  void nextTick(() => revealNode(node.id));
+}
+
+defineExpose({ addCard: addRootCard, showCard });
+
 function closeNode(id: string) {
   const doomed = new Set([id]);
   let grew = true;

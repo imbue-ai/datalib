@@ -9,7 +9,7 @@
 // with the reason as its tooltip, the same rule the action buttons
 // follow, so a person learns what a row *could* do by reading the menu.
 
-export type MenuKind = "group" | "step" | "applet";
+export type MenuKind = "group" | "step" | "applet" | "system";
 
 /// The slice of a Manage row the menu reads.
 export type MenuTarget = {
@@ -35,7 +35,16 @@ export type MenuTarget = {
 /// The Browse entry's name — shared with the Actions cell's button, so
 /// the two never say different things.
 export function browseLabel(t: Pick<MenuTarget, "kind" | "type">): string {
+  if (t.kind === "system") return "Browse the log";
   return t.kind === "group" && !t.type ? "Browse every source" : "Browse this data";
+}
+
+/// Why an entry that edits the config does not apply, or null when the
+/// row is a config entry.
+const NOT_IN_CONFIG = "Not a config entry";
+
+function notInConfig(t: MenuTarget): string | null {
+  return t.kind === "system" ? NOT_IN_CONFIG : null;
 }
 
 export type MenuAction =
@@ -78,6 +87,7 @@ const ONE_AT_A_TIME = "One row at a time";
 /// Why "Compare…" does not apply: a comparison is of a source — a group
 /// with a type — that is not itself one (`docs/dev/plans/completed/diff_renderer.md`).
 export function notComparableReason(t: MenuTarget): string | null {
+  if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind !== "group") return "Compare a source, not a step under it";
   if (!t.type) return "The index mirrors nothing to compare";
   if (t.type === "diff") return "Already a comparison — make another from its source";
@@ -86,6 +96,7 @@ export function notComparableReason(t: MenuTarget): string | null {
 
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
+  if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
   if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
   return null;
 }
@@ -113,7 +124,9 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     entries.push({
       action: "rename",
       name: "Rename…",
-      disabled: !one ? ONE_AT_A_TIME : only.kind !== "group" ? "Only a group has a name" : null,
+      disabled: !one
+        ? ONE_AT_A_TIME
+        : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
     });
     entries.push({
       action: "copy_id",
@@ -170,9 +183,11 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
       ? ONE_AT_A_TIME
       : only.kind === "applet"
         ? "An applet runs no step"
-        : only.kind === "group" && !only.statusFrom
-          ? "No step under this group has run yet"
-          : null,
+        : only.kind === "system"
+          ? "The log is what Browse opens here"
+          : only.kind === "group" && !only.statusFrom
+            ? "No step under this group has run yet"
+            : null,
   });
   entries.push({
     action: "history",
@@ -194,7 +209,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
         ? "Remove from config, with everything under it"
         : "Remove from config"
       : `Remove ${targets.length} entries from config`,
-    disabled: null,
+    disabled: firstBlocked(targets, notInConfig),
   });
   return entries;
 }

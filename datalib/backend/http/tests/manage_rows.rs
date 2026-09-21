@@ -128,11 +128,44 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         ]
     );
     let rows = by_key(&got);
-    assert_eq!(rows.len(), 6, "{got}");
+    assert_eq!(rows.len(), 8, "{got}");
     // Nothing has counted its problems, so no row claims a green zero.
     for (key, row) in &rows {
         assert_eq!(row["problems"], serde_json::json!([]), "{key}: {row}");
     }
+
+    // `system/` is a group the config never named, with the run log
+    // under it: both take disk, the log is browsable, nothing syncs.
+    let system = &rows["system"];
+    assert_eq!(system["kind"], "system");
+    assert_eq!(system["path"], serde_json::json!(["system"]));
+    assert_eq!(system["name"]["label"], "System");
+    assert_eq!(system["type"], serde_json::Value::Null);
+    assert_eq!(system["status"]["key"], "");
+    let actions = system["actions"].as_array().unwrap();
+    assert_eq!(actions[0]["id"], "browse");
+    assert_eq!(actions[0]["enabled"], false);
+    assert_eq!(actions[1]["id"], "sync");
+    assert_eq!(actions[1]["enabled"], false);
+    let logs = &rows["system/runs"];
+    assert_eq!(logs["kind"], "system");
+    assert_eq!(logs["path"], serde_json::json!(["system", "system/runs"]));
+    assert_eq!(logs["name"]["label"], "Logs");
+    assert_eq!(logs["actions"][0]["id"], "browse");
+    assert_eq!(logs["actions"][0]["enabled"], true);
+    assert_eq!(logs["actions"][1]["enabled"], false);
+    assert_eq!(logs["seeds"], serde_json::json!([]));
+    let keys: Vec<&str> = got["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        &keys[keys.len() - 2..],
+        ["system", "system/runs"],
+        "the system rows come after everything the config declares"
+    );
 
     let slack = &rows["group:slack"];
     assert_eq!(slack["kind"], "group");

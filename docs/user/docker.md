@@ -101,7 +101,7 @@ the image:
 docker exec datalib-demo datalib-dag /opt/datalib/demo/config.toml
 ```
 
-The same thing happens if you press **Sync all** on the Manage tab.
+The same thing happens if you press **Sync all** on the Data sources card.
 Every store in the library is a database you can query, from inside
 the container or from any other one with the folder mounted:
 

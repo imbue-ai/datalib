@@ -1,12 +1,13 @@
 //! `GET /api/manage/rows`: the Manage screen's tree, assembled. One row
 //! per entry in the config *file* — a group with its steps and applets
-//! under it — with the status, timestamps, sizes and actions the screen
-//! draws, joined here from the config, the runner's record, the run
-//! store, the job queue, the usage sampler and the applet supervisor,
-//! and typed by the columns the response declares. What stays in the
-//! browser is what needs the wizard's descriptors: whether the form can
-//! edit a row, what Browse opens, and an ingest step's Download/Import
-//! label.
+//! under it — plus one for `system/`, which no config names but which
+//! is on disk like the rest; with the status, timestamps, sizes and
+//! actions the screen draws, joined here from the config, the runner's
+//! record, the run store, the job queue, the usage sampler and the
+//! applet supervisor, and typed by the columns the response declares.
+//! What stays in the browser is what needs the wizard's descriptors:
+//! whether the form can edit a row, what Browse opens, and an ingest
+//! step's Download/Import label.
 
 mod activity;
 mod group;
@@ -44,6 +45,10 @@ pub enum RowKind {
     Group,
     Step,
     Applet,
+    /// `system/`: the run log and the app's own stores. Not a config
+    /// entry — nothing syncs, edits or removes it — but it takes disk
+    /// and its log is browsable.
+    System,
 }
 
 /// The built-in functions by what they do. Mirrors
@@ -224,7 +229,7 @@ pub async fn get_manage_rows(
     let record = crate::dag_record(&s.root).await;
     let storage = s
         .usage
-        .snapshot(s.root.as_path(), &usage::declared_trees(&config_path))
+        .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
         .await;
     let root_storage = RootStorage {
         root: storage.root.clone(),
@@ -419,7 +424,118 @@ impl Snapshot<'_> {
             .collect();
         let mut rows = groups;
         rows.extend(entry_rows.drain(..).map(|(_, r)| r));
+        rows.extend(self.system_rows());
         rows
+    }
+
+    /// The System group and its Logs child, after everything the
+    /// config declares: `system/` as a whole, and the run store's
+    /// directory inside it.
+    fn system_rows(&self) -> [ManageRow; 2] {
+        let dir = datalib_core::layout::SYSTEM_DIR;
+        let log = datalib_core::layout::RUNS_DIR_REL;
+        let dir_tree = self.outputs.iter().find(|o| o.path == dir);
+        let log_tree = self.outputs.iter().find(|o| o.path == log);
+        let dir_disk = dir_tree.filter(|t| t.present);
+        let log_disk = log_tree.filter(|t| t.present);
+        let sync = || Action {
+            id: "sync".into(),
+            label: "Sync now".into(),
+            enabled: false,
+            disabled_reason: Some(
+                "Nothing here runs on its own \u{2014} every run writes to it.".to_string(),
+            ),
+            danger: false,
+        };
+        let row = |id: &str,
+                   path: Vec<String>,
+                   name: Identity,
+                   disk: Timeseries,
+                   browse: Action,
+                   on_disk: Option<&OutputStorage>| ManageRow {
+            id: id.to_string(),
+            key: id.to_string(),
+            path,
+            kind: RowKind::System,
+            group: None,
+            written_group: None,
+            inputs: vec![],
+            phase: Phase::Other,
+            function: None,
+            params: serde_json::Value::Object(Default::default()),
+            name,
+            r#type: None,
+            dropped: None,
+            status: StatusView::default(),
+            status_from: None,
+            activity: vec![],
+            problems: vec![],
+            last_synced: None,
+            disk,
+            actions: vec![browse, sync()],
+            seeds: vec![],
+            reveal_blocked: on_disk
+                .is_none()
+                .then(|| "Nothing on disk yet.".to_string()),
+            stop_job_id: None,
+            last_run_id: String::new(),
+            live_run_id: None,
+            reveal_path: on_disk.map(|t| t.abs.clone()),
+        };
+        let group = row(
+            dir,
+            vec![dir.to_string()],
+            Identity {
+                id: dir.to_string(),
+                label: "System".into(),
+                icon: None,
+                detail: Some("Group".into()),
+            },
+            Timeseries {
+                value: dir_disk.map(|t| t.bytes as i64),
+                unit: "bytes".into(),
+                samples: dir_tree.map(samples).unwrap_or_default(),
+                detail: Some(match dir_disk {
+                    None => "Nothing on disk yet.".to_string(),
+                    Some(t) => format!(
+                        "{} in {dir}/ \u{2014} the run log {}, and the job queue, the usage \
+                         samples and the feedback filed here.",
+                        human_bytes(t.bytes),
+                        human_bytes(log_disk.map_or(0, |l| l.bytes)),
+                    ),
+                }),
+            },
+            browse_action(
+                "Browse the log",
+                Some("The log under this group is what to browse.".to_string()),
+            ),
+            dir_disk,
+        );
+        let logs = row(
+            log,
+            vec![dir.to_string(), log.to_string()],
+            Identity {
+                id: log.to_string(),
+                label: "Logs".into(),
+                icon: None,
+                detail: Some("Every run's step states and log lines".into()),
+            },
+            Timeseries {
+                value: log_disk.map(|t| t.bytes as i64),
+                unit: "bytes".into(),
+                samples: log_tree.map(samples).unwrap_or_default(),
+                detail: Some(match log_disk {
+                    None => "Nothing on disk yet \u{2014} no run has been recorded.".to_string(),
+                    Some(t) => format!(
+                        "{} in {log}/ \u{2014} the store and the WAL beside it.",
+                        human_bytes(t.bytes)
+                    ),
+                }),
+            },
+            browse_action("Browse the log", None),
+            log_disk,
+        );
+        [group, logs]
     }
 }
 

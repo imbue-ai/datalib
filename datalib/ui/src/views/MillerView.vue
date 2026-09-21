@@ -5,7 +5,7 @@
 // column's header bar and evaluated (cardSource.ts) to render the
 // column inside a Shadow DOM via ShadowCard. Edit the source and
 // press Enter to re-run the card.
-import { ref, watch } from "vue";
+import { nextTick, ref, useTemplateRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
@@ -224,9 +224,40 @@ function setColumnSource(id: string, source: string) {
 // modes), which the user resolves by picking a component (it replaces
 // itself via host.setSource).
 function addCard() {
-  setSlots([...slots.value, newSlot("galleryView()")]);
+  const slot = newSlot("galleryView()");
+  setSlots([...slots.value, slot]);
   syncUrl();
+  revealColumn(slot.id);
 }
+
+// The toolbar's "Data sources": the column already showing that
+// source, or a new one at the end of the stack.
+function showCard(source: string) {
+  const existing = slots.value.find((s) => s.source === source);
+  if (existing) {
+    revealColumn(existing.id);
+    return;
+  }
+  const slot = newSlot(source);
+  setSlots([...slots.value, slot]);
+  syncUrl();
+  revealColumn(slot.id);
+}
+
+const columnsEl = useTemplateRef<HTMLDivElement>("columnsEl");
+
+// Scroll a column to the left edge of the row once it has rendered.
+// `inline: "start"`, not "nearest": a column wider than the viewport
+// that is already partly on screen counts as "nearest" and never moves.
+function revealColumn(id: string) {
+  void nextTick(() => {
+    columnsEl.value
+      ?.querySelector(`[data-slot-id="${id}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "start", behavior: "smooth" });
+  });
+}
+
+defineExpose({ addCard, showCard });
 
 // Drag a column's right edge to set its width. Captures the pointer
 // so the move tracks even when the cursor crosses other columns;
@@ -257,11 +288,12 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 
 <template>
   <div class="miller-root">
-    <div class="miller-columns">
+    <div ref="columnsEl" class="miller-columns">
       <section
         v-for="slot in slots"
         :key="slot.id"
         class="miller-col"
+        :data-slot-id="slot.id"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
         <div

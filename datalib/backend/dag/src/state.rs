@@ -60,7 +60,7 @@ impl CurrentRun {
 /// date", this answers "what happened, and when".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LastRun {
-    /// The run this happened in — the key into `system/runs.sqlite`,
+    /// The run this happened in — the key into `system/runs/runs.sqlite`,
     /// where the step's log lines and metrics for it live. Empty for a
     /// record written before runs had ids.
     #[serde(default)]

@@ -238,6 +238,16 @@ type Row = ManageRow & {
 const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
 
 function decorate(r: ManageRow): Row {
+  // `system/` is not a config entry: nothing to edit, and Browse is
+  // the run log over every run.
+  if (r.kind === "system") {
+    return {
+      ...r,
+      editBlocked: "Not a config entry.",
+      editGroup: null,
+      browseSource: browseAction(r)?.enabled ? "logView()" : null,
+    };
+  }
   if (r.kind === "group") {
     const editBlocked = groupEditBlocked(r.id);
     return {

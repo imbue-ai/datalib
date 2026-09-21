@@ -21,7 +21,7 @@ const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 /// The log opens as the column after the Manage card, titled for
 /// what it shows.
 async function openServerLog(page: Page) {
-  await page.goto("/sources2");
+  await page.goto("/data_sources");
   await page.getByRole("button", { name: "Server log" }).click();
   const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
