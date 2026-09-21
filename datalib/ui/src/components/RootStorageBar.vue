@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// The whole data root, along the bottom of every view: its path, how
-// much of the disk it takes, and how that has moved over the last few
-// minutes. Not the sum of the sources — it includes `system/`, the
+// The whole data root, in the status bar: its path, how much of the
+// disk it takes, and how that has moved over the last few minutes.
+// Not the sum of the sources — it includes `system/`, the
 // stores, the served attachments, and anything a deleted step left
 // behind. Read from `GET /api/pipeline/storage`, which the backend
 // walks on a tick *while a sync runs* and otherwise on request.
@@ -16,9 +16,8 @@ const storage = ref<PipelineStorage | null>(null);
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
 
-/// The plot box, in user units. Wide, because it is the only thing on
-/// its line.
-const SPARK = { width: 260, height: 20 };
+/// The plot box, in user units.
+const SPARK = { width: 160, height: 18 };
 
 async function load(refresh = false) {
   try {
@@ -138,7 +137,7 @@ onBeforeUnmount(() => unsubscribe?.());
 </script>
 
 <template>
-  <footer class="root-bar" data-testid="root-storage">
+  <div class="root-bar" data-testid="root-storage">
     <span class="root-bar-label">Data root</span>
     <code class="root-bar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
     <span class="root-bar-spark" ref="sparkHost" :title="title"></span>
@@ -156,20 +155,18 @@ onBeforeUnmount(() => unsubscribe?.());
     >
       {{ revealLabel }}
     </button>
-  </footer>
+  </div>
 </template>
 
 <style scoped>
+/* Shrinks with the row: the path gives way first (below). */
 .root-bar {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 16px;
-  border-top: 1px solid var(--datalib-border);
-  font-size: 12px;
   color: var(--datalib-muted);
-  background: var(--datalib-bg);
 }
 .root-bar-label { flex: 0 0 auto; font-weight: 600; }
 /* The path yields first when the window narrows — the number and the
@@ -182,11 +179,10 @@ onBeforeUnmount(() => unsubscribe?.());
   white-space: nowrap;
 }
 .root-bar-spark {
-  margin-left: auto;
   flex: 0 0 auto;
   display: block;
-  width: 260px;
-  height: 20px;
+  width: 160px;
+  height: 18px;
 }
 .root-bar-size {
   flex: 0 0 auto;

@@ -4,7 +4,6 @@ import { RouterView } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
 import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
-import RootStorageBar from "@/components/RootStorageBar.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
@@ -75,9 +74,6 @@ onUnmounted(() => stop?.());
     />
     <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
     <RouterView v-else-if="checked" />
-    <!-- The data root as a whole, on every view: what it weighs and
-         which way it is moving. -->
-    <RootStorageBar v-if="!gate && checked" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the config editor. -->

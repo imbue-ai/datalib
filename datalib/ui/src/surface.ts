@@ -1,12 +1,13 @@
-// The two things the toolbar can ask of the card surface — reveal the
-// sources card, start a new card — without knowing which layout is
-// showing. CardsView registers the active layout here; off the card
-// surface (the hidden /sources screen, the gates) the toolbar
-// navigates to a stack that holds the card instead.
+// What the chrome can ask of the card surface — reveal a card, start
+// a new one — without knowing which layout is showing. CardsView
+// registers the active layout here; off the card surface (the hidden
+// /sources screen, the gates) the toolbar navigates to a stack that
+// holds the card instead.
 import { ref } from "vue";
 import router, { MANAGE_STACK, NEW_CARD_STACK } from "@/router";
 
 export const SOURCES_CARD = "sourcesView()";
+export const LOG_CARD = "logView()";
 
 export type SurfaceCommands = {
   // A new gallery card, revealed.
