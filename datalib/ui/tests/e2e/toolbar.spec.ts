@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { stubClipboard } from "./grid-helpers";
 
 // The toolbar across the top is the way home: "Data sources" reveals
 // the sources card — opening one only when none is showing — and
@@ -44,6 +45,16 @@ test.describe("toolbar", () => {
 
     await page.getByRole("button", { name: "Logs" }).click();
     await expect(page.locator(".miller-col")).toHaveCount(2);
+  });
+
+  test("the status bar copies the data root's path in a browser", async ({ page }) => {
+    await page.goto("/");
+    const path = page.getByTestId("root-storage").locator(".root-bar-path");
+    await expect(path).not.toHaveText("", { timeout: 10_000 });
+    const copied = await stubClipboard(page);
+    await page.getByRole("button", { name: "Copy path" }).click();
+    await expect(page.locator(".datalib-toast", { hasText: "path copied" })).toBeVisible();
+    expect(await copied()).toBe(await path.textContent());
   });
 
   test("the syncing pill is absent when nothing runs", async ({ page }) => {

@@ -11,6 +11,8 @@ import { formatBytes } from "@/config/bytes";
 import { sparkline } from "@/config/sparkline";
 import { changed, subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import { copyToClipboard } from "@/clipboard";
+import { pushToast } from "@/toasts";
 
 const storage = ref<PipelineStorage | null>(null);
 const canReveal = isDesktopApp();
@@ -114,6 +116,14 @@ async function reveal() {
   if (storage.value) await revealInFileManager(storage.value.root.abs);
 }
 
+// In a browser the file manager is out of reach; the path is what
+// someone pastes into a terminal.
+async function copyPath() {
+  if (!storage.value) return;
+  const ok = await copyToClipboard(storage.value.root.abs);
+  pushToast(ok ? "Data root path copied" : "Could not copy the path", ok ? "info" : "error");
+}
+
 let unsubscribe: (() => void) | null = null;
 onMounted(() => {
   // Fresh on the first paint: the backend only walks on its own while
@@ -154,6 +164,14 @@ onBeforeUnmount(() => unsubscribe?.());
       @click="reveal"
     >
       {{ revealLabel }}
+    </button>
+    <button
+      v-else-if="storage"
+      class="root-bar-btn"
+      title="Copy the data root's path"
+      @click="copyPath"
+    >
+      Copy path
     </button>
   </div>
 </template>
