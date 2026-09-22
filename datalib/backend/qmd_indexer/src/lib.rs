@@ -500,10 +500,17 @@ struct EmbedScript(PathBuf);
 
 impl EmbedScript {
     fn write() -> Result<Self> {
+        // The pid alone is not unique enough: a crate's tests run as
+        // threads of one process, so two scripts would share a path and
+        // the first `Drop` would delete a file the other still needed.
+        static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // `.mjs` so node reads it as a module from the extension alone,
         // with no flag that a forked grandchild could inherit.
-        let path =
-            std::env::temp_dir().join(format!("datalib-qmd-embed-{}.mjs", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "datalib-qmd-embed-{}-{nth}.mjs",
+            std::process::id()
+        ));
         std::fs::write(&path, EMBED_NDJSON_MJS)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(Self(path))
@@ -822,6 +829,22 @@ mod tests {
             script.0.clone()
         };
         assert!(!path.exists(), "the script should be gone once dropped");
+    }
+
+    /// Two live scripts must not share a path. They did while the name
+    /// was the pid alone: `cargo`/bazel run a crate's tests as threads
+    /// of **one** process, so every test that wrote a script wrote the
+    /// same file, and the first one to drop deleted a file another was
+    /// still asserting on. It fails as a flake somewhere else, which is
+    /// the expensive kind.
+    #[test]
+    fn two_scripts_in_one_process_get_their_own_files() {
+        let a = EmbedScript::write().unwrap();
+        let b = EmbedScript::write().unwrap();
+        assert_ne!(a.0, b.0, "two scripts collided on one path");
+        assert!(a.0.is_file() && b.0.is_file());
+        drop(a);
+        assert!(b.0.is_file(), "dropping one script deleted the other's");
     }
 
     /// A stand-in for the wrapper: `sh` printing canned lines, then
