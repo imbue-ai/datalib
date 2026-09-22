@@ -1,6 +1,6 @@
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load("//tools:live.bzl", "live_run")
 
 exports_files(["Cargo.toml"])
 
@@ -63,6 +63,7 @@ rust_binary(
 rust_test(
     name = "claude_tests",
     srcs = glob(["tests/claude_tests/*.rs"]),
+    args = ["--skip", "live::"],
     crate_root = "tests/claude_tests/main.rs",
     data = glob(["tests/claude_tests/snapshots/*.snap"], allow_empty = True) + [
         ":tng_fixture",
@@ -98,33 +99,10 @@ rust_test(
     ],
 )
 
-rust_test(
-    name = "claude_live",
-    srcs = ["tests/claude_live.rs"],
-    crate_root = "tests/claude_live.rs",
-    data = glob(["tests/snapshots/claude_live__*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",  # talks to claude.ai/api
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
-    ],
-    deps = [
-        ":datalib_etl_claude",
-        "@datalib_crates//:insta",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
 insta_update(
     name = "claude_tests.update",
     test = ":claude_tests",
+    test_args = ["--skip", "live::"],
     extra_data = [":tng_fixture"],
     extra_env = {
         "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
@@ -133,15 +111,20 @@ insta_update(
 
 insta_update(
     name = "claude_live.update",
-    test = ":claude_live",
-    test_args = ["--ignored"],
+    test = ":claude_tests",
+    test_args = ["live::"],
 )
 
-# `manual` keeps these out of `//...`, so nothing else ever builds them.
-# See scripts/lint_repo.py check 7.
-build_test(
-    name = "manual_targets_build",
-    targets = [
-        ":claude_live",
+# The live tests of `claude_tests`'s `live` module — the ones its
+# `--skip live::` leaves out. `bazel run`, so they inherit the
+# shell's `LATCHKEY_CURL` and reach the host keyring.
+live_run(
+    name = "claude_live",
+    test = ":claude_tests",
+    extra_data = [
+        ":tng_fixture",
     ],
+    extra_env = {
+        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
+    },
 )

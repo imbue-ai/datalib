@@ -217,18 +217,71 @@ pub fn stamp_of(id: &str) -> Option<i64> {
 }
 
 /// Join the parts of a **composite natural key** — an Anthropic
-/// `(message_uuid, tool_use_id)`, a Slack `(channel_id, ts)`.
+/// `(message_uuid, tool_use_id)`, a Slack `(channel_id, ts)`, a
+/// contact's `(addressbook, uid)`.
 ///
-/// Uses `#`, not the `\x1f` that separates recipe *components*, because this
-/// exact string is also what `grid_rows.upstream_id` stores and what the
-/// grid's "Copy source ID(s)" action puts on a clipboard. Parts must not
-/// contain `#`; debug builds assert it.
+/// Uses `#`, not the `\x1f` that separates recipe *components*, because
+/// this exact string is also what `grid_rows.upstream_id` stores and
+/// what the grid's "Copy source ID(s)" action puts on a clipboard.
+///
+/// **Any string may be a part.** A part's `%` and `#` are
+/// percent-encoded, so the only unescaped `#` in the result is a
+/// separator and two different part lists cannot produce one key. A
+/// vCard `UID` is free text; a contact with none is keyed by an href
+/// fragment, where the `#` is the part that says *which* card, so
+/// dropping or refusing it would collapse every nameless card in a
+/// file onto one id. [`split_composite_key`] reverses this exactly.
 pub fn composite_key(parts: &[&str]) -> String {
-    debug_assert!(
-        parts.iter().all(|p| !p.contains('#')),
-        "composite_key parts must not contain '#': {parts:?}"
-    );
-    parts.join("#")
+    parts
+        .iter()
+        .map(|p| {
+            let mut out = String::with_capacity(p.len());
+            for c in p.chars() {
+                match c {
+                    '%' => out.push_str("%25"),
+                    '#' => out.push_str("%23"),
+                    c => out.push(c),
+                }
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("#")
+}
+
+/// The parts a [`composite_key`] was built from. For a string that is
+/// not one of our keys this is still well defined — it splits on the
+/// unescaped `#`s and decodes the two escapes — which is what makes it
+/// safe on an `upstream_id` read back out of a store.
+pub fn split_composite_key(key: &str) -> Vec<String> {
+    // One left-to-right pass, not two `replace`s: replacing `%23` first
+    // and `%25` second lets the first pass manufacture an escape for
+    // the second to read, and the part comes back wrong.
+    key.split('#')
+        .map(|p| {
+            let mut out = String::with_capacity(p.len());
+            let mut rest = p;
+            while let Some(i) = rest.find('%') {
+                out.push_str(&rest[..i]);
+                match rest.get(i..i + 3) {
+                    Some("%23") => {
+                        out.push('#');
+                        rest = &rest[i + 3..];
+                    }
+                    Some("%25") => {
+                        out.push('%');
+                        rest = &rest[i + 3..];
+                    }
+                    _ => {
+                        out.push('%');
+                        rest = &rest[i + 1..];
+                    }
+                }
+            }
+            out.push_str(rest);
+            out
+        })
+        .collect()
 }
 
 pub fn entity_id_str(
@@ -555,6 +608,58 @@ mod tests {
     #[test]
     fn composite_keys_do_not_alias_across_part_boundaries() {
         assert_ne!(composite_key(&["a", "bc"]), composite_key(&["ab", "c"]),);
+    }
+
+    /// Every part this tree can hand it, and every shape that could
+    /// confuse the escape, survives the round trip — and no two part
+    /// lists collide. A vCard UID is free text and a nameless contact
+    /// is keyed by an href fragment (`contacts:#10:0`), so "any string"
+    /// is the contract, not a caution.
+    #[test]
+    fn any_parts_round_trip_and_no_two_lists_collide() {
+        let lists: &[&[&str]] = &[
+            &["C123", "1699999999.000100"],
+            &["contacts", "contacts:#10:0"],
+            &["contacts", "contacts:#11:0"],
+            &["a", "bc"],
+            &["ab", "c"],
+            &["a#b", "c"],
+            &["a", "b#c"],
+            &["%23", "x"],
+            &["#", "x"],
+            &["%", "x"],
+            &["%25", "x"],
+            &["%2523", "x"],
+            &["%%23", "#%"],
+            &["", "#"],
+            &["#", ""],
+            &["", ""],
+            &["100%", "#1"],
+            &["a", "b", "c"],
+            &["a#b#c"],
+        ];
+        let mut seen: std::collections::HashMap<String, &[&str]> = std::collections::HashMap::new();
+        for parts in lists {
+            let key = composite_key(parts);
+            assert_eq!(
+                split_composite_key(&key),
+                parts.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+                "{parts:?} did not survive {key:?}"
+            );
+            if let Some(prev) = seen.insert(key.clone(), parts) {
+                panic!("{parts:?} and {prev:?} both produce {key:?}");
+            }
+        }
+    }
+
+    /// The pass-through that keeps this from moving any id that works
+    /// today: a part with neither escape is joined byte for byte.
+    #[test]
+    fn a_part_with_no_escape_is_joined_byte_for_byte() {
+        assert_eq!(
+            composite_key(&["C123", "1699999999.000100"]),
+            "C123#1699999999.000100"
+        );
     }
 
     /// An edge sorts beside its source end: the anchor's stamp when the

@@ -265,16 +265,14 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// batch (the README's "one writer per file"). `close().await` waits for
 /// the connection to close, so it is also the moment the lock is free.
 ///
-/// `acquire_timeout` is far past sqlx's 30s default because cold opens of
-/// multi-GB stores legitimately take 4-10s inside `sqlite3_open_v2`; 5min is
-/// "something else is wrong" territory.
+/// The acquire timeout is [`datalib_pin::acquire_timeout`].
 async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
     let writable = access == Access::ReadWrite;
     let mut options = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .acquire_timeout(Duration::from_secs(300));
+        .acquire_timeout(datalib_pin::acquire_timeout());
     if writable {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)

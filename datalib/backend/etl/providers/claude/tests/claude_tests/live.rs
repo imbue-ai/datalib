@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Claude single-conversation download test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/claude:claude_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use std::time::Duration;
 
@@ -14,7 +20,6 @@ use serde_json::{json, Value};
 const TARGET_UUID: &str = "b0c2f022-cc28-4888-b038-702ec040b87b";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn claude_live_single_conv_snapshot() {
     let tmp = tempfile::TempDir::with_prefix("claude-live-")
         .expect("create tempdir")

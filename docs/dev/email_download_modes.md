@@ -307,13 +307,11 @@ for the Gmail API mode.
 
 Unit tests cover the pure parts (label vocabulary, envelope synthesis,
 history parsing, base64url, the quota throttle). What they cannot cover
-is incremental correctness, so there is a **live test** —
-`tests/gmail_live.rs`, tagged `manual` + `external` + `no-sandbox`:
+is incremental correctness, so there is a **live test** — the `live`
+module of `tests/email_tests/`, which `bazel test` skips by name:
 
 ```sh
-bazelisk test //datalib/backend/etl/providers/email:gmail_live \
-    --test_arg=--ignored --test_arg=--nocapture --test_output=all \
-    --test_env=PATH --test_env=HOME --test_env=USER
+bazelisk run //datalib/backend/etl/providers/email:gmail_live
 ```
 
 It mirrors one label (`$DATALIB_GMAIL_TEST_LABEL`, default `datalib`)

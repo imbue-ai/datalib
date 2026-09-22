@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Gmail REST API download test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/email:gmail_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -53,7 +59,6 @@ fn scratch(prefix: &str) -> std::path::PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn gmail_live_one_label_roundtrip() {
     let label = test_label();
     let tmp = scratch("gmail-live-");
@@ -241,7 +246,6 @@ async fn mailbox_id_for(db: &RawDb, label: &str) -> String {
 
 /// A budget-limited backfill must **walk forward** across runs.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn gmail_live_budget_limited_backfill_makes_progress() {
     const BUDGET: usize = 2;
     const MAX_RUNS: usize = 20;
@@ -316,7 +320,6 @@ async fn gmail_live_budget_limited_backfill_makes_progress() {
 /// set. Mirror each label alone, mirror both together, and require the
 /// third to be exactly the union of the first two.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn gmail_live_two_labels_mirror_their_union() {
     let (a, b) = (test_label(), second_test_label());
     assert_ne!(a, b, "the two test labels must differ");

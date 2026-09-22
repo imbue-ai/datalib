@@ -10,4 +10,5 @@ mod gmail_label_union;
 mod gmail_widened_labels_backfill;
 mod jmap_mbox;
 mod jmap_render;
+mod live;
 mod playback_roundtrip;

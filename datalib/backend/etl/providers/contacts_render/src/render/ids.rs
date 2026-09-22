@@ -61,6 +61,20 @@ mod tests {
         }
     }
 
+    /// A vCard `UID` is free text, and a card with none is keyed by its
+    /// href fragment (`contacts:#10:0`) — the `#` says which card in the
+    /// file. The id has to survive it, and two cards must stay two ids.
+    #[test]
+    fn a_uid_carrying_a_hash_still_regenerates_and_stays_distinct() {
+        let a = contact("c", "contacts", "contacts:#10:0");
+        let b = contact("c", "contacts", "contacts:#11:0");
+        assert_ne!(a.uuid, b.uuid);
+        assert_eq!(
+            a.uuid,
+            entity_id_str(ID_NAMESPACE, "c", None, a.entity_kind, &a.natural_key, a.at),
+        );
+    }
+
     #[test]
     fn addressbooks_and_sources_separate_one_uid() {
         let a = contact("c", "Personal", "uid-1");

@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live GitLab single-MR download + render test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/gitlab:gitlab_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use datalib_etl_gitlab::ingest::{self as gitlab, parse_mr_ref, FetchOptions};
 use datalib_etl_gitlab_render::render::{parse_api_dir, render_gitlab};
@@ -14,7 +20,6 @@ use serde_json::json;
 const DEFAULT_TARGET_MR: &str = "generally-intelligent/generally_intelligent!7643";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn gitlab_live_single_mr_snapshot() {
     let mr_ref = std::env::var("GITLAB_TEST_MR")
         .ok()

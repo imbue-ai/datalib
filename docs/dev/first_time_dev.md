@@ -284,15 +284,22 @@ router curl (which hands Cloudflare-fronted hosts to the bundled
 ```sh
 bazel build //third-party/latchkey-curl-shims
 export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
-bazelisk test //datalib/backend/etl/providers/claude:claude_live \
-    --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER \
-    --test_env=LATCHKEY_CURL
+bazelisk run //datalib/backend/etl/providers/claude:claude_live
 ```
+
+`bazel run`, not `bazel test`, and no `--test_env` list: each of these
+targets runs the `live` module of its package's ordinary test binary,
+which the binary's own `--skip live::` leaves out of `bazel test`, and
+`bazel run` hands the test the shell you invoked it from. The live code
+is therefore compiled with the rest of the package's tests — it cannot
+rot — without being a separate link. `docs/dev/testing.md` § "A
+package's integration tests are one binary" has the layout.
 
 When upstream content changes, the test will fail with a diff; accept the
 change with the sibling `.update` target (e.g. `bazel run
 //datalib/backend/etl/providers/claude:claude_live.update` —
-see [`/AGENTS.md`](/AGENTS.md) § "Updating insta snapshots").
+see [`/docs/dev/testing.md`](/docs/dev/testing.md) § "Updating insta
+goldens").
 
 ### Changing a row schema
 

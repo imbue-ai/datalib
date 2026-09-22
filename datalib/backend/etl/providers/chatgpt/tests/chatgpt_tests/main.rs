@@ -8,4 +8,5 @@
 mod chatgpt_render;
 mod chatgpt_translate;
 mod incremental_skip;
+mod live;
 mod playback_roundtrip;

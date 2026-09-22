@@ -85,6 +85,19 @@ key. Without the release secret a tag build runs cold (~20 min a leg)
 rather than falling back to the contributor cache — that is the
 intended failure mode.
 
+**The two orgs are write-disjoint, so a third writer was needed.** A
+main push writes the release org and a PR run writes the contributor
+org, which means nothing wrote *main's tree* into the contributor org:
+the first PR run after any merge that touched a shared crate rebuilt
+the world, however small the PR's own diff. #658's run is the shape —
+a PR touching `http` and `ui` alone, 1677 s, 713 sandboxed actions, 141
+tests executed. `test.yml`'s `warm-contributor-cache` job is the
+missing writer: on a main push it runs the same two commands the PR
+jobs run, with the contributor key, `continue-on-error` because its
+only product is cache entries. It does not help a PR that edits a
+widely-linked crate — that one rebuilds its own `rdeps` either way —
+it removes the runs that were cold for no reason.
+
 The release org exists and its read-write key is the repository
 secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
@@ -180,6 +193,18 @@ lines are usually the whole diagnosis:
 **Check the queue first.** A run can be slow without doing anything:
 compare the run's `created_at` with the job's `started_at`. Median
 queue is seconds; the tail has been over an hour.
+
+**A run with no jobs at all was cancelled while pending.** `gh run
+view <id> --json jobs --jq '.jobs | length'` says `0`, and its
+`updatedAt` is within seconds of the *next* run's `createdAt`. A
+concurrency group holds at most one pending run, so a newly queued run
+evicts the one already waiting — `cancel-in-progress: false` protects
+only the run that is executing. This used to hit `main`: every push
+shared one group, so 25 of the 98 completed main runs between
+2026-09-18 and 2026-09-22 were cancelled before starting, each a
+commit whose actions never reached the release cache. Since #674 a
+push and a dispatch each get a group of their own
+(`github.run_id`), and only PR runs supersede one another.
 
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
