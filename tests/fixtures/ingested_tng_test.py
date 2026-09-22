@@ -42,6 +42,7 @@ import subprocess
 import sys
 import unittest
 import uuid as uuidlib
+from datetime import datetime
 from pathlib import Path
 
 # Bazel runfiles layout: under bzlmod, the workspace dir is `_main`.
@@ -91,37 +92,57 @@ NON_UUID_PK_PROVIDERS: frozenset[str] = frozenset()
 # deterministic. Recomputing it here from the columns the renderer
 # stored pins the actual contract: that `upstream_id` and
 # `upstream_entity_kind` really are the inputs `uuid` was derived from,
-# and that the wire format hasn't drifted. A renderer that stamps a
-# plausible-looking but wrong backpointer fails here and nowhere else.
+# that the stamp in the id is the row's `created_at`, and that the wire
+# format hasn't drifted. A renderer that stamps a plausible-looking but
+# wrong backpointer fails here and nowhere else.
 #
 # Source of truth: datalib/backend/id/src/lib.rs. If that file's
-# namespace, separator or component order changes, this must change with
-# it — which is the point.
+# namespace, separator, component order or layout changes, this must
+# change with it — which is the point.
 DATALIB_ID_NS = uuidlib.UUID(bytes=b"datalib-id-ns-v1")
 ID_SEP = "\x1f"
+MAX_STAMP_MS = (1 << 48) - 1
 
-# Which `Scope` variant each ported provider mints under. Scope is a
-# provider-level design decision, not a per-row one, so a table is the
-# right shape — and it has to live here because `upstream_scope` is NULL
+# Which `Scope` variant each provider mints under, as `(scoped,
+# unscoped)`: the tag for a row whose `upstream_scope` is set — its
+# value is per-row, so the row supplies it — and the tag for a row
+# whose `upstream_scope` is NULL. `None` on either side means a row of
+# that shape is a failure. A provider may use both: airvisual and garmin
+# mint their one page under the source and their device rows under the
+# provider. The table has to live here because `upstream_scope` is NULL
 # for both `ProviderGlobal` and `Content`, making the two
 # indistinguishable from the row alone.
 #
-# Grow this as providers are ported; a provider absent from it is
-# skipped by the round-trip check below, and `PORTED_PROVIDERS` keeps
-# that from being silent.
+# Every provider that renders is here; one absent from it is skipped by
+# the round-trip check, and `PORTED_PROVIDERS` keeps that from being
+# silent.
 SCOPE_TAG_BY_PROVIDER = {
-    "claude": ("pg", ""),
-    "chatgpt": ("pg", ""),
-    # Slack scopes on `team_id`, which the row carries in
-    # `upstream_scope`. Resolved per-row rather than from a constant
-    # here — see `_roundtrip_failures`.
+    "airvisual": ("src", "pg"),
+    "beeper": ("up", None),
+    "chatgpt": (None, "pg"),
+    "claude": (None, "pg"),
+    "claude_code": (None, "pg"),
+    "contacts": ("src", None),
+    "email": ("up", None),
+    "facebook": (None, "pg"),
+    "garmin": ("src", "pg"),
+    "github": ("up", None),
+    "gitlab": ("up", None),
+    "google_takeout": (None, "pg"),
+    "linkedin": (None, "pg"),
+    "notion": (None, "pg"),
+    "pdf": (None, "content"),
+    "signal": ("src", None),
     "slack": ("up", None),
+    "sms_backup_restore": (None, "pg"),
+    "whatsapp": ("src", None),
+    "yolink": ("src", None),
 }
 
-# Providers whose rows MUST round-trip. Separate from the table above so
-# a typo in a provider name shows up as "no rows checked" rather than as
-# a silent pass.
-PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
+# Providers whose rows MUST round-trip: every source in the fixture that
+# renders. Separate from the table above so a typo in a provider name
+# shows up as "no rows checked" rather than as a silent pass.
+PORTED_PROVIDERS = frozenset(SCOPE_TAG_BY_PROVIDER)
 
 # Every `problems` row the fixture produces, per source. The ids are
 # `datalib_id::problem_id` over (source, stage, scope, item, field,
@@ -136,10 +157,13 @@ PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
 # a nulled `created_at` on that message.
 POISONED_PROBLEM = (
-    "37f8fe60-9c94-5398-a0d9-4be95d77089b"  # problem_uuid
+    "2e02b541-6fff-525f-a7f8-54d13990f50d"  # problem_uuid
     "|warning|parse|markdown"
-    "|fb0232cd-d04b-5372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
-    "|dcce3451-eb4f-53dd-bce7-7e0b22d3af16"  # the reply's item uuid
+    "|00000000-0000-8372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
+    # The reply's item uuid. Its `created_at` would not parse, so the
+    # item inherited the previous message's stamp — which is what the
+    # id's leading bits carry.
+    "|0b75c4b3-d900-83dd-bce7-7e0b22d3af16"
     "|created_at|coercion_failed|stardate 47988.1"
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
@@ -162,15 +186,36 @@ EXPECTED_PROBLEMS = {
 }
 
 
-def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
-    """UUIDv5 over the five-component recipe, joined with \x1f.
+def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key, at_ms):
+    """The v8 layout: `at_ms` in the leading 48 bits (0 for none), the
+    version nibble 8, and the rest of a UUIDv5 over the five-component
+    recipe joined with \x1f.
 
-    `namespace` is `IdNamespace::as_str`, which for every ported
-    provider happens to equal its `grid_rows.provider` tag — they are
-    still two vocabularies, and a provider ported later may well differ.
+    `namespace` is `IdNamespace::as_str`, which for every provider
+    equals its `grid_rows.provider` tag — they are still two
+    vocabularies, and a provider added later may differ.
     """
     name = ID_SEP.join([namespace, scope_tag, scope_val, entity_kind, natural_key])
-    return str(uuidlib.uuid5(DATALIB_ID_NS, name))
+    b = bytearray(uuidlib.uuid5(DATALIB_ID_NS, name).bytes)
+    ms = min(max(at_ms or 0, 0), MAX_STAMP_MS)
+    b[0:6] = ms.to_bytes(6, "big")
+    b[6] = 0x80 | (b[6] & 0x0F)
+    return str(uuidlib.UUID(bytes=bytes(b)))
+
+
+def stamp_of(uuid_str: str) -> int:
+    """The unix milliseconds in a datalib id's leading 48 bits."""
+    return int.from_bytes(uuidlib.UUID(uuid_str).bytes[0:6], "big")
+
+
+def stored_stamp_ms(created_at_utc: str) -> int | None:
+    """What `created_at_utc` (`2026-06-05T19:18:39.123000Z`) reads as in
+    unix milliseconds, clamped the way the id layout clamps it."""
+    if not created_at_utc:
+        return None
+    dt = datetime.fromisoformat(created_at_utc)
+    ms = int(dt.timestamp() * 1000)
+    return min(max(ms, 0), MAX_STAMP_MS)
 
 
 # Canonical 8-4-4-4-12 hex form. Deliberately not a version-specific
@@ -558,15 +603,21 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
     def _roundtrip_failures(self) -> list[str]:
-        """Ported rows whose backpointer does not regenerate their uuid.
+        """Rows whose backpointer does not regenerate their uuid.
 
         For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
         recompute `entity_id(provider, scope, upstream_entity_kind,
-        upstream_id)` and compare to the stored `uuid`. A mismatch
-        means the backpointer is decorative — it names something that
-        would not produce this row — and the round-trip back to the
-        upstream API is broken in a way nothing else would notice,
-        because both columns still look perfectly plausible.
+        upstream_id, stamp)` and compare to the stored `uuid`. A
+        mismatch means the backpointer is decorative — it names
+        something that would not produce this row — and the round-trip
+        back to the upstream API is broken in a way nothing else would
+        notice, because both columns still look perfectly plausible.
+
+        The stamp in the id's leading bits is checked on its own: it is
+        the row's `created_at_utc`, or zero. Zero is allowed beside a
+        non-null `created_at` because a document's stamp is derived from
+        its items and a provider may decline to embed it; a non-zero
+        stamp that is not the row's is the bug this catches.
 
         A diff group's rows are left out: they carry the source's
         provider and its `upstream_id` — the backpointer to the real
@@ -577,15 +628,19 @@ class IngestedTngPipelineTest(unittest.TestCase):
         rows = self._query(
             self._index_db,
             "SELECT provider, uuid, IFNULL(upstream_entity_kind, ''), "
-            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
+            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, ''), "
+            "       IFNULL(created_at_utc, '') "
             "FROM grid_rows "
             f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
             "  AND diff_status IS NULL "
             "ORDER BY uuid;",
         )
         failures = []
+        stamped = 0
         for line in rows:
-            provider, row_uuid, entity_kind, native_id, row_scope = line.split("|", 4)
+            provider, row_uuid, entity_kind, native_id, row_scope, created = line.split(
+                "|", 5
+            )
             if not entity_kind or not native_id:
                 failures.append(
                     f"{provider} {row_uuid}: ported provider left "
@@ -593,27 +648,39 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     f"upstream_id={native_id!r}"
                 )
                 continue
-            scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
-            # An `Upstream` scope's value is per-row, so the table
-            # stores None and the row supplies it. A ported provider
-            # that scopes upstream but leaves `upstream_scope` empty is
-            # itself the bug.
-            if scope_val is None:
-                if not row_scope:
+            scoped_tag, unscoped_tag = SCOPE_TAG_BY_PROVIDER[provider]
+            scope_tag = scoped_tag if row_scope else unscoped_tag
+            if scope_tag is None:
+                failures.append(
+                    f"{provider} {row_uuid}: upstream_scope is "
+                    f"{row_scope!r}, which this provider does not mint"
+                )
+                continue
+            scope_val = row_scope
+            at_ms = stamp_of(row_uuid)
+            if at_ms != 0:
+                stamped += 1
+                if at_ms != stored_stamp_ms(created):
                     failures.append(
-                        f"{provider} {row_uuid}: upstream-scoped but "
-                        f"upstream_scope is empty"
+                        f"{provider} {row_uuid}: stamp {at_ms} is not the "
+                        f"row's created_at_utc {created!r}"
                     )
                     continue
-                scope_val = row_scope
             want = datalib_entity_id(
-                provider, scope_tag, scope_val, entity_kind, native_id
+                provider, scope_tag, scope_val, entity_kind, native_id, at_ms
             )
             if want != row_uuid:
                 failures.append(
                     f"{provider} {row_uuid}: ({entity_kind!r}, "
-                    f"{native_id!r}) regenerates {want}"
+                    f"{native_id!r}, {at_ms}) regenerates {want}"
                 )
+        # A layout that embeds nothing would pass every check above
+        # vacuously; most rows in this fixture are dated messages.
+        if rows and stamped < len(rows) // 2:
+            failures.append(
+                f"only {stamped} of {len(rows)} rows carry a stamp; the "
+                "v8 layout is not being used"
+            )
         return failures
 
     def _ported_provider_row_counts(self) -> dict[str, int]:
@@ -836,6 +903,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return result
 
     def test_pipeline_resume_and_reset(self) -> None:
+        self.maxDiff = None
         # --- Run 1: fresh workspace. Full ingest.
         run1 = self._run_pipeline(reset=False)
         self.assertNotIn(

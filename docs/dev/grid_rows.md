@@ -128,8 +128,12 @@ code is right and this table is stale.
 
 ### `uuid`
 
-Minted by `datalib_id::entity_id` for ported providers; the others pass an
-upstream id through directly.
+Minted by `datalib_id::entity_id` for every provider: the record's
+`created_at` in the leading bits where it has one of its own, then a
+hash of `(provider, scope, upstream_entity_kind, upstream_id)`. The
+recipe, the scopes and which rows carry a stamp are in
+[`entity_ids.md`](entity_ids.md); the natural keys below are what
+`upstream_id` holds.
 
 The authoritative list of tables and columns is the `schema_inventory`
 golden at
@@ -150,16 +154,13 @@ they sit beside the shared blob store.
 | claude.block | `{message_uuid}:{block_index}` |
 | chatgpt.chat | `conversations.id` |
 | chatgpt.message | `conversations.payload.mapping[*]` |
-| slack.thread | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')` |
-| slack.message | `uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')` |
-| github.pr | `uuidv5(GITHUB_NS, 'github:{repo}:pr:{number}')` |
-| github.issue_comment | `uuidv5(GITHUB_NS, 'github:{repo}:issue_comment:{id}')` |
-| github.pr_review | `uuidv5(GITHUB_NS, 'github:{repo}:pr_review:{id}')` |
-| github.pr_review_comment | `uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')` |
-| gitlab.mr | `uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')` |
-| gitlab.note | `uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')` |
-| notion.page | `page_id` (already a Notion UUID) |
-| notion.heading | `uuidv5(NOTION_NS, 'notion:heading:{page_id}:{block_id}')` |
+| slack.thread | `{channel}#{thread_ts}` under `Upstream(team_id)` |
+| slack.message | `{channel}#{ts}` under `Upstream(team_id)` |
+| github.pr | `{number}` under `Upstream(repo)` |
+| github.issue_comment, pr_review, pr_review_comment | `{id}` under `Upstream(repo)`, told apart by `upstream_entity_kind` |
+| gitlab.mr | `{iid}` under `Upstream(project)` |
+| gitlab.note | `{id}` under `Upstream(project)` |
+| notion.page | `page_id` (a Notion UUID) |
 | notion.thread | `discussion_id` |
 | notion.comment | `comment_id` |
 
