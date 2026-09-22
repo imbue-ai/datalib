@@ -22,7 +22,7 @@ pub use store::{
     processes, runs, snapshot, snapshot_of, versions, LogLine, LogSink, ProcessLogWriter,
     RunWriter, Snapshot,
 };
-pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
+pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 
 use std::path::{Path, PathBuf};
 

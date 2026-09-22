@@ -85,14 +85,19 @@ Adding a UI event is one word in the `PageEventName` union and the
 call; the server files any word. Uncaught exceptions and route changes
 are already tracked — see the union for what is.
 
-Levels are `trace` … `error`. A process starts from
-`datalib_log_filter::DEFAULT_LOG_FILTER` (our crates at `debug`, the
-noisy libraries at `warn`) unless `RUST_LOG` says otherwise, and the
-store keeps every level it is handed — `debug` is where a doltlite
-commit or a batch of rows goes. The log card opens at
-`min_level:info`, so `debug` is there when asked for and not otherwise.
-`trace` is off unless `RUST_LOG` turns it on, and little emits it: the
-few `trace!` lines in the tree are a step's progress ticks
+Levels are `trace` … `error`. The level a root logs at is
+`log_level` at the top of its `config.toml` — `trace` when it does
+not say, while the pipeline is being debugged — and it applies to
+datalib's own crates in every process of that root: the server reads
+it at launch (a change takes a restart), the runner per run, and each
+step gets the resulting filter as `RUST_LOG`. Third-party crates
+follow it down to `debug` and no further, and the noisy ones stay at
+`warn` (`datalib_log_filter`). A `RUST_LOG` set where a process was
+started wins over all of that. The store keeps every level it is
+handed — `debug` is where a doltlite commit or a batch of rows goes —
+and the log card opens at `min_level:info`, so the lower levels are
+there when asked for and not otherwise. Little emits `trace` today:
+the few `trace!` lines in the tree are a step's progress ticks
 (`etl/src/progress.rs`), so a log with none is the normal case, not a
 sign the level is lost. The server itself writes no `debug` lines in
 ordinary service either — its `debug` sites are in the providers —

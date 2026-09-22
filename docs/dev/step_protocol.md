@@ -98,6 +98,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_RESET_AND_REDOWNLOAD` | `1` when the user asked for a from-scratch re-ingest — honor it if you bring data in from outside the pipeline, whether that is re-fetching from an origin or re-reading your files in full; a step whose inputs are other steps' trees ignores it |
 | `DATALIB_DAG_REFETCH_BLOBS` | `1` when the user asked for attachments/blobs to re-fetch |
+| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar: the config's `log_level` (`trace` when unset) for datalib's own crates, third-party crates no lower than `debug`, the noisy ones at `warn`. A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
 plus anything in the entry's `env:` map (which wins over the run-wide
 values on collision).
@@ -339,12 +340,13 @@ columns — the line's own timestamp wins over the runner's arrival time
 remaining `fields`) rides along as `fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
-Every level is kept, `debug` included: a built-in step logs its own
-lines down to `debug` by default (`datalib_log_filter::DEFAULT_LOG_FILTER`,
-which `RUST_LOG` overrides) — a doltlite commit, a batch of rows
-upserted, a request being retried, each with its numbers in the
-sentence — and the runner stores a `DEBUG` envelope as a `debug` row
-rather than rounding it up to `info`.
+Every level is kept, `debug` and `trace` included: a built-in step
+logs its own lines down to the level the run's `RUST_LOG` names
+(`datalib_log_filter`; the config's `log_level`, `trace` when unset)
+— a doltlite commit, a batch of rows upserted, a request being
+retried, each with its numbers in the sentence — and the runner stores
+a `DEBUG` envelope as a `debug` row rather than rounding it up to
+`info`.
 
 **Your attempt is a process.** Every line names the process that
 wrote it, and each attempt of a step is one: the runner records it at

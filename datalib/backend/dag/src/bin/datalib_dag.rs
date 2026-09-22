@@ -226,6 +226,11 @@ async fn main() -> Result<()> {
     if let Some(cadence) = cfg.checkpoint_cadence {
         child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
     }
+    // One filter for the run: the runner's own lines and every step's.
+    // A `RUST_LOG` already in the environment is a person's choice and
+    // wins; else the config's level (`log_level`, default `trace`).
+    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
+    child_env.insert("RUST_LOG".into(), log_filter.clone());
 
     if !sync_only.is_empty() {
         let fringe = graph.fringe_ids();
@@ -288,10 +293,7 @@ async fn main() -> Result<()> {
                 // as the run's lines with no step — and only there:
                 // stderr is the NDJSON event stream, which a fmt layer
                 // would interleave prose into.
-                let filter =
-                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new(datalib_runs::DEFAULT_LOG_FILTER)
-                    });
+                let filter = tracing_subscriber::EnvFilter::new(&log_filter);
                 let _ = tracing_subscriber::registry()
                     .with(filter)
                     .with(datalib_runs::StoreLayer::new(store.log_sink()))

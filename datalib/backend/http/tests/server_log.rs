@@ -79,7 +79,13 @@ async fn what_the_server_logs_is_served_as_its_own_process() {
     let fields: serde_json::Value = serde_json::from_str(l["fields"].as_str().unwrap()).unwrap();
     assert_eq!(fields["job"], "j-1");
 
-    // And the same store answers for every line, server or run, at once.
+    // And the same store answers for every line, server or run, at once:
+    // the two boot lines (no commit; the filter), the warn, the info.
     let all = get(td.path(), "/api/log").await;
-    assert_eq!(all.as_array().unwrap().len(), 3);
+    let all = all.as_array().unwrap();
+    assert_eq!(all.len(), 4, "{all:?}");
+    assert_eq!(all[1]["msg"], "log filter");
+    let fields: serde_json::Value =
+        serde_json::from_str(all[1]["fields"].as_str().unwrap()).unwrap();
+    assert_eq!(fields["filter"], datalib_runs::default_filter());
 }
