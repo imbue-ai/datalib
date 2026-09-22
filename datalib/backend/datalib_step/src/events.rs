@@ -92,8 +92,7 @@ impl Emitter {
     }
 }
 
-/// [`ProgressSink`] impl over an [`Emitter`]. Children get a
-/// `parent/child` step label, mirroring `TracingSink`.
+/// [`ProgressSink`] impl over an [`Emitter`].
 struct EmitterSink {
     emitter: Emitter,
     step: String,
@@ -154,11 +153,5 @@ impl ProgressSink for EmitterSink {
             thread: None,
             fields: None,
         });
-    }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(EmitterSink {
-            emitter: self.emitter.clone(),
-            step: format!("{}/{}", self.step, prefix),
-        })
     }
 }

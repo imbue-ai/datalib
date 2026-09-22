@@ -30,9 +30,6 @@ pub trait ProgressSink: Send + Sync {
     /// runner's store coalesces to the newest, and a dropped position
     /// costs nothing where a dropped delta is lost work.
     fn metric(&self, _name: &str, _labels: &[(&str, &str)], _value: i64) {}
-    fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(NoopSink)
-    }
 }
 
 /// Cheap-to-clone progress handle. Calls forward to the inner
@@ -75,9 +72,6 @@ impl Progress {
     }
     pub fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
         self.sink.metric(name, labels, value);
-    }
-    pub fn child(&self, prefix: &str) -> Progress {
-        Progress::new(self.sink.child(prefix))
     }
 }
 
@@ -129,8 +123,16 @@ impl RunBar {
     /// size of — the coarse per-phase or per-unit ticks a bar starts
     /// with, so it reads as something other than 0/0 before the first
     /// response lands.
+    ///
+    /// A `fixed` of zero announces nothing at all. A run that does not
+    /// yet know its size has no total, which is not the same as a total
+    /// of zero: the runner publishes no `queued` for a step that never
+    /// announced one, where a `queued` of 0 means "nothing left to do"
+    /// and the Manage screen reads it as idle.
     pub fn new(progress: &Progress, fixed: u64) -> Self {
-        progress.set_length(Some(fixed));
+        if fixed > 0 {
+            progress.set_length(Some(fixed));
+        }
         Self {
             bar: progress.clone(),
             announced: Arc::new(AtomicU64::new(fixed)),
@@ -140,7 +142,9 @@ impl RunBar {
     /// Another `more` items this run has committed to handling.
     pub fn expect(&self, more: u64) {
         let total = self.announced.fetch_add(more, Ordering::SeqCst) + more;
-        self.bar.set_length(Some(total));
+        if total > 0 {
+            self.bar.set_length(Some(total));
+        }
     }
 
     /// Raise the total to `at_least` if it is not already there. For a
@@ -263,9 +267,6 @@ impl ProgressSink for TracingSink {
             "the progress bar finished"
         );
     }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(TracingSink::new(format!("{}/{}", self.source, prefix)))
-    }
 }
 
 /// Fan a single `Progress` call out to several sinks. Used by sync to
@@ -322,11 +323,6 @@ impl ProgressSink for FanOut {
             s.finish(msg);
         }
     }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(FanOut {
-            sinks: self.sinks.iter().map(|s| s.child(prefix)).collect(),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -336,9 +332,7 @@ mod tests {
 
     /// A sink that just counts how many times `finish_and_clear` fired, so a
     /// test can assert a wrapping sink (e.g. `FanOut`) forwards the call
-    /// instead of silently hitting the no-op default trait method. Children
-    /// share the same counter — mirroring how a real leaf sink spawns its own
-    /// child bars — so the count survives nesting through `FanOut::child`.
+    /// instead of silently hitting the no-op default trait method..
     #[derive(Default, Clone)]
     struct RecordingSink {
         finish_and_clear: Arc<AtomicUsize>,
@@ -360,9 +354,6 @@ mod tests {
         }
         fn metric(&self, name: &str, _labels: &[(&str, &str)], value: i64) {
             self.metrics.lock().unwrap().push((name.to_string(), value));
-        }
-        fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
-            Arc::new(self.clone())
         }
     }
 
@@ -449,24 +440,5 @@ mod tests {
                 "FanOut must forward metric to its {name} sink",
             );
         }
-    }
-
-    // The same gap affected inner per-unit bars: providers call
-    // `inner.finish_and_clear()` on a `FanOut::child`, which is itself a
-    // `FanOut`, so the forward has to work through nesting too.
-    #[test]
-    fn fanout_child_forwards_finish_and_clear() {
-        let leaf = Arc::new(RecordingSink::default());
-        let sinks: Vec<Arc<dyn ProgressSink>> = vec![leaf.clone()];
-        let fan = FanOut::new(sinks);
-
-        let child = fan.child("inner");
-        child.finish_and_clear();
-
-        assert_eq!(
-            leaf.finish_and_clear.load(Ordering::SeqCst),
-            1,
-            "FanOut child must forward finish_and_clear down to the leaf sink",
-        );
     }
 }

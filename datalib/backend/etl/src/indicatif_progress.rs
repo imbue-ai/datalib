@@ -2,6 +2,10 @@
 //! a live terminal progress bar — the CLI pipeline binaries
 //! and the standalone provider CLIs (`fsindex`, the various
 //! `<provider>_download` bins) alike.
+//!
+//! One bar per step, never a tree of them. A download reports through a
+//! single [`crate::progress::RunBar`] whose total only grows, so there
+//! is nothing for a nested bar to show that the message does not.
 
 use std::sync::Arc;
 
@@ -9,35 +13,13 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::progress::{FanOut, Progress, ProgressSink, TracingSink};
 
-pub struct IndicatifSink {
+struct IndicatifSink {
     bar: ProgressBar,
-    // Held so child bars can attach to the same MultiProgress. Cheap
-    // to clone (it's an `Arc` internally).
-    multi: Arc<MultiProgress>,
-    // Nesting depth — 0 for the top-level bar, 1+ for children spawned
-    // via `child(...)`. Used to indent the prefix column so nested bars
-    // visually belong to their parent.
-    depth: usize,
     // When true the bar renders only `{prefix} {spinner} {msg}` — no
     // `{pos}`/`{per_sec}` headline. For callers whose message already
     // carries every counter and rate (fsindex's scan dashboard), where
     // the headline would just duplicate them unlabeled.
     message_only: bool,
-}
-
-impl IndicatifSink {
-    pub fn new(bar: ProgressBar, multi: Arc<MultiProgress>) -> Self {
-        Self {
-            bar,
-            multi,
-            depth: 0,
-            message_only: false,
-        }
-    }
-
-    fn prefix_width(&self) -> usize {
-        prefix_width_at_depth(self.depth)
-    }
 }
 
 impl ProgressSink for IndicatifSink {
@@ -56,13 +38,11 @@ impl ProgressSink for IndicatifSink {
         match total {
             Some(t) => {
                 self.bar.set_length(t);
-                self.bar
-                    .set_style(determinate_style(self.depth, self.prefix_width()));
+                self.bar.set_style(determinate_style());
             }
             None => {
                 self.bar.unset_length();
-                self.bar
-                    .set_style(spinner_style(self.depth, self.prefix_width()));
+                self.bar.set_style(spinner_style());
             }
         }
     }
@@ -77,20 +57,6 @@ impl ProgressSink for IndicatifSink {
     }
     fn finish_and_clear(&self) {
         self.bar.finish_and_clear();
-    }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        let depth = self.depth + 1;
-        let child_bar = if self.message_only {
-            make_message_only_bar_at_depth(&self.multi, prefix.to_string(), depth)
-        } else {
-            make_bar_at_depth(&self.multi, prefix.to_string(), depth)
-        };
-        Arc::new(IndicatifSink {
-            bar: child_bar,
-            multi: self.multi.clone(),
-            depth,
-            message_only: self.message_only,
-        })
     }
 }
 
@@ -116,15 +82,8 @@ impl Progress {
         let tracing: Arc<dyn ProgressSink> = Arc::new(TracingSink::new(prefix.clone()));
         match datalib_obs::shared_multi() {
             Some(multi) => {
-                let bar = if message_only {
-                    make_message_only_bar(&multi, prefix)
-                } else {
-                    make_bar(&multi, prefix)
-                };
                 let sink = IndicatifSink {
-                    bar,
-                    multi,
-                    depth: 0,
+                    bar: make_bar(&multi, prefix, message_only),
                     message_only,
                 };
                 let sinks = vec![Arc::new(sink) as Arc<dyn ProgressSink>, tracing];
@@ -135,83 +94,25 @@ impl Progress {
     }
 }
 
-/// The process-wide `MultiProgress` owned by `datalib_obs`, whose
-/// draws are suspended by every tracing log emission. Panics if
-/// `obs::init` hasn't published one yet — callers that can't guarantee
-/// that ordering should use [`Progress::indicatif`], which falls back
-/// gracefully instead.
-pub fn make_multi() -> Arc<MultiProgress> {
-    datalib_obs::shared_multi()
-        .expect("datalib_obs::init must run before indicatif_progress::make_multi")
-}
-
-pub fn make_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
-    make_bar_at_depth(multi, prefix, 0)
-}
-
-/// Like [`make_bar`] but indents the prefix column by `depth` levels so
-/// nested child bars visually belong to their parent. Depth 0 matches
-/// `make_bar` exactly; each level adds two leading spaces and shrinks
-/// the prefix field by the same amount, keeping every column aligned.
-pub fn make_bar_at_depth(
-    multi: &MultiProgress,
-    prefix: impl Into<String>,
-    depth: usize,
-) -> ProgressBar {
+fn make_bar(multi: &MultiProgress, prefix: String, message_only: bool) -> ProgressBar {
     let bar = multi.add(ProgressBar::new_spinner());
-    let prefix_width = prefix_width_at_depth(depth);
-    // Start in spinner mode — `set_length(Some(_))` flips to the
-    // determinate template later if/when the caller learns the total.
-    bar.set_style(spinner_style(depth, prefix_width));
-    bar.set_prefix(prefix.into());
+    // Starts as a spinner even when it will learn a total: `set_length`
+    // flips it to the determinate template the moment one arrives.
+    bar.set_style(if message_only {
+        message_only_style()
+    } else {
+        spinner_style()
+    });
+    bar.set_prefix(prefix);
     bar.enable_steady_tick(std::time::Duration::from_millis(120));
     bar
 }
 
-pub fn make_message_only_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
-    make_message_only_bar_at_depth(multi, prefix, 0)
-}
-
-fn make_message_only_bar_at_depth(
-    multi: &MultiProgress,
-    prefix: impl Into<String>,
-    depth: usize,
-) -> ProgressBar {
-    let bar = multi.add(ProgressBar::new_spinner());
-    bar.set_style(message_only_style(depth, prefix_width_at_depth(depth)));
-    bar.set_prefix(prefix.into());
-    bar.enable_steady_tick(std::time::Duration::from_millis(120));
-    bar
-}
-
-// `prefix:>14` columns + a 2-cell indent per nesting depth. Bound the
-// indent so the prefix field never shrinks below a usable width even
-// if a caller spawns deeply nested children.
 const PREFIX_COL_WIDTH: usize = 14;
-const INDENT_PER_DEPTH: usize = 2;
 
-fn prefix_width_at_depth(depth: usize) -> usize {
-    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
-    PREFIX_COL_WIDTH - indent
-}
-
-fn leading_at_depth(depth: usize) -> String {
-    if depth == 0 {
-        return String::new();
-    }
-    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
-    // Replace the final two indent columns with a tree marker ("↳ ")
-    // so the parent/child relationship reads at a glance. Column count
-    // is unchanged — "↳ " renders as two cells.
-    let mut s = " ".repeat(indent.saturating_sub(2));
-    s.push_str("↳ ");
-    s
-}
-
-fn determinate_style(depth: usize, prefix_width: usize) -> ProgressStyle {
-    let leading = leading_at_depth(depth);
+fn determinate_style() -> ProgressStyle {
     let template = format!(
-        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}}/{{len:5}} [{{wide_bar}}] {{per_sec:>10}} {{msg}}"
+        "{{prefix:>{PREFIX_COL_WIDTH}}} {{spinner}} {{pos:>5}}/{{len:5}} [{{wide_bar}}] {{per_sec:>10}} {{msg}}"
     );
     ProgressStyle::with_template(&template)
         .unwrap()
@@ -225,18 +126,15 @@ fn determinate_style(depth: usize, prefix_width: usize) -> ProgressStyle {
 /// lockstep), implying a known total when there is none. We elide
 /// `{wide_bar}` for the same reason: a determinate bar against an
 /// unknown total is misleading.
-fn spinner_style(depth: usize, prefix_width: usize) -> ProgressStyle {
-    let leading = leading_at_depth(depth);
-    let template = format!(
-        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}} {{per_sec:>10}} {{msg}}"
-    );
+fn spinner_style() -> ProgressStyle {
+    let template =
+        format!("{{prefix:>{PREFIX_COL_WIDTH}}} {{spinner}} {{pos:>5}} {{per_sec:>10}} {{msg}}");
     ProgressStyle::with_template(&template).unwrap()
 }
 
 /// Message-only template — `{prefix} {spinner} {msg}`, no headline
 /// counters. The caller's message owns the entire readout.
-fn message_only_style(depth: usize, prefix_width: usize) -> ProgressStyle {
-    let leading = leading_at_depth(depth);
-    let template = format!("{leading}{{prefix:>{prefix_width}}} {{spinner}} {{msg}}");
+fn message_only_style() -> ProgressStyle {
+    let template = format!("{{prefix:>{PREFIX_COL_WIDTH}}} {{spinner}} {{msg}}");
     ProgressStyle::with_template(&template).unwrap()
 }

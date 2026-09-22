@@ -46,9 +46,6 @@ impl ProgressSink for Recorder {
     fn inc(&self, delta: u64) {
         *self.done.lock().unwrap() += delta;
     }
-    fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(self.clone())
-    }
 }
 
 impl Recorder {

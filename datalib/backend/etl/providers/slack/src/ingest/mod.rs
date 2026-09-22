@@ -1167,7 +1167,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut channel_failures: usize = 0;
 
     let work = async {
-        let setup = opts.progress.child("setup");
+        // The step's own handle: the setup phase only names what it is
+        // doing, and a bar of its own would be one more thing whose
+        // numbers have to agree with the run's.
+        let setup = opts.progress.clone();
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
