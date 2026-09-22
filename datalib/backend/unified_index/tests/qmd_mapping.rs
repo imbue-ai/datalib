@@ -35,7 +35,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         git_sha: None,
         upstream_id: None,
         upstream_entity_kind: None,
-        upstream_scope: None,
+        upstream_account: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(uuid.into()),

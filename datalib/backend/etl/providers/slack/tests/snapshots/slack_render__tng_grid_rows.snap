@@ -31,9 +31,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D",
     "text": "Mr. Data, status report.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000100.000100",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f2-dea0-85d5-a39a-abc9bdba7fcd"
   },
   {
@@ -64,9 +64,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE",
     "text": "All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000200.000200",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f4-6540-8fa2-9892-c092f12446bb"
   },
   {
@@ -97,9 +97,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE",
     "text": "Set a course, Mr. Data. Warp factor five.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000300.000300",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f5-ebe0-8ed0-ab20-9c92f639fa0b"
   },
   {
@@ -130,9 +130,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D",
     "text": "I recommend raising shields, Captain.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000400.000400",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f7-7280-8966-bad5-3ef67d2995a1"
   },
   {
@@ -163,9 +163,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D",
     "text": "Warp core efficiency at 99.7%.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_ENG#12604000500.000500",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f8-f920-8e90-bd54-7eb8ac1b6886"
   },
   {
@@ -196,9 +196,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D",
     "text": "Anyone up for poker tonight?",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_TENFWD#12604000600.000600",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698fa-7fc0-88ac-8adf-c22400c25539"
   },
   {
@@ -229,9 +229,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D",
     "text": "New combadge prototypes — thoughts?",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000700.000700",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698fc-0660-89df-b570-20fea0d34957"
   },
   {
@@ -262,9 +262,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&thread_ts=12604000600.000600&cid=C_TENFWD",
     "text": "I do not understand the appeal of this Earth game.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_TENFWD#12604000700.000700",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698fc-0660-8f49-958b-e010cc8c963a"
   },
   {
@@ -295,9 +295,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D",
     "text": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "C_BRIDGE#12604000800.000800",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698fd-8d00-8d8a-babd-75592eff4b85"
   },
   {
@@ -328,9 +328,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D",
     "text": "Captain, the away team roster is ready for your review.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "D_RIKER#12604000900.000900",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-13a0-89e2-a71a-9301e97ee4b8"
   },
   {
@@ -361,9 +361,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D",
     "text": "Thank you, Number One. Make it so.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "D_RIKER#12604000901.000901",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-1788-84e2-9319-1da246eea5c2"
   },
   {
@@ -394,9 +394,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D",
     "text": "Sir, I have completed my analysis of the Romulan signature.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "D_DATA#12604000902.000902",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-1b70-80ae-b392-d12d67f7a814"
   },
   {
@@ -427,9 +427,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D",
     "text": "I must object to beaming down unarmed.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "G_AWAYTEAM#12604000903.000903",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-1f58-83f0-858a-e33c7da8df4a"
   },
   {
@@ -460,9 +460,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D",
     "text": "Noted, Mr. Worf. Phasers on stun.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "message",
     "upstream_id": "G_AWAYTEAM#12604000904.000904",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-2340-896e-ac88-a3f776701ae9"
   },
   {
@@ -493,9 +493,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": null,
     "text": "👍",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#thumbsup#U_RIKER",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f4-6540-83ee-ae01-26393305b017"
   },
   {
@@ -526,9 +526,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": null,
     "text": "👍",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#thumbsup#U_PICARD",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f4-6540-8e15-b6c2-d03d620ec174"
   },
   {
@@ -559,9 +559,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": null,
     "text": ":robot_face:",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_BRIDGE#12604000200.000200#robot_face#U_DATA",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698f4-6540-8e72-b8f6-095b21ce783f"
   },
   {
@@ -592,9 +592,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": null,
     "text": "😂",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "reaction",
     "upstream_id": "C_TENFWD#12604000700.000700#joy#U_RIKER",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698fc-0660-8c96-864b-e6aa68422a4e"
   },
   {
@@ -625,9 +625,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": null,
     "text": "👍",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "reaction",
     "upstream_id": "D_DATA#12604000902.000902#thumbsup#U_PICARD",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "0b7698ff-1b70-8308-adf1-23c26d30e013"
   },
   {
@@ -658,9 +658,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D",
     "text": "Mr. Data, status report.\nAll systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.\nSet a course, Mr. Data. Warp factor five.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000100.000100",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8317-9ef9-393bf7346f79"
   },
   {
@@ -691,9 +691,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D",
     "text": "I recommend raising shields, Captain.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000400.000400",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-85ce-ad38-deac11f57f93"
   },
   {
@@ -724,9 +724,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D",
     "text": "Warp core efficiency at 99.7%.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_ENG#12604000500.000500",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8948-9dff-ce3daf102bd8"
   },
   {
@@ -757,9 +757,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D",
     "text": "Anyone up for poker tonight?\nI do not understand the appeal of this Earth game.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_TENFWD#12604000600.000600",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8752-b0c1-474a169fdb3c"
   },
   {
@@ -790,9 +790,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D",
     "text": "New combadge prototypes — thoughts?",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000700.000700",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8a4c-aff9-7a14aadb2344"
   },
   {
@@ -823,9 +823,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D",
     "text": "Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "C_BRIDGE#12604000800.000800",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8d68-b7dc-08d9ae2795f6"
   },
   {
@@ -856,9 +856,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_RIKER/p12604000900000900?team=T_NCC1701D",
     "text": "Captain, the away team roster is ready for your review.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "D_RIKER#12604000900.000900",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-83bc-ae17-f15c9ea6dbb3"
   },
   {
@@ -889,9 +889,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_RIKER/p12604000901000901?team=T_NCC1701D",
     "text": "Thank you, Number One. Make it so.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "D_RIKER#12604000901.000901",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8c74-8f5e-10f7cfb23eb4"
   },
   {
@@ -922,9 +922,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D",
     "text": "Sir, I have completed my analysis of the Romulan signature.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "D_DATA#12604000902.000902",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8c86-9536-e7d7234af0ca"
   },
   {
@@ -955,9 +955,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/G_AWAYTEAM/p12604000903000903?team=T_NCC1701D",
     "text": "I must object to beaming down unarmed.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "G_AWAYTEAM#12604000903.000903",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-86e8-a93e-c2df52701153"
   },
   {
@@ -988,9 +988,9 @@ expression: rows
     "source_label": "Slack",
     "source_url": "https://slack.com/archives/G_AWAYTEAM/p12604000904000904?team=T_NCC1701D",
     "text": "Noted, Mr. Worf. Phasers on stun.",
+    "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",
     "upstream_id": "G_AWAYTEAM#12604000904.000904",
-    "upstream_scope": "T_NCC1701D",
     "uuid": "00000000-0000-8ad6-bdfa-3f1529359a94"
   }
 ]

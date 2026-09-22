@@ -410,7 +410,7 @@ fn build_chat(
         // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
@@ -534,7 +534,7 @@ fn build_project_page(
         // conversation's, see `build_chat`.
         external_id: Some(project_uuid.clone()),
         source_url: Some(format!("https://claude.ai/project/{project_uuid}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {

@@ -267,7 +267,7 @@ fn build_post_chats(
             external_id: Some(post.natural_key),
             // Whole-post linkout on the thread header / chat-level row.
             source_url: nonempty(&thread.url).map(str::to_string),
-            upstream_scope: None,
+            upstream_account: None,
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {

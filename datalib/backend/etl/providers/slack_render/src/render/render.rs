@@ -200,7 +200,7 @@ fn build_chats(
             // Every row in this thread was minted under
             // `Some(team_id)`; the round-trip check
             // recomputes `uuid` from this exact string.
-            upstream_scope: Some(root.team_id.clone()),
+            upstream_account: Some(root.team_id.clone()),
             org_uuid: Some(root.team_id.clone()),
             org_name: org_name.clone(),
             buckets: vec![NormalizedDoc {

@@ -154,7 +154,7 @@ def datalib_entity_id(namespace, source_id, account, entity_kind, natural_key, a
     equals its `grid_rows.provider` tag — they are still two
     vocabularies, and a provider added later may differ. `source_id` is
     the group id the row rendered under, which is why two sources cannot
-    share an id; `account` is `upstream_scope`, empty when the record
+    share an id; `account` is `upstream_account`, empty when the record
     names no account.
     """
     name = ID_SEP.join([namespace, source_id, account, entity_kind, natural_key])
@@ -575,7 +575,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose backpointer does not regenerate their uuid.
 
         For every row from a provider in `PORTED_PROVIDERS`, recompute
-        `entity_id(provider, source, upstream_scope,
+        `entity_id(provider, source, upstream_account,
         upstream_entity_kind, upstream_id, stamp)` from the row's own
         columns and compare to the stored `uuid`. A mismatch means the
         backpointer is decorative — it names something that would not
@@ -597,7 +597,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         rows = self._query(
             self._index_db,
             "SELECT g.provider, g.uuid, IFNULL(g.upstream_entity_kind, ''), "
-            "       IFNULL(g.upstream_id, ''), IFNULL(g.upstream_scope, ''), "
+            "       IFNULL(g.upstream_id, ''), IFNULL(g.upstream_account, ''), "
             "       IFNULL(g.created_at_utc, ''), m.source_id "
             "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid "
             f"WHERE g.provider IN ({_sql_in(PORTED_PROVIDERS)}) "

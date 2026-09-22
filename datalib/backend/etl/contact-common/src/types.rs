@@ -25,8 +25,8 @@ pub struct NormalizedContact {
     /// `contact_uuid`, so the round-trip check regenerates the row.
     pub external_id: Option<String>,
     /// The upstream account `contact_uuid` was minted under, for
-    /// `grid_rows.upstream_scope`; `None` when the record names none.
-    pub upstream_scope: Option<String>,
+    /// `grid_rows.upstream_account`; `None` when the record names none.
+    pub upstream_account: Option<String>,
     /// When the contact came to be, where the source says (LinkedIn's
     /// "Connected On"). A vCard does not say; a person does not have a
     /// creation event. Never fabricated.

@@ -490,7 +490,7 @@ impl ChatBuild {
             account: None,
             author: None,
             project: None,
-            upstream_scope: None,
+            upstream_account: None,
             source_url: None,
             org_uuid: None,
             org_name: None,

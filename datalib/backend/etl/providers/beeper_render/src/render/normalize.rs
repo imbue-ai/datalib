@@ -140,7 +140,7 @@ fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> No
         // The room's id is minted from its native (Matrix) id; the
         // bridge's own id stays on `project`'s neighbour columns.
         external_id: Some(room.native_room_id.clone()),
-        upstream_scope: None,
+        upstream_account: None,
         source_url: None,
         org_uuid: None,
         org_name: None,

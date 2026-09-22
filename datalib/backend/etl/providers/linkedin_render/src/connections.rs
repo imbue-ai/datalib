@@ -180,7 +180,7 @@ fn to_contact(source_id: &str, p: &Value) -> NormalizedContact {
         group_label: GROUP_LABEL.to_string(),
         display_name: (!name.is_empty()).then_some(name),
         external_id: Some(id.natural_key),
-        upstream_scope: None,
+        upstream_account: None,
         created_at: connected_on_to_stamp(field(p, "Connected On")),
         modified_at: None,
         source_url: (!url.is_empty()).then(|| url.to_string()),

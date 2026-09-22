@@ -101,7 +101,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         project: None,
         external_id: Some(album.natural_key),
         source_url: None,
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

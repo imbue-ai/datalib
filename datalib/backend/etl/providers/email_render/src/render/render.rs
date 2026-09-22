@@ -469,7 +469,7 @@ fn build_chat(
         project: None,
         external_id: Some(thread_id.natural_key),
         source_url: thread_source_url,
-        upstream_scope: Some(account_id.clone()),
+        upstream_account: Some(account_id.clone()),
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

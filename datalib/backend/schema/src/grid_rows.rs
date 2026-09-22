@@ -147,15 +147,16 @@ pub struct GridRow {
     /// the reviewed commit for a diff comment.
     #[col(sql = "VARCHAR(64)")]
     pub git_sha: Option<String>,
-    /// The upstream's own identifier for this entity within
-    /// `upstream_scope`: the backpointer half of the id pair. `uuid` is a
-    /// one-way hash, so this preserves what it was minted from and lets a
-    /// row be taken back to the provider's API.
+    /// The key `uuid` was minted from: the upstream's own id for the
+    /// record, verbatim, where it has one (a Slack `ts`, a Message-ID, a
+    /// CTS URN); the key datalib chose where it composes the row (a period
+    /// bucket's period, a storage report's path). `uuid` is a one-way
+    /// hash, so this is what lets a row be taken back to the provider.
     ///
-    /// With `upstream_entity_kind`, `upstream_scope`, `created_at_utc`
+    /// With `upstream_entity_kind`, `upstream_account`, `created_at_utc`
     /// and the document's `markdowns.source_id` this is the whole
     /// `entity_id` recipe minus the provider, so
-    /// `entity_id(provider, source_id, scope, upstream_entity_kind, upstream_id, stamp) == uuid`
+    /// `entity_id(provider, source_id, upstream_account, upstream_entity_kind, upstream_id, stamp) == uuid`
     /// holds by construction, with `stamp` the row's `created_at_utc` or
     /// nothing — which makes the backpointer verifiable rather than
     /// decorative.
@@ -172,19 +173,18 @@ pub struct GridRow {
     /// review comment.
     #[col(sql = "VARCHAR(32)")]
     pub upstream_entity_kind: Option<String>,
-    /// The upstream account the record belongs to — the `account` fed to
-    /// `entity_id` — when the record names one: a Slack `team_id`, a JMAP
-    /// `account_id`. A value that is on every row the provider writes,
-    /// never one that is sometimes there, and never a secret: it is stored
-    /// here in the clear. NULL when the upstream names no account on the
-    /// record. Never the source's own id: that is a component of every id
-    /// and lives on `markdowns.source_id`.
+    /// The account the record itself names, exactly as the upstream wrote
+    /// it: a Slack `team_id`, a JMAP `account_id`. A component of the id,
+    /// so only a value that is on every row the provider writes — never
+    /// one that is sometimes there — and never a secret, since it is
+    /// stored in the clear. NULL when the record names no account.
     ///
-    /// Overlaps `account` in spirit but not contract — `account` is a
-    /// display value and may be prettified; this is the exact opaque string
-    /// the id was derived from and must not be.
+    /// Not `account`: that is the login the mirror was fetched under —
+    /// configuration, prettified for display, driving the `account:`
+    /// filter. This is data, and must not be prettified. The two agree
+    /// only where the login *is* what the record names (email).
     #[col(sql = "VARCHAR(96)")]
-    pub upstream_scope: Option<String>,
+    pub upstream_account: Option<String>,
     /// Notion only. The datalib id of the page this row lives in, so the
     /// grid can filter every row in a document. Equals `uuid` for page rows.
     #[col(sql = "VARCHAR(96)")]

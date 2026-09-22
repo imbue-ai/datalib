@@ -45,7 +45,7 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<Normaliz
                 group_label: GROUP_LABEL.to_string(),
                 display_name: str_field(v, "name").map(str::to_string),
                 external_id: Some(id.natural_key),
-                upstream_scope: None,
+                upstream_account: None,
                 created_at: since.clone(),
                 modified_at: None,
                 source_url: None,

@@ -646,7 +646,7 @@ fn build_grid_rows(
                 Some(r) => r.entity_kind.clone(),
                 None => profile.chat_entity_kind.to_string(),
             }))
-            .upstream_scope(chat.upstream_scope.clone())
+            .upstream_account(chat.upstream_account.clone())
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build_or_record(
                 source_id,
@@ -689,7 +689,7 @@ fn build_grid_rows(
                 // Items inherit the chat's account: a chat belongs to
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same one.
-                .upstream_scope(chat.upstream_scope.clone())
+                .upstream_account(chat.upstream_account.clone())
                 .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))
                 .item_count(Some(1))
@@ -773,7 +773,7 @@ fn reaction_row(
         .source_label(profile.source_label.clone())
         .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
         .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
-        .upstream_scope(chat.upstream_scope.clone())
+        .upstream_account(chat.upstream_account.clone())
         .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
         .author(non_empty(&r.reactor_display))
         .account(chat.account.clone())
@@ -879,7 +879,7 @@ mod tests {
             project: None,
             external_id: Some("bridge-crew@g.us".to_string()),
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             title: None,
             org_uuid: None,
             org_name: None,

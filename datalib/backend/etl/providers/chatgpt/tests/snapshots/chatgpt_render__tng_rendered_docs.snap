@@ -35,9 +35,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001",
       "text": "User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.\nCompose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.\nUpon the bridge, where duty bids us stand,\nA tabby of the warmest tangerine,\nWith feline grace defies the captain's hand\nAnd treads the helm with footfall light, serene.\n\nNo Klingon foe nor anomaly arrayed\nCan match the menace of his sudden leap;\nThe console glows where Spot in mirth has played,\nAnd alarms ring out where he chose to sleep.\n\nYet Data, faithful keeper, smiles unseen —\nAn android's joy, though circuited and spare —\nFor in this beast a mystery serene\nReflects the very life he hopes to share.\n\nSo bless thee, Spot, of fur and quiet purr:\nThou art my muse, my console saboteur.\nCurious. The closing couplet is satisfying. Thank you.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "68fa0001-fake-7000-8000-positronic0001",
-      "upstream_scope": null,
       "uuid": "00000000-0000-84b7-85ef-23cb38507f8b"
     },
     {
@@ -68,9 +68,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-spot-0000",
-      "upstream_scope": null,
       "uuid": "0b80ee6f-7000-8c3a-9df2-b36f4f934480"
     },
     {
@@ -101,9 +101,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-spot-0001",
-      "upstream_scope": null,
       "uuid": "0b80ee6f-7000-809c-b34a-a49c576317da"
     },
     {
@@ -134,9 +134,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "Upon the bridge, where duty bids us stand,\nA tabby of the warmest tangerine,\nWith feline grace defies the captain's hand\nAnd treads the helm with footfall light, serene.\n\nNo Klingon foe nor anomaly arrayed\nCan match the menace of his sudden leap;\nThe console glows where Spot in mirth has played,\nAnd alarms ring out where he chose to sleep.\n\nYet Data, faithful keeper, smiles unseen —\nAn android's joy, though circuited and spare —\nFor in this beast a mystery serene\nReflects the very life he hopes to share.\n\nSo bless thee, Spot, of fur and quiet purr:\nThou art my muse, my console saboteur.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-spot-0002",
-      "upstream_scope": null,
       "uuid": "0b80ee71-44c0-8065-b2e9-d01d32bf6526"
     },
     {
@@ -167,9 +167,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "Curious. The closing couplet is satisfying. Thank you.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-spot-0003",
-      "upstream_scope": null,
       "uuid": "0b80ee74-03e0-8e93-937e-ec0a89ad127c"
     }
   ]
@@ -207,9 +207,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003",
       "text": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?\nThe premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "68fa0003-fake-7000-8000-positronic0003",
-      "upstream_scope": null,
       "uuid": "00000000-0000-888f-8dff-2bdaf3aa5faa"
     },
     {
@@ -240,9 +240,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-warp-0001",
-      "upstream_scope": null,
       "uuid": "0b80f8bc-2800-86ce-b4a6-fbea29d7eaaf"
     },
     {
@@ -273,9 +273,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-warp-0002",
-      "upstream_scope": null,
       "uuid": "0b80f8c0-bbe0-8c71-97f7-6b11b8781213"
     }
   ]
@@ -313,9 +313,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": "https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002",
       "text": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.\n```python\nimport numpy as np\nx = np.array([1,2,3,4,5])\ny = np.array([2.1, 4.0, 9.1, 15.8, 25.0])\ncoeffs = np.polyfit(x, y, 2)\nprint(coeffs)\n```\nThe fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "68fa0002-fake-7000-8000-positronic0002",
-      "upstream_scope": null,
       "uuid": "00000000-0000-893e-9200-2f457298a582"
     },
     {
@@ -346,9 +346,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-poly-0001",
-      "upstream_scope": null,
       "uuid": "0b80f395-cc00-874b-a008-66b4275c17bb"
     },
     {
@@ -379,9 +379,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "```python\nimport numpy as np\nx = np.array([1,2,3,4,5])\ny = np.array([2.1, 4.0, 9.1, 15.8, 25.0])\ncoeffs = np.polyfit(x, y, 2)\nprint(coeffs)\n```",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-poly-0002",
-      "upstream_scope": null,
       "uuid": "0b80f398-d940-8ade-8f13-bbcd1d7edeb4"
     },
     {
@@ -412,9 +412,9 @@ expression: docs_bundle(&docs)
       "source_label": "ChatGPT",
       "source_url": null,
       "text": "The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "msg-fake-poly-0003",
-      "upstream_scope": null,
       "uuid": "0b80f39a-ae00-8e8e-9fb3-ef43b131bef2"
     }
   ]

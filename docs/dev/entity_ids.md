@@ -36,7 +36,7 @@ let id = Identity::mint(
 // id.uuid          → grid_rows.uuid / markdown_uuid / the anchor
 // id.natural_key   → grid_rows.upstream_id
 // id.entity_kind   → grid_rows.upstream_entity_kind
-// the account      → grid_rows.upstream_scope
+// the account      → grid_rows.upstream_account
 ```
 
 One root namespace, one function, five recipe components joined with
@@ -80,7 +80,7 @@ that is anything else fails there. Two consequences:
   seconds mints from `RecordStampPrecision::stored_ms(date_ms)`; one
   that stores an ISO string mints from `datalib_time::record_stamp_ms`
   of that string. Both are what `created_at_utc` reads back as.
-- Present-or-never applies to the stamp as it does to a scope. A stamp
+- Present-or-never applies to the stamp as it does to the account. A stamp
   that is null on one fetch and set on the next re-keys the row, and a
   source that edits a record's stamp re-keys it — a real identity
   change, reported the way any re-key is.
@@ -105,7 +105,7 @@ leaf its row does; a diff row keeps the stamp of the row it is about.
 
 The third component is the upstream account the record belongs to: a
 Slack `team_id`, a JMAP `account_id`. It goes in as data — the account
-is part of what the record *is* — and out to `grid_rows.upstream_scope`
+is part of what the record *is* — and out to `grid_rows.upstream_account`
 in the clear, so it is never a secret. Two rules decide whether a
 provider has one:
 
@@ -182,13 +182,13 @@ from:
 
 | Column | Holds |
 |---|---|
-| `upstream_id` | The upstream's own id, within the scope |
+| `upstream_id` | The key the uuid was minted from: the upstream's own id where it has one, datalib's key for a row it composes |
 | `upstream_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
-| `upstream_scope` | The upstream account the record names; NULL when it names none |
+| `upstream_account` | The account the record itself names; NULL when it names none. Not `account`, which is the login the mirror was fetched under |
 
 Together with `provider` (its own column), `markdowns.source_id` (the
 source) and `created_at_utc` (the stamp) that is the entire recipe, so
-`entity_id(provider, source_id, upstream_scope, upstream_entity_kind,
+`entity_id(provider, source_id, upstream_account, upstream_entity_kind,
 upstream_id, stamp_of(uuid)) == uuid` holds by construction, with
 `stamp_of(uuid)` either zero or the row's `created_at_utc` — and the
 fixture recomputes it for every row from those columns alone, with no
@@ -264,7 +264,7 @@ Every id depends on the source's group id by design, and the driver
 regenerates the same group ids every run, so the check says nothing
 about a recipe that reads *more* of the config than that. The
 round-trip check stands in: a row's uuid has to come back from its
-provider, its source, its scope, its kind, its key and its stamp, so
+provider, its source, its account, its kind, its key and its stamp, so
 anything else a recipe folded in fails there.
 
 ## Porting status
@@ -324,14 +324,14 @@ backup, and expect a re-key when you do:
    it twice. Use `datalib_id::composite_key` for tuple keys, and pass
    the item's stamp (`None` for a document).
 2. Populate the backpointer columns. For chat-common providers that
-   means `NormalizedChat::upstream_scope` (the account, when there is one),
+   means `NormalizedChat::upstream_account` (the account, when there is one),
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss — that was a real bug), and `NormalizedDoc::source_ref`
    on every bucket whose id is not the chat's own — a period of a chat,
    a subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
-   `NormalizedContact::{external_id, upstream_scope}`.
+   `NormalizedContact::{external_id, upstream_account}`.
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids
    are minted; a bucket key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,

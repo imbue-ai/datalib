@@ -281,7 +281,7 @@ fn build_grid_row(
         .source_url(contact.source_url.clone())
         .upstream_id(contact.external_id.clone())
         .upstream_entity_kind(Some(profile.contact_entity_kind.to_string()))
-        .upstream_scope(contact.upstream_scope.clone())
+        .upstream_account(contact.upstream_account.clone())
         .markdown_uuid(Some(contact.contact_uuid.clone()))
         .build_or_record(
             source_id,
@@ -344,7 +344,7 @@ mod tests {
             group_label: "LinkedIn Connections".to_string(),
             display_name: Some("Jean-Luc Picard".to_string()),
             external_id: Some("https://www.linkedin.com/in/jlp".to_string()),
-            upstream_scope: None,
+            upstream_account: None,
             // Offset-bearing per the grid's created_at contract (the
             // builder now rejects bare dates — see GridRowBuilder).
             created_at: Some("2024-01-02T00:00:00+00:00".to_string()),

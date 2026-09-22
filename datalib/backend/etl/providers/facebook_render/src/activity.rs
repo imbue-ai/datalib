@@ -260,7 +260,7 @@ fn monthly_chat(
         project: None,
         external_id: Some(feed.natural_key),
         source_url: None,
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: by_month

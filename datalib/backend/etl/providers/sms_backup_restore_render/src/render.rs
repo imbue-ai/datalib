@@ -339,7 +339,7 @@ fn build_chats(
             project: Some("SMS Backup".to_string()),
             external_id: Some(conversation.natural_key),
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             title: None,
             org_uuid: None,
             org_name: None,

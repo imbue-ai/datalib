@@ -229,7 +229,7 @@ fn build_chats(
             external_id: Some(conversation.natural_key),
             // No public per-conversation URL in the message export.
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {

@@ -35,9 +35,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/project/70000002-1701-4d00-8000-000000000702",
       "text": "Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.\nAnswer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.\n# Charting conventions\n\nBearings are given from the ship's current heading, not from galactic north.\n\n- Sector designations use the Federation catalogue number, never the local name.\n- An extrapolated position is written in parentheses.\n",
+      "upstream_account": null,
       "upstream_entity_kind": "project",
       "upstream_id": "70000002-1701-4d00-8000-000000000702",
-      "upstream_scope": null,
       "uuid": "00000000-0000-83ab-b990-357eea87eda5"
     },
     {
@@ -68,9 +68,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.",
+      "upstream_account": null,
       "upstream_entity_kind": "project_description",
       "upstream_id": "70000002-1701-4d00-8000-000000000702",
-      "upstream_scope": null,
       "uuid": "00000000-0000-8d8c-ac00-6fb14cf03f13"
     },
     {
@@ -101,9 +101,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.",
+      "upstream_account": null,
       "upstream_entity_kind": "project_instructions",
       "upstream_id": "70000002-1701-4d00-8000-000000000702",
-      "upstream_scope": null,
       "uuid": "00000000-0000-8257-a6d5-e3a1abb07521"
     },
     {
@@ -134,9 +134,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "# Charting conventions\n\nBearings are given from the ship's current heading, not from galactic north.\n\n- Sector designations use the Federation catalogue number, never the local name.\n- An extrapolated position is written in parentheses.\n",
+      "upstream_account": null,
       "upstream_entity_kind": "project_document",
       "upstream_id": "7d000003-1701-4d00-8000-0000000007d3",
-      "upstream_scope": null,
       "uuid": "00000000-0000-8b92-8710-5185e38f81da"
     }
   ]
@@ -174,9 +174,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006",
       "text": "Computer, what stardate is it?\nStardate 47988.1. The chronometer is on ship's time.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "c0000006-1701-4d00-8000-00000000c006",
-      "upstream_scope": null,
       "uuid": "00000000-0000-84d9-a07c-75bb3c93c654"
     },
     {
@@ -207,9 +207,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Computer, what stardate is it?",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "60000001-1701-4d00-8000-000000060001",
-      "upstream_scope": null,
       "uuid": "0b75c4b3-d900-834f-9ccd-cd06aca1f1fc"
     },
     {
@@ -240,9 +240,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Stardate 47988.1. The chronometer is on ship's time.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "60000002-1701-4d00-8000-000000060002",
-      "upstream_scope": null,
       "uuid": "0b75c4b3-d900-8d40-884b-e9cdda2faccb"
     }
   ]
@@ -280,9 +280,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.\n<details><summary>Thinking</summary>\n\n> \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.\n\n</details>\n<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>\n\n```json\n{\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n</details>\nFor a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.\n<details><summary>Tool result: web_fetch</summary>\n\n```json\n{\n  \"is_missing\": false,\n  \"metadata\": {\n    \"site_domain\": \"memory-alpha.test\"\n  },\n  \"text\": \"nuqneH (lit. \\\"what do you want\\\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \\\"qaleghneS\\\" (\\\"I am honored to see you\\\").\",\n  \"title\": \"Klingon language — Memory Alpha (test mirror)\",\n  \"type\": \"knowledge\",\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n\n</details>\nPerfect. Make it so.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "c0000003-1701-4d00-8000-00000000c003",
-      "upstream_scope": null,
       "uuid": "00000000-0000-856b-944c-412bf8dca640"
     },
     {
@@ -313,9 +313,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "30000001-1701-4d00-8000-000000030001",
-      "upstream_scope": null,
       "uuid": "0b75b540-c500-844a-b73a-e6dbe1ab76d7"
     },
     {
@@ -346,9 +346,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Thinking</summary>\n\n> \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.\n\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "thinking_block",
       "upstream_id": "30000002-1701-4d00-8000-000000030002#0",
-      "upstream_scope": null,
       "uuid": "0b75b541-3a30-89b3-8db9-add265c34f05"
     },
     {
@@ -379,9 +379,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>\n\n```json\n{\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_use",
       "upstream_id": "30000002-1701-4d00-8000-000000030002#toolu_FAKE0001ngfedcba9876543210",
-      "upstream_scope": null,
       "uuid": "0b75b541-4200-8abc-b9a3-3edad069d109"
     },
     {
@@ -412,9 +412,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "30000002-1701-4d00-8000-000000030002",
-      "upstream_scope": null,
       "uuid": "0b75b541-af60-8133-840a-94a11a820014"
     },
     {
@@ -445,9 +445,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool result: web_fetch</summary>\n\n```json\n{\n  \"is_missing\": false,\n  \"metadata\": {\n    \"site_domain\": \"memory-alpha.test\"\n  },\n  \"text\": \"nuqneH (lit. \\\"what do you want\\\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \\\"qaleghneS\\\" (\\\"I am honored to see you\\\").\",\n  \"title\": \"Klingon language — Memory Alpha (test mirror)\",\n  \"type\": \"knowledge\",\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_result",
       "upstream_id": "30000002-1701-4d00-8000-000000030002#toolu_FAKE0001ngfedcba9876543210",
-      "upstream_scope": null,
       "uuid": "0b75b541-af60-82f7-81e2-1e2ddb2e59d8"
     },
     {
@@ -478,9 +478,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Perfect. Make it so.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "30000003-1701-4d00-8000-000000030003",
-      "upstream_scope": null,
       "uuid": "0b75b542-99c0-8ce5-a073-36e7fde35cde"
     }
   ]
@@ -518,9 +518,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.\n<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>\n\n```json\n{\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>\n<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>\n\n```json\n{\n  \"relay\": \"backup-2\",\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>\nYes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.\n<details><summary>Tool result: starfleet_db_query (error)</summary>\n\n```\nERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)\n```\n</details>\n<details><summary>Tool result: starfleet_db_query</summary>\n\nSignature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.\n\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "c0000005-1701-4d00-8000-00000000c005",
-      "upstream_scope": null,
       "uuid": "00000000-0000-882d-b21e-5e54f3f20dbb"
     },
     {
@@ -551,9 +551,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "50000001-1701-4d00-8000-000000050001",
-      "upstream_scope": null,
       "uuid": "0b75bf56-8e80-873d-9a5d-3ddfc58937d2"
     },
     {
@@ -584,9 +584,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>\n\n```json\n{\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_use",
       "upstream_id": "50000002-1701-4d00-8000-000000050002#toolu_FAKE0002borgsigfirstattempt0",
-      "upstream_scope": null,
       "uuid": "0b75bf56-b590-8b25-9363-cf22e1614c34"
     },
     {
@@ -617,9 +617,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>\n\n```json\n{\n  \"relay\": \"backup-2\",\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_use",
       "upstream_id": "50000002-1701-4d00-8000-000000050002#toolu_FAKE0003borgsigsecondtry00",
-      "upstream_scope": null,
       "uuid": "0b75bf57-03b0-8ae2-8e8d-933c699552d0"
     },
     {
@@ -650,9 +650,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "50000002-1701-4d00-8000-000000050002",
-      "upstream_scope": null,
       "uuid": "0b75bf57-ee10-8817-80c1-39e86d09a4c8"
     },
     {
@@ -683,9 +683,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool result: starfleet_db_query (error)</summary>\n\n```\nERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)\n```\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_result",
       "upstream_id": "50000002-1701-4d00-8000-000000050002#toolu_FAKE0002borgsigfirstattempt0",
-      "upstream_scope": null,
       "uuid": "0b75bf57-ee10-858a-8e3e-f9340282d61b"
     },
     {
@@ -716,9 +716,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "<details><summary>Tool result: starfleet_db_query</summary>\n\nSignature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.\n\n</details>",
+      "upstream_account": null,
       "upstream_entity_kind": "tool_result",
       "upstream_id": "50000002-1701-4d00-8000-000000050002#toolu_FAKE0003borgsigsecondtry00",
-      "upstream_scope": null,
       "uuid": "0b75bf57-ee10-8544-980b-3dc7c47ea618"
     }
   ]
@@ -756,9 +756,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "What's wrong with this medical-tricorder readout?\nThe readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
+      "upstream_account": null,
       "upstream_entity_kind": "conversation",
       "upstream_id": "c0000004-1701-4d00-8000-00000000c004",
-      "upstream_scope": null,
       "uuid": "00000000-0000-8b06-828d-f59d39f6190d"
     },
     {
@@ -789,9 +789,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "What's wrong with this medical-tricorder readout?",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "40000001-1701-4d00-8000-000000040001",
-      "upstream_scope": null,
       "uuid": "0b75ba14-bb40-877f-bf26-28fc93d65eef"
     },
     {
@@ -822,9 +822,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
+      "upstream_account": null,
       "upstream_entity_kind": "message",
       "upstream_id": "40000002-1701-4d00-8000-000000040002",
-      "upstream_scope": null,
       "uuid": "0b75ba15-6b08-8219-b2c7-ab8a5d6bab33"
     }
   ]
@@ -862,9 +862,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": "https://claude.ai/project/70000001-1701-4d00-8000-000000000701",
       "text": "Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.\nAnswer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.\n# Hailing frequencies\n\nOpen on subspace band 3 unless the target is cloaked.\n\n- Klingon vessels: lead with rank, then ship name.\n- Romulan vessels: do not open first.\n\nOps -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).\nMedical emergencies route directly to Sickbay (Crusher).\n",
+      "upstream_account": null,
       "upstream_entity_kind": "project",
       "upstream_id": "70000001-1701-4d00-8000-000000000701",
-      "upstream_scope": null,
       "uuid": "00000000-0000-8da1-84c9-7ed998e5bd85"
     },
     {
@@ -895,9 +895,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.",
+      "upstream_account": null,
       "upstream_entity_kind": "project_description",
       "upstream_id": "70000001-1701-4d00-8000-000000000701",
-      "upstream_scope": null,
       "uuid": "0b5016d5-ce80-8aa2-8c03-406059b607f4"
     },
     {
@@ -928,9 +928,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.",
+      "upstream_account": null,
       "upstream_entity_kind": "project_instructions",
       "upstream_id": "70000001-1701-4d00-8000-000000000701",
-      "upstream_scope": null,
       "uuid": "0b5016d5-ce80-8621-821c-1a2cc06a0e54"
     },
     {
@@ -961,9 +961,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "# Hailing frequencies\n\nOpen on subspace band 3 unless the target is cloaked.\n\n- Klingon vessels: lead with rank, then ship name.\n- Romulan vessels: do not open first.\n",
+      "upstream_account": null,
       "upstream_entity_kind": "project_document",
       "upstream_id": "7d000001-1701-4d00-8000-0000000007d1",
-      "upstream_scope": null,
       "uuid": "0b5016da-6260-8886-8e62-6aec56734bbd"
     },
     {
@@ -994,9 +994,9 @@ expression: docs_bundle(&docs)
       "source_label": "Claude",
       "source_url": null,
       "text": "Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).\nMedical emergencies route directly to Sickbay (Crusher).\n",
+      "upstream_account": null,
       "upstream_entity_kind": "project_document",
       "upstream_id": "7d000002-1701-4d00-8000-0000000007d2",
-      "upstream_scope": null,
       "uuid": "0b501c85-7ec0-8425-8204-a6321b1bfd7f"
     }
   ]

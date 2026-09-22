@@ -270,9 +270,9 @@ pub struct NormalizedChat {
     pub external_id: Option<String>,
     /// The upstream account every row in this chat was minted under —
     /// the exact provider-issued string fed to `datalib_id::entity_id`
-    /// as `account`, stamped into `grid_rows.upstream_scope`. `None`
+    /// as `account`, stamped into `grid_rows.upstream_account`. `None`
     /// when the upstream names no account on the record.
-    pub upstream_scope: Option<String>,
+    pub upstream_account: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
     /// link in the page title and the chat-level grid_row's `source_url`.

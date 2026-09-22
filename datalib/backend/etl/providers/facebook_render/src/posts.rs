@@ -255,7 +255,7 @@ fn one_item_chat(
         project: None,
         external_id: Some(post.natural_key),
         source_url,
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

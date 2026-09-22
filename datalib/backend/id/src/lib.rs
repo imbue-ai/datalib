@@ -113,7 +113,7 @@ pub const MAX_STAMP_MS: i64 = (1 << 48) - 1;
 /// the record belongs to, when the record names one: a Slack `team_id`,
 /// a JMAP `account_id` — a value that is on every row the provider
 /// writes, never one that is sometimes there, and never a secret, since
-/// it is stored in `grid_rows.upstream_scope` in the clear. `at` is the stamp in the id's
+/// it is stored in `grid_rows.upstream_account` in the clear. `at` is the stamp in the id's
 /// leading bits, and the one rule about it is that **it is the row's
 /// `created_at` or nothing**: the fixture's round-trip check reads the
 /// stamp back out of the uuid and compares it to `created_at_utc`, so
@@ -454,10 +454,10 @@ mod tests {
     /// their rows cannot overlap however their data does.
     #[test]
     fn two_sources_never_share_an_id() {
-        for scope in [Some("T1"), None, None] {
+        for account in [Some("T1"), None, None] {
             assert_ne!(
-                entity_id(IdNamespace::Slack, "work", scope, "message", "m", None),
-                entity_id(IdNamespace::Slack, "home", scope, "message", "m", None),
+                entity_id(IdNamespace::Slack, "work", account, "message", "m", None),
+                entity_id(IdNamespace::Slack, "home", account, "message", "m", None),
             );
         }
     }
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_scope_separates_two_accounts() {
+    fn upstream_account_separates_two_accounts() {
         // Two workspaces under one login both have channel `C1`.
         assert_ne!(
             slack(Some("acct-a"), "chat", "1"),

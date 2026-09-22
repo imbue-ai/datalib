@@ -130,8 +130,8 @@ code is right and this table is stale.
 
 Minted by `datalib_id::entity_id` for every provider: the record's
 `created_at` in the leading bits where it has one of its own, then a
-hash of `(provider, scope, upstream_entity_kind, upstream_id)`. The
-recipe, the scopes and which rows carry a stamp are in
+hash of `(provider, source_id, upstream_account, upstream_entity_kind,
+upstream_id)`. The recipe, the accounts and which rows carry a stamp are in
 [`entity_ids.md`](entity_ids.md); the natural keys below are what
 `upstream_id` holds.
 
@@ -154,8 +154,8 @@ they sit beside the shared blob store.
 | claude.block | `{message_uuid}:{block_index}` |
 | chatgpt.chat | `conversations.id` |
 | chatgpt.message | `conversations.payload.mapping[*]` |
-| slack.thread | `{channel}#{thread_ts}`, with `team_id` in `upstream_scope` |
-| slack.message | `{channel}#{ts}`, with `team_id` in `upstream_scope` |
+| slack.thread | `{channel}#{thread_ts}`, with `team_id` in `upstream_account` |
+| slack.message | `{channel}#{ts}`, with `team_id` in `upstream_account` |
 | github.pr | `{repo}#{number}` |
 | github.issue_comment, pr_review, pr_review_comment | `{repo}#{id}`, told apart by `upstream_entity_kind` |
 | gitlab.mr | `{project}#{iid}` |

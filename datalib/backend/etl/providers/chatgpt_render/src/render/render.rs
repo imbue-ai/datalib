@@ -210,7 +210,7 @@ fn build_chat(
         // to chatgpt.com now that `uuid` is a minted v5.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {

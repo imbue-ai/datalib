@@ -1207,7 +1207,7 @@ mod insert_round_trip_tests {
             git_sha: Some("0123456789abcdef".into()),
             upstream_id: Some("upstream-1701".into()),
             upstream_entity_kind: Some("conversation".into()),
-            upstream_scope: Some("claude.ai".into()),
+            upstream_account: Some("claude.ai".into()),
             notion_page_uuid: Some("notion-page-1701".into()),
             notion_block_uuid: Some("notion-block-1701".into()),
             markdown_uuid: Some("md-1701".into()),
@@ -1326,7 +1326,7 @@ mod write_lock_tests {
             git_sha: None,
             upstream_id: None,
             upstream_entity_kind: None,
-            upstream_scope: None,
+            upstream_account: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(uuid.clone()),
@@ -1698,7 +1698,7 @@ mod schema_reconcile_tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        for added in ["upstream_id", "upstream_entity_kind", "upstream_scope"] {
+        for added in ["upstream_id", "upstream_entity_kind", "upstream_account"] {
             assert!(
                 cols.iter().any(|c| c == added),
                 "grid_rows must have gained {added}"
@@ -1729,7 +1729,7 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid, \
+             entire_chat, text, upstream_id, upstream_entity_kind, upstream_account, markdown_uuid, \
              is_document) \
              VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
              'upstream-1', 'conversation', '', 'md-1', 1)",

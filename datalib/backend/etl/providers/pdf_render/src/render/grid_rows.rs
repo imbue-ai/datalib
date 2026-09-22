@@ -174,11 +174,11 @@ pub fn rows_for_document(
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
-        // `upstream_scope` stays NULL: a content hash needs no further
+        // `upstream_account` stays NULL: a content hash needs no further
         // scoping.
         upstream_id: Some(doc.natural_key),
         upstream_entity_kind: Some(doc.entity_kind.to_string()),
-        upstream_scope: None,
+        upstream_account: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(doc_uuid.clone()),
@@ -219,7 +219,7 @@ pub fn rows_for_document(
             git_sha: None,
             upstream_id: Some(page.natural_key),
             upstream_entity_kind: Some(page.entity_kind.to_string()),
-            upstream_scope: None,
+            upstream_account: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(doc_uuid.clone()),

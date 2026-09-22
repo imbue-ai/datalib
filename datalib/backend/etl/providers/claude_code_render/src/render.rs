@@ -308,7 +308,7 @@ fn build_chat(
         project: str_of(meta, "cwd").map(project_of),
         external_id: Some(id.natural_key.clone()),
         source_url: str_of(meta, "cloud_session_id").map(|c| format!("https://claude.ai/code/{c}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: str_of(meta, "org_uuid").map(str::to_string),
         org_name: None,
         buckets: vec![NormalizedDoc {
