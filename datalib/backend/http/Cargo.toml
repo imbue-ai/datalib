@@ -57,6 +57,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Owner-only params files for the applets and probes this server spawns.
 tempfile = "3"
+# `GET /api/remote_media` (src/remote_media.rs). rustls for the same
+# reason as datalib-fetch: the musl release binaries are fully static.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }

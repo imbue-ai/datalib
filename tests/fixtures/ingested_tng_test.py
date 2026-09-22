@@ -1575,8 +1575,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         try:
             rows = con.execute(
                 "SELECT step, fields FROM log "
-                # Every fixture run is pinned to one `--now`, so insertion
-                # order, not the stamp, says which run is newest.
+                # The runs share a pinned `--now` (run 2 is five minutes on),
+                # so insertion order, not the stamp, says which is newest.
                 "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1) "
                 "AND msg = 'docs (re)rendered'"
             ).fetchall()

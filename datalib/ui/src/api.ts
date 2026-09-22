@@ -181,6 +181,9 @@ export type ChatResponse = {
   created_at: string | null;
   source_label: string | null;
   source_url: string | null;
+  /// The configured source this document came from, as the grid's
+  /// Source column shows it; null when no grid row points at the doc.
+  source_ref: Identity | null;
   body: string;
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
@@ -199,6 +202,86 @@ export type DocEntry = {
   provider: string;
   created_at: string | null;
 };
+// --- Remote media (issue #648) --------------------------------------------
+// A document's images on remote hosts are held back until a person lets
+// them load. A decision is an allow row in `system/remote_media`, and the
+// server is the one judge of what a row covers: the page asks it which
+// of a document's references may load, and the bytes of a URL let
+// through are fetched once by the server into its download CAS and
+// served from there. Mirrors `app_schema::remote_media` and
+// `http/src/remote_media.rs`.
+
+export type AllowScope = "url" | "document" | "host" | "source";
+
+export type RemoteAllow = {
+  allow_uuid: string;
+  scope: AllowScope;
+  /// The URL, the document's markdown uuid, the host, or the source's id.
+  key: string;
+  created_at_utc: string;
+  tz_offset: string | null;
+};
+
+/// The two tables as typed tables, for `tableView({ url })`.
+export const REMOTE_ALLOW_TABLE = "/api/remote_media/allow";
+export const REMOTE_FETCHED_TABLE = "/api/remote_media/fetched";
+
+/// What a document is, for the rows that name it or its source; sent
+/// with every ask and every fetch, since a `document` or `source` row
+/// covers only what is loaded for it.
+export type RemoteContext = { document: string | null; source: string | null };
+
+function remoteContextParams(ctx: RemoteContext): string {
+  const p = new URLSearchParams();
+  if (ctx.document) p.set("document", ctx.document);
+  if (ctx.source) p.set("source", ctx.source);
+  const s = p.toString();
+  return s ? `&${s}` : "";
+}
+
+/// A remote image or media file, fetched by the server on the page's
+/// behalf — and only when a row lets it: the app's CSP lets the page
+/// reach no remote host itself (`cards/remoteMedia.ts`).
+export function remoteMediaUrl(url: string, ctx: RemoteContext): string {
+  return `/api/remote_media?url=${encodeURIComponent(url)}${remoteContextParams(ctx)}`;
+}
+
+/// Which of `urls` a row lets load for `ctx`, each with its row. A
+/// URL not in the answer is held.
+export async function checkRemote(
+  ctx: RemoteContext,
+  urls: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, RemoteAllow>> {
+  if (urls.length === 0) return new Map();
+  const r = await fetch("/api/remote_media/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ document: ctx.document, source: ctx.source, urls }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`POST /api/remote_media/check → ${r.status}: ${await r.text()}`);
+  const { allowed } = (await r.json()) as { allowed: { url: string; rule: RemoteAllow }[] };
+  return new Map(allowed.map((a) => [a.url, a.rule]));
+}
+
+export async function allowRemote(scope: AllowScope, key: string): Promise<RemoteAllow> {
+  const r = await fetch(REMOTE_ALLOW_TABLE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, key }),
+  });
+  if (!r.ok) throw new Error(`POST ${REMOTE_ALLOW_TABLE} → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as RemoteAllow;
+}
+
+export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
+  const r = await fetch(`${REMOTE_ALLOW_TABLE}/${encodeURIComponent(allowUuid)}`, {
+    method: "DELETE",
+  });
+  if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
+}
+
 // --- The unified_index applet --------------------------------------------
 export const UNIFIED_INDEX = "/applet/unified_index";
 

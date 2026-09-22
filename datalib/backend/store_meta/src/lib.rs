@@ -48,6 +48,9 @@ pub enum StoreKind {
     Feedback,
     Jobs,
     Usage,
+    /// `system/remote_media.doltlite_db`: what remote media a person
+    /// let a document load, and the URLs fetched into the download CAS.
+    RemoteMedia,
     /// `system/runs/runs.sqlite`, the one plain-SQLite store.
     Runs,
 }

@@ -8,10 +8,24 @@
 //   (`edge.hover`); every doc card subscribes and puts a transient
 //   highlight on the target span when the destination is its own doc.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { fetchChat, type ChatResponse, type DocProblem, type EdgeOut } from "@/api";
+import {
+  allowRemote,
+  checkRemote,
+  fetchChat,
+  forgetRemoteAllow,
+  REMOTE_ALLOW_TABLE,
+  REMOTE_FETCHED_TABLE,
+  type AllowScope,
+  type ChatResponse,
+  type DocProblem,
+  type EdgeOut,
+  type RemoteAllow,
+  type RemoteContext,
+} from "@/api";
 import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
-import type { RemoteRef } from "./remoteMedia";
+import { absoluteRemote, type RemoteRef } from "./remoteMedia";
+import { renderDocument } from "./renderDocument";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
@@ -151,10 +165,44 @@ function onProblemJump(p: DocProblem) {
 }
 
 // ── Remote images. The body's references to other hosts are held back
-// by the sanitizer (`remoteMedia.ts`); the banner above the body says
-// how many and from where, so what the document would have fetched is
-// known before it is read. Loading them is issue #648's second half.
+// by the sanitizer unless the server says an allow row lets them
+// through (`remoteMedia.ts`): the card renders the body once without
+// mounting it to learn the references, asks `/api/remote_media/check`,
+// and only then shows the document, so the first paint is already the
+// server's answer. The banner says how many are held and from where,
+// offers to let them load — one, a host's worth, this document's,
+// this source's — and names the rows that let the rest load, each
+// deletable. A decision is a row in the server's store; after each
+// write the card asks again and the body re-renders, so nothing here
+// touches the DOM.
 const remoteRefs = ref<RemoteRef[]>([]);
+/// The server's answer: the row covering each reference it lets load,
+/// keyed by the URL as the body wrote it.
+const remoteCovered = ref<Map<string, RemoteAllow>>(new Map());
+const remoteBusy = ref(false);
+const remoteError = ref<string | null>(null);
+
+function contextOf(doc: ChatResponse): RemoteContext {
+  return { document: doc.markdown_uuid, source: doc.source_ref?.id ?? null };
+}
+const remoteContext = computed<RemoteContext>(() =>
+  chat.value ? contextOf(chat.value) : { document: null, source: null },
+);
+
+/// Every remote URL a body references, as written, each once.
+function remoteUrlsOf(doc: ChatResponse): string[] {
+  const seen = new Set<string>();
+  return renderDocument(doc.body, doc.markdown_uuid)
+    .remote.map((r) => r.url)
+    .filter((u) => !seen.has(u) && (seen.add(u), true));
+}
+
+/// A new function per answer, which is what makes the body re-render
+/// under it.
+const remoteAccept = computed(() => {
+  const covered = remoteCovered.value;
+  return (url: string) => covered.has(url);
+});
 
 /// One entry per distinct URL.
 const remoteUnique = computed<RemoteRef[]>(() => {
@@ -165,11 +213,12 @@ const remoteUnique = computed<RemoteRef[]>(() => {
     return true;
   });
 });
+const remotePending = computed(() => remoteUnique.value.filter((r) => !r.loaded));
 
-/// The hosts referenced, most-referenced first.
+/// The hosts still held, most-referenced first.
 const remoteHosts = computed<{ host: string; count: number }[]>(() => {
   const counts = new Map<string, number>();
-  for (const r of remoteUnique.value) {
+  for (const r of remotePending.value) {
     const host = r.host || r.url;
     counts.set(host, (counts.get(host) ?? 0) + 1);
   }
@@ -178,15 +227,70 @@ const remoteHosts = computed<{ host: string; count: number }[]>(() => {
     .sort((a, b) => b.count - a.count || a.host.localeCompare(b.host));
 });
 
+/// The rows letting this document's references load, each once.
+const remoteRules = computed<RemoteAllow[]>(() => {
+  const seen = new Set<string>();
+  const rules: RemoteAllow[] = [];
+  for (const rule of remoteCovered.value.values()) {
+    if (!seen.has(rule.allow_uuid)) {
+      seen.add(rule.allow_uuid);
+      rules.push(rule);
+    }
+  }
+  return rules;
+});
+
 /// "remote images", or "remote images and media" when a video or audio
 /// element is among them; singular for one.
-const remoteNoun = computed(() => {
-  const n = remoteUnique.value.length;
+function remoteNoun(n: number): string {
   if (remoteRefs.value.some((r) => r.kind === "media")) {
     return n === 1 ? "remote image or media file" : "remote images and media";
   }
   return n === 1 ? "remote image" : "remote images";
-});
+}
+
+function ruleLabel(rule: RemoteAllow): string {
+  switch (rule.scope) {
+    case "source":
+      return `everything from ${chat.value?.source_ref?.label ?? rule.key}`;
+    case "document":
+      return "everything in this document";
+    case "host":
+      return `everything on ${rule.key}`;
+    default:
+      return rule.key;
+  }
+}
+
+async function remoteWrite(what: () => Promise<unknown>) {
+  const doc = chat.value;
+  if (!doc || remoteBusy.value) return;
+  remoteBusy.value = true;
+  remoteError.value = null;
+  try {
+    await what();
+    remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
+  } catch (e) {
+    remoteError.value = (e as Error).message;
+  } finally {
+    remoteBusy.value = false;
+  }
+}
+
+function allow(scope: AllowScope, key: string | null) {
+  if (!key) return;
+  // A `url` row names the URL as the server will see it.
+  const named = scope === "url" ? absoluteRemote(key) : key;
+  void remoteWrite(() => allowRemote(scope, named));
+}
+
+function forget(rule: RemoteAllow) {
+  void remoteWrite(() => forgetRemoteAllow(rule.allow_uuid));
+}
+
+function openRemoteTable(url: string, title: string) {
+  props.ctx.host.openCards(`tableView(${JSON.stringify({ url, title })})`);
+}
 
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
@@ -352,8 +456,15 @@ watch(
     loading.value = true;
     error.value = null;
     remoteRefs.value = [];
+    remoteError.value = null;
     try {
-      chat.value = await fetchChat(uuid);
+      // The server's answer before the document shows, so the first
+      // render is already under it: a placeholder that then vanished
+      // would read as a flicker, and a held image that then loaded as
+      // a leak.
+      const doc = await fetchChat(uuid);
+      remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
+      chat.value = doc;
     } catch (e) {
       error.value = (e as Error).message;
     } finally {
@@ -420,16 +531,79 @@ watch(
           </span>
         </li>
       </ul>
-      <div v-if="remoteUnique.length" class="remote-banner">
-        <span class="remote-banner-text">
-          <strong>{{ remoteUnique.length }}</strong> {{ remoteNoun }} not loaded — loading one would
-          tell its host you opened this.
+      <div
+        v-if="remoteUnique.length"
+        class="remote-banner"
+        :class="{ 'remote-banner--pending': remotePending.length }"
+      >
+        <template v-if="remotePending.length">
+          <span class="remote-banner-text">
+            <strong>{{ remotePending.length }}</strong> {{ remoteNoun(remotePending.length) }} not
+            loaded — loading one tells its host you opened this, once.
+          </span>
+          <span class="remote-banner-hosts">
+            <button
+              v-for="h in remoteHosts"
+              :key="h.host"
+              type="button"
+              class="remote-host"
+              :disabled="remoteBusy"
+              :title="`Load everything on ${h.host}, here and in every other document`"
+              @click="allow('host', h.host)"
+            >
+              {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
+            </button>
+          </span>
+          <span class="remote-banner-actions">
+            <button
+              type="button"
+              class="remote-action remote-load-all"
+              :disabled="remoteBusy"
+              title="Load everything in this document"
+              @click="allow('document', chat.markdown_uuid)"
+            >
+              Load all
+            </button>
+            <button
+              v-if="chat.source_ref"
+              type="button"
+              class="remote-action"
+              :disabled="remoteBusy"
+              :title="`Load remote images in every document from ${chat.source_ref.label} without asking`"
+              @click="allow('source', chat.source_ref.id)"
+            >
+              Always for {{ chat.source_ref.label }}
+            </button>
+          </span>
+        </template>
+        <span v-else class="remote-banner-text">
+          {{ remoteNoun(remoteUnique.length).replace(/^remote/, "Remote") }} loaded.
         </span>
-        <span class="remote-banner-hosts">
-          <span v-for="h in remoteHosts" :key="h.host" class="remote-host">
-            {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
+        <span v-if="remoteRules.length" class="remote-banner-rules">
+          <span class="remote-rules-label">Let through by</span>
+          <span v-for="rule in remoteRules" :key="rule.allow_uuid" class="remote-rule">
+            {{ ruleLabel(rule) }}
+            <button
+              type="button"
+              class="remote-rule-forget"
+              :disabled="remoteBusy"
+              :title="`Forget this rule (allowed ${rule.created_at_utc})`"
+              @click="forget(rule)"
+            >
+              ✕
+            </button>
           </span>
         </span>
+        <span class="remote-banner-links">
+          <a href="#" @click.prevent="openRemoteTable(REMOTE_ALLOW_TABLE, 'Remote media rules')"
+            >all rules</a
+          >
+          ·
+          <a href="#" @click.prevent="openRemoteTable(REMOTE_FETCHED_TABLE, 'Remote media fetched')"
+            >fetched</a
+          >
+        </span>
+        <span v-if="remoteError" class="remote-banner-error">{{ remoteError }}</span>
       </div>
       <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
@@ -465,7 +639,10 @@ watch(
           :hover-anchor-uuid="hoverAnchor"
           @open-edge="onOpenEdge"
           @hover-edge="onHoverEdge"
+          :remote-accept="remoteAccept"
+          :remote-context="remoteContext"
           @remote-media="remoteRefs = $event"
+          @remote-load="allow('url', $event)"
         />
       </div>
     </template>
@@ -584,7 +761,7 @@ watch(
 }
 /* The remote-images banner: above the body with the problems, since
    what the document would fetch from elsewhere is something to know
-   before reading it. */
+   before reading it. Muted once everything is loaded. */
 .remote-banner {
   display: flex;
   flex-wrap: wrap;
@@ -593,30 +770,97 @@ watch(
   margin: 0 0 0.5rem;
   padding: 0.4rem 0;
   font-size: 0.8rem;
+  color: var(--datalib-muted);
   border-top: 1px solid var(--datalib-border);
   border-bottom: 1px solid var(--datalib-border);
 }
-.remote-banner-text {
+.remote-banner--pending {
+  color: inherit;
+}
+.remote-banner-text,
+.remote-banner-rules,
+.remote-banner-error {
   flex: 1 1 100%;
 }
-.remote-banner-hosts {
+.remote-banner-hosts,
+.remote-banner-actions,
+.remote-banner-rules {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 0.3rem;
   align-items: center;
 }
-.remote-host {
-  font-family: ui-monospace, Menlo, monospace;
+.remote-banner-actions,
+.remote-banner-links {
+  margin-left: auto;
+}
+.remote-banner-links {
+  font-size: 0.75rem;
+  color: var(--datalib-muted);
+}
+.remote-banner-links a {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+.remote-host,
+.remote-action,
+.remote-rule {
+  font: inherit;
   font-size: 0.75rem;
   line-height: 1.3;
   padding: 0.1rem 0.5rem;
+  color: inherit;
   background: var(--datalib-input-bg, #fff);
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-radius: 999px;
 }
+.remote-host,
+.remote-action {
+  cursor: pointer;
+}
+.remote-host:hover,
+.remote-action:hover {
+  background: var(--datalib-hover, #f0f0f0);
+}
+.remote-host:disabled,
+.remote-action:disabled,
+.remote-rule-forget:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.remote-host {
+  font-family: ui-monospace, Menlo, monospace;
+}
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
+}
+.remote-load-all {
+  border-color: var(--datalib-accent, #6366f1);
+}
+.remote-rules-label {
+  font-size: 0.75rem;
+}
+.remote-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.remote-rule-forget {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.remote-rule-forget:hover {
+  color: #e35d6a;
+}
+.remote-banner-error {
+  color: #e35d6a;
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
