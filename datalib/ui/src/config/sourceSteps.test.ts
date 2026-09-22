@@ -11,6 +11,7 @@ import {
   listGroups,
   listSteps,
   seedFieldValues,
+  setGroupLoadRemoteImages,
   wireIntoFanIns,
   type ConfiguredStep,
   type FieldValues,
@@ -217,5 +218,44 @@ inputs = ["slack/render_markdown"]
     const fanIn = listSteps(next).find((s) => s.id === "unified_index/grid_index")!;
     expect(fanIn.inputs).toContain("slack-diff/render_markdown");
     expect(next).toContain('source = "slack"');
+  });
+});
+
+describe("setGroupLoadRemoteImages", () => {
+  const base = `[[groups]]
+id = "mail"
+name = "Fastmail"
+type = "email"
+
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "mail"
+function = "ingest"
+`;
+
+  it("adds the switch under the group's id and removes it again", () => {
+    const on = setGroupLoadRemoteImages(base, "mail", true);
+    expect(on).toContain('id = "mail"\nload_remote_images = true\nname = "Fastmail"');
+    // The other group and the steps are untouched.
+    expect(on).toContain('[[groups]]\nid = "slack"\ntype = "slack"\n');
+    expect(on).toContain('[[steps]]\ngroup = "mail"');
+    // Off is the default, so it is said by absence.
+    expect(setGroupLoadRemoteImages(on, "mail", false)).toBe(base);
+  });
+
+  it("replaces a switch already there rather than adding a second", () => {
+    const twice = setGroupLoadRemoteImages(
+      setGroupLoadRemoteImages(base, "mail", true),
+      "mail",
+      true,
+    );
+    expect(twice.match(/load_remote_images/g)).toHaveLength(1);
+  });
+
+  it("leaves the text alone for a group it cannot find", () => {
+    expect(setGroupLoadRemoteImages(base, "nope", true)).toBe(base);
   });
 });

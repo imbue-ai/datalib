@@ -20,6 +20,7 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { decorateRemoteMedia, loadRemoteMedia, type RemoteRef } from "./remoteMedia";
 import { sanitizeRenderedHtml } from "./sanitize";
 import { isBrowserClick } from "./chatLink";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
@@ -62,10 +63,21 @@ const props = defineProps<{
    * through unchanged.
    */
   markdownUuid?: string | null;
+  /**
+   * Whether the body's remote images and media are put back (proxied)
+   * as it renders, rather than held behind placeholders. The source's
+   * `load_remote_images` setting; see `remoteMedia.ts`.
+   */
+  loadRemote?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
+  /** Every remote reference the body carries, after each render. */
+  (e: "remote-media", refs: RemoteRef[]): void;
+  /** The remote references just loaded, by a placeholder's click or
+   *  by `loadRemote`. */
+  (e: "remote-loaded", urls: string[]): void;
   /**
    * Fired when the cursor enters or leaves an `.edge-source` span.
    * Payload is the edge's destination — `{ md, anchor }` — or null
@@ -134,10 +146,32 @@ for (const rule of ["html_block", "html_inline"] as const) {
 
 // Sanitized last, after every rewrite: the body is whatever the source
 // sent, and `html: true` above lets it through as HTML.
-const html = computed(() =>
-  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null })),
+const sanitized = computed(() =>
+  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }), {
+    loadRemote: props.loadRemote === true,
+  }),
 );
+const html = computed(() => sanitized.value.html);
+watch(sanitized, (s) => emit("remote-media", s.remote), { immediate: true });
 const root = ref<HTMLElement | null>(null);
+
+/** Put back the held remote references `accept` says yes to. The
+ *  parent's "load all" and per-host controls come through here. */
+function loadRemote(accept: (url: string) => boolean): void {
+  if (!root.value) return;
+  const urls = loadRemoteMedia(root.value, accept);
+  if (urls.length) emit("remote-loaded", urls);
+}
+defineExpose({ loadRemote });
+
+function onRemoteChipClick(ev: MouseEvent) {
+  const chip = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.remote-media");
+  if (!chip) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const url = chip.dataset.remoteUrl;
+  if (url) loadRemote((u) => u === url);
+}
 
 async function onCopyClick(ev: MouseEvent) {
   const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.copy-uuid");
@@ -284,6 +318,7 @@ watch(html, async () => {
   await nextTick();
   if (root.value) {
     injectCopyUuidButtons(root.value);
+    decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
   decorateEdgeSources();
@@ -317,6 +352,7 @@ watch(
 onMounted(() => {
   if (root.value) {
     injectCopyUuidButtons(root.value);
+    decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
   decorateEdgeSources();
@@ -334,6 +370,7 @@ onMounted(() => {
       (ev) => {
         onBodyEdgeClick(ev);
         onCopyClick(ev);
+        onRemoteChipClick(ev);
       }
     "
     @mouseover="onBodyMouseOver"
@@ -600,6 +637,55 @@ onMounted(() => {
   background: var(--datalib-card-bg, #1f2937);
   outline: 2px solid var(--datalib-accent, #6366f1);
   border-radius: 3px;
+}
+/* A remote image or media element held back by the sanitizer
+   (`remoteMedia.ts`) has no source to show; the placeholder before it
+   says what it is and where it would load from. An email's tracking
+   pixel gets the same chip — that it is there is the point. */
+.chat-body .remote-blocked {
+  display: none;
+}
+.chat-body button.remote-media {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  max-width: 100%;
+  margin: 0.15rem 0;
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  color: var(--datalib-muted, #94a3b8);
+  background: var(--datalib-card-bg, #fafafa);
+  border: 1px dashed var(--datalib-border, #d8d8d8);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-body button.remote-media:hover {
+  color: inherit;
+  border-style: solid;
+  background: var(--datalib-hover, #f0f0f0);
+}
+.chat-body button.remote-media .remote-media-icon {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+.chat-body button.remote-media .remote-media-host {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.chat-body button.remote-media .remote-media-alt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 24rem;
+  font-style: italic;
+}
+.chat-body button.remote-media--pixel {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  opacity: 0.8;
 }
 /* Attachment images arrive at their original resolution; without a
    cap a phone photo renders thousands of pixels wide inside the pane.

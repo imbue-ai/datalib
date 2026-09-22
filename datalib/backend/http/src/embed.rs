@@ -24,8 +24,15 @@ struct UiAssets;
 /// - `style-src 'unsafe-inline'`: the custom elements put `<style>` in
 ///   their shadow roots, and the renderers emit `style=`. Inline style
 ///   is not a code path.
-/// - `img-src`/`media-src` any `http(s):`: a rendered email or chat may
-///   reference a remote image, as it did before the policy existed.
+/// - `img-src`/`media-src` `'self' data: blob:` and **no remote host**:
+///   a rendered email or chat may reference a remote image, and loading
+///   it tells the sender's server your address and the moment you
+///   opened the message — a tracking pixel is exactly that. The
+///   sanitizer (`ui/src/cards/sanitize.ts`) strips remote references
+///   before they reach the DOM and offers to load them; this line is
+///   the guarantee behind it, for anything the sanitizer misses. A
+///   reference the person chooses to load goes through
+///   [`crate::remote_media`], which is `'self'`.
 /// - `connect-src ipc: http://ipc.localhost`: Tauri's IPC. The desktop
 ///   shell loads this page from the server as a remote URL, so Tauri
 ///   does not rewrite the policy the way it would for a page it serves
@@ -36,8 +43,8 @@ struct UiAssets;
 pub const APP_CSP: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-eval'; \
     style-src 'self' 'unsafe-inline'; \
-    img-src 'self' data: blob: http: https:; \
-    media-src 'self' data: blob: http: https:; \
+    img-src 'self' data: blob:; \
+    media-src 'self' data: blob:; \
     font-src 'self' data:; \
     connect-src 'self' ipc: http://ipc.localhost; \
     frame-src 'self'; \

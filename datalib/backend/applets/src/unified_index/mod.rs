@@ -18,6 +18,7 @@ use axum::{
 mod columns;
 mod problems;
 
+use datalib_columns::Identity;
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
@@ -220,6 +221,13 @@ pub struct ChatResponse {
     pub created_at: Option<String>,
     pub source_label: Option<String>,
     pub source_url: Option<String>,
+    /// The configured source this document came from, as the grid's
+    /// Source column shows it. `None` when no grid row points at it.
+    pub source_ref: Option<Identity>,
+    /// Whether the config says to load this document's remote images
+    /// without asking. Off by default; the document view offers the
+    /// switch, per source.
+    pub load_remote_images: bool,
     pub body: String,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
@@ -585,6 +593,12 @@ async fn chat(
             Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{markdown_uuid}")),
             _ => None,
         });
+    let sources = columns::Sources::read(&s.root);
+    let source_ref = meta.source_id.as_deref().map(|id| sources.identity(id));
+    let load_remote_images = meta
+        .source_id
+        .as_deref()
+        .is_some_and(|id| sources.load_remote_images(id));
     let outgoing_edges = s
         .repo
         .outgoing_edges(&markdown_uuid)
@@ -616,6 +630,8 @@ async fn chat(
         created_at: meta.created_at,
         source_label: meta.source_label,
         source_url,
+        source_ref,
+        load_remote_images,
         body,
         outgoing_edges,
         problems,

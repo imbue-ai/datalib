@@ -42,10 +42,14 @@ command = "datalib-applet unified_index"
 ```
 
 **A group** is one thing on the Manage screen: an `id`, an optional
-`name`, an optional `type`, an optional `description`. A source is a
-group with a `type`; the unified index is a group without one. `name`
-and `description` are display text — never forwarded to a step, never
-fingerprinted — so editing either re-runs nothing.
+`name`, an optional `type`, an optional `description`, and
+`load_remote_images` (default `false`: the document view blocks a
+document's remote images and offers to load them; `true` loads them
+without asking, for a source whose senders are trusted). A source is a
+group with a `type`; the unified index is a group without one. `name`,
+`description` and `load_remote_images` are read by the UI only — never
+forwarded to a step, never fingerprinted — so editing any of them
+re-runs nothing.
 
 **A step** is `(group, function)`. The loader composes its id as
 `<group>/<function>`; it is never written, and nothing downstream

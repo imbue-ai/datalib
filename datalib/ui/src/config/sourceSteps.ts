@@ -810,6 +810,12 @@ export function describeGroup(text: string, groupId: string, description: string
   return setGroupLine(text, groupId, "description", descriptionLine(description));
 }
 
+/// Set or (when off) remove the `load_remote_images` switch of one
+/// `[[groups]]` entry: off is the default, so it is said by absence.
+export function setGroupLoadRemoteImages(text: string, groupId: string, on: boolean): string {
+  return setGroupLine(text, groupId, "load_remote_images", on ? "load_remote_images = true" : null);
+}
+
 /// Replace the `<key> = …` line of one `[[groups]]` entry with `line`,
 /// remove it when `line` is null, or add it under the `id` line when the
 /// entry has none. The rest of the text is untouched.

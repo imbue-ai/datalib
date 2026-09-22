@@ -75,12 +75,18 @@ process_log_lines = 200000
 # the directories they write — are composed from the two. An optional
 # `description` says what this source is to you. Like the name it is
 # display text nothing depends on; search does not read it yet
-# (imbue-ai/datalib#409).
+# (imbue-ai/datalib#409). `load_remote_images` lets the document view
+# load the images a document references on a remote host without
+# asking first; off unless said, because loading one tells its host
+# who opened the document and when. Turn it on for a source whose
+# senders you trust — a chat with friends, not a newsletter. Like the
+# name, read by the UI only: flipping it re-runs nothing.
 [[groups]]
 id = "slack"
 name = "Work Slack"
 type = "slack"
 description = "The company Slack, mostly the infra and on-call channels."
+load_remote_images = true
 
 [[steps]]
 group = "slack"
