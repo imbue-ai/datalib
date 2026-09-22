@@ -58,7 +58,10 @@ test("opening an email with remote images reaches no remote host", async ({ page
   await expect(chips).toHaveCount(2);
   await expect(chips.nth(0).locator(".remote-media-host")).toHaveText("risa.tourism");
   await expect(chips.nth(0).locator(".remote-media-alt")).toHaveText("Temtibi Lagoon at sunset");
-  await expect(chips.nth(0)).toHaveAttribute("title", HERO);
+  await expect(chips.nth(0)).toHaveAttribute(
+    "title",
+    new RegExp(`^${HERO.replace(/[.?]/g, "\\$&")}`),
+  );
   await expect(chips.nth(1).locator(".remote-media-host")).toHaveText(
     "pixel.ferengi-marketing.example",
   );

@@ -187,3 +187,5 @@ macro_rules! stamps_rung {
 pub(crate) const FEEDBACK_LADDER: &[Migration] = &[stamps_rung!(FEEDBACK)];
 pub(crate) const SYNC_JOBS_LADDER: &[Migration] = &[stamps_rung!(SYNC_JOBS)];
 pub(crate) const DISK_USAGE_LADDER: &[Migration] = &[stamps_rung!(DISK_USAGE)];
+/// Born after the stamp rename; nothing to climb yet.
+pub(crate) const REMOTE_MEDIA_LADDER: &[Migration] = &[];

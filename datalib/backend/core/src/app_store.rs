@@ -1,20 +1,25 @@
-//! `AppStore` — the three stores this server owns: filed feedback, the
-//! sync job queue, and the bytes-on-disk timeseries, one doltlite file
-//! each.
+//! `AppStore` — the four stores this server owns: filed feedback, the
+//! sync job queue, the bytes-on-disk timeseries, and remote media (the
+//! allow-list and the download CAS's index), one doltlite file each.
 
-use crate::app_store_migrate::{DISK_USAGE_LADDER, FEEDBACK_LADDER, SYNC_JOBS_LADDER};
+use crate::app_store_migrate::{
+    DISK_USAGE_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER, SYNC_JOBS_LADDER,
+};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
 use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
+use app_schema::remote_media::allow::RemoteMediaAllowRow;
+use app_schema::remote_media::media::RemoteMediaRow;
+use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
 use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow, DDL as SYNC_JOBS_DDL};
 use async_trait::async_trait;
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-/// The three application stores: filed feedback, the sync job queue,
-/// and the bytes-on-disk timeseries.
+/// The four application stores: filed feedback, the sync job queue,
+/// the bytes-on-disk timeseries, and remote media.
 pub struct AppStore {
     /// Filed feedback. Outside the cache-tagged index tree, because
     /// nothing regenerates it.
@@ -25,6 +30,10 @@ pub struct AppStore {
     /// server is up, and never committed — so it must not share a file
     /// with anything that is.
     usage_pool: SqlitePool,
+    /// What remote media a person let a document load, and the URLs
+    /// fetched into the download CAS. Committed per write, like
+    /// feedback, so the decisions have a history.
+    remote_media_pool: SqlitePool,
     /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
     /// Probed once at connect time via `pragma_function_list`. When
     /// false, every `commit_version` call is a no-op — the row still
@@ -43,6 +52,7 @@ impl AppStore {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
         let usage_pool = open_pool(&crate::layout::usage_db(root)).await?;
+        let remote_media_pool = open_pool(&crate::layout::remote_media_db(root)).await?;
         let has_dolt = probe_dolt_extensions(&feedback_pool).await;
         let internal = |e: anyhow::Error| sqlx::Error::Protocol(format!("{e:#}"));
         // Before the ladder and the DDL: a store a newer line of datalib
@@ -69,10 +79,16 @@ impl AppStore {
                 DISK_USAGE_LADDER,
                 false,
             ),
+            (
+                &remote_media_pool,
+                crate::layout::remote_media_db(root),
+                REMOTE_MEDIA_LADDER,
+                has_dolt,
+            ),
         ] {
             let written_by = datalib_store_meta::read(pool).await.map_err(internal)?;
             if let Err(newer) = datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
-                for p in [&feedback_pool, &jobs_pool, &usage_pool] {
+                for p in [&feedback_pool, &jobs_pool, &usage_pool, &remote_media_pool] {
                     p.close().await;
                 }
                 return Err(sqlx::Error::Configuration(Box::new(newer)));
@@ -80,7 +96,7 @@ impl AppStore {
             let stored = written_by.map_or(0, |m| m.schema_version);
             let top = datalib_store_meta::ladder::top(ladder);
             if stored > top {
-                for p in [&feedback_pool, &jobs_pool, &usage_pool] {
+                for p in [&feedback_pool, &jobs_pool, &usage_pool, &remote_media_pool] {
                     p.close().await;
                 }
                 return Err(sqlx::Error::Configuration(Box::new(
@@ -104,15 +120,18 @@ impl AppStore {
             feedback_pool,
             jobs_pool,
             usage_pool,
+            remote_media_pool,
             has_dolt,
         };
         store.init_feedback_table().await?;
         store.init_sync_jobs_table().await?;
         store.init_disk_usage_table().await?;
-        // Which build wrote each store, beside its tables. Feedback is
-        // committed per row with `-Am`, so a changed meta row is sealed
-        // here rather than left to ride into the next feedback commit;
-        // jobs and usage are never committed and their rows just land.
+        store.init_remote_media_tables().await?;
+        // Which build wrote each store, beside its tables. Feedback and
+        // remote media are committed per row with `-Am`, so a changed
+        // meta row is sealed here rather than left to ride into the next
+        // commit; jobs and usage are never committed and their rows just
+        // land.
         for (pool, kind, ddl, ladder) in [
             (
                 &store.feedback_pool,
@@ -132,13 +151,20 @@ impl AppStore {
                 DISK_USAGE_DDL,
                 DISK_USAGE_LADDER,
             ),
+            (
+                &store.remote_media_pool,
+                StoreKind::RemoteMedia,
+                REMOTE_MEDIA_DDL,
+                REMOTE_MEDIA_LADDER,
+            ),
         ] {
             let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
             let top = datalib_store_meta::ladder::top(ladder);
             let changed = datalib_store_meta::write(pool, kind, &hash, top)
                 .await
                 .map_err(internal)?;
-            if changed && has_dolt && kind == StoreKind::Feedback {
+            let committed = matches!(kind, StoreKind::Feedback | StoreKind::RemoteMedia);
+            if changed && has_dolt && committed {
                 sqlx::query("SELECT dolt_commit('-Am', ?)")
                     .bind(format!(
                         "meta: written by datalib {}",
@@ -185,6 +211,12 @@ impl AppStore {
     async fn init_disk_usage_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in DISK_USAGE_DDL {
             sqlx::query(*ddl).execute(&self.usage_pool).await?;
+        }
+        Ok(())
+    }
+    async fn init_remote_media_tables(&self) -> Result<(), sqlx::Error> {
+        for (_table, ddl) in REMOTE_MEDIA_DDL {
+            sqlx::query(*ddl).execute(&self.remote_media_pool).await?;
         }
         Ok(())
     }
@@ -511,6 +543,153 @@ impl AppRepo for AppStore {
             })
             .collect())
     }
+
+    async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT allow_uuid, scope, key, created_at_utc, tz_offset FROM remote_media_allow \
+             ORDER BY created_at_utc DESC",
+        )
+        .fetch_all(&self.remote_media_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(rows.iter().map(allow_row).collect())
+    }
+
+    async fn allow_remote(
+        &self,
+        scope: AllowScope,
+        key: &str,
+    ) -> Result<RemoteMediaAllowRow, RepoError> {
+        let mut conn = self
+            .remote_media_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let existing = sqlx::query(
+            "SELECT allow_uuid, scope, key, created_at_utc, tz_offset FROM remote_media_allow \
+             WHERE scope = ? AND key = ?",
+        )
+        .bind(scope.as_str())
+        .bind(key)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        if let Some(r) = existing {
+            return Ok(allow_row(&r));
+        }
+        let (created_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let row = RemoteMediaAllowRow {
+            allow_uuid: uuid::Uuid::new_v4().to_string(),
+            scope: scope.as_str().to_string(),
+            key: key.to_string(),
+            created_at_utc,
+            tz_offset: Some(tz_offset),
+        };
+        sqlx::query(
+            "INSERT INTO remote_media_allow (allow_uuid, scope, key, created_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&row.allow_uuid)
+        .bind(&row.scope)
+        .bind(&row.key)
+        .bind(&row.created_at_utc)
+        .bind(&row.tz_offset)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert remote_media_allow: {e}")))?;
+        let msg = format!("remote media: allow {} {}", row.scope, row.key);
+        self.commit_version(&mut conn, &msg).await?;
+        Ok(row)
+    }
+
+    async fn delete_remote_allow(&self, allow_uuid: &str) -> Result<bool, RepoError> {
+        let mut conn = self
+            .remote_media_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let done = sqlx::query("DELETE FROM remote_media_allow WHERE allow_uuid = ?")
+            .bind(allow_uuid)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("delete remote_media_allow: {e}")))?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let msg = format!("remote media: forget {allow_uuid}");
+        self.commit_version(&mut conn, &msg).await?;
+        Ok(true)
+    }
+
+    async fn get_remote_media(&self, url: &str) -> Result<Option<RemoteMediaRow>, RepoError> {
+        let row = sqlx::query(
+            "SELECT url, sha256, content_type, byte_size, fetched_at_utc, tz_offset \
+             FROM remote_media WHERE url = ?",
+        )
+        .bind(url)
+        .fetch_optional(&self.remote_media_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(row.as_ref().map(media_row))
+    }
+
+    async fn list_remote_media(&self) -> Result<Vec<RemoteMediaRow>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT url, sha256, content_type, byte_size, fetched_at_utc, tz_offset \
+             FROM remote_media ORDER BY fetched_at_utc DESC",
+        )
+        .fetch_all(&self.remote_media_pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(rows.iter().map(media_row).collect())
+    }
+
+    async fn record_remote_media(&self, row: RemoteMediaRow) -> Result<(), RepoError> {
+        let mut conn = self
+            .remote_media_pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO remote_media \
+             (url, sha256, content_type, byte_size, fetched_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.url)
+        .bind(&row.sha256)
+        .bind(&row.content_type)
+        .bind(row.byte_size)
+        .bind(&row.fetched_at_utc)
+        .bind(&row.tz_offset)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert remote_media: {e}")))?;
+        let msg = format!("remote media: fetched {}", row.url);
+        self.commit_version(&mut conn, &msg).await?;
+        Ok(())
+    }
+}
+
+fn allow_row(r: &sqlx::sqlite::SqliteRow) -> RemoteMediaAllowRow {
+    RemoteMediaAllowRow {
+        allow_uuid: r.try_get("allow_uuid").unwrap_or_default(),
+        scope: r.try_get("scope").unwrap_or_default(),
+        key: r.try_get("key").unwrap_or_default(),
+        created_at_utc: r.try_get("created_at_utc").unwrap_or_default(),
+        tz_offset: r.try_get("tz_offset").ok(),
+    }
+}
+
+fn media_row(r: &sqlx::sqlite::SqliteRow) -> RemoteMediaRow {
+    RemoteMediaRow {
+        url: r.try_get("url").unwrap_or_default(),
+        sha256: r.try_get("sha256").unwrap_or_default(),
+        content_type: r.try_get("content_type").unwrap_or_default(),
+        byte_size: r.try_get("byte_size").unwrap_or_default(),
+        fetched_at_utc: r.try_get("fetched_at_utc").unwrap_or_default(),
+        tz_offset: r.try_get("tz_offset").ok(),
+    }
 }
 
 /// Ask the linked libsqlite3 whether `dolt_commit` is a registered
@@ -566,6 +745,59 @@ mod tests {
             tz_offset: None,
             bytes,
         }
+    }
+
+    /// An allow is one row however often it is asked for, comes back
+    /// in the list until deleted, and a fetched URL is one row that a
+    /// second fetch replaces.
+    #[tokio::test]
+    async fn remote_media_allows_are_unique_and_deletable() {
+        let td = tempfile::tempdir().unwrap();
+        let store = AppStore::open(td.path()).await.unwrap();
+        let first = store
+            .allow_remote(AllowScope::Host, "cdn.example")
+            .await
+            .unwrap();
+        let again = store
+            .allow_remote(AllowScope::Host, "cdn.example")
+            .await
+            .unwrap();
+        assert_eq!(first.allow_uuid, again.allow_uuid);
+        let other = store
+            .allow_remote(AllowScope::Url, "https://cdn.example/a.png")
+            .await
+            .unwrap();
+        let listed = store.list_remote_allows().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|r| AllowScope::parse(&r.scope).is_some()));
+        assert!(store.delete_remote_allow(&first.allow_uuid).await.unwrap());
+        assert!(!store.delete_remote_allow(&first.allow_uuid).await.unwrap());
+        let listed = store.list_remote_allows().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].allow_uuid, other.allow_uuid);
+
+        let fetched = |sha: &str| RemoteMediaRow {
+            url: "https://cdn.example/a.png".into(),
+            sha256: sha.into(),
+            content_type: "image/png".into(),
+            byte_size: 3,
+            fetched_at_utc: "2026-09-22T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert!(store
+            .get_remote_media("https://cdn.example/a.png")
+            .await
+            .unwrap()
+            .is_none());
+        store.record_remote_media(fetched("aaa")).await.unwrap();
+        store.record_remote_media(fetched("bbb")).await.unwrap();
+        let got = store
+            .get_remote_media("https://cdn.example/a.png")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.sha256, "bbb");
+        assert_eq!(store.list_remote_media().await.unwrap().len(), 1);
     }
 
     /// The disk-usage timeseries round-trips, and — the part worth
@@ -737,7 +969,7 @@ mod tests {
         assert_eq!(again.list_jobs(false, 10).await.unwrap().len(), 2);
     }
 
-    /// Each of the three stores says which build wrote it, with its own
+    /// Each of the stores says which build wrote it, with its own
     /// kind; feedback's rows are committed on the spot rather than left
     /// to ride into the next filed feedback, and a second open by the
     /// same build commits nothing more.
@@ -749,6 +981,7 @@ mod tests {
             (&store.feedback_pool, StoreKind::Feedback),
             (&store.jobs_pool, StoreKind::Jobs),
             (&store.usage_pool, StoreKind::Usage),
+            (&store.remote_media_pool, StoreKind::RemoteMedia),
         ] {
             let meta = datalib_store_meta::read(pool)
                 .await

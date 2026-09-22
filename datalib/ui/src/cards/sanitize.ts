@@ -13,11 +13,13 @@
 //
 // A reference to a remote host — an image, a video, a CSS background —
 // is not a script but a request the browser would make on the sender's
-// behalf, telling them who opened the document and when. Every such
-// reference is taken off its element and kept as `data-remote-<attr>`
-// for the document view to show in its place (`remoteMedia.ts`).
-// Nothing leaves here pointing at a remote host, and the app's CSP
-// refuses anything that still does.
+// behalf, telling them who opened the document and when. Unless the
+// caller's `accept` says the person let it load, every such reference
+// is taken off its element and kept as `data-remote-<attr>` for the
+// document view to show in its place; one accepted is rewritten to the
+// server's `/api/remote_media` route (`remoteMedia.ts`). Nothing leaves
+// here pointing at a remote host, and the app's CSP refuses anything
+// that still does.
 import DOMPurify from "dompurify";
 import {
   blockAttribute,
@@ -25,14 +27,22 @@ import {
   isRemoteUrl,
   kindOf,
   loadingAttributes,
-  remoteInSrcset,
-  stripStyleUrls,
+  proxied,
+  rewriteSrcset,
+  rewriteStyleUrls,
   type RemoteRef,
 } from "./remoteMedia";
 
+export type SanitizeOptions = {
+  /** Which remote references may load, through the server. Absent:
+   *  none. */
+  accept?: (url: string) => boolean;
+};
+
 export type Sanitized = {
   html: string;
-  /** Every remote reference the body carried, in document order. */
+  /** Every remote reference the body carried, in document order,
+   *  whether held or let through. */
   remote: RemoteRef[];
 };
 
@@ -52,12 +62,13 @@ DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
   }
 });
 
-// DOMPurify's hooks are global and synchronous, so the findings of the
-// call in progress live here for its duration.
+// DOMPurify's hooks are global and synchronous, so the options and the
+// findings of the call in progress live here for its duration.
+let accept: (url: string) => boolean = () => false;
 let found: RemoteRef[] = [];
 
-function note(url: string, node: Node, attr: string): void {
-  found.push({ url, host: hostOf(url), kind: kindOf(node.nodeName, attr) });
+function record(url: string, node: Node, attr: string, loaded: boolean): void {
+  found.push({ url, host: hostOf(url), kind: kindOf(node.nodeName, attr), loaded });
 }
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -72,23 +83,31 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     const value = el.getAttribute(attr);
     if (value === null) continue;
     if (attr === "srcset") {
-      const remote = remoteInSrcset(value);
+      // All or nothing: a srcset half held would still name a host.
+      const { remote } = rewriteSrcset(value, (u) => u);
       if (remote.length === 0) continue;
-      for (const u of remote) note(u, node, attr);
-      blockAttribute(el, attr, null);
+      const all = remote.every(accept);
+      for (const u of remote) record(u, node, attr, all);
+      if (all) el.setAttribute(attr, rewriteSrcset(value, proxied).srcset);
+      else blockAttribute(el, attr, null);
     } else if (attr === "style") {
-      const { style, remote } = stripStyleUrls(value);
+      const { style: stripped, remote } = rewriteStyleUrls(value, () => null);
       if (remote.length === 0) continue;
-      for (const u of remote) note(u, node, attr);
-      blockAttribute(el, attr, style);
+      const all = remote.every(accept);
+      for (const u of remote) record(u, node, attr, all);
+      if (all) el.setAttribute(attr, rewriteStyleUrls(value, proxied).style);
+      else blockAttribute(el, attr, stripped);
     } else if (isRemoteUrl(value)) {
-      note(value, node, attr);
-      blockAttribute(el, attr, null);
+      const loaded = accept(value);
+      record(value, node, attr, loaded);
+      if (loaded) el.setAttribute(attr, proxied(value));
+      else blockAttribute(el, attr, null);
     }
   }
 });
 
-export function sanitizeRenderedHtml(html: string): Sanitized {
+export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}): Sanitized {
+  accept = options.accept ?? (() => false);
   found = [];
   const clean = DOMPurify.sanitize(html, {
     // Not in DOMPurify's default set; the plot pages are iframes.

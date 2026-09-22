@@ -9,6 +9,9 @@
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/jobs.doltlite_db               the sync job queue
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
+<data_root>/system/remote_media.doltlite_db       what remote media a person let a document
+                                                  load, and the URLs fetched for it
+<data_root>/system/remote_media/<sha256>          the download CAS those URLs' bytes land in
 <data_root>/system/runs/runs.sqlite               every run's step states, log lines and
                                                   metrics, plus the app server's own log;
                                                   every process — runner, step attempt,
@@ -35,8 +38,8 @@ One writer per file, and it is load-bearing: doltlite's working set is
 per *file* and shared across processes, so two writers on one file
 commit each other's in-flight rows. The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
-the index; `datalib-http` owns feedback, jobs and usage; the applet only
-reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
+the index; `datalib-http` owns feedback, jobs, usage and remote media;
+the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in WAL mode, written by both the runner (its runs) and the server
@@ -45,7 +48,7 @@ SQLite in WAL mode, written by both the runner (its runs) and the server
 Who writes which line of it, how to add one, and how to read it is
 [`logging.md`](logging.md).
 
-## The three stores `datalib-http` owns
+## The four stores `datalib-http` owns
 
 `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
 them in `AppStore` (`datalib/backend/core/src/app_store.rs`), the
@@ -76,6 +79,25 @@ datalib carries the instant it was next *measured*. Reading it is
 `SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
 (no repeated value, nothing closer than five seconds), so carry the last
 value forward rather than assuming a fixed interval.
+
+**Remote media** (issue #648). A rendered document's images on remote
+hosts are held back by the UI until a person lets them load, because
+loading one tells its host who opened the document and when. A
+decision is a row in `remote_media_allow` — its `scope` is `url`,
+`document`, `host` or `source` and its `key` the thing named — and
+the UI applies the list at render time (`ui/src/cards/remoteMedia.ts`).
+A URL let through is fetched once by `GET /api/remote_media?url=…`
+(`http/src/remote_media.rs`: no cookie or referrer, media types only,
+a size cap, redirects re-judged per hop, private and loopback targets
+refused), its bytes kept at `system/remote_media/<sha256>` and a
+`remote_media` row saying so; every later request is answered from
+there, so the host hears of it once. Both tables are committed per
+write like feedback, are served as typed tables at
+`/api/remote_media/allow` and `/api/remote_media/fetched`, and an allow
+row is deleted through `DELETE /api/remote_media/allow/{uuid}` — the
+document banner offers that for the rows in effect. The rows are the
+UI's memory, not a gate on the route: a caller holding the token may
+fetch any public URL, as it may do anything else the API offers.
 
 ## Inspecting a store
 
