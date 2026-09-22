@@ -27,6 +27,25 @@ const renderToggle = (page: Page) =>
   wizard(page).locator(
     '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
   );
+/// The Rendering section's second toggle: whether this source's
+/// markdown is named by `unified_index/qmd_index`, and so reachable by
+/// semantic search.
+const qmdToggle = (page: Page) =>
+  wizard(page).locator(
+    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for semantic search")) input.wiz-bool',
+  );
+
+/// The `inputs` one fan-in declares, read out of the config text.
+function fanInInputs(config: string, fn: string): string[] {
+  const table = new RegExp(
+    `\\[\\[steps\\]\\]\\ngroup = "unified_index"\\nfunction = "${fn}"\\ninputs = \\[([^\\]]*)\\]`,
+  ).exec(config);
+  if (!table) throw new Error(`no unified_index/${fn} step in the config`);
+  return table[1]
+    .split(",")
+    .map((t) => t.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
 const idField = (page: Page) => field(page, "Id");
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
@@ -234,6 +253,43 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   const after = await editor.inputValue();
   expect(after).not.toContain("no-render/render_markdown");
   expect(after).toContain('group = "no-render"');
+});
+
+test("semantic search is a choice, and only the qmd fan-in feels it", async ({ page }) => {
+  // Embedding is the slow part of a sync, so a source can be rendered
+  // and gridded without being embedded. The grid index is not a
+  // choice — a source missing from it is missing from the table.
+  const editor = page.locator(".m2-editor");
+  await pickClaude(page);
+  await nameField(page).fill("Rows Only");
+  await expect(qmdToggle(page)).toBeChecked();
+  await qmdToggle(page).uncheck();
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Rows Only.")).toBeVisible();
+
+  await expect(editor).toHaveValue(/rows-only\/render_markdown/);
+  const added = await editor.inputValue();
+  expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
+  expect(fanInInputs(added, "qmd_index")).not.toContain("rows-only/render_markdown");
+
+  // Reopening reads the answer back off the config, not off a default.
+  await expandGroup(page, "rows-only");
+  await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
+  await expect(qmdToggle(page)).not.toBeChecked();
+  // Rendering off leaves nothing to index, so the question cannot be
+  // answered — and answering it would write an input naming a step
+  // that no longer exists.
+  await renderToggle(page).uncheck();
+  await expect(qmdToggle(page)).toBeDisabled();
+  await renderToggle(page).check();
+
+  await qmdToggle(page).check();
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved Rows Only.")).toBeVisible();
+  const saved = await editor.inputValue();
+  expect(fanInInputs(saved, "qmd_index")).toContain("rows-only/render_markdown");
+  // Added once, however many times the source is saved.
+  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({

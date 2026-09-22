@@ -65,7 +65,8 @@ picker fields (`label`, `blurb`, `keywords`, `kind`, `icon`,
 `buildSource` produces the TOML for a group and its two steps,
 `appendSource` / `replaceSteps` / `removeSteps` splice it into the
 text, `wireIntoFanIns` / `unwireFromFanIns` keep the index steps'
-`inputs` right, and the result is saved through the existing
+`inputs` right (either can act on one fan-in alone, which is how the
+semantic-search tickbox is written), and the result is saved through the existing
 `PUT /api/config`, which runs the real loader. There is no
 `toml_edit` and no backend draft endpoint. Two rules make editing
 trustworthy: `paramsAreRepresentable` gates the Edit button, so a

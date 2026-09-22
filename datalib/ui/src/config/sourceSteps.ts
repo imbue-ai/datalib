@@ -831,42 +831,94 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// Wire a render step into every fan-in that consumes rendered markdown.
+/// The fan-in steps that consume rendered markdown, by function: the
+/// SQL index the grid reads, and the qmd collections semantic search
+/// reads. A source can be in one and not the other.
+export type FanInFunction = "grid_index" | "qmd_index";
+
+/// One `[[steps]]` table and its body: up to the next line opening a
+/// table — its own `[steps.params…]` sub-table, or the next entry.
+/// Stopping on a *line* that starts with `[` rather than on any `[` is
+/// what lets the body hold an array. Keys inside a table can be written
+/// in any order, so the body is *tested* rather than pattern-matched.
+const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
+
+const INPUTS_ARRAY = /(inputs\s*=\s*\[)([^\]]*)(\])/;
+
+/// Is this step body a fan-in — filed under the `unified_index` group,
+/// or, for a custom step, writing an `unified_index/…` id — and, when
+/// `only` names one, that particular one?
+function isFanIn(body: string, only?: FanInFunction): boolean {
+  const verbatim = /id\s*=\s*"unified_index\/([^"]*)"/.exec(body);
+  if (!verbatim && !/group\s*=\s*"unified_index"/.test(body)) return false;
+  if (!only) return true;
+  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
+  return fn === only;
+}
+
+/// Rewrite the `inputs` of the fan-ins `only` selects — all of them
+/// when it is absent — leaving every other table, and every other key
+/// in theirs, exactly as written.
+function editFanInInputs(
+  text: string,
+  only: FanInFunction | undefined,
+  edit: (ids: string[]) => string[],
+): string {
+  return text.replace(STEP_TABLE, (whole, head: string, body: string) => {
+    if (!isFanIn(body, only)) return whole;
+    // Function replacers throughout: an id is user text, and as a
+    // replacement *string* `$1`, `$&` and `$$` in it would be expanded.
+    const next = body.replace(INPUTS_ARRAY, (_m, open: string, list: string, close: string) => {
+      const ids = list
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      return `${open}${edit(ids).join(", ")}${close}`;
+    });
+    return `${head}${next}`;
+  });
+}
+
+/// Wire a render step into the fan-ins that consume rendered markdown —
+/// every one, or just the one `only` names.
 ///
 /// The fan-ins name their inputs by id, so a source added without this renders
 /// happily and is never indexed — invisible in search, with nothing on screen
 /// to say why.
-/// A fan-in step's `inputs = [...]`, keyed on the step being filed
-/// under the `unified_index` group (or, for a custom step, writing an
-/// `unified_index/…` id), within its own table.
-const FAN_IN_INPUTS =
-  /((?:group\s*=\s*"unified_index"|id\s*=\s*"unified_index\/[^"]*")[^\[]*?inputs\s*=\s*\[)([^\]]*)(\])/g;
-
-export function wireIntoFanIns(text: string, renderStepId: string): string {
-  return text.replace(FAN_IN_INPUTS, (whole, head: string, body: string, tail: string) => {
-    const ids = body
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (ids.includes(`"${renderStepId}"`)) return whole;
-    ids.push(`"${renderStepId}"`);
-    return `${head}${ids.join(", ")}${tail}`;
-  });
+export function wireIntoFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only, (ids) =>
+    ids.includes(quote(renderStepId)) ? ids : [...ids, quote(renderStepId)],
+  );
 }
 
-/// Drop a render step from every fan-in's inputs. The mirror of
+/// Drop a render step from the fan-ins' inputs. The mirror of
 /// [`wireIntoFanIns`]: an input naming a step that no longer exists is
 /// a config the runner refuses outright, so deleting a source has to
 /// take its edges with it.
-export function unwireFromFanIns(text: string, renderStepId: string): string {
-  return text.replace(FAN_IN_INPUTS, (_whole, head: string, body: string, tail: string) => {
-    const ids = body
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean)
-      .filter((t) => t !== `"${renderStepId}"`);
-    return `${head}${ids.join(", ")}${tail}`;
-  });
+export function unwireFromFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only, (ids) => ids.filter((t) => t !== quote(renderStepId)));
+}
+
+/// Does the fan-in `fn` name this render step — that is, does this
+/// source reach that index? A config with no such step answers false,
+/// which is what it is: nothing indexes this source that way.
+export function fanInNames(
+  steps: ConfiguredStep[],
+  fn: FanInFunction,
+  renderStepId: string,
+): boolean {
+  return steps.some(
+    (s) => s.kind === "step" && fanInFunctionOf(s) === fn && s.inputs.includes(renderStepId),
+  );
+}
+
+/// Which fan-in a step is, or null for a step that is not one. A
+/// grouped step says so with `group` + `function`; a custom step filed
+/// outside any group says it in the id it writes.
+function fanInFunctionOf(step: ConfiguredStep): string | null {
+  if (step.group === "unified_index") return step.function;
+  const [group, fn] = step.id.split("/");
+  return step.group === null && group === "unified_index" ? (fn ?? null) : null;
 }
 
 /// Append entries to the config text. Always at the end: the DAG

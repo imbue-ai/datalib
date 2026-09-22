@@ -24,6 +24,7 @@ import {
   seedFieldValues,
   sourceStepsOf,
   stepIdFor,
+  fanInNames,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
@@ -743,6 +744,51 @@ describe("fan-in wiring", () => {
     // separate because deleting a source needs both.
     expect(bare).toContain('function = "render_markdown"');
     expect(bare).toContain('function = "grid_index"');
+  });
+
+  /// Semantic search is the one fan-in a person can opt out of, so the
+  /// wiring has to reach one fan-in without touching its neighbour —
+  /// the grid index is not a choice.
+  it("wires and unwires one fan-in without touching the other", () => {
+    const qmdOnly = wireIntoFanIns(PAIR, "email/render_markdown", "qmd_index");
+    const steps = (text: string, id: string) => listSteps(text).find((s) => s.id === id)!.inputs;
+    expect(steps(qmdOnly, "unified_index/qmd_index")).toContain("email/render_markdown");
+    expect(steps(qmdOnly, "unified_index/grid_index")).not.toContain("email/render_markdown");
+
+    // What the wizard writes for a rendered source that is not to be
+    // embedded: in every fan-in, then back out of qmd's alone.
+    const gridOnly = unwireFromFanIns(
+      wireIntoFanIns(PAIR, "email/render_markdown"),
+      "email/render_markdown",
+      "qmd_index",
+    );
+    expect(steps(gridOnly, "unified_index/grid_index")).toContain("email/render_markdown");
+    expect(steps(gridOnly, "unified_index/qmd_index")).toEqual(["slack/render_markdown"]);
+  });
+
+  /// Which fan-in a step is comes off its `function`, not off the order
+  /// its keys happen to be written in.
+  it("finds a fan-in whose keys are in an unusual order", () => {
+    const odd = `[[steps]]
+inputs = []
+function = "qmd_index"
+group = "unified_index"
+`;
+    const wired = wireIntoFanIns(odd, "pdfs/render_markdown", "qmd_index");
+    expect(listSteps(wired).find((s) => s.id === "unified_index/qmd_index")!.inputs).toEqual([
+      "pdfs/render_markdown",
+    ]);
+  });
+
+  /// What the wizard's tickbox is seeded from when a source is reopened
+  /// for editing: what the config says today, not what it would write.
+  it("reads whether a fan-in already names a render step", () => {
+    const steps = listSteps(PAIR);
+    expect(fanInNames(steps, "qmd_index", "slack/render_markdown")).toBe(true);
+    expect(fanInNames(steps, "qmd_index", "email/render_markdown")).toBe(false);
+    const bare = listSteps(unwireFromFanIns(PAIR, "slack/render_markdown", "qmd_index"));
+    expect(fanInNames(bare, "qmd_index", "slack/render_markdown")).toBe(false);
+    expect(fanInNames(bare, "grid_index", "slack/render_markdown")).toBe(true);
   });
 
   /// The scaffold's index steps start with `inputs = []`, and the applet

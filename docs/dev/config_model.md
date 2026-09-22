@@ -218,10 +218,21 @@ config stops being indexed on the next run even while its rendered
 tree is still on disk, and `qmd_index` retires the collections no
 group claims.
 
-So a source's render step has to be named in both fan-ins' `inputs`,
-or it renders and is never searchable. The wizard maintains those
-lists — `wireIntoFanIns` on create, `unwireFromFanIns` on delete and
-when a render step is removed (`ui/src/config/sourceSteps.ts`). A hand
+So the two lists are what decides which indexes a source reaches, and
+they are decided separately. A render step named by neither renders
+and reaches nothing. Named by `grid_index` alone, its rows are in the
+grid and its documents open and filter, but free text typed into the
+search bar will not find it — that goes to qmd (`QueryMode::Hybrid`),
+so leaving a source out costs keyword search as well as semantic.
+Which is still a reasonable thing to want, because embedding is the
+slow part of a sync.
+
+The wizard maintains both lists (`ui/src/config/sourceSteps.ts`):
+`wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
+render step is removed. Either takes an optional fan-in to act on
+alone, which is how the Rendering section's "Index the markdown for
+semantic search" tickbox writes its answer — it is the one fan-in a
+person is asked about, because the grid index is not a choice. A hand
 edit has to remember, and the Manage screen flags a render step
 nothing consumes.
 
