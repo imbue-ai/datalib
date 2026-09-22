@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live Notion single-page download test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/notion:notion_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use datalib_etl_notion::ingest::{self as notion, FetchOptions};
 use datalib_etl_notion_render::render::parse_api_dir;
@@ -14,7 +20,6 @@ use serde_json::json;
 const DEFAULT_TARGET_PAGE: &str = "364a550f-af95-80de-829f-c5fccb3021fd";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn notion_live_single_page_snapshot() {
     let page = std::env::var("NOTION_TEST_PAGE")
         .ok()

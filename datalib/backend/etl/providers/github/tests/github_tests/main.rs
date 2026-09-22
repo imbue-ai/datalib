@@ -7,4 +7,5 @@
 
 mod child_prune;
 mod incremental_render;
+mod live;
 mod playback_roundtrip;

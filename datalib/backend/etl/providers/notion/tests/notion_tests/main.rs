@@ -7,4 +7,5 @@
 
 mod blob_render;
 mod incremental_render;
+mod live;
 mod playback_roundtrip;
