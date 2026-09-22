@@ -19,12 +19,9 @@ const CALL_ID: &str = "a";
 /// reasonable `Email/get` page including bodyValues.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The request one JMAP method call goes out as.
-///
-/// Public because a playback fixture is keyed on the request's exact
-/// bytes, so a test that writes one has to build it the same way this
-/// does — through here, rather than by re-spelling the envelope and
-/// drifting from it silently.
+/// The request one JMAP method call goes out as. Public because a
+/// playback fixture is keyed on its exact bytes, so a test that writes
+/// one builds it here rather than re-spelling the envelope.
 pub fn method_request(session: &Session, method: &str, args: Value) -> Result<HttpRequest> {
     let envelope = json!({
         "using": [CAP_CORE, CAP_MAIL],

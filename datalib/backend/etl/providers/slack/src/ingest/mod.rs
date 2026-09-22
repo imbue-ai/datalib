@@ -686,11 +686,8 @@ async fn export_channel(
             Some(reply_count as u64)
         })
         .sum();
-    // Only the replies: pass A announced its own messages page by page
-    // as it listed them. Added to the run's total rather than replacing
-    // it — `done` is summed across every channel already walked, so
-    // announcing one channel's count as the whole total pins "N queued"
-    // at zero for every channel after the first.
+    // Only the replies. Pass A announced its own messages page by page
+    // as it listed them.
     if replies_to_fetch > 0 {
         bar.expect(replies_to_fetch);
     }
@@ -814,10 +811,10 @@ async fn list_history(
             "fetched one page of history"
         );
 
-        // Announced before it is counted, not after. Slack names no
-        // message count up front, so a page is the first moment this
-        // walk knows of more work — and a tick against a total that does
-        // not include it yet drives "N queued" to zero mid-channel.
+        // Announced before it is counted: Slack names no message count
+        // up front, so a page is the first moment this walk knows of
+        // more work, and ticking first would count it against a total
+        // that does not include it yet.
         bar.expect(messages.len() as u64);
         let rows: Vec<MessageInput> = messages
             .iter()
@@ -1167,9 +1164,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut channel_failures: usize = 0;
 
     let work = async {
-        // The step's own handle: the setup phase only names what it is
-        // doing, and a bar of its own would be one more thing whose
-        // numbers have to agree with the run's.
+        // The step's own handle: setup only names what it is doing.
         let setup = opts.progress.clone();
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
@@ -1247,10 +1242,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         );
         let targets = plan.targets;
 
-        // One bar for the whole run, seeded with one tick per channel so
-        // it reads as something other than 0/0 before the first channel
-        // has listed anything. Each channel then adds its own message
-        // count to the total as it learns it.
+        // Seeded with one tick per channel, so the bar reads as
+        // something before the first channel has listed anything.
         let bar = RunBar::new(&opts.progress, targets.len() as u64);
         for (cid, name) in &targets {
             // Asked to stop: the channel that just finished sealed (a stop

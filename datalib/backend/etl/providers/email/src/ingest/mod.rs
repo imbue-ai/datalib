@@ -763,10 +763,8 @@ async fn full_enumerate_emails(
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
     bar.doing("enumerating");
-    // Everything the run had already committed to before this walk.
-    // `total` below is this walk's own size, so the run total is the
-    // two added — not `total` alone, which would undercount whatever a
-    // preceding incremental pass or the phase ticks already announced.
+    // `total` below is this walk's own size, so the run total is it
+    // plus whatever a preceding incremental pass already announced.
     let before = bar.announced();
     // Decide filter: if a label filter resolved to mailbox ids, push it
     // server-side as an OR over inMailbox.
@@ -839,11 +837,9 @@ async fn full_enumerate_emails(
         if ids.is_empty() {
             break;
         }
-        // `Email/query` was asked for `calculateTotal`, so the size of the
-        // whole filtered result set — not of this page — arrives with
-        // every page. Nothing read it before; it is the one exact
-        // denominator this provider gets. Raised rather than added,
-        // because each page repeats the same number.
+        // `calculateTotal` means every page carries the size of the whole
+        // result set, not of the page — so raise the total to it rather
+        // than adding, or each page counts the same messages again.
         if let Some(total) = resp.get("total").and_then(|v| v.as_i64()) {
             bar.expect_at_least(before + total.max(0) as u64);
         }
@@ -962,11 +958,9 @@ async fn sync_threads(
     if touched.is_empty() {
         return Ok(());
     }
-    // Sorted: `touched` is a hash set, so its iteration order differs
-    // between runs. That makes the same set of threads go out as a
-    // different request each time — which splits them across batch
-    // boundaries differently run to run, and gives a playback fixture
-    // recorded from one run no chance of matching the next.
+    // Sorted: `touched` is a hash set, so the same threads would
+    // otherwise go out as a different request — batched differently
+    // each run, and unmatchable by a recorded playback fixture.
     let mut ids: Vec<String> = touched.iter().cloned().collect();
     ids.sort_unstable();
     for batch in ids.chunks(THREAD_GET_BATCH) {

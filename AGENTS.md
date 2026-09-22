@@ -19,7 +19,7 @@ how the system works; when a completed plan stops being worth keeping,
 
 **Pipeline / sync engine**
 
-- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks. **Start here.**
+- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks, progress (why a download gets one `RunBar` and not a bar per unit of work). **Start here.**
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
 - [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs) — why config validation returns diagnostics, not an error; read before changing validation.
 - [`configs/dag_example.toml`](configs/dag_example.toml) — a complete, commented config.

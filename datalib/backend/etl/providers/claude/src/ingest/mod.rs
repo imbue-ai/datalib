@@ -193,10 +193,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // downloads insert into it.
     let mut blake3_by_file = db.load_attachment_blake3s().await?;
 
-    // One bar for the run: projects, then either the targeted walk or
-    // the per-org one, each adding its own size to the total as it
-    // learns it. Nothing is known before the org listing returns, so it
-    // starts at nothing rather than at a guess.
+    // Nothing is known before the org listing returns, so the bar
+    // starts with no total rather than a guess.
     let bar = RunBar::new(&opts.progress, 0);
 
     let work = async {
@@ -514,12 +512,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             summary.pruned += db.prune_org_conversations(org_uuid, &listed).await?;
         }
 
-        // Pass 2: fetch. Announced as the sum across all orgs, ticking
-        // once per chat — so a quick glance answers "how close is the
-        // whole sync to done?". The org being walked is the bar's
-        // message rather than a bar of its own: a second bar announcing
-        // its own size would make the count jump backwards, which is
-        // the same hazard Pass 1 above is written to avoid.
+        // Pass 2: fetch. The sum across all orgs, ticking once per chat,
+        // so a glance answers "how close is the whole sync to done?".
+        // The org is the bar's message, not a bar of its own — that is
+        // the backwards jump Pass 1 above is written to avoid.
         let total: usize = plans.iter().map(|p| p.ordered.len()).sum();
         bar.expect(total as u64);
         'orgs: for plan in &plans {
@@ -682,9 +678,8 @@ async fn sync_projects(
             }
         };
 
-        // This org's projects, added to the run's total. `Projects/list`
-        // is what first says how many there are, so the number arrives
-        // one org at a time.
+        // `Projects/list` is what first says how many there are, so the
+        // number arrives one org at a time.
         bar.expect(listing.len() as u64);
         for project in &listing {
             let Some(uuid) = project.get("uuid").and_then(|v| v.as_str()) else {

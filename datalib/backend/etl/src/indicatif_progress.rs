@@ -3,9 +3,9 @@
 //! and the standalone provider CLIs (`fsindex`, the various
 //! `<provider>_download` bins) alike.
 //!
-//! One bar per step, never a tree of them. A download reports through a
-//! single [`crate::progress::RunBar`] whose total only grows, so there
-//! is nothing for a nested bar to show that the message does not.
+//! One bar per step, never a tree of them: a step cannot have two
+//! independent bars (`datalib/backend/dag/README.md` § "One bar per
+//! step"), so there is nothing for a nested one to show.
 
 use std::sync::Arc;
 

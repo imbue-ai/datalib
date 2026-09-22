@@ -669,10 +669,8 @@ async fn full_sync(
             .await?;
             pages += 1;
             listed += page.ids.len();
-            // `resultSizeEstimate` is an estimate, and one that can come
-            // in under what the walk actually lists. Never let the total
-            // sit below what has already been listed, or the bar reads 0
-            // remaining while pages are still arriving.
+            // The estimate can come in under what the walk really lists,
+            // and a total below that reads as 0 remaining mid-walk.
             let want = page.result_size_estimate.unwrap_or(0).max(listed as u64);
             state.bar.expect_at_least(before + want);
             // A message under two configured labels is listed by both
@@ -740,11 +738,9 @@ async fn fetch_ids(
         // through a large mailbox instead of re-fetching the same prefix.
         if state.known_gmail_ids.contains(id) {
             summary.messages_already_had += 1;
-            // Counted against the bar even though nothing was fetched:
-            // the total it counts down from is how many ids the walk
-            // *listed*, and a re-walk of a mirrored mailbox lists
-            // almost only these. Skipping the tick would leave the bar
-            // pinned near its total for the whole run.
+            // Ticked although nothing was fetched: the total counts ids
+            // *listed*, and a re-walk of a mirrored mailbox is almost
+            // all skips, which would otherwise never move the bar.
             state.bar.did(1);
             continue;
         }

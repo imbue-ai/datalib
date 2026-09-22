@@ -325,11 +325,9 @@ impl Label {
 pub struct MessagePage {
     pub ids: Vec<String>,
     pub next_page_token: Option<String>,
-    /// Google's own guess at how many messages the whole walk will
-    /// list, repeated on every page. An estimate, and it is the only
-    /// whole-walk number Gmail offers before the last page — so it is
-    /// what the progress bar counts down from, never what the walk
-    /// decides to stop at.
+    /// Google's guess at how many messages the whole walk will list,
+    /// repeated on every page. The only whole-walk number Gmail offers,
+    /// and an estimate — never what the walk decides to stop at.
     pub result_size_estimate: Option<u64>,
 }
 

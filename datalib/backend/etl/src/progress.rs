@@ -92,26 +92,15 @@ impl ProgressSink for NoopSink {}
 
 /// One bar for a whole run, whose announced total only ever grows.
 ///
-/// The DAG runner relabels every child bar's events back to the step
-/// that emitted them, then computes the step's `queued` metric — the
-/// "N queued" the Manage screen shows — as `total - done`, where `done`
-/// is the sum of *every* increment the step made and `total` is
-/// whichever length it announced last. So a step with two bars, each
-/// announcing its own size, pins `queued` at zero the moment the second
-/// one starts: `done` already carries the first bar's work.
+/// A step cannot have two independent progress bars: the runner sums
+/// every increment into one `done` and keeps only the last total, so a
+/// second bar announcing its own size pins the Manage screen's
+/// "N queued" at zero. `datalib/backend/dag/README.md` § "One bar per
+/// step" has the whole rule.
 ///
-/// A run therefore has one bar and one running total, and each phase
-/// adds what it has learned it will do. The total is shared and
-/// interior-mutable so the handle can be passed around by reference the
-/// way [`Progress`] is; a phase that fans out should tick from its
-/// tasks and announce from the one that plans them.
-///
-/// It wraps the step's own [`Progress`] rather than a [`Progress::child`]
-/// of it. A child buys a nested bar on a terminal and nothing else — the
-/// runner relabels a child's events back to the step regardless — and it
-/// costs correctness against any sink that does not override
-/// `ProgressSink::child`, whose default returns a sink that silently
-/// drops everything.
+/// Shared and interior-mutable so it passes by reference the way
+/// [`Progress`] does. A phase that fans out ticks from its tasks and
+/// announces from the one that plans them.
 #[derive(Clone)]
 pub struct RunBar {
     bar: Progress,
@@ -119,16 +108,10 @@ pub struct RunBar {
 }
 
 impl RunBar {
-    /// `fixed` is work the run will certainly do and already knows the
-    /// size of — the coarse per-phase or per-unit ticks a bar starts
-    /// with, so it reads as something other than 0/0 before the first
-    /// response lands.
-    ///
-    /// A `fixed` of zero announces nothing at all. A run that does not
-    /// yet know its size has no total, which is not the same as a total
-    /// of zero: the runner publishes no `queued` for a step that never
-    /// announced one, where a `queued` of 0 means "nothing left to do"
-    /// and the Manage screen reads it as idle.
+    /// `fixed` is work the run already knows the size of, so the bar
+    /// reads as something other than 0/0 before the first response.
+    /// Zero announces nothing: an unknown total is not a total of zero,
+    /// which would read as finished.
     pub fn new(progress: &Progress, fixed: u64) -> Self {
         if fixed > 0 {
             progress.set_length(Some(fixed));
