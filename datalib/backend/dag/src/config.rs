@@ -58,6 +58,12 @@ pub struct DagConfig {
     /// in [`RunHistory`].
     #[serde(default)]
     pub run_history: Option<RunHistory>,
+    /// The lowest level of its own lines every process of this root
+    /// keeps — the server, the runner, each step. Omitted means
+    /// `datalib_log_filter::DEFAULT_LEVEL`; `RUST_LOG` in a process's
+    /// environment wins over both.
+    #[serde(default)]
+    pub log_level: Option<datalib_runs::LogLevel>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -636,6 +642,8 @@ struct RawConfig {
     checkpoint_cadence: Option<CheckpointCadence>,
     #[serde(default)]
     run_history: Option<RunHistory>,
+    #[serde(default)]
+    log_level: Option<datalib_runs::LogLevel>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -1506,6 +1514,7 @@ fn entries_of(text: &str) -> Entries {
             applets: accepted.applets,
             checkpoint_cadence: raw.checkpoint_cadence,
             run_history: raw.run_history,
+            log_level: raw.log_level,
         },
         specs,
         spans,
@@ -1615,6 +1624,16 @@ pub fn check_text(text: &str) -> ConfigCheck {
 }
 
 impl DagConfig {
+    /// The `RUST_LOG`-grammar filter this config asks for: its
+    /// `log_level`, else the default level, over the library caps.
+    pub fn log_filter(&self) -> String {
+        datalib_runs::filter_at(
+            self.log_level
+                .map(datalib_runs::LogLevel::as_str)
+                .unwrap_or(datalib_runs::DEFAULT_LEVEL),
+        )
+    }
+
     /// What a fatal diagnostic leaves behind. Deliberately not `Default`:
     /// "empty" here is a failure state and should read as one.
     fn empty() -> Self {
@@ -1626,6 +1645,7 @@ impl DagConfig {
             applets: Vec::new(),
             checkpoint_cadence: None,
             run_history: None,
+            log_level: None,
         }
     }
 }

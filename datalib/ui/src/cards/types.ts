@@ -36,6 +36,12 @@ export type HostCommands = {
   // order. Calling with a single source opens one card, the common
   // case (a grid row → its document).
   openCards(...sources: string[]): string[];
+  // The URL `openCards(...sources)` would land on, so a card can draw a
+  // real link: a plain click goes through openCards, and a modified
+  // click, a middle click, the context menu and a drag are the
+  // browser's — a new tab, a copied link, a bookmark. A layout the URL
+  // does not describe answers with the chain alone.
+  hrefFor(...sources: string[]): string;
   // Replace THIS card's own source (and clear its state, since the old
   // state no longer applies to new code). Layout-agnostic: the miller
   // layout rewrites the column's URL segment, the tree layout rewrites

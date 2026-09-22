@@ -18,6 +18,7 @@ import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { displayTitle } from "@/cards/title";
 import { setCardHelp } from "@/cards/help";
+import { chainHref } from "@/cards/chainHref";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -135,6 +136,7 @@ function ctxFor(leaf: TileLeaf): CardCtx {
     const cardId = leaf.id;
     const host: HostCommands = {
       openCards: (...sources) => openCardsFrom(cardId, sources),
+      hrefFor: (...sources) => chainHref(sources),
       setSource: (source) => setTileSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setTileState(cardId, state),

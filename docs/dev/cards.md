@@ -185,19 +185,30 @@ Each card gets its own instance, pre-bound to that card:
 
 ```ts
 type HostCommands = {
-  openCard(source: string): string;  // returns the new card's id
+  openCards(...sources: string[]): string[];  // returns the new cards' ids
+  hrefFor(...sources: string[]): string;      // the URL openCards would land on
+  setSource(source: string): void;
   close(): void;
   setState(state: string): void;
 };
 ```
 
-- `openCard(source)` opens a new card "from" this one. The card
-  supplies only the new card's **source** — e.g. the grid card
-  composes `documentView("<md>", "<row>")` when a row is clicked — and
-  makes **no assumption about placement**: where the new card lands is
+- `openCards(...sources)` opens a chain of new cards "from" this one
+  (one source is the common case). The card supplies only the new
+  cards' **source** — e.g. the grid card composes
+  `documentView("<md>", "<row>")` when a row is clicked — and makes
+  **no assumption about placement**: where the new card lands is
   entirely the active layout's business (next to the caller, as a
   child node, as a sibling, …). Structural operations always go
   through host commands, never the bus.
+- `hrefFor(...sources)` is the URL `openCards(...sources)` would land
+  on, so a card can draw a **real link**: a plain click goes through
+  `openCards`, and a modified click, a middle click, the context menu
+  and a drag are the browser's — a new tab, a copied link, a bookmark.
+  The document card's edge list is the pattern (`onEdgeLinkClick`;
+  `isBrowserClick` in `cards/chatLink.ts` is the one rule for which
+  clicks to leave alone). A layout the URL does not describe answers
+  with the chain alone.
 - `close()` closes this card. A layout may close dependents along with
   it (e.g. a node's subtree) — that's its call, not the card's.
 - `setState(state)` replaces this card's persisted state string (see
@@ -251,13 +262,15 @@ never reaches for the layout directly. The division of labour:
 - **The layout** owns placement and chrome. Around each card it draws
   a header with the source box (Enter re-runs the card, Shift+Enter
   inserts a newline; committing new source clears the old state
-  string), ← → back/forward buttons over the card's own source
-  history (each `setSource` — a gallery pick, an agent hand-off, a
-  source edit — is a step; navigating replays the source with fresh
-  state), an ↗ "open this card alone" link — a new browser tab, or in
+  string), an ↗ "open this card alone" link — a new browser tab, or in
   the desktop app a second native window of the app (the shell's
   `on_new_window` handler in `datalib/tauri/src/main.rs`), so a card
-  can live on another screen — and a ✕ close button.
+  can live on another screen — and a ✕ close button. There is no back
+  or forward in the chrome: in the miller layout every `setSource` — a
+  gallery pick, an agent hand-off, a source edit — and every open and
+  close is a browser history entry, and the browser's own Back walks
+  them (the desktop app answers ⌘[ / ⌘] and draws the two buttons in
+  its toolbar). See "The miller layout and the browser" below.
   Anything past that — resize handles, drag grips, add buttons,
   dividers, tab bars — is layout-specific furniture, invisible to the
   card. The layout also decides what `openCard` placement means, what
@@ -268,6 +281,28 @@ unchanged in any layout, and a layout can be added or changed without
 touching cards. Cards are **not** carried across when the user toggles
 layouts — each layout keeps its own set, all kept alive across toggles
 so switching back doesn't lose them.
+
+## The miller layout and the browser
+
+The miller stack **is the URL** (`router/columns.ts`), and the browser's
+history is the only history. `MillerView` writes it two ways: opening,
+closing or repointing a column is a navigation (`push`), so Back undoes
+it and Forward redoes it; a card's state and a column's width rewrite
+the current entry (`replace`), the way a page's scroll position is not
+somewhere Back returns to. Writes go through one queue — the router
+cancels a navigation another one overtakes, and a grid row click is two
+writes in one tick, the selection then the document. When the URL
+changes under the layout (Back, a link, a hand-edited address) the
+stack is *reconciled*, not rebuilt: a column whose code and state match
+the URL at its position stays mounted, so Back from a document leaves
+the grid beside it as it was, still on the row that opened the
+document. `views/millerStack.ts` holds these decisions as pure
+functions; `document.title` names the stack, newest column first, so a
+tab, a history menu and a bookmark say what it is. A `/chat/<uuid>`
+link — the shape every renderer writes into a document body — is
+routed to that document alone (`router/index.ts`), so the tab a
+modified click opens shows the document. The tree and tiling layouts
+are in memory only and get none of this.
 
 ## Prebuilt views
 

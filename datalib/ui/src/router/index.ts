@@ -1,3 +1,4 @@
+import { chatUuidFromHref } from "@/cards/chatLink";
 import { encodeColumns } from "@/router/columns";
 import { createRouter, createWebHistory } from "vue-router";
 
@@ -41,6 +42,21 @@ const router = createRouter({
       component: () => import("@/views/CardsView.vue"),
     },
   ],
+});
+
+// The link every renderer writes into a document body — `/chat/<uuid>`,
+// with or without a `#/` in front — is a page of its own: the document
+// alone. A plain click never gets here (the document card opens the
+// target beside itself); a new tab, a bookmark or a pasted link does.
+export function documentStack(markdownUuid: string): string {
+  return encodeColumns([
+    { code: `documentView(${JSON.stringify(markdownUuid)})`, size: null, state: "" },
+  ]);
+}
+
+router.beforeEach((to) => {
+  const uuid = chatUuidFromHref(to.fullPath);
+  return uuid ? documentStack(uuid) : true;
 });
 
 export default router;

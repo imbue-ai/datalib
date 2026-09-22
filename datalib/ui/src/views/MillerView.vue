@@ -5,45 +5,40 @@
 // column's header bar and evaluated (cardSource.ts) to render the
 // column inside a Shadow DOM via ShadowCard. Edit the source and
 // press Enter to re-run the card.
-import { nextTick, ref, useTemplateRef, watch } from "vue";
+//
+// The stack is the URL, and the browser's history is the only history:
+// opening, closing or repointing a column is a navigation (Back undoes
+// it), a card's state or a column's width rewrites the current entry.
+import { nextTick, onBeforeUnmount, ref, useTemplateRef, watch, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
-import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
+import { decodeColumns, type ColumnSpec } from "@/router/columns";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { setCardHelp } from "@/cards/help";
 import { revealScrollLeft } from "@/views/millerReveal";
+import {
+  DEFAULT_SPECS,
+  DEFAULT_WIDTH,
+  pageTitle,
+  pathFor,
+  reconcile,
+  sameSpecs,
+  specOf,
+  specsOf,
+  widthOf,
+  type Slot,
+} from "@/views/millerStack";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
 const router = useRouter();
 const bus = createBus();
 
-type Slot = {
-  id: string;
-  source: string;
-  // Opaque per-card state string (see HostCommands.setState).
-  state: string;
-  // Column width in px; null renders at DEFAULT_WIDTH until the user
-  // drags the column's right edge. Persisted in the URL as a ratio of
-  // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
-  width: number | null;
-  // Human-readable title the card set via ctx.setTitle, shown instead
-  // of the source box when dev mode is off; null until compiled or
-  // when the card never set one.
-  title: string | null;
-};
-
-const DEFAULT_WIDTH = 640;
 const MIN_WIDTH = 240;
-
-// Round a width ratio to two decimals for a terse, stable URL.
-function sizeRatio(width: number | null): number | null {
-  return width == null ? null : Math.round((width / DEFAULT_WIDTH) * 100) / 100;
-}
 
 let nextId = 1;
 function freshId(): string {
@@ -54,8 +49,8 @@ function newSlot(source: string, state = "", width: number | null = null): Slot 
   return { id: freshId(), source, state, width, title: null };
 }
 
-function isBlankSource(source: string): boolean {
-  return source.trim() === "";
+function slotFor(spec: ColumnSpec): Slot {
+  return newSlot(spec.code, spec.state, widthOf(spec));
 }
 
 const slots = ref<Slot[]>([]);
@@ -74,66 +69,93 @@ function setSlots(list: Slot[]) {
 
 // ---- URL sync ----
 
-function specsOf(list: Slot[]): ColumnSpec[] {
-  return list
-    .filter((s) => !isBlankSource(s.source))
-    .map((s) => ({ code: s.source, size: sizeRatio(s.width), state: s.state }));
+function effectiveSpecs(path: string): ColumnSpec[] {
+  const incoming = decodeColumns(path);
+  return incoming.length === 0 ? DEFAULT_SPECS : incoming;
 }
 
-function sameSpecs(a: ColumnSpec[], b: ColumnSpec[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every(
-      (x, i) =>
-        x.code === b[i].code && (x.size ?? null) === (b[i].size ?? null) && x.state === b[i].state,
-    )
-  );
+// What the URL last said, decoded, so a write that would change
+// nothing is skipped and our own writes are told apart from a foreign
+// navigation.
+let written: ColumnSpec[] = effectiveSpecs(route.path);
+setSlots(written.map(slotFor));
+
+// Writes are queued: the router cancels a navigation another one
+// overtakes, and a row click is two writes in one tick — the grid's
+// selection (replace), then the document it opens (push).
+let queue: Promise<unknown> = Promise.resolve();
+let inFlight = 0;
+
+function writeUrl(mode: "push" | "replace", specs: ColumnSpec[]) {
+  if (sameSpecs(specs, written)) return;
+  written = specs;
+  const target = pathFor(specs);
+  inFlight++;
+  queue = queue
+    .then(() => router[mode](target))
+    .catch((e: unknown) => console.warn("url write failed", e))
+    .finally(() => {
+      inFlight--;
+      if (inFlight === 0) adoptRoute(route.path);
+    });
 }
 
-// The stack "/" renders when the URL carries no columns.
-const DEFAULT_SPECS: ColumnSpec[] = [{ code: "gridView()", size: null, state: "" }];
-
-function syncUrl() {
-  const specs = specsOf(slots.value);
-  // Keep "/" for the pristine default stack instead of writing it out.
-  const target = sameSpecs(specs, DEFAULT_SPECS) ? "/" : encodeColumns(specs);
-  if (route.path !== target) void router.replace(target);
+// A card's state or a column's width: the page's own scroll position,
+// not somewhere Back should return to.
+function syncState() {
+  writeUrl("replace", specsOf(slots.value));
 }
 
-function slotsFromSpecs(specs: ColumnSpec[]): Slot[] {
-  if (specs.length === 0) return [newSlot("gridView()")];
-  return specs.map((c) => newSlot(c.code, c.state, c.size != null ? c.size * DEFAULT_WIDTH : null));
+// A structural change: the new stack is a new entry.
+function navigate(change: () => void) {
+  change();
+  writeUrl("push", specsOf(slots.value));
 }
 
-setSlots(slotsFromSpecs(decodeColumns(route.path)));
+// The URL changed under us — Back, Forward, a link, a hand-edited
+// address: keep what still matches, mount what doesn't, show what is
+// new. Compared decoded-form to decoded-form so router re-encoding
+// can't cause false rebuilds.
+function adoptRoute(path: string) {
+  const specs = effectiveSpecs(path);
+  if (sameSpecs(specs, specsOf(slots.value))) return;
+  written = specs;
+  const before = new Set(slots.value.map((s) => s.id));
+  const next = reconcile(slots.value, specs, slotFor);
+  setSlots(next);
+  const added = next.filter((s) => !before.has(s.id));
+  if (added.length > 0) revealColumn(added[added.length - 1].id);
+}
 
-// Back/forward navigation (or a hand-edited URL): rebuild the stack
-// when the path no longer describes what we're showing. Compared
-// decoded-form to decoded-form so router re-encoding can't cause
-// false rebuilds.
 watch(
   () => route.path,
   (path) => {
-    const incoming = decodeColumns(path);
-    // An empty path means the default stack — normalize before
-    // comparing, so our own collapse back to "/" (e.g. closing the
-    // last document column next to a pristine grid) isn't mistaken
-    // for a foreign navigation. Rebuilding would remount every card
-    // and visibly flash the grid.
-    const effective = incoming.length === 0 ? DEFAULT_SPECS : incoming;
-    if (!sameSpecs(effective, specsOf(slots.value))) {
-      setSlots(slotsFromSpecs(incoming));
-    }
+    // Our own writes settle through the queue's tail, which adopts
+    // the route once; a foreign navigation in between is picked up
+    // there too.
+    if (inFlight === 0) adoptRoute(path);
   },
 );
 
+// The browser's name for the page — its tab, its history menu, a
+// bookmark of it.
+watchEffect(() => {
+  document.title = pageTitle(slots.value.map((s) => displayTitle(s.source, s.title)));
+});
+onBeforeUnmount(() => {
+  document.title = pageTitle([]);
+});
+
 // ---- host commands ----
 
+function indexOf(id: string): number {
+  return slots.value.findIndex((s) => s.id === id);
+}
+
 function openColumnAfter(afterId: string, source: string): string {
-  const idx = slots.value.findIndex((s) => s.id === afterId);
+  const idx = indexOf(afterId);
   const slot = newSlot(source);
   setSlots([...slots.value.slice(0, idx + 1), slot]);
-  syncUrl();
   return slot.id;
 }
 
@@ -144,28 +166,35 @@ function openColumnAfter(afterId: string, source: string): string {
 // trailing panels out (Miller semantics). Drives the scaife control
 // panel: one click opens one column per selected version.
 function openColumnsAfter(afterId: string, sources: string[]): string[] {
-  let prev = afterId;
   const ids: string[] = [];
-  for (const source of sources) {
-    prev = openColumnAfter(prev, source);
-    ids.push(prev);
-  }
+  navigate(() => {
+    let prev = afterId;
+    for (const source of sources) {
+      prev = openColumnAfter(prev, source);
+      ids.push(prev);
+    }
+  });
   // The end of the chain is what the click was for; showing it keeps
   // as much of the chain (and the caller) on screen as fits.
   if (ids.length > 0) revealColumn(ids[ids.length - 1]);
   return ids;
 }
 
+// host.hrefFor: the URL openCards would land on, for a real link.
+function hrefAfter(afterId: string, sources: string[]): string {
+  const idx = indexOf(afterId);
+  return pathFor([...specsOf(slots.value.slice(0, idx + 1)), ...sources.map(specOf)]);
+}
+
 function closeColumn(id: string) {
-  setSlots(slots.value.filter((s) => s.id !== id));
-  syncUrl();
+  navigate(() => setSlots(slots.value.filter((s) => s.id !== id)));
 }
 
 function setColumnState(id: string, state: string) {
   const slot = slots.value.find((s) => s.id === id);
   if (!slot || slot.state === state) return;
   slot.state = state;
-  syncUrl();
+  syncState();
 }
 
 // One CardCtx per slot, with host commands pre-bound to that card's
@@ -179,6 +208,7 @@ function ctxFor(slot: Slot): CardCtx {
     const cardId = slot.id;
     const host: HostCommands = {
       openCards: (...sources) => openColumnsAfter(cardId, sources),
+      hrefFor: (...sources) => hrefAfter(cardId, sources),
       setSource: (source) => setColumnSource(cardId, source),
       close: () => closeColumn(cardId),
       setState: (state) => setColumnState(cardId, state),
@@ -202,22 +232,23 @@ function ctxFor(slot: Slot): CardCtx {
 
 function commitSource(slot: Slot, e: Event) {
   const next = (e.target as HTMLTextAreaElement).value;
-  if (next !== slot.source) {
+  if (next === slot.source) return;
+  navigate(() => {
     slot.source = next;
     // New code means the old card's state no longer applies.
     slot.state = "";
-  }
-  syncUrl();
+  });
 }
 
 // host.setSource: replace this column's own source (clearing state) —
-// drives the agent hand-off (see handoff.ts).
+// drives the gallery's pick and the agent hand-off (see handoff.ts).
 function setColumnSource(id: string, source: string) {
   const slot = slots.value.find((s) => s.id === id);
   if (!slot) return;
-  slot.source = source;
-  slot.state = "";
-  syncUrl();
+  navigate(() => {
+    slot.source = source;
+    slot.state = "";
+  });
 }
 
 // The "+" strip after the last column appends a gallery column (both
@@ -225,8 +256,7 @@ function setColumnSource(id: string, source: string) {
 // itself via host.setSource).
 function addCard() {
   const slot = newSlot("galleryView()");
-  setSlots([...slots.value, slot]);
-  syncUrl();
+  navigate(() => setSlots([...slots.value, slot]));
   revealColumn(slot.id);
 }
 
@@ -239,8 +269,7 @@ function showCard(source: string) {
     return;
   }
   const slot = newSlot(source);
-  setSlots([...slots.value, slot]);
-  syncUrl();
+  navigate(() => setSlots([...slots.value, slot]));
   revealColumn(slot.id);
 }
 
@@ -285,7 +314,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
     target.removeEventListener("pointerup", onUp);
     target.removeEventListener("pointercancel", onUp);
     // Persist the new width as a size ratio in the URL.
-    syncUrl();
+    syncState();
   };
   target.addEventListener("pointermove", onMove);
   target.addEventListener("pointerup", onUp);

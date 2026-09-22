@@ -24,7 +24,8 @@ props.ctx.setHelp(`
 beyond its message; hover one for <em>copy</em>, and <em>keep</em> /
 <em>exclude</em>, which narrow the log beside this card to lines with
 (or without) that value. The source link opens the line of code that
-wrote it, at the commit the process was built from.</p>
+wrote it, at the commit the process was built from, or at
+<code>main</code> when the process could not say which.</p>
 `);
 
 async function load() {
@@ -61,7 +62,7 @@ const fields = computed<Record<string, unknown> | null>(() => {
 
 const source = computed(() => sourceOf(line.value?.fields));
 const sourceHref = computed(() =>
-  source.value && line.value?.git_hash ? sourceUrl(line.value.git_hash, source.value) : null,
+  source.value ? sourceUrl(line.value?.git_hash, source.value) : null,
 );
 const commitHref = computed(() =>
   line.value?.git_hash ? `${SOURCE_REPO}/commit/${line.value.git_hash}` : null,

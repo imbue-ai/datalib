@@ -110,10 +110,12 @@ Content-Type: text/html; charset=utf-8
 
 <html><body>
 <h1>Greetings Captain Picard!</h1>
+<p><img src="https://risa.tourism/images/temtibi-lagoon.jpg" alt="Temtibi Lagoon at sunset"></p>
 <p>Risa is the <strong>jewel of the Alpha Quadrant</strong>.
 Book your next shore leave today and save 30%.</p>
 <p><a href="https://risa.tourism/shore-leave">Redeem your offer</a></p>
 <p>— The Risa Tourism Board</p>
+<img src="https://pixel.ferengi-marketing.example/open.gif?m=risa-promo-001" width="1" height="1" alt="">
 </body></html>
 
 --boundary-risa--
