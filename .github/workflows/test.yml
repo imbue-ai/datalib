@@ -423,6 +423,77 @@ jobs:
           path: artifact/datalib-x86_64-unknown-linux-gnu.tar.gz
           retention-days: 3
 
+  # Fill the *contributor* cache with main's tree, after the merge.
+  #
+  # The two BuildBuddy orgs (docs/dev/ci.md § "Two caches") are
+  # write-disjoint: a main push writes the release org, a PR run writes
+  # the contributor org. Nothing wrote main's tree into the contributor
+  # org, so the first PR run after any merge that touched a shared crate
+  # rebuilt the world — measured on #658, whose PR touched `http` and
+  # `ui` alone and still spent 1677 s on 713 sandboxed actions and 141
+  # executed tests. This job is the missing writer.
+  #
+  # It duplicates the compile work of `bazel-test` above rather than
+  # sharing it, because the two write different orgs and CI keeps no
+  # disk cache (`build:ci --disk_cache=`). That is why it runs in
+  # parallel instead of `needs:`-ing it: there is nothing to inherit,
+  # and nobody is waiting on this job.
+  #
+  # `continue-on-error` because its only product is cache entries. A
+  # flake here must not put a red cross on a commit that `bazel-test`
+  # already passed on the same tree; a real breakage shows up there.
+  #
+  # What it does NOT fix: a PR that edits a widely-linked crate still
+  # rebuilds its own `rdeps` (see § "blast radius"). This only removes
+  # the runs that were cold for no reason.
+  warm-contributor-cache:
+    name: warm the contributor cache
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    # Same shell, image and checkout depth as `bazel-test` above, for the
+    # reasons documented there.
+    defaults:
+      run:
+        shell: bash
+
+    container:
+      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The contributor key unconditionally — that is the whole point of
+      # this job, and the reason it cannot just be a flag on `bazel-test`.
+      - uses: ./.github/actions/prepare-bazel
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILD_BUDDY_API_KEY }}
+          buildbuddy-config: buildbuddy
+
+      # The same two commands the PR jobs run, in the same modes, so the
+      # entries a PR looks up are the entries this writes. `ROLE=CACHE`
+      # rather than `ROLE=CI` so these are filterable from the runs that
+      # gate something.
+      - name: bazel test //... (contributor cache)
+        run: |
+          bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
+            --build_metadata=ROLE=CACHE \
+            --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+            //...
+
+      - name: bazel build :dist (musl static, contributor cache)
+        run: |
+          bazel build -c opt --config=release --config=musl-x86_64 \
+            --nostamp --jobs=16 \
+            --build_metadata=ROLE=CACHE \
+            //datalib/backend:dist
+
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo
   # has been burned before by release-only build paths rotting between

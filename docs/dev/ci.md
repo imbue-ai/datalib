@@ -85,6 +85,19 @@ key. Without the release secret a tag build runs cold (~20 min a leg)
 rather than falling back to the contributor cache — that is the
 intended failure mode.
 
+**The two orgs are write-disjoint, so a third writer was needed.** A
+main push writes the release org and a PR run writes the contributor
+org, which means nothing wrote *main's tree* into the contributor org:
+the first PR run after any merge that touched a shared crate rebuilt
+the world, however small the PR's own diff. #658's run is the shape —
+a PR touching `http` and `ui` alone, 1677 s, 713 sandboxed actions, 141
+tests executed. `test.yml`'s `warm-contributor-cache` job is the
+missing writer: on a main push it runs the same two commands the PR
+jobs run, with the contributor key, `continue-on-error` because its
+only product is cache entries. It does not help a PR that edits a
+widely-linked crate — that one rebuilds its own `rdeps` either way —
+it removes the runs that were cold for no reason.
+
 The release org exists and its read-write key is the repository
 secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
