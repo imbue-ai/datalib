@@ -468,6 +468,12 @@ Two neighbours of the same mistake:
   derive the stamp from `now`, or set the window in the test so wide
   that the calendar cannot reach it (`process_log_days: 36500`, #567),
   and say which in a comment.
+- **A temp path built from `std::process::id()` is not unique.** A
+  Rust test binary runs its tests as threads of one process, so two
+  tests that name a path that way get the same file, and one's cleanup
+  deletes the other's. Take a `tempfile::tempdir()`; in code that
+  cannot reach for a dependency, add a process-local counter to the
+  pid.
 - **A test that takes more than a third of its timeout on CI is a
   flake waiting to happen** once the runner is busy. Tag it `cpu:N`
   or `exclusive` so bazel schedules it alone, or raise the timeout and
