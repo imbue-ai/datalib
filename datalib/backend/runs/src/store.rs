@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use datalib_flock::FileLock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -35,6 +36,24 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// outside any run. A run prunes them when it starts; a server that
 /// runs for weeks between syncs has to do it for itself.
 const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
+
+/// How long a writer waits for the other process's write lock before
+/// SQLite hands it `SQLITE_BUSY`. Set here rather than left to sqlx's
+/// default, because the number is a decision: a batch holds the lock
+/// for milliseconds, so ten seconds is far past any honest wait and a
+/// writer that has spent them is better off saying so than growing its
+/// buffer behind a silent one.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a failed flush waits before its one retry.
+const RETRY_AFTER: Duration = Duration::from_millis(50);
+
+/// How long a process waits for another's open to finish before
+/// deciding about the file for itself. An open takes milliseconds, so
+/// reaching this means the holder is wedged — and a log store is not
+/// worth holding a run up for.
+const OPEN_LOCK_WAIT: Duration = Duration::from_secs(30);
+const OPEN_LOCK_POLL: Duration = Duration::from_millis(20);
 
 fn connect_string(path: &Path) -> String {
     // Percent-encode only what would otherwise terminate the path or be
@@ -68,6 +87,11 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
         // file torn by a power cut is deleted and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
+        // Two processes write this file, the runner and the server, and
+        // SQLite serializes them with a lock on it. Without a timeout
+        // the loser of a race is handed `SQLITE_BUSY` at once and its
+        // batch is lost.
+        .busy_timeout(BUSY_TIMEOUT)
 }
 
 pub async fn open_or_create(path: &Path) -> Result<SqlitePool, sqlx::Error> {
@@ -97,12 +121,48 @@ fn remove_with_sidecars(path: &Path) {
     }
 }
 
+/// Where the claim on *deciding about* the store lives. Not one of the
+/// store's own sidecars, so remaking the store leaves it alone.
+fn open_lock_path(path: &Path) -> PathBuf {
+    let mut p = path.as_os_str().to_os_string();
+    p.push(".open-lock");
+    PathBuf::from(p)
+}
+
+/// Hold the right to decide what happens to the file, for as long as
+/// the returned lock lives. [`open_or_recreate`] can delete the store
+/// and remake it, and doing that under another process's open leaves
+/// that process writing to an inode nobody will ever read — silently,
+/// until one of its statements fails with "database disk image is
+/// malformed".
+///
+/// A lock that cannot be taken is not worth failing an open over: the
+/// store is not load-bearing, and the window it guards is one process
+/// remaking the file.
+async fn hold_open_lock(path: &Path) -> Option<FileLock> {
+    let lock = open_lock_path(path);
+    let deadline = Instant::now() + OPEN_LOCK_WAIT;
+    loop {
+        match FileLock::acquire(&lock) {
+            Ok(held) => return Some(held),
+            Err(e) if e.is_held() && Instant::now() < deadline => {
+                tokio::time::sleep(OPEN_LOCK_POLL).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "run store: opening without the open lock");
+                return None;
+            }
+        }
+    }
+}
+
 /// Open the store and make sure its schema is there, replacing a file
 /// that will not open or was written by another schema version.
 /// `synchronous=Off` means an OS crash can leave an unreadable file
 /// behind, and losing old logs is a better outcome than a run that
 /// refuses to start.
 async fn open_or_recreate(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+    let _deciding = hold_open_lock(path).await;
     let why = match open_or_create(path).await {
         Ok(pool) => match schema_matches(&pool).await {
             Ok(true) => {
@@ -172,20 +232,27 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(false)
 }
 
+/// One transaction, because another process deciding what to do with
+/// this file decides by what it can see. Tables without the version
+/// stamp read as a store from some other build, which
+/// [`open_or_recreate`] answers by deleting the file — so a half-built
+/// store must never be visible. The DDL is all `IF NOT EXISTS`, so two
+/// processes installing at once is the second one finding it done.
 async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     for ddl in app_schema::runs::ddl()
         .into_iter()
         .chain(INDEXES.iter().copied())
     {
-        sqlx::query(ddl).execute(pool).await?;
+        sqlx::query(ddl).execute(&mut *tx).await?;
     }
     // Safe: a compile-time integer, not input.
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA user_version = {SCHEMA_VERSION}"
     )))
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+    tx.commit().await
 }
 
 /// `k=v` pairs joined with `,`, in key order — one spelling per label
@@ -644,6 +711,9 @@ pub(crate) fn log_line_from(r: &sqlx::sqlite::SqliteRow) -> LogLine {
     }
 }
 
+/// What names one metric series: its step, its name and its labels.
+type SeriesKey = (String, String, String);
+
 /// What has been published and not yet written. Step and metric updates
 /// coalesce to the newest; log lines never do.
 #[derive(Default)]
@@ -653,7 +723,7 @@ struct Pending {
     /// the same row again with its end. Newest wins.
     processes: BTreeMap<String, ProcessRow>,
     logs: Vec<LogRow>,
-    metrics: BTreeMap<(String, String, String), MetricRow>,
+    metrics: BTreeMap<SeriesKey, MetricRow>,
 }
 
 type Shared = Arc<Mutex<Pending>>;
@@ -926,7 +996,7 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
         tracing::warn!(error = %e, "run store: could not record the start");
     }
 
-    let mut series: HashMap<(String, String, String), SeriesState> = HashMap::new();
+    let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
     let mut last_prune = Instant::now();
     loop {
         // Wake on the interval, or immediately when the writer is
@@ -939,10 +1009,14 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
             let mut p = pending.lock().expect("run store mutex");
             std::mem::take(&mut *p)
         };
-        if let Err(e) = rt.block_on(flush(&pool, &scope, batch, &mut series, done)) {
+        let lines = batch.logs.len();
+        if let Err(e) = rt.block_on(flush_or_retry(&pool, &scope, &batch, &mut series, done)) {
             // One bad flush must not stop the record for every other
-            // step, and must never take the run down.
-            tracing::warn!(error = %e, "run store: write failed");
+            // step, and must never take the run down. Say how many
+            // lines went with it: the count is the only trace left of
+            // them, and a silent loss here is what makes anyone
+            // distrust the store.
+            tracing::warn!(error = %e, lines, "run store: write failed twice; the batch is lost");
         }
         if done {
             break;
@@ -1184,11 +1258,34 @@ async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
+/// One retry, because a flush is one transaction: a failure wrote
+/// nothing, so the same batch can simply be handed over again. The
+/// reason to expect a second attempt to work is the reason for the
+/// first failure — the other process held the write lock past
+/// [`BUSY_TIMEOUT`] — which is over by the time it starts.
+async fn flush_or_retry(
+    pool: &SqlitePool,
+    scope: &Scope,
+    batch: &Pending,
+    series: &mut HashMap<SeriesKey, SeriesState>,
+    last: bool,
+) -> Result<(), sqlx::Error> {
+    let Err(first) = flush(pool, scope, batch, series, last).await else {
+        return Ok(());
+    };
+    tracing::debug!(error = %first, "run store: write failed; retrying once");
+    tokio::time::sleep(RETRY_AFTER).await;
+    flush(pool, scope, batch, series, last).await
+}
+
+/// Writes the batch in one transaction, and moves `series` on only if
+/// that transaction commits — so a retry sees the sample state its
+/// failed predecessor found, not the one it would have installed.
 async fn flush(
     pool: &SqlitePool,
     scope: &Scope,
-    batch: Pending,
-    series: &mut HashMap<(String, String, String), SeriesState>,
+    batch: &Pending,
+    series: &mut HashMap<SeriesKey, SeriesState>,
     last: bool,
 ) -> Result<(), sqlx::Error> {
     let empty = batch.steps.is_empty()
@@ -1225,7 +1322,7 @@ async fn flush(
     if !batch.metrics.is_empty() {
         bump(&mut tx, StorePart::Metrics).await?;
     }
-    for s in batch.steps.into_values() {
+    for s in batch.steps.values() {
         sqlx::query(
             "INSERT INTO step_runs \
                (run_id, step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, \
@@ -1277,7 +1374,8 @@ async fn flush(
         .await?;
     }
     let now = Instant::now();
-    for (key, m) in batch.metrics {
+    let plan = plan_series(series, &batch.metrics, now, last);
+    for m in batch.metrics.values() {
         sqlx::query(
             "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
              VALUES (?,?,?,?,?,?,?) \
@@ -1293,35 +1391,82 @@ async fn flush(
         .bind(&m.tz_offset)
         .execute(&mut *tx)
         .await?;
-        let due = match series.get(&key) {
+    }
+    for m in &plan.samples {
+        insert_sample(&mut tx, run_id, m).await?;
+    }
+    tx.commit().await?;
+    for (key, state) in plan.next {
+        series.insert(key, state);
+    }
+    Ok(())
+}
+
+/// What a flush is about to do to the sample series: the rows to write,
+/// and the state to install once its transaction commits.
+struct SeriesPlan {
+    samples: Vec<MetricRow>,
+    next: Vec<(SeriesKey, SeriesState)>,
+}
+
+/// A sample is due when a series has moved and the floor between
+/// samples has passed — and, on the last flush of a run, once more for
+/// whatever each series ended at, however recent its previous sample:
+/// a rate drawn to the end of the run needs that point.
+fn plan_series(
+    series: &HashMap<SeriesKey, SeriesState>,
+    batch: &BTreeMap<SeriesKey, MetricRow>,
+    now: Instant,
+    last: bool,
+) -> SeriesPlan {
+    let mut plan = SeriesPlan {
+        samples: Vec::new(),
+        next: Vec::new(),
+    };
+    for (key, m) in batch {
+        let previous = series.get(key);
+        let due = match previous {
             None => true,
             Some(s) => s.last_sample_value != m.value && now - s.last_sample_at >= SAMPLE_EVERY,
         };
-        if due {
-            insert_sample(&mut tx, run_id, &m).await?;
-            series.insert(
-                key,
-                SeriesState {
-                    last_sample_at: now,
-                    last_sample_value: m.value,
-                    current: m,
-                },
-            );
-        } else if let Some(s) = series.get_mut(&key) {
-            s.current = m;
+        // `previous` is Some wherever this is reached: a series with no
+        // state behind it is always due.
+        let closing = last && !due && previous.is_some_and(|s| s.last_sample_value != m.value);
+        if due || closing {
+            plan.samples.push(m.clone());
         }
+        plan.next.push((
+            key.clone(),
+            SeriesState {
+                last_sample_at: match (due, previous) {
+                    (false, Some(s)) => s.last_sample_at,
+                    _ => now,
+                },
+                last_sample_value: match (due || closing, previous) {
+                    (false, Some(s)) => s.last_sample_value,
+                    _ => m.value,
+                },
+                current: m.clone(),
+            },
+        ));
     }
     if last {
-        // The final value of every series is a sample, however recent
-        // the previous one: a rate drawn to the end of the run needs it.
-        for s in series.values_mut() {
-            if s.current.value != s.last_sample_value {
-                insert_sample(&mut tx, run_id, &s.current).await?;
-                s.last_sample_value = s.current.value;
+        for (key, s) in series {
+            if batch.contains_key(key) || s.current.value == s.last_sample_value {
+                continue;
             }
+            plan.samples.push(s.current.clone());
+            plan.next.push((
+                key.clone(),
+                SeriesState {
+                    last_sample_at: s.last_sample_at,
+                    last_sample_value: s.current.value,
+                    current: s.current.clone(),
+                },
+            ));
         }
     }
-    tx.commit().await
+    plan
 }
 
 /// Steps and metrics belong to a run, so `run_id` is bound as given:

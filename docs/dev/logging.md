@@ -28,6 +28,25 @@ in beside it (`tz_offset`); text order is instant order. A line keeps
 its own clock when it had one (a tracing envelope's `timestamp`, a
 page's `at`), else the moment the writer saw it.
 
+**Two writers on one file is the design, and it is measured.** SQLite
+serializes writers with a lock on the file rather than letting them
+overwrite each other: a writer that cannot take the lock waits ten
+seconds and is then handed an error. A batch that fails that way is one
+transaction that wrote nothing, so the writer offers the same batch once
+more before giving up — and when it does give up it says how many lines
+went with it, because a silent loss here is what makes anyone distrust
+the store. Deciding what to *do* with the file is exclusive between
+processes (`runs.sqlite.open-lock`): remaking the store is a delete, and
+doing that under another process's open leaves that process filling an
+inode nobody will ever read. `runs_two_process_test` runs four writers
+at once — on a fresh root, and on one this build has to remake — and
+checks that every line published reaches the store.
+
+One thing this rests on: WAL keeps shared state in a file beside the
+store, and SQLite's locking is not dependable on a network or
+file-syncing filesystem. **A data root belongs on local disk**, not on
+an NFS or SMB mount or inside a Dropbox folder.
+
 Retention is `[run_history]` in `config.toml`
 ([`configs/dag_example.toml`](../../configs/dag_example.toml)):
 `max_runs` / `max_age_days` for runs and everything that belongs to
