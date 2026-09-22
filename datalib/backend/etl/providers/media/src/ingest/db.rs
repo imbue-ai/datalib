@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_entity_in_tx;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw as dr;
+use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
     full_ddl, MediaAudioRow, MediaFileRow, MediaItemRow, MediaPlaylistEntryRow, MediaPlaylistRow,
@@ -130,11 +131,15 @@ impl RawDb {
     }
 
     pub async fn delete_files(&self, ids: &[String]) -> Result<u64> {
-        self.delete_by_id("media_files", ids).await
+        let n = self.delete_by_id("media_files", ids).await?;
+        self.delete_by_id("media_files_bookkeeping", ids).await?;
+        Ok(n)
     }
 
     pub async fn delete_playlists(&self, ids: &[String]) -> Result<u64> {
         let n = self.delete_by_id("media_playlists", ids).await?;
+        self.delete_by_id("media_playlists_bookkeeping", ids)
+            .await?;
         self.delete_where("media_playlist_entries", "playlist_id", ids)
             .await?;
         Ok(n)
@@ -202,12 +207,12 @@ impl RawDb {
     /// is `media_files.blake3 -> media_items.blake3`, so writing them
     /// together is what keeps a path row from ever referring to an item
     /// that is not there.
-    pub async fn write_batch(&self, b: &WriteBatch) -> Result<()> {
+    pub async fn write_batch(&self, b: &WriteBatch, now: &IsoOffsetTimestamp) -> Result<()> {
         if b.is_empty() {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin write tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, &b.items)
+        bulk_upsert_in_tx(&mut tx, &b.items, now)
             .await
             .context("upsert media_items")?;
         bulk_upsert_entity_in_tx(&mut tx, &b.audio)
@@ -216,7 +221,7 @@ impl RawDb {
         bulk_upsert_entity_in_tx(&mut tx, &b.visual)
             .await
             .context("upsert media_visual")?;
-        bulk_upsert_entity_in_tx(&mut tx, &b.files)
+        bulk_upsert_in_tx(&mut tx, &b.files, now)
             .await
             .context("upsert media_files")?;
         tx.commit().await.context("commit write tx")?;
@@ -227,12 +232,13 @@ impl RawDb {
         &self,
         playlists: &[MediaPlaylistRow],
         entries: &[MediaPlaylistEntryRow],
+        now: &IsoOffsetTimestamp,
     ) -> Result<()> {
         if playlists.is_empty() && entries.is_empty() {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin playlist tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, playlists)
+        bulk_upsert_in_tx(&mut tx, playlists, now)
             .await
             .context("upsert media_playlists")?;
         bulk_upsert_entity_in_tx(&mut tx, entries)

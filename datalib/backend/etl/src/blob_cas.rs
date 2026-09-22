@@ -19,14 +19,14 @@ use sqlx::{Row, SqlitePool};
 // Schema
 
 /// Sole table in the per-source blobs database. Pure content-addressed
-/// storage: bytes keyed by their blake3, nothing source-specific.
+/// storage: bytes keyed by their blake3, nothing source-specific — and
+/// no stamp, since when a row arrived is the date of the commit that
+/// brought it.
 pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
     blake3            TEXT PRIMARY KEY,
     byte_len          INTEGER NOT NULL,
     content_type      TEXT NULL,
     bytes             BLOB NOT NULL,
-    first_seen_at_utc TEXT NOT NULL,
-    tz_offset         TEXT NULL,
     CHECK (length(blake3) = 64)
 )";
 
@@ -122,18 +122,14 @@ impl BlobCas {
 
     pub async fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<String> {
         let hash = blake3_hex(bytes);
-        let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         sqlx::query(
-            "INSERT OR IGNORE INTO cas_objects \
-             (blake3, byte_len, content_type, bytes, first_seen_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO cas_objects (blake3, byte_len, content_type, bytes) \
+             VALUES (?, ?, ?, ?)",
         )
         .bind(&hash)
         .bind(bytes.len() as i64)
         .bind(content_type)
         .bind(bytes)
-        .bind(&now)
-        .bind(&tz_offset)
         .execute(&self.pool)
         .await
         .context("cas put")?;
@@ -148,14 +144,12 @@ impl BlobCas {
         if items.is_empty() {
             return Ok(());
         }
-        let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await.context("begin cas put_many tx")?;
         for chunk in items.chunks(crate::bulk::SQL_CHUNK) {
             let mut sql = String::from(
-                "INSERT OR IGNORE INTO cas_objects \
-                 (blake3, byte_len, content_type, bytes, first_seen_at_utc, tz_offset) VALUES ",
+                "INSERT OR IGNORE INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES ",
             );
-            crate::bulk::push_placeholders(&mut sql, chunk.len(), 6);
+            crate::bulk::push_placeholders(&mut sql, chunk.len(), 4);
             // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is a
             // `&'static str` prefix plus a `(?,?,?),...` run that `push_placeholders`
             // builds from `chunk.len()`. Every value is bound.
@@ -165,9 +159,7 @@ impl BlobCas {
                     .bind(it.blake3)
                     .bind(it.bytes.len() as i64)
                     .bind(it.content_type)
-                    .bind(it.bytes)
-                    .bind(&now)
-                    .bind(&tz_offset);
+                    .bind(it.bytes);
             }
             q.execute(&mut *tx)
                 .await

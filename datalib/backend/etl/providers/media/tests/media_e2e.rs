@@ -871,9 +871,9 @@ async fn deletions_are_reconciled_without_a_clock() -> Result<()> {
 
     std::fs::remove_file(h.root.join("music/untagged_hum.mp3"))?;
     std::fs::remove_file(h.root.join("playlists/bridge_ambience.m3u"))?;
-    // Both scans use the same pinned `NOW`, deliberately: a
-    // `WHERE last_seen_at_utc <> ?` sweep would delete nothing here, which
-    // is exactly why reconciliation is a set difference instead.
+    // Both scans use the same pinned `NOW`, deliberately: a sweep by
+    // the bookkeeping stamp would delete nothing here, which is exactly
+    // why reconciliation is a set difference instead.
     let second = h.scan().await?;
     assert_eq!(second.removed, 2, "one file and one playlist: {second:?}");
 
@@ -931,7 +931,7 @@ async fn a_deleted_file_disappears_from_the_path_table_but_the_item_remains() ->
         "the path row should fall out with the truncate"
     );
     // The item survives: it is keyed on content, which has no notion of
-    // "no longer present", and keeping it preserves `first_seen_at_utc`.
+    // "no longer present", and keeping it keeps when it was first seen.
     assert!(
         items(db).await?.contains_key(&hash),
         "the item row should remain (see INGEST.md §Orphaned items)"

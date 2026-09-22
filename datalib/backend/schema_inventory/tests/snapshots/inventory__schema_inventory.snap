@@ -802,7 +802,13 @@ media_audio
 media_files
     id
     blake3
-    last_seen_at_utc
+media_files_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 media_items
     blake3
@@ -813,7 +819,13 @@ media_items
     duration_ms
     payload_blake3
     payload_scheme
-    first_seen_at_utc
+media_items_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 media_playlist_entries
     id
@@ -830,7 +842,13 @@ media_playlists
     format
     title
     entry_count
-    last_seen_at_utc
+media_playlists_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 media_scan_meta
     id
@@ -966,12 +984,24 @@ pdf_documents
     xmp_document_id
     xmp_instance_id
     xmp_original_document_id
-    first_seen_at_utc
+pdf_documents_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 pdf_paths
     id
     blake3
-    last_seen_at_utc
+pdf_paths_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 pdf_scan_meta
     id

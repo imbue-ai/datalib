@@ -16,7 +16,6 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
-use datalib_time::StoredStamp;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -102,6 +101,8 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let stamp = datalib_time::split_stamp(&opts.now);
+    let now = datalib_time::parse_strict(&opts.now)
+        .with_context(|| format!("parse the run's now {:?}", opts.now))?;
 
     // The rescan cache, read once so the walk never touches the
     // database. Nothing is deleted here: stale rows are swept at the
@@ -178,7 +179,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
         // ── Identify, once per distinct content ──────────────────────
         if !prev.known_items.contains(&hash_hex) && !seen_items.contains(&hash_hex) {
-            match identify(&f.path, f.size, &hash_hex, &opts, &stamp) {
+            match identify(&f.path, f.size, &hash_hex, &opts) {
                 Ok(id) => {
                     seen_items.insert(hash_hex.clone());
                     summary.items += 1;
@@ -211,19 +212,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         batch.files.push(MediaFileRow {
             id: f.rel.clone(),
             blake3: hash_hex,
-            last_seen_at_utc: stamp.utc.clone(),
-            tz_offset: stamp.tz_offset.clone(),
         });
 
         if batch.len() >= BATCH_SIZE {
-            opts.db.write_batch(&batch).await?;
+            opts.db.write_batch(&batch, &now).await?;
             batch.clear();
         }
     }
-    opts.db.write_batch(&batch).await?;
+    opts.db.write_batch(&batch, &now).await?;
 
     if opts.playlists {
-        scan_playlists(&opts, &stamp, &playlist_files, &mut prev, &mut summary).await?;
+        scan_playlists(&opts, &now, &playlist_files, &mut prev, &mut summary).await?;
     }
 
     // Reconcile last. Whatever is still in the cache was never visited,
@@ -268,13 +267,7 @@ struct Identified {
     visual: Option<MediaVisualRow>,
 }
 
-fn identify(
-    path: &Path,
-    size: i64,
-    blake3: &str,
-    opts: &FetchOptions,
-    stamp: &StoredStamp,
-) -> Result<Identified> {
+fn identify(path: &Path, size: i64, blake3: &str, opts: &FetchOptions) -> Result<Identified> {
     let head = read_head(path)?;
     let container = Container::sniff(&head);
     let class = kind::resolve_class(container, path);
@@ -301,8 +294,6 @@ fn identify(
         duration_ms: m.duration_ms,
         payload_blake3: payload.as_ref().map(|p| p.blake3.clone()),
         payload_scheme: payload.as_ref().map(|p| p.scheme.to_string()),
-        first_seen_at_utc: stamp.utc.clone(),
-        tz_offset: stamp.tz_offset.clone(),
     };
 
     let audio = m.audio.map(|a| MediaAudioRow {
@@ -366,7 +357,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>> {
 
 async fn scan_playlists(
     opts: &FetchOptions,
-    stamp: &StoredStamp,
+    now: &datalib_time::IsoOffsetTimestamp,
     files: &[fsscan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
@@ -445,16 +436,14 @@ async fn scan_playlists(
             format: playlist::format_of(&f.path).to_string(),
             title: parsed.title.clone(),
             entry_count: parsed.entries.len() as i64,
-            last_seen_at_utc: stamp.utc.clone(),
-            tz_offset: stamp.tz_offset.clone(),
         });
 
         if entries.len() >= BATCH_SIZE {
-            opts.db.write_playlists(&rows, &entries).await?;
+            opts.db.write_playlists(&rows, &entries, now).await?;
             rows.clear();
             entries.clear();
         }
     }
-    opts.db.write_playlists(&rows, &entries).await?;
+    opts.db.write_playlists(&rows, &entries, now).await?;
     Ok(())
 }

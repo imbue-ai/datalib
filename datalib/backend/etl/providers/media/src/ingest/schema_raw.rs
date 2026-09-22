@@ -31,9 +31,7 @@ pub const MEDIA_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS media_items (
     codec           TEXT NULL,
     duration_ms     INTEGER NULL,
     payload_blake3  TEXT NULL,
-    payload_scheme  TEXT NULL,
-    first_seen_at_utc   TEXT NOT NULL,
-    tz_offset       TEXT NULL
+    payload_scheme  TEXT NULL
 )";
 
 pub const MEDIA_ITEMS_INDEXES: &[&str] = &[
@@ -108,9 +106,7 @@ pub const MEDIA_VISUAL_INDEXES: &[&str] = &[
 
 pub const MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS media_files (
     id           TEXT PRIMARY KEY,
-    blake3       TEXT NOT NULL,
-    last_seen_at_utc TEXT NOT NULL,
-    tz_offset    TEXT NULL
+    blake3       TEXT NOT NULL
 )";
 
 pub const MEDIA_FILES_INDEXES: &[&str] = &[
@@ -124,9 +120,7 @@ pub const MEDIA_PLAYLISTS_DDL: &str = "CREATE TABLE IF NOT EXISTS media_playlist
     blake3         TEXT NOT NULL,
     format         TEXT NOT NULL,
     title          TEXT NULL,
-    entry_count    INTEGER NOT NULL,
-    last_seen_at_utc   TEXT NOT NULL,
-    tz_offset      TEXT NULL
+    entry_count    INTEGER NOT NULL
 )";
 
 pub const MEDIA_PLAYLIST_ENTRIES_DDL: &str = "CREATE TABLE IF NOT EXISTS media_playlist_entries (
@@ -160,6 +154,15 @@ pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_met
     tz_offset    TEXT NULL
 )";
 
+/// The tables written through the paired sidecar: when a row was last
+/// written is `<table>_bookkeeping.fetched_at_utc`, not a column of the
+/// row, so a scan that finds nothing changed changes no content row.
+/// For the content-keyed `media_items` that stamp is when the item was
+/// first identified, because an item is only written when its hash is
+/// new. The audio/visual rows and the playlist entries go with their
+/// item or playlist and carry no stamp of their own.
+pub const STAMPED_TABLES: &[&str] = &["media_items", "media_files", "media_playlists"];
+
 pub fn full_ddl() -> Vec<String> {
     let mut out = vec![
         MEDIA_ITEMS_DDL.to_string(),
@@ -170,6 +173,11 @@ pub fn full_ddl() -> Vec<String> {
         MEDIA_PLAYLIST_ENTRIES_DDL.to_string(),
         MEDIA_SCAN_META_DDL.to_string(),
     ];
+    out.extend(
+        STAMPED_TABLES
+            .iter()
+            .map(|t| datalib_etl::doltlite_raw::bookkeeping_ddl_for(t)),
+    );
     for set in [
         MEDIA_ITEMS_INDEXES,
         MEDIA_AUDIO_INDEXES,
@@ -203,10 +211,6 @@ pub struct MediaItemRow {
     /// one recipe, so the recipe is stored beside the digest and any
     /// change to what a recipe excludes bumps its version.
     pub payload_scheme: Option<String>,
-    /// UTC; `tz_offset` is the offset the scan's clock was in. The same
-    /// pair on every stamp-bearing table in this store.
-    pub first_seen_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaItemRow {
@@ -223,8 +227,6 @@ impl BulkUpsertable for MediaItemRow {
         "duration_ms",
         "payload_blake3",
         "payload_scheme",
-        "first_seen_at_utc",
-        "tz_offset",
     ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
@@ -244,8 +246,6 @@ impl BulkUpsertable for MediaItemRow {
             .bind(self.duration_ms)
             .bind(self.payload_blake3.as_deref())
             .bind(self.payload_scheme.as_deref())
-            .bind(&self.first_seen_at_utc)
-            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -412,13 +412,11 @@ pub struct MediaFileRow {
     /// Hex blake3 of the bytes at this path — the FK into
     /// `media_items`.
     pub blake3: String,
-    pub last_seen_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaFileRow {
     const TABLE: &'static str = "media_files";
-    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at_utc", "tz_offset"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -429,10 +427,7 @@ impl BulkUpsertable for MediaFileRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.blake3)
-            .bind(&self.last_seen_at_utc)
-            .bind(self.tz_offset.as_deref())
+        q.bind(&self.id).bind(&self.blake3)
     }
 }
 
@@ -448,20 +443,11 @@ pub struct MediaPlaylistRow {
     pub format: String,
     pub title: Option<String>,
     pub entry_count: i64,
-    pub last_seen_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaPlaylistRow {
     const TABLE: &'static str = "media_playlists";
-    const TYPED_COLUMNS: &'static [&'static str] = &[
-        "blake3",
-        "format",
-        "title",
-        "entry_count",
-        "last_seen_at_utc",
-        "tz_offset",
-    ];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "format", "title", "entry_count"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -477,8 +463,6 @@ impl BulkUpsertable for MediaPlaylistRow {
             .bind(&self.format)
             .bind(self.title.as_deref())
             .bind(self.entry_count)
-            .bind(&self.last_seen_at_utc)
-            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -571,8 +555,9 @@ mod tests {
 
     #[test]
     fn content_keyed_tables_are_never_swept() {
-        // Sweeping them would drop `first_seen_at_utc` and re-parse every
-        // item whose path merely moved. Only the path-keyed tables are.
+        // Sweeping them would drop the item's bookkeeping and re-parse
+        // every item whose path merely moved. Only the path-keyed tables
+        // are.
         for t in ["media_items", "media_audio", "media_visual"] {
             assert!(
                 !DATA_TABLES.contains(&t),
