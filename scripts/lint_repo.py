@@ -120,10 +120,7 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # Applet coverage starts real applet processes and proxies to them
     # over loopback. The store semantics they sit on top of are unit
     # tested hermetically in datalib/backend/http/src/frontend.rs.
-    "datalib/backend/http:applet_endpoint_test": (
-        "starts applet subprocesses and binds loopback ports"
-    ),
-    "datalib/backend/http:applet_proxy_test": (
+    "datalib/backend/http:applet_tests": (
         "starts applet subprocesses and binds loopback ports"
     ),
 }
