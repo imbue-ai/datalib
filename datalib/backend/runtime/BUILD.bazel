@@ -34,7 +34,7 @@ rust_library(
     # "which datalib wrote this store" comes from. Must match
     # [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.35.2",
+    version = "0.36.0",
     visibility = ["//datalib:__subpackages__"],
 )
 
