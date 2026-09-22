@@ -2,27 +2,58 @@
 
 What was measured about `qmd` 2.8.3 (the pin in
 `datalib/backend/runtime/src/qmd.rs`) while designing per-source
-embedding on PR #456. Nine facts, each measured on a mac against the
-TNG fixture's rendered tree (16 groups, 79 documents, one qmd
-collection per group, exactly as the shipped `qmd_index` step registers
-them), with the recipe at the end so they can be re-measured after a
-qmd bump. File references are into `third-party/qmd/src`, the vendored
-reference snapshot (`docs/dev/qmd_vendored.md`); function names are
-given so a line number that drifts is still findable.
+embedding on PR #456, and extended on #679 once the embed pass started
+driving qmd's SDK rather than its CLI. Eleven facts, each measured on a
+mac against the TNG fixture's rendered tree (one qmd collection per
+group, exactly as the shipped `qmd_index` step registers them), with
+the recipe at the end so they can be re-measured after a qmd bump. The
+first nine were measured when the fixture held 16 groups and 79
+documents; findings 1 (its SDK half), 10 and 11 against the 22 groups
+and 111 documents it holds now. File
+references are into `third-party/qmd/src`, the vendored reference
+snapshot (`docs/dev/qmd_vendored.md`); function names are given so a
+line number that drifts is still findable.
 
 Read this before touching `qmd_indexer/src/lib.rs` or anything that
-shells `qmd embed`. Findings 5 and 6 describe how the step **today**
-can report success for work qmd did not do.
+drives `qmd embed`. Finding 6 describes how the step **today** can
+report success for work qmd did not do.
+
+**The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
+both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
+its only declared export). Several of the limits below are the CLI's
+alone — finding 1 most of all — so a fact measured by shelling `qmd`
+does not carry over to `createStore()` without being re-measured.
 
 ## What was measured
 
-1. **`qmd update` cannot be scoped to a collection.** `updateCollections`
-   (`cli/qmd.ts`) loops over `listCollections(db)` — every collection in
-   the store — and there is no `-c` on `update` in 2.8.3 or on upstream
-   `main` (checked 2026-09-15). Only `embed` takes `-c`, and only one
-   name. So a per-source step that shells `qmd update` would re-hash
-   every source's files on every run: O(sources × corpus), and a step
-   whose declared input is one tree while it reads all of them.
+1. **`qmd update` cannot be scoped to a collection *from the CLI*.**
+   `updateCollections` (`cli/qmd.ts`) loops over `listCollections(db)` —
+   every collection in the store — and there is no `-c` on `update` in
+   2.8.3 or on upstream `main` (checked 2026-09-15). Only `embed` takes
+   `-c`, and only one name. So a per-source step that shells `qmd
+   update` would re-hash every source's files on every run:
+   O(sources × corpus), and a step whose declared input is one tree
+   while it reads all of them.
+
+   **The SDK can scope it.** `createStore().update({ collections: [...] })`
+   filters `getStoreCollections(db)` by name and calls the same
+   `reindexCollection` per surviving collection (`index.ts`, the
+   `update` member). Measured on the fixture: with one file edited in
+   `slack` and one in `notion`, `update({collections:["slack"]})`
+   reported `{collections: 1, updated: 1, unchanged: 12}` — slack's 13
+   documents — fired `onProgress` for `slack` and no other collection,
+   moved slack's row to a new hash, and left notion's row on its old
+   one. A second run scoped to `notion` then picked notion's edit up.
+   Checked on the keyword index itself and not just on
+   `documents.hash`: after the slack-scoped run, `documents_fts` did
+   not match a sentinel word written into the notion file, and after
+   the notion-scoped run it did. With nothing to do, three runs each:
+   scoped to `slack` 8/12/11 ms, unscoped 27/39/29 ms.
+
+   So the keyword index **can** be built per source through qmd's own
+   code. That is what finding 2 was a workaround for; #468's
+   "backed out: a writer for another program's tables" is no longer
+   the only route.
 
 2. **Writing a source's `documents`/`content` rows ourselves works, and
    qmd cannot tell the difference.** `reindexCollection` (`store.ts`)
@@ -69,15 +100,32 @@ can report success for work qmd did not do.
    lock file is recovered by PID check after a crash (measured: a
    SIGTERM'd embed left the file; the next embed took it and finished).
 
+   The shipped step no longer inherits this. Since #679 it takes the
+   lock itself (`dist/cli/embed-lock.js`, which the SDK does not
+   re-export) and treats a lock it cannot get as a failure, on the
+   grounds that the step owns the index and nothing else should be
+   writing it. The hazard is still qmd's, so anything new that shells
+   `qmd embed` gets it back.
+
 6. **`qmd embed` stops itself after 30 minutes and still exits 0.**
    `DEFAULT_EMBED_MAX_DURATION_MS = 30 * 60 * 1000` (`store.ts`); on the
    cap it prints `⚠ Session expired — skipping remaining document
    batches` and then `✓ Done!` (`cli/qmd.ts`). `--timeout <minutes>`
-   sets it; `0` disables it. **This is a live bug in the shipped step:**
-   `run_index` (`qmd_indexer/src/lib.rs`) runs a bare `qmd embed` and
-   trusts its status, so a root whose first embed needs more than half
-   an hour reports `Succeeded` with most documents unembedded, and
-   nothing re-runs it until a render moves. Tracked as #617.
+   sets it; `0` disables it. **This is a live bug in the shipped step**,
+   and #679 did not fix it: the step now drives the SDK, whose
+   `embed()` forwards `force`, `model`, `collection`, `maxDocsPerBatch`,
+   `maxBatchBytes`, `chunkStrategy` and `onProgress` and **drops
+   `maxDurationMs`** (`index.ts`, the `embed` member), so it always
+   takes the 30-minute default and there is no flag to raise. A root
+   whose first embed needs more than half an hour still reports
+   `Succeeded` with most documents unembedded, and nothing re-runs it
+   until a render moves. Tracked as #617.
+
+   The SDK does make it cheap to fix without reaching past the public
+   entry point: by finding 7 an embed resumes, and `EmbedResult`
+   reports `docsProcessed`, so calling `embed()` in a loop until it
+   returns zero finishes the work. In one process that also pays
+   finding 8's model load once rather than per pass.
 
 7. **Embedding resumes.** Vectors are committed per batch; an
    interrupted run leaves what it finished, and the pending query counts
@@ -97,6 +145,34 @@ can report success for work qmd did not do.
    every start. Registering a new source therefore costs one qmd-side
    scan at `collection add` and a second at the `qmd update` that
    follows; the second finds every row unchanged.
+
+10. **`createStore({ dbPath, configPath })` deletes every collection the
+    config file does not name — including when that file does not
+    exist.** `createStore` calls `loadConfig()` and then
+    `syncConfigToDb` (`store.ts`), whose last step is `DELETE FROM
+    store_collections WHERE name = ?` for every row not in the config.
+    A missing file loads as an empty config, so the delete takes all of
+    them. Measured: `store_collections` was empty after one
+    `createStore` against a `configPath` that was not there, having held
+    every registered collection the moment before. The `documents` rows
+    survive — it
+    is the registry that goes — but a later scoped `update` then matches
+    nothing and silently does no work, which is how this was noticed.
+    The shipped step passes `configPath` only when the file is on disk
+    (`qmd_indexer/src/lib.rs`, `run_embed`); anything else built on the
+    SDK needs the same guard, or `{ dbPath }` alone, which is the
+    DB-only mode that reads `store_collections` and syncs nothing.
+
+11. **The SDK reports progress the CLI keeps to itself.** `embed`'s
+    `onProgress` fires per batch with chunks embedded, bytes processed
+    and total, and the active error count; `update`'s fires per file
+    with the collection, the file and a position. Both are plain
+    callbacks on the store, so nothing has to parse a progress bar or
+    poll qmd's SQLite. The CLI computes the same embed numbers and
+    writes them only when `process.stderr.isTTY` (`cli/qmd.ts`), as a
+    `\r`-redrawn bar — which is why a piped `qmd embed` says nothing at
+    all between its model line and its last one. #679 is that
+    measurement turned into the step's progress reporting.
 
 One more, about our side rather than qmd's: `QmdDaemon`
 (`unified_index/src/qmd/daemon.rs`) respawns `qmd mcp` whenever
@@ -121,12 +197,42 @@ decision record — what was built, what still bothered, and the options
 upstream for `status -c` and `embed --json`). The branch
 `claude/per-source-indexing-embeddings-735411` has the code.
 
+Findings 1, 10 and 11 move that ground, and #468 should be read with
+them in hand:
+
+- **`embed --json` is already there**, as `onProgress` (finding 11).
+  The ~500 lines of embed loop that #468 attributes to qmd's exit-code
+  behaviour, and the per-collection gauge polled from qmd's SQLite,
+  both answer to that callback instead.
+- **The keyword index can be per source without writing qmd's tables**
+  (finding 1). That is the third of the change that was backed out.
+- **A loop over collections need not pay finding 8's model load per
+  collection**, as long as it is one process calling
+  `embed({collection})` repeatedly rather than one process per
+  collection. Per-source *DAG steps* do not get this — they are
+  separate processes, and by finding 5 they still need the runner's
+  `lock`. That asymmetry is the argument for #468's option B over its
+  option A, and it is new.
+
 ## Re-running the measurements
+
+**Pin `QMD_CONFIG_DIR`, and set the variables on separate lines.**
+`getConfigDir` (`collections.ts`) takes `QMD_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/qmd`, else `$HOME/.config/qmd` — and the checks are
+for truthiness, so an *empty* `XDG_CONFIG_HOME` falls through to your
+home directory. `export A=$S/x B=$A` leaves `B` empty, because the
+shell expands the whole line before any of it is assigned. Get that
+wrong and `collection add` writes the fixture's collections into your
+own `~/.config/qmd/index.yml` (it merges, so nothing there is lost, but
+they have to be taken back out by hand).
 
 ```sh
 S=/tmp/qmd-exp; mkdir -p $S/root
 tar -xf bazel-bin/tests/fixtures/ingested/qmd_md.tar -C $S/root --strip-components=1
-export XDG_CACHE_HOME=$S/root/unified_index/qmd_index XDG_CONFIG_HOME=$XDG_CACHE_HOME NO_COLOR=1
+export XDG_CACHE_HOME=$S/root/unified_index/qmd_index
+export XDG_CONFIG_HOME=$XDG_CACHE_HOME
+export QMD_CONFIG_DIR=$XDG_CACHE_HOME/qmd
+export NO_COLOR=1
 mkdir -p $XDG_CACHE_HOME/qmd && ln -sfn ~/.cache/qmd/models $XDG_CACHE_HOME/qmd/models
 qmd() { node bazel-bin/third-party/qmd/runtime/node_modules/@tobilu/qmd/dist/cli/qmd.js "$@"; }
 for g in $(ls $S/root | grep -v unified_index); do
@@ -139,6 +245,32 @@ sqlite3 $XDG_CACHE_HOME/qmd/index.sqlite \
   "select d.collection, count(distinct d.hash), count(distinct v.hash)
      from documents d left join content_vectors v on v.hash=d.hash
     where d.active=1 group by 1;"
+```
+
+Finding 1's SDK half needs a script, since there is no CLI for it.
+Append a sentinel word to one file in `slack` and one in `notion`,
+then scope an update to one of them and ask the *keyword* index which
+sentinel it can see:
+
+```js
+// node scoped.mjs <pkg-dir> <index.sqlite> <index.yml> [collection...]
+import { pathToFileURL } from "node:url"; import { join } from "node:path";
+const [pkg, dbPath, configPath, ...only] = process.argv.slice(2);
+const { createStore } = await import(pathToFileURL(join(pkg, "dist/index.js")).href);
+const store = await createStore({ dbPath, configPath });   // finding 10: must exist
+const seen = new Set();
+const t0 = Date.now();
+const res = await store.update({
+  collections: only.length ? only : undefined,
+  onProgress: (p) => seen.add(p.collection),
+});
+console.log(Date.now() - t0, "ms", JSON.stringify(res), [...seen].sort());
+await store.close();
+```
+
+```sh
+sqlite3 $XDG_CACHE_HOME/qmd/index.sqlite \
+  "select count(*) from documents_fts where documents_fts match 'SENTINEL';"
 ```
 
 Finding 2's direct write is an `UPDATE documents … / INSERT OR IGNORE
