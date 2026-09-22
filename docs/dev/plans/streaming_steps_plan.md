@@ -654,7 +654,7 @@ consumer would faithfully propagate that.
 
 Three cases, and the first two are the same case:
 
-- **A reset** (`datalib-dag --reset`) empties every table in a commit of
+- **A reset** (`datalib-dag --reset`) drops every table in a commit of
   its own before any run starts
   ([`doltlite_raw::reset_store`](../../../datalib/backend/etl/src/doltlite_raw.rs));
   the sync that follows is an ordinary first sync and checkpoints as one.

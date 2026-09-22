@@ -643,10 +643,20 @@ async fn open_inner(
     // The ladder, before the DDL is compared to anything: a rung is how
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
-    // leaves a store the next open resumes from.
+    // leaves a store the next open resumes from. A file with no tables
+    // — new, or reset — has nothing to climb: the DDL below creates it
+    // at the ladder's top. And a caller with no DDL (`open_index`, a
+    // reset) does no schema work at all, the ladder included.
+    let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
+    let bare = extra_ddl.is_empty() && shared.is_empty();
     let stored_version = datalib_store_meta::ladder::stored_version(&pool).await?;
     let top = datalib_store_meta::ladder::top(ladder);
-    if stored_version > top {
+    let rungs = if bare || user_tables(&pool).await?.is_empty() {
+        Vec::new()
+    } else {
+        datalib_store_meta::ladder::pending(ladder, stored_version)?
+    };
+    if stored_version > top && !bare {
         pool.close().await;
         return Err(
             anyhow::Error::new(datalib_store_meta::ladder::AheadOfLadder {
@@ -656,7 +666,7 @@ async fn open_inner(
             .context(format!("open {}", db_path.display())),
         );
     }
-    for rung in datalib_store_meta::ladder::pending(ladder, stored_version)? {
+    for rung in rungs {
         // The meta table has to exist for the rung to bump the version;
         // a store from before the table is at version 0 and gets it here.
         sqlx::query(datalib_store_meta::DDL)
@@ -671,7 +681,6 @@ async fn open_inner(
     // Tables, then indexes — see the README for why the order is
     // load-bearing. `parse_create_table_name` returns `None` for exactly
     // the statements that must wait.
-    let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     // `_datalib_meta` first, in every store: it says which build wrote
     // the file, and it rides in the same schema commit as the rest.
     let meta_ddl: &[&str] = &[datalib_store_meta::DDL];
@@ -739,7 +748,7 @@ async fn open_inner(
     // A caller with no DDL of its own installs its schema itself, writes
     // the meta rows for it and commits it itself (`open_index`); a commit
     // here would carry nothing it wants.
-    if extra_ddl.is_empty() && shared.is_empty() {
+    if bare {
         return Ok(pool);
     }
     let meta_moved = datalib_store_meta::write(
@@ -859,14 +868,14 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
 }
 
 /// Empty vec if the table does not exist (no error).
-async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
-    // Audited: `table` is a quoted name parsed from our own DDL.
-    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT COUNT(*) FROM \"{table}\""
-    )))
-    .fetch_one(pool)
+/// Every table in the file that is ours to touch.
+async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(pool)
     .await
-    .with_context(|| format!("count {table}"))
+    .context("list tables")
 }
 
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
@@ -1032,9 +1041,6 @@ enum TablePlan {
     Add(Vec<String>),
     /// Present, and not reachable additively: what differs.
     Break(String),
-    /// As [`Break`](Self::Break), but empty, so nothing is lost by
-    /// dropping and recreating it under any policy.
-    Recreate(String),
 }
 
 /// Whether a column clause can go through `ALTER TABLE … ADD COLUMN`.
@@ -1062,14 +1068,7 @@ async fn plan_table_schema(pool: &SqlitePool, create_sql: &str, table: &str) -> 
             .filter(|d| !actual.iter().any(|a| a.name == d.name))
             .all(can_be_added);
     if !additive {
-        // "Its rows may be the only copy" is the whole argument for
-        // refusing, and an empty table has none: a reset store gets
-        // its new shape on the next open.
-        return Ok(if row_count(pool, table).await? == 0 {
-            TablePlan::Recreate(drift)
-        } else {
-            TablePlan::Break(drift)
-        });
+        return Ok(TablePlan::Break(drift));
     }
     let mut clauses = Vec::new();
     for col in declared
@@ -1196,12 +1195,6 @@ async fn apply_table_plan(
                  dropping and recreating the table from the DDL"
             );
         }
-        TablePlan::Recreate(what) => tracing::info!(
-            table,
-            what = %what,
-            "doltlite_raw: the stored shape cannot be reached by ADD COLUMN and the \
-             table is empty; recreating it from the DDL"
-        ),
     }
     // Audited: `table` is parsed from our own static DDL.
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
@@ -1519,17 +1512,14 @@ pub async fn problem_counts_at_path(
 
 // ── Reset ───────────────────────────────────────────────────────────
 
-/// Empty every table but `_datalib_meta` and commit, so the store reads
-/// as a source with nothing in it while its history keeps every row —
-/// the run log and the storage series included, which is where to look
-/// for them. `_datalib_meta` is not a record but the file's shape: the
-/// ladder's `schema_version`, and the guard against an older build.
-/// Opened with no DDL, so a store whose shape this build refuses resets
-/// all the same; once its tables are empty the owner's next open
-/// recreates whatever it cannot reach additively. A store that does not
-/// exist has nothing to reset.
+/// Drop every table and commit, so the store reads as a source with
+/// nothing in it while its history keeps every row — the run log
+/// included, which is where to look for it. The owner's next open is a
+/// first open: the DDL creates the tables afresh, with nothing to
+/// migrate, so a store whose shape this build refuses resets all the
+/// same. A store that does not exist has nothing to reset.
 pub async fn reset_store(db_path: &Path) -> Result<()> {
-    reset_with(db_path, |_| true, "reset").await
+    reset_with(db_path, Reset::DropTables, "reset").await
 }
 
 /// The blob side of a reset: empty the CAS beside `entities_db`, and
@@ -1540,14 +1530,21 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
 pub async fn reset_blobs(entities_db: &Path) -> Result<()> {
     reset_with(
         &crate::blob_cas::cas_path_for(entities_db),
-        |_| true,
+        Reset::DropTables,
         "reset blobs",
     )
     .await?;
-    reset_with(entities_db, |_| false, "reset blobs").await
+    reset_with(entities_db, Reset::ForgetBlobs, "reset blobs").await
 }
 
-async fn reset_with(db_path: &Path, empty: impl Fn(&str) -> bool, message: &str) -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reset {
+    DropTables,
+    /// Null `blake3` where it is nullable; leave every other table alone.
+    ForgetBlobs,
+}
+
+async fn reset_with(db_path: &Path, what: Reset, message: &str) -> Result<()> {
     if !db_path.exists() {
         return Ok(());
     }
@@ -1561,19 +1558,13 @@ async fn reset_with(db_path: &Path, empty: impl Fn(&str) -> bool, message: &str)
     )
     .await?;
     let result = async {
-        let tables: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-        )
-        .fetch_all(&pool)
-        .await
-        .context("list tables")?;
         // Decided before the transaction: the pool has one connection,
         // and a `PRAGMA` inside the transaction would wait on it forever.
         let mut statements = Vec::new();
-        for table in tables.iter().filter(|t| t != &datalib_store_meta::TABLE) {
-            if empty(table) {
-                statements.push(format!("DELETE FROM \"{table}\""));
-            } else if table_columns(&pool, table)
+        for table in user_tables(&pool).await? {
+            if what == Reset::DropTables {
+                statements.push(format!("DROP TABLE \"{table}\""));
+            } else if table_columns(&pool, &table)
                 .await?
                 .iter()
                 .any(|c| c.name == "blake3" && !c.not_null)
@@ -2827,12 +2818,13 @@ mod tests {
         assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
-    /// A reset empties content, cursors and the run log alike, keeps only
-    /// the store's own shape, and commits, so the rows are still in history.
-    /// The blob side empties the CAS and nulls only the nullable `blake3`
-    /// columns — the CAS references — leaving a file's own digest alone.
+    /// A reset drops content, cursors and the run log alike and commits,
+    /// so the rows are still in history and the next open is a first
+    /// open. The blob side empties the CAS and nulls only the nullable
+    /// `blake3` columns — the CAS references — leaving a file's own
+    /// digest alone.
     #[tokio::test]
-    async fn a_reset_empties_everything_but_the_record_and_a_blob_reset_forgets_the_bytes() {
+    async fn a_reset_drops_everything_and_a_blob_reset_forgets_the_bytes() {
         let d = tempdir().unwrap();
         let p = d.path().join("entities.doltlite_db");
         const EDGE: &str =
@@ -2895,10 +2887,10 @@ mod tests {
         assert_eq!(count(&pool, "sync_runs").await, 0, "the run log goes too");
         assert_eq!(
             count(&pool, "dolt_log").await,
-            commits_before + 2,
-            "each reset is one commit, so the rows are still in history"
+            commits_before + 3,
+            "two resets and the schema the reopen wrote: the rows are still in history"
         );
-        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~1')")
+        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~2')")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -2907,16 +2899,21 @@ mod tests {
     }
 
     async fn count(pool: &SqlitePool, table: &str) -> i64 {
-        row_count(pool, table).await.unwrap()
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM \"{table}\""
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     /// A column the DDL no longer declares cannot be reached by ADD, so a
     /// raw store refuses the open: the error names the table and the
     /// column, and the file — the column, the row — is exactly as it was.
-    /// A reset empties the table without needing the DDL, and an empty
-    /// table is recreated by the next open rather than refused.
+    /// A reset drops the table without needing the DDL, and the next open
+    /// creates it afresh.
     #[tokio::test]
-    async fn a_removed_column_is_refused_untouched_and_recreated_once_reset() {
+    async fn a_removed_column_is_refused_untouched_and_gone_once_reset() {
         let d = tempdir().unwrap();
         let p = d.path().join("recreate.doltlite_db");
         {
@@ -2961,7 +2958,7 @@ mod tests {
         reset_store(&p).await.unwrap();
         let pool = open(&p, &[WIDGETS_DDL])
             .await
-            .expect("an empty table is recreated, not refused");
+            .expect("a reset store opens as a new one");
         let cols = table_columns(&pool, "widgets").await.unwrap();
         assert!(
             !cols.iter().any(|c| c.name == "legacy_col"),
@@ -3053,6 +3050,17 @@ mod tests {
                 .is_some(),
             "{err:#}"
         );
+
+        // A new file — or a reset one — has nothing to climb: the DDL
+        // creates it at the top, and the rung never runs against a
+        // table that is not there.
+        reset_store(&p).await.unwrap();
+        let pool = open_migrating(&p, &[V1], LADDER)
+            .await
+            .expect("a reset store opens as a new one");
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.schema_version, 1);
+        pool.close().await;
     }
 
     /// Every non-additive change to a table with rows refuses, and the

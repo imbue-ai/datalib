@@ -302,9 +302,8 @@ generated — not on its column names.
   window upstream no longer serves — so nothing is dropped on the way
   in. The refusal names the two ways out: a rung on the provider's
   migration ladder (below) or `datalib-dag --reset <source>/ingest`,
-  which empties the store without needing the DDL; an **empty** table
-  is never refused — nothing is lost by dropping it — so the next open
-  recreates it and the sync refills it. Derived stores (`open_derived`:
+  which drops every table without needing the DDL, so the next open is
+  a first open and the sync refills it. Derived stores (`open_derived`:
   render, index, CAS) always rebuild, since every row is a function of
   another store.
 
