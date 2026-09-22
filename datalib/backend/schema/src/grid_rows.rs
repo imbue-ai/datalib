@@ -172,12 +172,13 @@ pub struct GridRow {
     /// review comment.
     #[col(sql = "VARCHAR(32)")]
     pub upstream_entity_kind: Option<String>,
-    /// The upstream account / workspace / organization `upstream_id` is
-    /// unique within: the `Scope::Upstream` value fed to `entity_id`.
-    /// NULL means `Scope::ProviderGlobal` or `Scope::Content`, where the
-    /// natural key needs no further scoping within the source. Never
-    /// the source's own id: that is a component of every id and lives
-    /// on `markdowns.source_id`.
+    /// The upstream account the record belongs to — the `account` fed to
+    /// `entity_id` — when the record names one: a Slack `team_id`, a JMAP
+    /// `account_id`. A value that is on every row the provider writes,
+    /// never one that is sometimes there, and never a secret: it is stored
+    /// here in the clear. NULL when the upstream names no account on the
+    /// record. Never the source's own id: that is a component of every id
+    /// and lives on `markdowns.source_id`.
     ///
     /// Overlaps `account` in spirit but not contract — `account` is a
     /// display value and may be prettified; this is the exact opaque string

@@ -2,7 +2,7 @@
 //! a session id, a record uuid, a tool-use id — and Claude Code mints
 //! them unique across every machine, so the scope is provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::ClaudeCode;
@@ -30,7 +30,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),

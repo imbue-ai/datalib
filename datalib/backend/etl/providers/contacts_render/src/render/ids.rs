@@ -3,7 +3,7 @@
 //! principal is not extracted, so the ids are scoped to the configured
 //! source. No stamp anywhere: a card carries no creation event.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Contacts;
 
@@ -14,7 +14,7 @@ fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> 
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         None,
@@ -52,7 +52,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "c",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

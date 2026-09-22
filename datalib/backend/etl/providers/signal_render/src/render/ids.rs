@@ -5,7 +5,7 @@
 //! would be a better key, but `recipients.identifier` is nullable, and
 //! a scope that is sometimes there re-keys every row the day it appears.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Signal;
@@ -24,7 +24,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -71,7 +71,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "sig",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

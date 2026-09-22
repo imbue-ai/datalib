@@ -686,9 +686,9 @@ fn build_grid_rows(
                 .source_label(profile.source_label.clone())
                 .upstream_id(item.source_ref.as_ref().map(|r| r.native_id.clone()))
                 .upstream_entity_kind(item.source_ref.as_ref().map(|r| r.entity_kind.clone()))
-                // Items inherit the chat's scope: a chat belongs to
+                // Items inherit the chat's account: a chat belongs to
                 // exactly one workspace/account, and every row inside
-                // it was minted under that same `Scope::Upstream`.
+                // it was minted under that same one.
                 .upstream_scope(chat.upstream_scope.clone())
                 .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
                 .byte_size(Some(text.len() as i64))

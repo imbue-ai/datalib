@@ -154,12 +154,12 @@ they sit beside the shared blob store.
 | claude.block | `{message_uuid}:{block_index}` |
 | chatgpt.chat | `conversations.id` |
 | chatgpt.message | `conversations.payload.mapping[*]` |
-| slack.thread | `{channel}#{thread_ts}` under `Upstream(team_id)` |
-| slack.message | `{channel}#{ts}` under `Upstream(team_id)` |
-| github.pr | `{number}` under `Upstream(repo)` |
-| github.issue_comment, pr_review, pr_review_comment | `{id}` under `Upstream(repo)`, told apart by `upstream_entity_kind` |
-| gitlab.mr | `{iid}` under `Upstream(project)` |
-| gitlab.note | `{id}` under `Upstream(project)` |
+| slack.thread | `{channel}#{thread_ts}`, with `team_id` in `upstream_scope` |
+| slack.message | `{channel}#{ts}`, with `team_id` in `upstream_scope` |
+| github.pr | `{repo}#{number}` |
+| github.issue_comment, pr_review, pr_review_comment | `{repo}#{id}`, told apart by `upstream_entity_kind` |
+| gitlab.mr | `{project}#{iid}` |
+| gitlab.note | `{project}#{id}` |
 | notion.page | `page_id` (a Notion UUID) |
 | notion.thread | `discussion_id` |
 | notion.comment | `comment_id` |

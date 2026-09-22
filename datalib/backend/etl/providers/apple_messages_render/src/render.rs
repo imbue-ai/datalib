@@ -24,7 +24,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
-use datalib_id::{composite_key, entity_id_str, IdNamespace, Scope};
+use datalib_id::{composite_key, entity_id_str, IdNamespace};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 use sqlx::sqlite::SqlitePool;
@@ -65,7 +65,7 @@ fn uuid(source_id: &str, entity_kind: &str, natural_key: &str, date_ms: Option<i
     entity_id_str(
         IdNamespace::AppleMessages,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),

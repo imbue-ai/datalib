@@ -198,7 +198,7 @@ fn build_chats(
             // Thread permalink → chat-level `↗` + chat grid source_url.
             source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
             // Every row in this thread was minted under
-            // `Scope::Upstream(team_id)`; the round-trip check
+            // `Some(team_id)`; the round-trip check
             // recomputes `uuid` from this exact string.
             upstream_scope: Some(root.team_id.clone()),
             org_uuid: Some(root.team_id.clone()),

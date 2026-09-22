@@ -3,7 +3,7 @@
 //! and the synthetic one the grid sorts by is not the record's.
 
 use datalib_etl_perseus::WORK_URN;
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Perseus;
 
@@ -16,7 +16,7 @@ fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> 
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Content,
+        None,
         entity_kind,
         natural_key,
         None,
@@ -95,7 +95,7 @@ mod tests {
                 datalib_id::entity_id_str(
                     ID_NAMESPACE,
                     "perseus",
-                    Scope::Content,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

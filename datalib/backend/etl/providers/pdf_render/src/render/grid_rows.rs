@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
@@ -37,7 +37,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Content,
+        None,
         entity_kind,
         natural_key,
         when.and_then(record_stamp_ms),
@@ -290,7 +290,7 @@ mod tests {
                 datalib_id::entity_id_str(
                     ID_NAMESPACE,
                     "pdf",
-                    Scope::Content,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

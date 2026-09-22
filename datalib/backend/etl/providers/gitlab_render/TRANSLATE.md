@@ -34,8 +34,8 @@ plus that document's `grid_rows`.
 Same `RenderedMarkdown { markdown_uuid, rows, .. }` shape as the
 other providers:
 
-- `markdown_uuid` — `datalib_id` over the MR `iid` under
-  `Upstream(project)`, stamped with the MR's `created_at`. Re-renders
+- `markdown_uuid` — `datalib_id` over `{project}#{iid}` under the
+  configured source, stamped with the MR's `created_at`. Re-renders
   that didn't change content produce an identical row set, so the
   store's commit carries no diff for them.
 - `rows[0]` — the MR row (kind = "GitLab MR").

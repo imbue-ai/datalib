@@ -2,7 +2,7 @@
 //! carries an account id on every row, and a thread or email id is
 //! unique within that account, so the scope is the account.
 
-use datalib_id::{IdNamespace, Identity, Scope};
+use datalib_id::{IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Email;
@@ -21,7 +21,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Upstream(account_id),
+        Some(account_id),
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -65,7 +65,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "mail",
-                    Scope::Upstream("acct"),
+                    Some("acct"),
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

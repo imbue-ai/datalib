@@ -3,8 +3,8 @@
 //! Every `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` anchor is
 //! minted here from one recipe under one root namespace, so "could these
 //! two ids collide?" has one answer read off one file: the configured
-//! source is a component of every id, so two sources never can.
-//! Choosing a scope, and what each choice costs, is `docs/dev/entity_ids.md`.
+//! source is a component of every id, so two sources never can. What
+//! goes in the recipe, and why, is `docs/dev/entity_ids.md`.
 //!
 //! The layout is RFC 9562's version 8: the leading 48 bits are the
 //! record's own `created_at` in unix milliseconds, the rest a v5 hash of
@@ -101,43 +101,6 @@ impl IdNamespace {
     }
 }
 
-/// The space a natural key is unique within, *inside one configured
-/// source*. The source is always a component of the id, so this only
-/// has to tell apart what one source can hold more than one of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope<'a> {
-    /// Unique within one upstream account / workspace / organization,
-    /// identified by a **provider-issued** id: a Slack `team_id`, a
-    /// JMAP `account_id`, a GitHub repository. For a source that can
-    /// hold several — a JMAP session with two accounts, a Claude login
-    /// in two orgs. Never a secret: the value is stored in
-    /// `grid_rows.upstream_scope` in the clear.
-    Upstream(&'a str),
-
-    /// The natural key is unique across everything the source holds: a
-    /// Notion `page_id`, an Anthropic `conversation_uuid`, a LinkedIn
-    /// profile URL, a Facebook `fbid`, a Signal backup's local ids.
-    ProviderGlobal,
-
-    /// Identity is the content itself, so two copies of the same bytes
-    /// within a source produce one row — a PDF found twice under one
-    /// scanned tree.
-    Content,
-}
-
-impl Scope<'_> {
-    /// The scope's contribution to the recipe. Each variant gets a
-    /// distinct tag so a `Content` id can never collide with an
-    /// `Upstream` id that happens to carry the same string.
-    fn tag(&self) -> (&'static str, &str) {
-        match self {
-            Scope::Upstream(id) => ("up", id),
-            Scope::ProviderGlobal => ("pg", ""),
-            Scope::Content => ("content", ""),
-        }
-    }
-}
-
 /// The largest stamp the leading 48 bits can hold (the year 10889).
 /// A stamp outside `0..=MAX_STAMP_MS` is clamped to the nearer edge, on
 /// both sides of the round-trip check.
@@ -146,7 +109,11 @@ pub const MAX_STAMP_MS: i64 = (1 << 48) - 1;
 /// An entity's identity: the id we mint, and what it was minted from.
 ///
 /// Paired so `grid_rows.uuid` and its backpointer columns cannot drift —
-/// build the key once, use it twice. `at` is the stamp in the id's
+/// build the key once, use it twice. `account` is the upstream account
+/// the record belongs to, when the record names one: a Slack `team_id`,
+/// a JMAP `account_id` — a value that is on every row the provider
+/// writes, never one that is sometimes there, and never a secret, since
+/// it is stored in `grid_rows.upstream_scope` in the clear. `at` is the stamp in the id's
 /// leading bits, and the one rule about it is that **it is the row's
 /// `created_at` or nothing**: the fixture's round-trip check reads the
 /// stamp back out of the uuid and compares it to `created_at_utc`, so
@@ -167,13 +134,13 @@ impl Identity {
     pub fn mint(
         namespace: IdNamespace,
         source_id: &str,
-        scope: Scope<'_>,
+        account: Option<&str>,
         entity_kind: &'static str,
         natural_key: String,
         at: Option<i64>,
     ) -> Self {
         Self {
-            uuid: entity_id_str(namespace, source_id, scope, entity_kind, &natural_key, at),
+            uuid: entity_id_str(namespace, source_id, account, entity_kind, &natural_key, at),
             natural_key,
             entity_kind,
             at,
@@ -207,15 +174,15 @@ impl Identity {
 pub fn entity_id(
     namespace: IdNamespace,
     source_id: &str,
-    scope: Scope<'_>,
+    account: Option<&str>,
     entity_kind: &str,
     natural_key: &str,
     at: Option<i64>,
 ) -> Uuid {
-    let (scope_tag, scope_val) = scope.tag();
     let namespace = namespace.as_str();
+    let account = account.unwrap_or("");
     let recipe = format!(
-        "{namespace}\u{1f}{source_id}\u{1f}{scope_tag}\u{1f}{scope_val}\u{1f}{entity_kind}\u{1f}{natural_key}"
+        "{namespace}\u{1f}{source_id}\u{1f}{account}\u{1f}{entity_kind}\u{1f}{natural_key}"
     );
     time_prefixed(Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes()), at)
 }
@@ -264,12 +231,12 @@ pub fn composite_key(parts: &[&str]) -> String {
 pub fn entity_id_str(
     namespace: IdNamespace,
     source_id: &str,
-    scope: Scope<'_>,
+    account: Option<&str>,
     entity_kind: &str,
     natural_key: &str,
     at: Option<i64>,
 ) -> String {
-    entity_id(namespace, source_id, scope, entity_kind, natural_key, at)
+    entity_id(namespace, source_id, account, entity_kind, natural_key, at)
         .as_hyphenated()
         .to_string()
 }
@@ -340,12 +307,12 @@ mod tests {
 
     const SRC: &str = "home-slack";
 
-    fn slack(scope: Scope<'_>, kind: &str, key: &str) -> Uuid {
-        entity_id(IdNamespace::Slack, SRC, scope, kind, key, None)
+    fn slack(account: Option<&str>, kind: &str, key: &str) -> Uuid {
+        entity_id(IdNamespace::Slack, SRC, account, kind, key, None)
     }
 
-    fn chatgpt(scope: Scope<'_>, kind: &str, key: &str) -> Uuid {
-        entity_id(IdNamespace::Chatgpt, SRC, scope, kind, key, None)
+    fn chatgpt(account: Option<&str>, kind: &str, key: &str) -> Uuid {
+        entity_id(IdNamespace::Chatgpt, SRC, account, kind, key, None)
     }
 
     /// Two problems on one record are two ids; the same problem twice
@@ -386,21 +353,14 @@ mod tests {
         assert_ne!(a, other_field);
         assert_ne!(
             a,
-            entity_id_str(
-                IdNamespace::Slack,
-                SRC,
-                Scope::ProviderGlobal,
-                "problem",
-                "md-1",
-                None
-            )
+            entity_id_str(IdNamespace::Slack, SRC, None, "problem", "md-1", None)
         );
     }
 
     #[test]
     fn is_deterministic() {
-        let a = slack(Scope::Upstream("T123"), "message", "C1:170.5");
-        let b = slack(Scope::Upstream("T123"), "message", "C1:170.5");
+        let a = slack(Some("T123"), "message", "C1:170.5");
+        let b = slack(Some("T123"), "message", "C1:170.5");
         assert_eq!(a, b, "ids must be a pure function of their inputs");
     }
 
@@ -410,7 +370,7 @@ mod tests {
             let id = entity_id(
                 IdNamespace::Slack,
                 SRC,
-                Scope::Upstream("T123"),
+                Some("T123"),
                 "message",
                 "C1:170.5",
                 at,
@@ -431,16 +391,7 @@ mod tests {
     /// separately.
     #[test]
     fn the_stamp_is_the_prefix_and_the_hash_is_the_rest() {
-        let mint = |at| {
-            entity_id(
-                IdNamespace::Slack,
-                SRC,
-                Scope::Upstream("T1"),
-                "message",
-                "C1#1.1",
-                at,
-            )
-        };
+        let mint = |at| entity_id(IdNamespace::Slack, SRC, Some("T1"), "message", "C1#1.1", at);
         let ms = 1_700_000_000_123;
         let stamped = mint(Some(ms));
         let bare = mint(None);
@@ -458,7 +409,7 @@ mod tests {
     /// 1969 header sorts to the left edge instead of the year 10000.
     #[test]
     fn out_of_range_stamps_clamp() {
-        let mint = |at| entity_id(IdNamespace::Slack, SRC, Scope::ProviderGlobal, "k", "n", at);
+        let mint = |at| entity_id(IdNamespace::Slack, SRC, None, "k", "n", at);
         assert_eq!(mint(Some(-5)), mint(Some(0)));
         assert_eq!(mint(Some(i64::MAX)), mint(Some(MAX_STAMP_MS)));
         assert_eq!(
@@ -478,7 +429,7 @@ mod tests {
         let id = Identity::mint(
             IdNamespace::Slack,
             SRC,
-            Scope::Upstream("T1"),
+            Some("T1"),
             "message",
             "C1#1.1".to_string(),
             Some(42),
@@ -488,7 +439,7 @@ mod tests {
             entity_id_str(
                 IdNamespace::Slack,
                 SRC,
-                Scope::Upstream("T1"),
+                Some("T1"),
                 "message",
                 "C1#1.1",
                 Some(42)
@@ -503,7 +454,7 @@ mod tests {
     /// their rows cannot overlap however their data does.
     #[test]
     fn two_sources_never_share_an_id() {
-        for scope in [Scope::Upstream("T1"), Scope::ProviderGlobal, Scope::Content] {
+        for scope in [Some("T1"), None, None] {
             assert_ne!(
                 entity_id(IdNamespace::Slack, "work", scope, "message", "m", None),
                 entity_id(IdNamespace::Slack, "home", scope, "message", "m", None),
@@ -520,8 +471,8 @@ mod tests {
         for (i, &a) in IdNamespace::VARIANTS.iter().enumerate() {
             for &b in &IdNamespace::VARIANTS[i + 1..] {
                 assert_ne!(
-                    entity_id(a, SRC, Scope::ProviderGlobal, "chat", "X", None),
-                    entity_id(b, SRC, Scope::ProviderGlobal, "chat", "X", None),
+                    entity_id(a, SRC, None, "chat", "X", None),
+                    entity_id(b, SRC, None, "chat", "X", None),
                     "{a} and {b} mint the same id",
                 );
             }
@@ -530,10 +481,10 @@ mod tests {
 
     #[test]
     fn upstream_scope_separates_two_accounts() {
-        // Two orgs under one login both have conversation `1`.
+        // Two workspaces under one login both have channel `C1`.
         assert_ne!(
-            slack(Scope::Upstream("acct-a"), "chat", "1"),
-            slack(Scope::Upstream("acct-b"), "chat", "1"),
+            slack(Some("acct-a"), "chat", "1"),
+            slack(Some("acct-b"), "chat", "1"),
         );
     }
 
@@ -544,8 +495,8 @@ mod tests {
     fn entity_kind_separates_thread_root_from_its_message() {
         let key = "C1\u{1f}1700000000.000100";
         assert_ne!(
-            slack(Scope::Upstream("T1"), "thread", key),
-            slack(Scope::Upstream("T1"), "message", key),
+            slack(Some("T1"), "thread", key),
+            slack(Some("T1"), "message", key),
         );
     }
 
@@ -555,46 +506,26 @@ mod tests {
     /// in upstream ids (and in UUIDs).
     #[test]
     fn component_boundaries_are_unambiguous() {
-        assert_ne!(
-            chatgpt(Scope::ProviderGlobal, "a:b", "c"),
-            chatgpt(Scope::ProviderGlobal, "a", "b:c"),
-        );
-        assert_ne!(
-            chatgpt(Scope::ProviderGlobal, "a-b", "c"),
-            chatgpt(Scope::ProviderGlobal, "a", "b-c"),
-        );
+        assert_ne!(chatgpt(None, "a:b", "c"), chatgpt(None, "a", "b:c"),);
+        assert_ne!(chatgpt(None, "a-b", "c"), chatgpt(None, "a", "b-c"),);
         // A source id and a key are different components even when
         // one is a prefix of the other's spelling.
         assert_ne!(
-            entity_id(
-                IdNamespace::Chatgpt,
-                "a",
-                Scope::ProviderGlobal,
-                "k",
-                "b",
-                None
-            ),
-            entity_id(
-                IdNamespace::Chatgpt,
-                "a\u{1f}b",
-                Scope::ProviderGlobal,
-                "k",
-                "",
-                None
-            ),
+            entity_id(IdNamespace::Chatgpt, "a", None, "k", "b", None),
+            entity_id(IdNamespace::Chatgpt, "a\u{1f}b", None, "k", "", None),
         );
     }
 
+    /// No account and an empty account spell the same recipe — an
+    /// empty account is no account — and the component boundary keeps
+    /// an account from bleeding into the kind.
     #[test]
-    fn scope_variants_do_not_alias() {
-        assert_ne!(
-            chatgpt(Scope::Content, "document", "abc"),
-            chatgpt(Scope::ProviderGlobal, "document", "abc"),
+    fn an_empty_account_is_no_account() {
+        assert_eq!(
+            chatgpt(None, "document", "abc"),
+            chatgpt(Some(""), "document", "abc"),
         );
-        assert_ne!(
-            chatgpt(Scope::Upstream(""), "document", "abc"),
-            chatgpt(Scope::ProviderGlobal, "document", "abc"),
-        );
+        assert_ne!(chatgpt(Some("a"), "k", "n"), chatgpt(None, "a\u{1f}k", "n"),);
     }
 
     /// The invariant the fixture test enforces from the outside:
@@ -606,18 +537,11 @@ mod tests {
         let key = composite_key(&["msg-1", "toolu_9"]);
         assert_eq!(key, "msg-1#toolu_9");
         assert_eq!(
+            entity_id_str(IdNamespace::Claude, SRC, None, "tool_use", &key, None),
             entity_id_str(
                 IdNamespace::Claude,
                 SRC,
-                Scope::ProviderGlobal,
-                "tool_use",
-                &key,
-                None
-            ),
-            entity_id_str(
-                IdNamespace::Claude,
-                SRC,
-                Scope::ProviderGlobal,
+                None,
                 "tool_use",
                 "msg-1#toolu_9",
                 None
@@ -634,22 +558,8 @@ mod tests {
     /// edge leaves a section, else the document's, else zero.
     #[test]
     fn edges_take_their_source_ends_stamp() {
-        let doc = entity_id_str(
-            IdNamespace::Slack,
-            SRC,
-            Scope::ProviderGlobal,
-            "thread",
-            "t",
-            Some(1_000),
-        );
-        let msg = entity_id_str(
-            IdNamespace::Slack,
-            SRC,
-            Scope::ProviderGlobal,
-            "message",
-            "m",
-            Some(2_000),
-        );
+        let doc = entity_id_str(IdNamespace::Slack, SRC, None, "thread", "t", Some(1_000));
+        let msg = entity_id_str(IdNamespace::Slack, SRC, None, "message", "m", Some(2_000));
         assert_eq!(
             stamp_of(&edge_id(&doc, Some(&msg), "md-b", None, None)),
             Some(2_000)

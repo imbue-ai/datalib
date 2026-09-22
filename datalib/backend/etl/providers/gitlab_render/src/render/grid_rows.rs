@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use datalib_id::composite_key;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -88,9 +89,11 @@ pub fn rows_for_mr(
             .qmd_path(Some(qmd.clone()))
             .source_url(mr.web_url.clone())
             .git_sha(mr.head_sha.clone())
-            .upstream_id(Some(mr.mr_iid.to_string()))
+            .upstream_id(Some(composite_key(&[
+                &mr.project_full_path,
+                &mr.mr_iid.to_string(),
+            ])))
             .upstream_entity_kind(Some(super::ids::KIND_MR.to_string()))
-            .upstream_scope(Some(mr.project_full_path.clone()))
             .markdown_uuid(Some(mr.uuid.clone()))
             .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
     );
@@ -116,9 +119,11 @@ pub fn rows_for_mr(
                 .qmd_path(Some(qmd.clone()))
                 .source_url(n.web_url.clone())
                 .git_sha(n.commit_sha.clone())
-                .upstream_id(Some(n.external_id.to_string()))
+                .upstream_id(Some(composite_key(&[
+                    &mr.project_full_path,
+                    &n.external_id.to_string(),
+                ])))
                 .upstream_entity_kind(Some(super::ids::KIND_NOTE.to_string()))
-                .upstream_scope(Some(mr.project_full_path.clone()))
                 .markdown_uuid(Some(mr.uuid.clone()))
                 .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
         );

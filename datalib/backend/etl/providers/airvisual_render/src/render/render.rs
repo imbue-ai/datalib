@@ -12,7 +12,7 @@ use datalib_etl_timeseries_render::plot::{standalone_html, Trace};
 use datalib_etl_timeseries_render::text::{
     human_gap, iso, median_gap, short, short_ts, thousands, yaml_safe,
 };
-use datalib_id::{entity_id_str, IdNamespace, Scope};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -29,28 +29,14 @@ const SOURCE_LABEL: &str = "AirVisual";
 /// No stamp: the page's `created_at` is its earliest sample, which is
 /// not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        "timeseries",
-        source_id,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, "timeseries", source_id, None)
 }
 
 /// A device's row, keyed on its serial: IQAir issues those per unit.
 /// No stamp: the row's `created_at` is its latest sample, which moves
 /// every sync.
 pub fn device_uuid(source_id: &str, serial: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        "device",
-        serial,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, "device", serial, None)
 }
 
 #[derive(Debug, Default, Clone)]

@@ -23,12 +23,12 @@ This document is the rule for minting them. The implementation is
 ## The rule
 
 ```rust
-use datalib_id::{composite_key, Identity, IdNamespace, Scope};
+use datalib_id::{composite_key, Identity, IdNamespace};
 
 let id = Identity::mint(
     IdNamespace::Slack,                  // provider
     source_id,                           // the configured source's group id
-    Scope::Upstream(team_id),            // what the key is unique within, inside the source
+    Some(team_id),                       // the upstream account, when the record names one
     "message",                           // entity kind, in the upstream's vocabulary
     composite_key(&[channel_id, ts]),    // the upstream's own key
     Some(date_ms),                       // the row's `created_at`, or None
@@ -36,6 +36,7 @@ let id = Identity::mint(
 // id.uuid          → grid_rows.uuid / markdown_uuid / the anchor
 // id.natural_key   → grid_rows.upstream_id
 // id.entity_kind   → grid_rows.upstream_entity_kind
+// the account      → grid_rows.upstream_scope
 ```
 
 One root namespace, one function, five recipe components joined with
@@ -100,40 +101,35 @@ An edge takes the stamp of its source end (the anchor's, else the
 document's), so the edges a render writes beside a message land in the
 leaf its row does; a diff row keeps the stamp of the row it is about.
 
-### Picking a scope
+### The account, wherever the record names one
 
-`Scope` says what the natural key is unique within *inside one
-source*. The source is always in the id, so this only has to tell apart
-what a single source can hold more than one of.
+The third component is the upstream account the record belongs to: a
+Slack `team_id`, a JMAP `account_id`. It goes in as data — the account
+is part of what the record *is* — and out to `grid_rows.upstream_scope`
+in the clear, so it is never a secret. Two rules decide whether a
+provider has one:
 
-| Variant | When | Examples |
-|---|---|---|
-| `Upstream(id)` | The natural key is unique within one upstream account / workspace / repository, and a source can hold several of those. The scope value is **always present**. | Slack `team_id`, JMAP `account_id`, a GitHub repository |
-| `ProviderGlobal` | The natural key is unique across everything the source holds. The default. | Notion `page_id`, Anthropic conversation uuids, a Signal backup's local ids, a config-named YoLink device |
-| `Content` | Identity **is** the bytes, so two copies within a source collapse to one row. | pdf `blake3`, perseus canonical work id |
+- **It is on every row the provider writes.** "The source could look
+  it up" does not count: a GitHub login is not on the PR, so github
+  passes `None`. A repository is not an account either; it leads the
+  natural key (`{repo}#{number}`) instead.
+- **It is present-or-never.** If the value is `Option` and merely
+  *usually* set, the first ingest that finds it populated re-keys every
+  row minted while it was empty — precisely the silent re-keying this
+  crate exists to prevent. Claude's `org_uuid` is the worked example:
+  it looks like the textbook account, and it is empty whenever orgs
+  aren't mirrored (`sync.projects = false`, or an older ingest) and
+  populated afterwards, so claude passes `None`. So do whatsapp
+  (`chat.account_jid_row_id` is nullable) and signal (a backup names no
+  account at all); see [Where an account was wanted and not
+  taken](#where-an-account-was-wanted-and-not-taken).
 
-`Upstream` is worth its column only when one source really can hold
-two accounts — a JMAP session with two accounts, a Claude login in two
-orgs. It costs nothing extra *provided the account id is always there*.
-
-**A scope component has to be present-or-never.** This is the one way
-`Upstream` can be wrong, and it is not obvious: if the value is
-`Option` and merely *usually* set, then the first ingest that finds it
-populated re-keys every row minted while it was empty. That is precisely
-the silent re-keying this crate exists to prevent, arrived at from the
-inside.
-
-Anthropic is the worked example, and the reason it appears under
-`ProviderGlobal` above rather than here. Scoping its ids on `org_uuid`
-looks like the textbook `Upstream` case — right until you notice the
-column is empty whenever orgs aren't mirrored (`sync.projects = false`,
-or an older ingest) and populated afterwards. It issues service-wide
-unique uuids anyway, so `ProviderGlobal` is both correct and safe. See
-`claude_render/src/render/ids.rs` §Scope for the full argument.
-
-So the test is not "is this key unique within the account?" but "will
-this scope value be identical on every future ingest, including the ones
-configured differently?" If it can appear later, it is not a scope.
+`None` therefore means one thing: the upstream names no account on the
+record. Nothing about uniqueness rides on it — the source component
+already keeps two sources apart, and within a source a provider's keys
+are unique by construction. The test for a candidate is "will this
+value be identical on every future ingest, including the ones
+configured differently?" If it can appear later, it is not the account.
 
 ### A raw store's keys are the upstream's own
 
@@ -188,13 +184,15 @@ from:
 |---|---|
 | `upstream_id` | The upstream's own id, within the scope |
 | `upstream_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
-| `upstream_scope` | The `Scope::Upstream` value; NULL for `ProviderGlobal` / `Content` |
+| `upstream_scope` | The upstream account the record names; NULL when it names none |
 
 Together with `provider` (its own column), `markdowns.source_id` (the
 source) and `created_at_utc` (the stamp) that is the entire recipe, so
-`entity_id(provider, source_id, scope, upstream_entity_kind,
+`entity_id(provider, source_id, upstream_scope, upstream_entity_kind,
 upstream_id, stamp_of(uuid)) == uuid` holds by construction, with
-`stamp_of(uuid)` either zero or the row's `created_at_utc`.
+`stamp_of(uuid)` either zero or the row's `created_at_utc` — and the
+fixture recomputes it for every row from those columns alone, with no
+per-provider table.
 
 `upstream_entity_kind` is **not** `grid_rows.kind`. `kind` is a display
 label for the grid's Kind column ("LLM Thinking", "GitHub PR") and may
@@ -275,54 +273,48 @@ Every provider that renders mints through `entity_id`: the
 `IdNamespace` variants are exactly the `grid_rows.provider` tags, the
 `NON_UUID_PK_PROVIDERS` allowlist is empty, and
 `//tests/fixtures:ingested_tng_test` round-trips every row of every
-provider in the fixture (`SCOPE_TAG_BY_PROVIDER` there is the table
-below in code). What is left outside `datalib_id` is a raw store's own
+provider in the fixture from the row's own columns. What is left
+outside `datalib_id` is a raw store's own
 row key where an export carries no id — facebook, linkedin,
 google_takeout, sms_backup_restore hash the record; contacts
 synthesizes a `UID` — and those are the raw store's business, read
 back by render as the natural key.
 
-| Provider | Scope | Stamped rows |
+| Provider | Account | Stamped rows |
 |---|---|---|
-| airvisual | `ProviderGlobal` — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
-| apple_messages | `ProviderGlobal` — `message.guid` is a UUID Messages mints | messages, tapbacks |
-| beeper | `ProviderGlobal` on Matrix ids | events, at millisecond precision |
-| chatgpt | `ProviderGlobal` | messages |
-| claude | `ProviderGlobal` (see `claude_render/src/render/ids.rs` § Scope for why not `org_uuid`) | messages, blocks, project documents |
-| claude_code | `ProviderGlobal` — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
-| contacts | `ProviderGlobal` on `addressbook#uid` | none — a card has no creation event |
-| email | `Upstream(account_id)` | emails |
-| facebook | `ProviderGlobal` on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
-| garmin | `ProviderGlobal` — the page keyed on the source id, a device on Garmin's id | none |
-| github, gitlab | `Upstream(repo)` / `Upstream(project)` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
-| google_takeout | `ProviderGlobal` — a Chat message id names its space, a Voice row id is the ingest's | messages |
-| linkedin | `ProviderGlobal` on the profile URL, the post link, the raw row id | messages, shares, comments |
-| notion | `ProviderGlobal` — page, discussion and comment ids are Notion UUIDs, now the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
-| pdf | `Content` on the blake3 | documents and pages, when the Info dictionary dates the file |
-| perseus | `Content` on the CTS locator and edition | none — a classical text has no stamp of its own |
-| signal | `ProviderGlobal` on the backup's local ids | messages, on `date_sent` |
-| slack | `Upstream(team_id)` | messages, reactions — the `ts` in the key |
-| sms_backup_restore | `ProviderGlobal` on the raw row id | messages, calls |
-| whatsapp | `ProviderGlobal` on the chat JID | messages, reactions |
-| yolink | `ProviderGlobal` on the device's config name — the ids YoLink issues a device are read secrets, and a natural key is stored in the clear | none |
+| airvisual | none — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
+| apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
+| beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
+| chatgpt | none — keys are OpenAI's conversation and message ids | messages |
+| claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
+| claude_code | none — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
+| contacts | none — keyed on `addressbook#uid` | none — a card has no creation event |
+| email | `account_id` — the JMAP account, the Gmail address, or the mbox's configured id | emails |
+| facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
+| garmin | none — the page keyed on the source id, a device on Garmin's id | none |
+| github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
+| google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages |
+| linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
+| notion | none — page, discussion and comment ids are Notion UUIDs, now the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
+| pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
+| perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
+| signal | none — keyed on the backup's local ids | messages, on `date_sent` |
+| slack | `team_id` | messages, reactions — the `ts` in the key |
+| sms_backup_restore | none — keyed on the raw row id | messages, calls |
+| whatsapp | none — keyed on the chat JID | messages, reactions |
+| yolink | none — keyed on the device's config name; the ids YoLink issues a device are read secrets, and a natural key is stored in the clear | none |
 
-### Where an upstream scope was wanted and not taken
+### Where an account was wanted and not taken
 
-Three providers have an upstream account identity in reach that would
-let one source's ids tell two accounts apart, and each is held back by
-the present-or-never rule rather than by plumbing. None matters until
-a source can hold two accounts; take one only after verifying the
-column on a real backup:
+Three providers have a candidate account on the record, and each fails
+present-or-never. Take one only after verifying the column on a real
+backup, and expect a re-key when you do:
 
 - **whatsapp** — `chat.account_jid_row_id` names the account, but the
-  column is nullable and the fixture leaves it so. A scope that is
-  sometimes there re-keys every row the day it appears.
-- **signal** — `ParsedRecipient.identifier` is the e164 or ACI. It is
-  `Option`, and the backup carries no identifier for the account
-  itself, so the fallback for a recipient without one would be the
-  local id — two recipes in one keyspace.
-- **contacts** — the vCard `UID` is unique per addressbook and the
-  config's `server_url` is ours; a CardDAV principal is not extracted.
+  column is nullable and the fixture leaves it so.
+- **signal** — `ParsedRecipient.identifier` is the e164 or ACI of the
+  *peer*; the backup carries no identifier for the account itself.
+- **beeper** — `rooms.account_id` is nullable.
 
 ### Adding a provider, or changing a recipe
 
@@ -332,7 +324,7 @@ column on a real backup:
    it twice. Use `datalib_id::composite_key` for tuple keys, and pass
    the item's stamp (`None` for a document).
 2. Populate the backpointer columns. For chat-common providers that
-   means `NormalizedChat::upstream_scope` (only under `Upstream`),
+   means `NormalizedChat::upstream_scope` (the account, when there is one),
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss — that was a real bug), and `NormalizedDoc::source_ref`
@@ -340,9 +332,7 @@ column on a real backup:
    a subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
    `NormalizedContact::{external_id, upstream_scope}`.
-3. Add the provider to `SCOPE_TAG_BY_PROVIDER` in `ingested_tng_test`,
-   with the tag for its scoped rows and the tag for its unscoped ones.
-   Thread `source_id` — the render's `ctx.name` — to wherever the ids
+3. Thread `source_id` — the render's `ctx.name` — to wherever the ids
    are minted; a bucket key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,
    claude, email, slack all do).

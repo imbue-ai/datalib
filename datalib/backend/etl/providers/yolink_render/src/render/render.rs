@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_id::{entity_id_str, IdNamespace, Scope};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -30,14 +30,7 @@ const KIND_DEVICE: &str = "device";
 /// nothing upstream behind it, so its key is the source id. No stamp:
 /// the page's `created_at` is its earliest reading, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        KIND_PAGE,
-        source_id,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_PAGE, source_id, None)
 }
 
 /// A device's row, keyed on its config name. The ids YoLink issues a
@@ -46,14 +39,7 @@ pub fn document_uuid(source_id: &str) -> String {
 /// be the key. No stamp: the row's `created_at` is its latest reading,
 /// which moves every sync.
 pub fn device_uuid(source_id: &str, device: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        KIND_DEVICE,
-        device,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_DEVICE, device, None)
 }
 
 /// Counts for the step's one-line run summary.

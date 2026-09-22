@@ -3,7 +3,7 @@
 //! provider-global. They used to pass straight through as
 //! `grid_rows.uuid`; now they are the backpointer.
 
-use datalib_id::{IdNamespace, Identity, Scope};
+use datalib_id::{IdNamespace, Identity};
 use datalib_time::record_stamp_ms;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Notion;
@@ -21,7 +21,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key.to_string(),
         created_time.and_then(record_stamp_ms),
@@ -61,7 +61,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "src",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

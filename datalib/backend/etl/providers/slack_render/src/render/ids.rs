@@ -1,6 +1,6 @@
 //! Slack entity ids, and the `ts` parsing they share with the render.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::{IsoOffsetTimestamp, RecordStampPrecision};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Slack;
@@ -53,7 +53,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Upstream(team_id),
+        Some(team_id),
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(ts.and_then(ts_to_ms)),
@@ -136,7 +136,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "src",
-                    Scope::Upstream(team),
+                    Some(team),
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

@@ -24,9 +24,8 @@ pub struct NormalizedContact {
     /// `natural_key` the provider fed `datalib_id::entity_id` to mint
     /// `contact_uuid`, so the round-trip check regenerates the row.
     pub external_id: Option<String>,
-    /// The `Scope::Upstream` value `contact_uuid`
-    /// was minted under, for `grid_rows.upstream_scope`; `None` under
-    /// `ProviderGlobal`.
+    /// The upstream account `contact_uuid` was minted under, for
+    /// `grid_rows.upstream_scope`; `None` when the record names none.
     pub upstream_scope: Option<String>,
     /// When the contact came to be, where the source says (LinkedIn's
     /// "Connected On"). A vCard does not say; a person does not have a

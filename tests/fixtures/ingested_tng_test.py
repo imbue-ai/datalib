@@ -103,46 +103,6 @@ DATALIB_ID_NS = uuidlib.UUID(bytes=b"datalib-id-ns-v1")
 ID_SEP = "\x1f"
 MAX_STAMP_MS = (1 << 48) - 1
 
-# Which `Scope` variant each provider mints under, as `(scoped,
-# unscoped)`: the tag for a row whose `upstream_scope` is set — its
-# value is per-row, so the row supplies it — and the tag for a row
-# whose `upstream_scope` is NULL. `None` on either side means a row of
-# that shape is a failure. The table has to live here because
-# `upstream_scope` is NULL for both `ProviderGlobal` and `Content`,
-# making the two indistinguishable from the row alone. The configured
-# source is a component of every id and comes from `markdowns` per row.
-#
-# Every provider that renders is here; one absent from it is skipped by
-# the round-trip check, and `PORTED_PROVIDERS` keeps that from being
-# silent.
-SCOPE_TAG_BY_PROVIDER = {
-    "airvisual": (None, "pg"),
-    "beeper": (None, "pg"),
-    "chatgpt": (None, "pg"),
-    "claude": (None, "pg"),
-    "claude_code": (None, "pg"),
-    "contacts": (None, "pg"),
-    "email": ("up", None),
-    "facebook": (None, "pg"),
-    "garmin": (None, "pg"),
-    "github": ("up", None),
-    "gitlab": ("up", None),
-    "google_takeout": (None, "pg"),
-    "linkedin": (None, "pg"),
-    "notion": (None, "pg"),
-    "pdf": (None, "content"),
-    "signal": (None, "pg"),
-    "slack": ("up", None),
-    "sms_backup_restore": (None, "pg"),
-    "whatsapp": (None, "pg"),
-    "yolink": (None, "pg"),
-}
-
-# Providers whose rows MUST round-trip: every source in the fixture that
-# renders. Separate from the table above so a typo in a provider name
-# shows up as "no rows checked" rather than as a silent pass.
-PORTED_PROVIDERS = frozenset(SCOPE_TAG_BY_PROVIDER)
-
 # Every `problems` row the fixture produces, per source. The ids are
 # `datalib_id::problem_id` over (source, stage, scope, item, field,
 # reason, rule) and nothing else, which is why they can be written down.
@@ -156,13 +116,13 @@ PORTED_PROVIDERS = frozenset(SCOPE_TAG_BY_PROVIDER)
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
 # a nulled `created_at` on that message.
 POISONED_PROBLEM = (
-    "52bc57ee-c234-5f45-b4de-da9365e2e94a"  # problem_uuid
+    "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
-    "|00000000-0000-8ae1-8f22-a8a581af5808"  # the conversation's markdown_uuid
+    "|00000000-0000-8fda-8a1d-506771450366"  # the conversation's markdown_uuid
     # The reply's item uuid. Its `created_at` would not parse, so the
     # item inherited the previous message's stamp — which is what the
     # id's leading bits carry.
-    "|0b75c4b3-d900-8fa6-942f-b168cb67c041"
+    "|0b75c4b3-d900-82bf-a477-9591b8f289e5"
     "|created_at|coercion_failed|stardate 47988.1"
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
@@ -185,22 +145,19 @@ EXPECTED_PROBLEMS = {
 }
 
 
-def datalib_entity_id(
-    namespace, source_id, scope_tag, scope_val, entity_kind, natural_key, at_ms
-):
+def datalib_entity_id(namespace, source_id, account, entity_kind, natural_key, at_ms):
     """The v8 layout: `at_ms` in the leading 48 bits (0 for none), the
-    version nibble 8, and the rest of a UUIDv5 over the six-component
+    version nibble 8, and the rest of a UUIDv5 over the five-component
     recipe joined with \x1f.
 
     `namespace` is `IdNamespace::as_str`, which for every provider
     equals its `grid_rows.provider` tag — they are still two
     vocabularies, and a provider added later may differ. `source_id` is
     the group id the row rendered under, which is why two sources cannot
-    share an id.
+    share an id; `account` is `upstream_scope`, empty when the record
+    names no account.
     """
-    name = ID_SEP.join(
-        [namespace, source_id, scope_tag, scope_val, entity_kind, natural_key]
-    )
+    name = ID_SEP.join([namespace, source_id, account, entity_kind, natural_key])
     b = bytearray(uuidlib.uuid5(DATALIB_ID_NS, name).bytes)
     ms = min(max(at_ms or 0, 0), MAX_STAMP_MS)
     b[0:6] = ms.to_bytes(6, "big")
@@ -281,6 +238,12 @@ EXPECTED_PROVIDERS = frozenset(
         "garmin",
     }
 )
+
+# Providers whose rows MUST round-trip: every source in the fixture that
+# renders. A provider absent from it is skipped by the round-trip check
+# below, so the row-count assertion beside it keeps a typo from being a
+# silent pass.
+PORTED_PROVIDERS = frozenset(EXPECTED_PROVIDERS - {"datalib"})
 
 
 def _sql_in(names) -> str:
@@ -611,13 +574,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _roundtrip_failures(self) -> list[str]:
         """Rows whose backpointer does not regenerate their uuid.
 
-        For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
-        recompute `entity_id(provider, scope, upstream_entity_kind,
-        upstream_id, stamp)` and compare to the stored `uuid`. A
-        mismatch means the backpointer is decorative — it names
-        something that would not produce this row — and the round-trip
-        back to the upstream API is broken in a way nothing else would
-        notice, because both columns still look perfectly plausible.
+        For every row from a provider in `PORTED_PROVIDERS`, recompute
+        `entity_id(provider, source, upstream_scope,
+        upstream_entity_kind, upstream_id, stamp)` from the row's own
+        columns and compare to the stored `uuid`. A mismatch means the
+        backpointer is decorative — it names something that would not
+        produce this row — and the round-trip back to the upstream API
+        is broken in a way nothing else would notice, because both
+        columns still look perfectly plausible.
 
         The stamp in the id's leading bits is checked on its own: it is
         the row's `created_at_utc`, or zero. Zero is allowed beside a
@@ -636,7 +600,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "       IFNULL(g.upstream_id, ''), IFNULL(g.upstream_scope, ''), "
             "       IFNULL(g.created_at_utc, ''), m.source_id "
             "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid "
-            f"WHERE g.provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            f"WHERE g.provider IN ({_sql_in(PORTED_PROVIDERS)}) "
             "ORDER BY g.uuid;",
         )
         failures = []
@@ -658,15 +622,6 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     f"upstream_id={native_id!r}"
                 )
                 continue
-            scoped_tag, unscoped_tag = SCOPE_TAG_BY_PROVIDER[provider]
-            scope_tag = scoped_tag if row_scope else unscoped_tag
-            if scope_tag is None:
-                failures.append(
-                    f"{provider} {row_uuid}: upstream_scope is "
-                    f"{row_scope!r}, which this provider does not mint"
-                )
-                continue
-            scope_val = row_scope
             at_ms = stamp_of(row_uuid)
             if at_ms != 0:
                 stamped += 1
@@ -677,7 +632,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     )
                     continue
             want = datalib_entity_id(
-                provider, source_id, scope_tag, scope_val, entity_kind, native_id, at_ms
+                provider, source_id, row_scope, entity_kind, native_id, at_ms
             )
             if want != row_uuid:
                 failures.append(
@@ -1392,17 +1347,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         #
         # What it does NOT catch, because both runs see them identically:
         #
-        #   * an id derived from `config.toml`. The driver regenerates
-        #     the same step ids every run, so a recipe keyed on the
-        #     source name is byte-identical here. Catching that needs a
-        #     run over the same fixture under *different* step ids,
-        #     which the driver cannot do today — its source names are a
-        #     hardcoded dict and three raw stores are seeded at paths
-        #     built from them. What stands in for it is
-        #     `SCOPE_TAG_BY_PROVIDER`: a ported provider whose ids
-        #     depend on configuration has to declare that as the `src`
-        #     scope and store the value in `upstream_scope`, or the
-        #     round-trip check above fails it.
+        #   * an id that reads more of `config.toml` than the source's
+        #     group id, which every id carries by design. The driver
+        #     regenerates the same group ids every run. What stands in
+        #     for it is the round-trip check above: a uuid has to come
+        #     back from the row's own columns and its source, so
+        #     anything else a recipe folded in fails there.
         #   * an id derived from the data-root path, which is the same
         #     directory both times.
         #   * anything that varies between upstream *responses* rather

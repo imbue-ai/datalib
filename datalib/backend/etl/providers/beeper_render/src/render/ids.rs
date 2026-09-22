@@ -2,7 +2,7 @@
 //! their Matrix ids, which are unique across Matrix, so the natural key
 //! is the raw key and the scope is provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Beeper;
@@ -23,7 +23,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -78,7 +78,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "src",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

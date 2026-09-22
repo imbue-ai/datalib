@@ -23,8 +23,8 @@ For each thread we emit:
     with `message_index` set so the thread can be reassembled in order.
 
 `document_uuid` is the thread's UUID, `render::ids::thread` over
-`(channel_id, thread_ts)` under the configured source and
-`Upstream(team_id)`; a message's carries its `ts` in its leading bits
+`(channel_id, thread_ts)` under the configured source and the
+workspace's `team_id`; a message's carries its `ts` in its leading bits
 (`docs/dev/entity_ids.md`). The raw store keys messages and threads by
 `{team}#{channel}#{ts}` — the upstream's own key, never an entity id.
 

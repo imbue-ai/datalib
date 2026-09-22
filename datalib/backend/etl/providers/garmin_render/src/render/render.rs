@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_id::{entity_id_str, IdNamespace, Scope};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -25,27 +25,13 @@ const KIND_DEVICE: &str = "device";
 /// object behind it, so its key is the source id. No stamp: the page's
 /// `created_at` is its first weigh-in, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        KIND_PAGE,
-        source_id,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_PAGE, source_id, None)
 }
 
 /// A device's row, keyed on the id Garmin issues it. No stamp: the
 /// row's `created_at` is its last sync, which moves.
 pub fn device_uuid(source_id: &str, device_id: &str) -> String {
-    entity_id_str(
-        ID_NAMESPACE,
-        source_id,
-        Scope::ProviderGlobal,
-        KIND_DEVICE,
-        device_id,
-        None,
-    )
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_DEVICE, device_id, None)
 }
 
 /// How many of the newest weigh-ins the table shows. The plot has all

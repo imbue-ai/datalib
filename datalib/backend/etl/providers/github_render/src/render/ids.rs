@@ -1,9 +1,10 @@
 //! GitHub entity ids. A PR number is unique within its repository and
 //! a comment's numeric id within its API namespace — issue comments,
 //! reviews and review comments are three sequences that overlap — so
-//! the scope is the repository and the kind is the API namespace.
+//! the key leads with the repository and the kind is the API namespace.
+//! No account: the login that fetched a PR is not on the PR.
 
-use datalib_id::{IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::record_stamp_ms;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Github;
@@ -26,9 +27,9 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Upstream(repo),
+        None,
         entity_kind,
-        natural_key,
+        composite_key(&[repo, &natural_key]),
         created_at.and_then(record_stamp_ms),
     )
 }
@@ -71,7 +72,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "gh",
-                    Scope::Upstream("o/r"),
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

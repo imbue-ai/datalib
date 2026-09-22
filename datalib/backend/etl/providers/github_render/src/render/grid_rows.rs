@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use datalib_id::composite_key;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -117,9 +118,11 @@ pub fn rows_for_pr(
             .qmd_path(Some(qmd.clone()))
             .source_url(pr.html_url.clone())
             .git_sha(pr.head_sha.clone())
-            .upstream_id(Some(pr.pr_number.to_string()))
+            .upstream_id(Some(composite_key(&[
+                &pr.repo_full_name,
+                &pr.pr_number.to_string(),
+            ])))
             .upstream_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
-            .upstream_scope(Some(pr.repo_full_name.clone()))
             .markdown_uuid(Some(pr.uuid.clone()))
             .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
     );
@@ -145,13 +148,15 @@ pub fn rows_for_pr(
                 .qmd_path(Some(qmd.clone()))
                 .source_url(c.html_url.clone())
                 .git_sha(c.commit_id.clone())
-                .upstream_id(Some(c.external_id.to_string()))
+                .upstream_id(Some(composite_key(&[
+                    &pr.repo_full_name,
+                    &c.external_id.to_string(),
+                ])))
                 // `issue_comment` / `pr_review` / `pr_review_comment` —
                 // the three live in separate GitHub API namespaces and
                 // their numeric ids overlap freely, so the bare id is
                 // not a usable backpointer without this.
                 .upstream_entity_kind(Some(c.section.entity().to_string()))
-                .upstream_scope(Some(pr.repo_full_name.clone()))
                 .markdown_uuid(Some(pr.uuid.clone()))
                 .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
         );

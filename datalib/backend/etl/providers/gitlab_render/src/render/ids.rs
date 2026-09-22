@@ -1,7 +1,8 @@
 //! GitLab entity ids. An MR's `iid` is unique within its project and a
-//! note's id across the instance, so both scope to the project.
+//! note's id across the instance, so both keys lead with the project.
+//! No account: the login that fetched an MR is not on the MR.
 
-use datalib_id::{IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::record_stamp_ms;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Gitlab;
@@ -21,9 +22,9 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::Upstream(project),
+        None,
         entity_kind,
-        natural_key,
+        composite_key(&[project, &natural_key]),
         created_at.and_then(record_stamp_ms),
     )
 }
@@ -59,7 +60,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "gl",
-                    Scope::Upstream("g/p"),
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

@@ -3,7 +3,7 @@
 //! Google Chat; a Voice row's id is the one the ingest minted from the
 //! export, unique across Voice. Both are provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Scope};
+use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::GoogleTakeout;
@@ -25,7 +25,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -94,7 +94,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "src",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

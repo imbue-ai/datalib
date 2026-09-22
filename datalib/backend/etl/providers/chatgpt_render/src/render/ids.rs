@@ -1,6 +1,6 @@
 //! ChatGPT entity ids.
 
-use datalib_id::{IdNamespace, Identity, Scope};
+use datalib_id::{IdNamespace, Identity};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Chatgpt;
@@ -18,7 +18,7 @@ fn identity(
     Identity::mint(
         ID_NAMESPACE,
         source_id,
-        Scope::ProviderGlobal,
+        None,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -74,7 +74,7 @@ mod tests {
                 entity_id_str(
                     ID_NAMESPACE,
                     "src",
-                    Scope::ProviderGlobal,
+                    None,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

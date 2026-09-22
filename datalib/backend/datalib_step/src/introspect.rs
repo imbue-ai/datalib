@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_id::{entity_id_str, IdNamespace, Scope};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
@@ -76,7 +76,7 @@ impl Subject {
         entity_id_str(
             IdNamespace::Datalib,
             source_id,
-            Scope::ProviderGlobal,
+            None,
             self.kind.as_str(),
             &self.path,
             None,
@@ -566,7 +566,7 @@ mod tests {
         let recomputed = entity_id_str(
             namespace,
             "s",
-            Scope::ProviderGlobal,
+            None,
             row.upstream_entity_kind.as_deref().unwrap(),
             row.upstream_id.as_deref().unwrap(),
             None,
