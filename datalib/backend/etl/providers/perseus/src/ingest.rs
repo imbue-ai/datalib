@@ -71,10 +71,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     std::fs::create_dir_all(&opts.out_dir)
         .with_context(|| format!("mkdir -p {}", opts.out_dir.display()))?;
 
-    if opts.control.reset_and_redownload {
-        clear_xml_files(&opts.out_dir)?;
-    }
-
     opts.progress.set_length(Some(files.len() as u64));
     let mut summary = FetchSummary::default();
 
@@ -125,20 +121,6 @@ async fn curl_to_file(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn clear_xml_files(dir: &Path) -> Result<()> {
-    // Wipe every `.xml` in the target dir so a follow-up Render
-    // sees a clean state. We only touch `.xml` to avoid blowing
-    // away a sibling subdirectory or a user-staged playback fixture.
-    for entry in std::fs::read_dir(dir).with_context(|| format!("readdir {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("xml") {
-            std::fs::remove_file(&path).with_context(|| format!("rm {}", path.display()))?;
-        }
-    }
-    Ok(())
-}
-
 fn basename(subpath: &str) -> Option<&str> {
     Path::new(subpath).file_name().and_then(|s| s.to_str())
 }
@@ -166,20 +148,5 @@ mod tests {
         assert!(default_basenames.contains(&"tlg0003.tlg001.perseus-grc2.xml"));
         assert!(default_basenames.contains(&"tlg0003.tlg001.1st1K-eng1.xml"));
         assert!(default_basenames.contains(&"__cts__.xml"));
-    }
-
-    #[test]
-    fn clear_xml_only_removes_xml_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let xml = tmp.path().join("a.xml");
-        let other = tmp.path().join("b.txt");
-        let sub = tmp.path().join("sub");
-        std::fs::write(&xml, b"x").unwrap();
-        std::fs::write(&other, b"y").unwrap();
-        std::fs::create_dir(&sub).unwrap();
-        clear_xml_files(tmp.path()).unwrap();
-        assert!(!xml.exists());
-        assert!(other.exists());
-        assert!(sub.exists());
     }
 }

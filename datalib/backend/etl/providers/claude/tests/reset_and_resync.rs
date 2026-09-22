@@ -3,7 +3,8 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Integration test for `--reset-and-redownload`.
+//! A reset store, synced again, holds the same rows: the primary keys are
+//! minted from upstream identity, not from download order.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,8 +19,8 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
 use tempfile::tempdir;
 
-/// Tables whose contents must be byte-identical across a
-/// reset+redownload of the same upstream fixtures. Excludes the
+/// Tables whose contents must be byte-identical across a reset and a
+/// re-download of the same upstream fixtures. Excludes the
 /// `*_bookkeeping` sidecars (volatile `fetched_at_utc`) and the
 /// whole-table bookkeeping (`sync_runs` etc.).
 const DATA_TABLES: &[&str] = &["users", "orgs", "conversations", "projects", "project_docs"];
@@ -85,7 +86,7 @@ async fn snapshot_table(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reset_and_redownload_preserves_data_tables() {
+async fn a_reset_and_resync_preserves_data_tables() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
     let playback = d.path().join("playback");
@@ -188,7 +189,10 @@ async fn reset_and_redownload_preserves_data_tables() {
 
     pool.close().await;
 
-    // ── Run 2: reset + re-download ────────────────────────────────
+    // ── Run 2: reset, then re-download ────────────────────────────
+    datalib_etl::doltlite_raw::reset_store(&db_path_for(&out_db))
+        .await
+        .unwrap();
     // Open here and close before the store is read back: a second
     // live connection to one file makes a `dolt_commit` fail.
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
@@ -197,10 +201,6 @@ async fn reset_and_redownload_preserves_data_tables() {
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
-        control: datalib_etl::control::DownloadControl {
-            reset_and_redownload: true,
-            ..Default::default()
-        },
         ..FetchOptions::new(db.clone())
     })
     .await;
@@ -210,18 +210,13 @@ async fn reset_and_redownload_preserves_data_tables() {
         s2.fetched, 2,
         "after reset the second run should refetch every conversation"
     );
-    // `reset()` truncates the data tables but leaves the sweep markers
-    // in `sync_scope_state`, so the docs refetch has to be driven by the
-    // metadata skip-check finding an empty `projects` table — not by the
-    // TTL, which is still fresh from run 1.
     assert_eq!(
         s2.projects_fetched, 1,
         "after reset the project must be re-stored"
     );
     assert_eq!(
         s2.project_docs_fetched, 2,
-        "after reset the knowledge docs must be re-pulled even though \
-         the per-project docs sweep marker survives the truncate"
+        "after reset the knowledge docs must be re-pulled"
     );
 
     // Pool size 1 is the only safe choice for doltlite (per-connection
@@ -288,13 +283,13 @@ async fn reset_and_redownload_preserves_data_tables() {
         // (return same hash / new hash with no log entry / NULL),
         // so don't make THIS assertion load-bearing.
         eprintln!(
-            "[reset_and_redownload_test] first_hash={first_hash:?} \
+            "[reset_and_resync_test] first_hash={first_hash:?} \
              second_hash={second_hash:?} dolt_log_messages={messages:?}"
         );
         match second_hash {
             Some(h) if h == first_hash => {
                 eprintln!(
-                    "[reset_and_redownload_test] dolt confirmed zero diff: \
+                    "[reset_and_resync_test] dolt confirmed zero diff: \
                      second commit returned the same hash as first."
                 );
             }
@@ -304,12 +299,12 @@ async fn reset_and_redownload_preserves_data_tables() {
                 // we don't fail the test on it.
                 if messages.iter().any(|m| m.contains("reset-test: second")) {
                     eprintln!(
-                        "[reset_and_redownload_test] second commit recorded \
+                        "[reset_and_resync_test] second commit recorded \
                          (sidecar bookkeeping carried a per-row diff)."
                     );
                 } else {
                     eprintln!(
-                        "[reset_and_redownload_test] second commit returned a \
+                        "[reset_and_resync_test] second commit returned a \
                          distinct hash but did not appear in dolt_log — \
                          likely doltlite's 'no diff against HEAD' shape. \
                          Data-row equality already verified separately."
@@ -318,14 +313,14 @@ async fn reset_and_redownload_preserves_data_tables() {
             }
             None => {
                 eprintln!(
-                    "[reset_and_redownload_test] dolt_commit returned NULL — \
+                    "[reset_and_resync_test] dolt_commit returned NULL — \
                      no-diff signal."
                 );
             }
         }
     } else {
         eprintln!(
-            "[reset_and_redownload_test] dolt extensions not linked — \
+            "[reset_and_resync_test] dolt extensions not linked — \
              skipped dolt_log assertions (data-equality already verified)"
         );
     }

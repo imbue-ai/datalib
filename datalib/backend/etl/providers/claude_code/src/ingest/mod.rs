@@ -27,9 +27,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 
 use self::parse::{agent_id_from_path, parse_transcript, ParsedTranscript};
-use self::schema_raw::{
-    full_ddl, RecordRow, TranscriptRow, CURSOR_SCOPE, CURSOR_SCOPE_PREFIX, DATA_TABLES,
-};
+use self::schema_raw::{full_ddl, RecordRow, TranscriptRow, CURSOR_SCOPE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -73,21 +71,6 @@ impl RawDb {
     pub async fn close(self) {
         self.close_all().await;
     }
-
-    /// `--reset-and-redownload`: empty every table and forget which
-    /// files were read.
-    pub async fn reset(&self) -> Result<()> {
-        for table in DATA_TABLES {
-            // Audited: `table` iterates a `&'static str` const array of our own
-            // table names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-                .execute(&self.pool)
-                .await?;
-        }
-        file_checkpoint::clear_scope_prefix(&self.pool, CURSOR_SCOPE_PREFIX)
-            .await
-            .context("clear claude_code file cursors on reset")
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -122,9 +105,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
 
     let scan = fsscan::scan(
         &opts.cache,

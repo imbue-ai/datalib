@@ -106,7 +106,7 @@ moved.
 
 Left alone, that makes an unchanged page differ from itself every run:
 `dolt_diff_page_markdown` reports a modification, the page re-renders,
-and the `--reset-and-redownload` stability check fails on content nobody
+and the reset-then-resync stability check fails on content nobody
 touched.
 
 So every signed URL is reduced to its **slot** — scheme + host + path,

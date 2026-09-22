@@ -48,11 +48,8 @@ impl RawDb {
     }
 
     /// Truncate the entity tables so the next walk re-writes from
-    /// scratch (the truncate-and-rebuild model). fsindex has no
-    /// `_bookkeeping` sidecars (see [`super::schema_raw::full_ddl`]), so
-    /// we can't use the shared [`dr::truncate_data_tables`] — which
-    /// also deletes `<t>_bookkeeping` — and DELETE the entity tables
-    /// directly. Whole-table bookkeeping (`sync_runs`) is left alone.
+    /// scratch (the truncate-and-rebuild model). Whole-table
+    /// bookkeeping (`sync_runs`) is left alone.
     pub async fn reset(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin truncate tx")?;
         for table in DATA_TABLES {

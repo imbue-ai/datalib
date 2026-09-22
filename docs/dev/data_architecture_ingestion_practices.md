@@ -240,7 +240,7 @@ Two halves to this:
     the `GridRow` struct, the render store's tables, the
     `*_bookkeeping` sidecar tables, the per-provider CAS edge
     tables. Today's de facto answer to "I added a column" is
-    `--reset-and-redownload`. That
+    `datalib-dag --reset`, then a sync. That
     works for *rebakeable* sources (anything we can refetch from a
     live API) but breaks down for:
       - one-shot imports (Signal backup, archive ingestion) where

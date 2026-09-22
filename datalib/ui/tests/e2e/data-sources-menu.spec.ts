@@ -37,8 +37,12 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
     "Compare two syncs…",
     "Show log",
     "Show commit history",
+    "Reset (preserve attachments)…",
+    "Reset (drop attachments)…",
     "Remove from config, with everything under it",
   ]);
+  // The index rebuilds from the sources, so it is not reset by hand.
+  await expect(menuEntry(page, "Reset (preserve attachments)…")).toHaveClass(MENU_DISABLED);
   await page.keyboard.press("Escape");
 
   // The Name cell adds Rename and Copy id ahead of the row's entries.

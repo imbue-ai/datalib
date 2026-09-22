@@ -21,6 +21,7 @@ mod render;
 mod render_diff;
 #[cfg(test)]
 mod render_model_test;
+mod reset;
 mod source;
 mod source_type;
 mod synth;
@@ -33,8 +34,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use datalib_dag::subprocess::{
-    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_REFETCH_BLOBS, ENV_RESET_AND_REDOWNLOAD,
-    ENV_STEP,
+    ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_RESET, ENV_STEP,
 };
 use datalib_dag::FailureKind;
 
@@ -72,19 +72,6 @@ struct Cli {
     /// value so the whole run agrees), then the local clock.
     #[arg(long, global = true)]
     now: Option<String>,
-    /// Ingest only: wipe every entity table (and its bookkeeping
-    /// sidecar) before fetching, re-downloading every entity row. The
-    /// provider's CAS edge table is preserved, so already-fetched
-    /// attachment bytes are not re-pulled — see `--refetch-blobs`.
-    /// Falls back to `$DATALIB_DAG_RESET_AND_REDOWNLOAD=1`.
-    #[arg(long, global = true)]
-    reset_and_redownload: bool,
-    /// Ingest only: clear the `blake3` column on the provider's CAS
-    /// edge table so every attachment re-fetches on the wire (the CAS
-    /// itself is never truncated). Falls back to
-    /// `$DATALIB_DAG_REFETCH_BLOBS=1`.
-    #[arg(long, global = true)]
-    refetch_blobs: bool,
     /// Ingest only: HTTP playback fixture tree (hermetic runs); sets
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
@@ -175,13 +162,6 @@ fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
             None
         }
     }
-}
-
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref(),
-        Some("1") | Some("true")
-    )
 }
 
 /// How long a step may keep running after SIGINT before it is exited
@@ -316,17 +296,9 @@ async fn main() {
         std::process::exit(2);
     }
     let control = datalib_etl::control::DownloadControl {
-        reset_and_redownload: cli.reset_and_redownload || env_flag(ENV_RESET_AND_REDOWNLOAD),
-        refetch_blobs: cli.refetch_blobs || env_flag(ENV_REFETCH_BLOBS),
         checkpoint_cadence: checkpoint_cadence(),
         stop: stop.clone(),
     };
-    // A reset run empties and refills every raw table, so a table whose
-    // stored shape the DDL cannot be reached from is rebuilt rather than
-    // refused — the one way out the refusal names.
-    if control.reset_and_redownload {
-        datalib_etl::doltlite_raw::rebuild_raw_stores_on_schema_break();
-    }
 
     match run(cli, &data_root, &now, &control, &emitter).await {
         // A run that ended because it was asked to is not a success, even
@@ -389,6 +361,9 @@ async fn run(
         Some(Cmd::PullRuntime) => unreachable!("pull-runtime is answered in main"),
         None => {
             let env = StepEnv::from_env()?;
+            if let Ok(part) = std::env::var(ENV_RESET) {
+                return reset::run(&env, data_root, &part).await;
+            }
             run_function(
                 env,
                 cli.playback_root,

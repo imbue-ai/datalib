@@ -135,9 +135,6 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
 
     // Stamp a `sync_runs` row for this pass, the same as every other
     // live source. It is what the DAG-level run-2 incrementality golden

@@ -38,9 +38,6 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_perseus",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )
 
 # End-to-end translate smoke test against the in-crate tiny fixture.

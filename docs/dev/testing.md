@@ -339,7 +339,7 @@ The test makes three pipeline runs, each asserting something different:
    `deltas.<table>.added` back at first-run scale. Only the API-backed
    providers stamp `sync_runs`; file-backed sources record an explicit
    "no rows" marker, since there is no upstream to be incremental about.
-3. **`--reset-and-redownload`** — wipes and re-downloads everything, then
+3. **`--reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
    `volatile_payload` sidecar instead).

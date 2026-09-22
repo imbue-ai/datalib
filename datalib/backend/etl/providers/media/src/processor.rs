@@ -63,7 +63,6 @@ impl DataProcessor for MediaIngest {
             payload_max_bytes: self.payload_max_bytes,
             playlists: self.playlists,
             skip_dataless: self.skip_dataless,
-            force_rehash: ctx.control.reset_and_redownload,
             now: ctx.now.to_string(),
             progress: ctx.progress.clone(),
         })

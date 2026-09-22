@@ -54,9 +54,8 @@ impl DataProcessor for ClaudeIngest {
     /// Seals after each conversation and the blobs it names, and prunes
     /// only what the listing walk said is gone. So between checkpoints the
     /// store is the previous snapshot plus whatever this run has fetched --
-    /// a superset, never a gap. A truncate before the refill would break
-    /// that, and happens only under `--reset-and-redownload`, which does
-    /// not checkpoint at all.
+    /// a superset, never a gap. A reset is its own committed step, not a
+    /// truncate inside a run.
     fn streams_output(&self) -> bool {
         true
     }

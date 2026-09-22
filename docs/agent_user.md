@@ -116,14 +116,18 @@ some entries were dropped.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named download
 steps and everything downstream of them, and nothing else — pending
-work in other sources waits for a full run), `--parallelism N`, `--reset-and-redownload`,
-`--refetch-blobs`, `--binary-dir DIR` (where bare `command:` names like
-`datalib-step` resolve; defaults to the directory `datalib-dag` itself
-is in). A sync that fails with "has a shape this build's DDL cannot be
-reached from by adding columns" is a raw store an older build wrote in a
-shape this one cannot keep; nothing was changed, and if upstream still
-has the data, `--reset-and-redownload --sync <source>/ingest` is the way
-through.
+work in other sources waits for a full run), `--parallelism N`,
+`--reset <step-id>[+blobs]` (drops what that step wrote — its store,
+and with `+blobs` an ingest step's blob CAS too — keeping its doltlite
+history, so the
+next run does its work from the start; alone it does nothing else, with
+`--sync` it runs first), `--binary-dir DIR` (where bare `command:` names
+like `datalib-step` resolve; defaults to the directory `datalib-dag`
+itself is in). A sync that fails with "has a shape this build's DDL
+cannot be reached from by adding columns" is a raw store an older build
+wrote in a shape this one cannot keep; nothing was changed, and if
+upstream still has the data, `--reset <source>/ingest --sync
+<source>/ingest` is the way through.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (all step
 ids in topo order), then `step_start` / `progress_*` / `log` / `hint` /
@@ -135,8 +139,14 @@ failed step blocks only its downstream subtree. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
 
-Via the server instead: `POST /api/sync/jobs` enqueues and
-`/api/sync/jobs/{id}/cancel` cancels; `GET /api/sync/stream` pushes a
+Via the server instead: `POST /api/sync/jobs` enqueues —
+`{"kind":"all"}` with an optional comma-separated `source_ids`, or
+`{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
+for `datalib-dag --reset` of those steps (`+blobs` on an ingest step
+takes its attachments with it), which the Manage screen offers as "Reset (preserve attachments)…" and
+"Reset (drop attachments)…"
+on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
+cancels; `GET /api/sync/stream` pushes a
 frame when a job starts or ends and whenever the run store moves. The
 run store is what to read for what happened: `GET /api/runs` lists
 runs (a job's id is its run id), `/api/runs/{run}/steps` gives every

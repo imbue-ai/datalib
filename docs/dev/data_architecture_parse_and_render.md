@@ -757,14 +757,16 @@ removes.
    HEAD; nothing is swept except through the buckets it declared; the
    cursor is recorded at the end.
 
-2. **`--reset-and-redownload`.** The raw tables are truncated and
-   refilled, and the cursor stays: the next diff runs from the old
-   commit to the pin, where the tables are populated again, and an
-   unchanged row diffs as unchanged. Nothing wipes the cursor and
-   nothing should. A reset read at a checkpoint taken mid-wipe is the
-   one case no record can fix — every row reads as removed — and the
-   rule against it is on the ingest side: a wiping run does not
-   checkpoint ([`plans/one_mode.md`](plans/one_mode.md)).
+2. **A reset of the raw store.** `datalib-dag --reset` empties the
+   raw tables in a commit of their own and the next sync refills them;
+   the render cursor stays, so the next diff runs from the old commit
+   to the pin, where the tables are populated again, and an unchanged
+   row diffs as unchanged. A render that ran *between* the two would
+   see every row as removed, and that is the truth of the store at that
+   moment; it cannot happen by accident, because render only runs
+   downstream of its ingest. A reset of the render store itself
+   (`--reset <source>/render_markdown`) empties its tables and its
+   documents and forgets the cursor, so the next render is a first run.
 
 3. **A store with tables but no commit.** Download ran but nothing
    was committed — a test that bypasses the runner. `pin::head`

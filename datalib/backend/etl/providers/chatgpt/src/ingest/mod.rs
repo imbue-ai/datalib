@@ -67,7 +67,7 @@ pub struct FetchOptions {
     /// stamp; `None` samples the clock.
     pub now: Option<String>,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
 
@@ -118,17 +118,6 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
-
-    if opts.control.reset_and_redownload {
-        tracing::info!(event = "chatgpt_reset_and_redownload");
-        db.reset().await.context("reset raw db before redownload")?;
-    }
-    if opts.control.refetch_blobs {
-        tracing::info!(event = "chatgpt_refetch_blobs");
-        db.clear_blob_hashes()
-            .await
-            .context("clear chatgpt_attachments.blake3 before refetch")?;
-    }
 
     // Canonicalized to whole-second epoch, the same grain the
     // skip-check compares `update_time`s at (see `update_time_secs`).

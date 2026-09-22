@@ -12,7 +12,7 @@ use sqlx::Row;
 use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, DATA_TABLES};
+use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -43,19 +43,6 @@ impl RawDb {
 
     pub fn cas(&self) -> &BlobCas {
         &self.cas
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
-        // The resume cursor isn't a "data table" (no bookkeeping
-        // sidecar, no upstream id) so it's not in DATA_TABLES; wipe
-        // it explicitly so --reset-and-redownload re-ingests the
-        // current snapshot.
-        sqlx::query("DELETE FROM ingested_backups")
-            .execute(&self.pool)
-            .await
-            .context("truncate ingested_backups")?;
-        Ok(())
     }
 
     // ── ingested_backups (resume cursor) ────────────────────────────

@@ -14,7 +14,7 @@ use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, DATA_TABLES};
+use super::schema_raw::full_ddl;
 pub use super::schema_raw::{BeeperMediaAttachmentRow, EventRow, RoomRow, UserRow};
 
 #[derive(Clone, Debug, RawStoreHandle)]
@@ -55,10 +55,6 @@ impl RawDb {
 
     pub fn cas(&self) -> &BlobCas {
         &self.cas
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
     /// Distinct-row counts read straight from the destination DB

@@ -59,6 +59,8 @@ export type MenuAction =
   | "log"
   | "history"
   | "reveal"
+  | "reset"
+  | "reset_blobs"
   | "remove";
 
 export type MenuEntry =
@@ -98,6 +100,30 @@ export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
   if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
+  return null;
+}
+
+/// Why "Reset (preserve attachments)…" does not apply: a reset drops a
+/// tree's store, and only
+/// a source's steps keep one worth emptying — the index follows its
+/// sources, and an applet writes nothing.
+export function notResettableReason(t: MenuTarget): string | null {
+  if (t.kind === "system") return NOT_IN_CONFIG;
+  if (t.kind === "applet") return "An applet writes no store";
+  if (t.stopJobId) return "Busy — stop the sync first";
+  if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
+    return "Reset a source; the index follows it";
+  }
+  return null;
+}
+
+/// Why "Reset (drop attachments)…" does not apply: only a download keeps
+/// them.
+export function noAttachmentsReason(t: MenuTarget): string | null {
+  const why = notResettableReason(t);
+  if (why) return why;
+  if (t.type === "diff") return "A comparison downloads nothing";
+  if (t.kind === "step" && t.func !== "ingest") return "Only the download step keeps attachments";
   return null;
 }
 
@@ -205,6 +231,16 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     });
   }
   entries.push({ separator: true });
+  entries.push({
+    action: "reset",
+    name: "Reset (preserve attachments)…",
+    disabled: firstBlocked(targets, notResettableReason),
+  });
+  entries.push({
+    action: "reset_blobs",
+    name: "Reset (drop attachments)…",
+    disabled: firstBlocked(targets, noAttachmentsReason),
+  });
   entries.push({
     action: "remove",
     name: one

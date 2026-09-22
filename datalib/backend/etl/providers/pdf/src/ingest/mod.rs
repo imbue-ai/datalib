@@ -36,9 +36,6 @@ pub struct FetchOptions {
     /// This host's shared fingerprint cache. Host state, so it lives
     /// outside the scan store — see [`datalib_etl::fingerprint_cache`].
     pub cache: FingerprintCache,
-    /// Ignore the rescan cache and re-read every file. Wired to the
-    /// framework's `--reset-and-redownload`.
-    pub force_rehash: bool,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
     /// over sampling their own clock so one run's outputs agree. Every
     /// stamp this scan writes is this instant, as UTC with its offset
@@ -97,7 +94,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &fsscan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
-            force_rehash: opts.force_rehash,
         },
         is_pdf,
     )

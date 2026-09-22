@@ -123,7 +123,7 @@ synthesizes inodes; on a filesystem without them the cursor falls back
 to `(mtime, size)`, and the worst case after a remount is a re-hash of
 8.5 MB, never a re-ingest.
 
-Reset (`--reset-and-redownload`) empties the three tables and the
+A reset (`datalib-dag --reset`) empties the three tables and the
 cursor; the next run re-reads everything from the share.
 
 **Where the time goes is the share, not the parse.** Measured on

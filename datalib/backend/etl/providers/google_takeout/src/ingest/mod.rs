@@ -109,12 +109,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
-    // No upstream blob fetches — `--refetch-blobs` is a no-op for
-    // this provider. Files on disk are the source of truth.
-    let _ = opts.control.refetch_blobs;
 
     let mut summary = FetchSummary::default();
     let root = &opts.input_path;

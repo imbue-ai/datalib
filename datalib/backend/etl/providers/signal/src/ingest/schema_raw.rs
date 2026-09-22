@@ -93,9 +93,9 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
 /// someone inspecting the table can verify which bytes these were — never read
 /// on the hot path. `snapshot_dir` and `total_byte_size` are informational.
 ///
-/// A row exists only once ingestion finished successfully, and
-/// `--reset-and-redownload` wipes the table so an explicit reset re-processes
-/// even a snapshot already seen.
+/// A row exists only once ingestion finished successfully; a reset
+/// empties the table so the next run re-processes even a snapshot
+/// already seen.
 pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_backups (
     fingerprint TEXT PRIMARY KEY,
     blake3 TEXT NOT NULL,

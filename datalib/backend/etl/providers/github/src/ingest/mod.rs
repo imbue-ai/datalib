@@ -58,7 +58,7 @@ pub struct FetchOptions {
     pub full_sync: bool,
     pub sleep_between: Duration,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
 
@@ -304,13 +304,6 @@ fn scope_config_blob(refresh_window_days: u32) -> Value {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        tracing::info!(event = "github_reset_and_redownload");
-        db.reset().await.context("reset raw db before redownload")?;
-    }
-    // GitHub has no blob table — PRs / comments / reviews are pure
-    // JSON. `refetch_blobs` is a no-op for this provider.
-    let _ = opts.control.refetch_blobs;
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,

@@ -54,7 +54,6 @@ impl DataProcessor for PdfIngest {
             ignore: self.ignore.clone(),
             cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
             max_bytes: self.max_bytes,
-            force_rehash: ctx.control.reset_and_redownload,
             now: ctx.now.to_string(),
             progress: ctx.progress.clone(),
         })

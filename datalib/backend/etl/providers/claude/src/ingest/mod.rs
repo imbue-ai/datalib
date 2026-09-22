@@ -87,7 +87,7 @@ pub struct FetchOptions {
     /// listing still runs; everything outside the set is skipped.
     pub project_uuids: Vec<String>,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
     /// Seals what has been written so far, so render can start on the early
     /// conversations while the rest are still arriving. `None` -- the
@@ -166,17 +166,6 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
-
-    if opts.control.reset_and_redownload {
-        info!(event = "claude_reset_and_redownload");
-        db.reset().await.context("reset raw db before redownload")?;
-    }
-    if opts.control.refetch_blobs {
-        info!(event = "claude_refetch_blobs");
-        db.clear_blob_hashes()
-            .await
-            .context("clear claude_attachments.blake3 before refetch")?;
-    }
 
     let since = opts
         .since

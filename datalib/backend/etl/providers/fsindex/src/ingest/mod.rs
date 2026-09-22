@@ -139,7 +139,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if let Some(branch) = opts.target_doltlite_branch.as_deref() {
         db.checkout_branch(branch).await?;
     }
-    let _ = opts.control.refetch_blobs;
 
     // Canonicalize the root before anything keys off it. The
     // fingerprint cache is keyed by ABSOLUTE path — that is what makes
@@ -156,34 +155,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let load_start = Instant::now();
     let cache_bytes_before = opts.cache.disk_bytes();
-    let mut cache_entries_loaded = 0usize;
-    let prev = if opts.control.reset_and_redownload {
-        CachedTree::default()
-    } else {
-        // Loading the rescan cache for a large tree can take a while, and
-        // it happens before the walk's per-entry progress bar exists — so
-        // announce it (start log + live message) so it's clearly working,
-        // not hung, on both a TTY and the NDJSON log sink.
-        info!(
-            event = "fsindex_load_cache_start",
-            root = %opts.root.display(),
-            "loading this host's fingerprint cache for the scan root before the walk",
-        );
-        opts.progress.set_message(&format!(
-            "loading rescan cache for {} …",
-            opts.root.display()
-        ));
-        let cached = opts.cache.load_under(&opts.root).await?;
-        cache_entries_loaded = cached.len();
-        info!(
-            event = "fsindex_load_cache_done",
-            entry_rows = cached.len(),
-            elapsed_ms = load_start.elapsed().as_millis() as u64,
-            "loaded {} prior entries for this host from the fingerprint cache",
-            cached.len(),
-        );
-        cached
-    };
+    // Loading the rescan cache for a large tree can take a while, and
+    // it happens before the walk's per-entry progress bar exists — so
+    // announce it (start log + live message) so it's clearly working,
+    // not hung, on both a TTY and the NDJSON log sink.
+    info!(
+        event = "fsindex_load_cache_start",
+        root = %opts.root.display(),
+        "loading this host's fingerprint cache for the scan root before the walk",
+    );
+    opts.progress.set_message(&format!(
+        "loading rescan cache for {} …",
+        opts.root.display()
+    ));
+    let prev = opts.cache.load_under(&opts.root).await?;
+    let cache_entries_loaded = prev.len();
+    info!(
+        event = "fsindex_load_cache_done",
+        entry_rows = prev.len(),
+        elapsed_ms = load_start.elapsed().as_millis() as u64,
+        "loaded {} prior entries for this host from the fingerprint cache",
+        prev.len(),
+    );
     let phase_load = load_start.elapsed();
 
     opts.progress

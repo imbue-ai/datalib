@@ -30,7 +30,6 @@ use datalib_etl_airvisual_config::AirvisualDevice;
 
 use schema_raw::{
     cursor_scope, full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow,
-    CURSOR_SCOPE_PREFIX, DATA_TABLES,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -57,17 +56,6 @@ impl RawDb {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        for table in DATA_TABLES {
-            // Audited: `table` iterates a `&'static str` const array of our own
-            // table names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-                .execute(&self.pool)
-                .await?;
-        }
-        file_checkpoint::clear_scope_prefix(&self.pool, CURSOR_SCOPE_PREFIX).await
     }
 }
 
@@ -163,9 +151,6 @@ pub fn identify(dev: &AirvisualDevice, info: &DeviceInfo) -> Result<Identity> {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
     let mut s = FetchSummary {
         devices: opts.devices.len(),
         ..Default::default()
@@ -733,29 +718,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((s.devices, s.errors, s.samples), (1, 1, 0));
-        e.db.close().await;
-    }
-
-    #[tokio::test]
-    async fn reset_drops_rows_and_the_cursors() {
-        let e = env().await;
-        std::fs::write(
-            e.root.join("202609_AirVisual_values.txt"),
-            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
-        )
-        .unwrap();
-        fetch(opts(&e, kitchen(&e))).await.unwrap();
-        let mut o = opts(&e, kitchen(&e));
-        o.control.reset_and_redownload = true;
-        let s = fetch(o).await.unwrap();
-        assert_eq!(
-            s.files_skipped, 0,
-            "the cursor was cleared, so the file re-read"
-        );
-        assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
-            1
-        );
         e.db.close().await;
     }
 }

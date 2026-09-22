@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::scheduler::StepStatus;
+use datalib_dag::scheduler::{ResetTarget, StepStatus};
 
 // `DATALIB_VERSION` is `git describe` at build time under Bazel
 // release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
@@ -51,17 +51,20 @@ async fn main() -> Result<()> {
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--now RFC3339] [--run-id ID] [--parallelism N] \
-         [--reset-and-redownload] [--refetch-blobs]\n       \
-         datalib-dag --check <config.toml>";
+         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
+         [--run-id ID] [--parallelism N]\n       \
+         datalib-dag --check <config.toml>\n\n\
+         --reset drops what a step wrote (its store; `+blobs` an ingest step's blob \
+         CAS with it), keeping its doltlite history, so the next run does its work \
+         from the start. Alone, that is all the invocation does; with --sync it runs \
+         first.";
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
     let mut now: Option<String> = None;
     let mut run_id: Option<String> = None;
     let mut parallelism: Option<usize> = None;
-    let mut reset_and_redownload = false;
-    let mut refetch_blobs = false;
+    let mut reset: Vec<ResetTarget> = Vec::new();
     let mut check_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -85,8 +88,10 @@ async fn main() -> Result<()> {
                         .context("--parallelism must be a positive integer")?,
                 )
             }
-            "--reset-and-redownload" => reset_and_redownload = true,
-            "--refetch-blobs" => refetch_blobs = true,
+            "--reset" => {
+                let v = args.next().context("--reset needs a step id")?;
+                reset.extend(v.split(',').map(|s| ResetTarget::parse(s.trim())));
+            }
             "--check" => check_only = true,
             "--version" | "-V" => {
                 #[allow(clippy::disallowed_macros)]
@@ -194,7 +199,7 @@ async fn main() -> Result<()> {
     // binary dir prepended (so commands can say `datalib-step` bare),
     // one pinned timestamp for the whole run — whether given or
     // sampled, every stamped output (raw bookkeeping, rendered_at_utc)
-    // agrees — and the reset flags for steps that fetch from origin.
+    // agrees.
     let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
     if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {
         let mut paths = vec![dir];
@@ -217,12 +222,6 @@ async fn main() -> Result<()> {
     // by default — its progress lines would arrive in 4KB lumps, long
     // after the stderr they belong beside. Rust and sh need no help.
     child_env.insert("PYTHONUNBUFFERED".into(), "1".into());
-    if reset_and_redownload {
-        child_env.insert(subprocess::ENV_RESET_AND_REDOWNLOAD.into(), "1".into());
-    }
-    if refetch_blobs {
-        child_env.insert(subprocess::ENV_REFETCH_BLOBS.into(), "1".into());
-    }
     if let Some(cadence) = cfg.checkpoint_cadence {
         child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
     }
@@ -319,6 +318,12 @@ async fn main() -> Result<()> {
             .child_env(child_env);
         if let Some(p) = parallelism {
             runner.parallelism = p;
+        }
+        if !reset.is_empty() {
+            runner.reset(&graph, &reset).await?;
+            if sync_only.is_empty() {
+                return Ok(());
+            }
         }
         if !sync_only.is_empty() {
             runner = runner.only_fringe(sync_only);

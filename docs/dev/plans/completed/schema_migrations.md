@@ -242,8 +242,9 @@ conservatively.
 2. **A non-additive change to any raw store is a migration, written
    down, ordered, and run under a name.** Never a drop-and-recreate.
    If no migration is written, the open **fails loudly** and says
-   which table and what changed. `--reset-and-redownload` remains the
-   escape hatch and remains a thing a person types.
+   which table and what changed. A reset (`datalib-dag --reset`, once
+   `--reset-and-redownload`) remains the escape hatch and remains a
+   thing a person types.
 
    This is strict on purpose, and it is strict for the Expensive class
    too, not only the Irreplaceable one — decided 2026-09-21. The
@@ -391,9 +392,9 @@ position, generated); additive changes are applied by `ADD COLUMN` with
 the clause verbatim from the DDL (a VIRTUAL generated column included);
 anything else is a `SchemaBreak` under `OnSchemaBreak::Refuse`, which
 names every such table and leaves the file as it was, or a drop-and-
-recreate under `Rebuild`. Raw stores refuse unless `datalib-step` is a
-`--reset-and-redownload` run; derived stores rebuild. `etl/README.md`
-§"Schema self-healing" is the reference.
+recreate under `Rebuild`. Raw stores refuse unless the table is empty
+— which is what a `datalib-dag --reset` leaves; derived stores
+rebuild. `etl/README.md` §"Schema self-healing" is the reference.
 
 The text as planned:
 
@@ -425,8 +426,8 @@ The text as planned:
   — or, simpler and stricter, treats a render store the way the grid
   index treats itself: any drift drops every table. The raw-store
   `open` passes `Refuse` — for every raw store, whatever its class —
-  unless `DATALIB_DAG_RESET_AND_REDOWNLOAD` (the env the runner sets
-  for `--reset-and-redownload`) is on. The message says: the store,
+  and, since the reset became its own operation, an empty table is
+  recreated rather than refused. The message says: the store,
   the table, what differs, and the two ways out — a migration (§3.3)
   or a reset of that source. Closes §1.2(a) for the non-additive case;
   the additive case was already safe.

@@ -49,7 +49,7 @@ was in — the pair every stamp we mint is stored as (AGENTS.md,
 "Timestamp convention").
 
 The split keeps `dolt diff` over the data tables reflecting upstream change
-only, not re-fetch churn — which is what makes the `--reset-and-redownload`
+only, not re-fetch churn — which is what makes the reset-then-resync
 "did anything actually change?" assertion mean anything.
 
 Every object row gets a sidecar row in the same transaction; use
@@ -303,11 +303,11 @@ generated — not on its column names.
   store's rows may be the only copy — an export whose source is gone, a
   window upstream no longer serves — so nothing is dropped on the way
   in. The refusal names the two ways out: a rung on the provider's
-  migration ladder (below) or
-  `datalib-dag --reset-and-redownload --sync <source>/ingest`, which
-  runs the open as `OnSchemaBreak::Rebuild`: drop, recreate, clear the
-  cursors, refill. Derived stores (`open_derived`: render, index, CAS)
-  always rebuild, since every row is a function of another store.
+  migration ladder (below) or `datalib-dag --reset <source>/ingest`,
+  which drops every table without needing the DDL, so the next open is
+  a first open and the sync refills it. Derived stores (`open_derived`:
+  render, index, CAS) always rebuild, since every row is a function of
+  another store.
 
 ### The migration ladder
 

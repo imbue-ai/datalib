@@ -33,11 +33,6 @@ pub trait DataProcessor: Send + Sync {
     /// source which lost its data. Answering `true` there is how a
     /// consumer comes to delete rendered documents for rows that are
     /// about to come back.
-    ///
-    /// A wipe asked for by `--reset-and-redownload` or
-    /// `always_clear_before_ingest` is handled elsewhere and needs no
-    /// answer here: `RunCtx::checkpoint_policy` returns `Never` for those
-    /// runs, so nothing is announced to read.
     fn streams_output(&self) -> bool {
         false
     }
@@ -74,7 +69,7 @@ pub struct RunCtx<'a> {
     pub now: &'a str,
     /// Per-source progress hook.
     pub progress: &'a Progress,
-    /// Cross-provider download knobs (`--reset-and-redownload`, …).
+    /// Cross-provider download knobs (the checkpoint cadence, the stop flag).
     pub control: &'a DownloadControl,
     /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
     /// observability the orchestrator installs as scopes.
@@ -104,23 +99,9 @@ impl<'a> RunCtx<'a> {
         }
     }
 
-    /// Whether this run seals partial output, and how often.
-    ///
-    /// **A wipe-and-re-ingest run never does.** `reset_and_redownload`
-    /// truncates every table and re-fetches, so at any point before it
-    /// finishes the store holds a fraction of the source. Publishing that is
-    /// not "partial progress" — half a re-ingest is indistinguishable from a
-    /// source that lost most of its data, and every consumer downstream would
-    /// act on it. The whole run is the atomic unit, so it commits once, at
-    /// the end.
-    ///
-    /// The same reasoning covers any ingest that prunes to a snapshot; those
-    /// pass `Never` themselves.
-    pub fn checkpoint_policy(&self) -> crate::checkpointer::Policy {
-        if self.control.reset_and_redownload {
-            return crate::checkpointer::Policy::Never;
-        }
-        crate::checkpointer::Policy::Every(self.control.checkpoint_cadence.unwrap_or_default())
+    /// How often this run seals partial output.
+    pub fn checkpoint_cadence(&self) -> crate::checkpointer::Cadence {
+        self.control.checkpoint_cadence.unwrap_or_default()
     }
 
     /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)
