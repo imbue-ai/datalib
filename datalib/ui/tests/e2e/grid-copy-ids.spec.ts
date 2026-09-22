@@ -34,7 +34,7 @@ test("a row with an upstream id offers both copies, and they differ", async ({ p
   expect(
     row,
     "fixture must contain a row whose upstream_id differs from its uuid " +
-      "(slack threads carry `{channel_id}:{ts}` against a v5 uuid)",
+      "(slack messages carry `{team}#{channel}#{ts}` against a datalib uuid)",
   ).toBeTruthy();
 
   await page.goto("/");
@@ -55,22 +55,4 @@ test("a row with an upstream id offers both copies, and they differ", async ({ p
   await contextMenuRowByUuid(page, row!.uuid);
   await menuItem(page, /^Copy UUID$/).click();
   await expect.poll(readClipboard, { message: "clipboard after Copy UUID" }).toBe(row!.uuid);
-});
-
-test("a row with no upstream id hides the upstream-id action", async ({ page, request }) => {
-  const all = await rows(request);
-  // Message-level rows carry no native id yet — per-item ids land with
-  // the per-provider `datalib_id` port. When that lands and every row
-  // has one, this test should start failing to find a subject; delete
-  // it then rather than weakening it.
-  const row = all.find((r) => !r.upstream_id);
-  expect(row, "fixture must contain a row with no upstream_id").toBeTruthy();
-
-  await page.goto("/");
-  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
-
-  await contextMenuRowByUuid(page, row!.uuid);
-  await expect(menuItem(page, /^Copy UUID$/)).toBeVisible();
-  // A menu item that silently copies nothing is worse than no item.
-  await expect(menuItem(page, /^Copy upstream ID$/)).toHaveCount(0);
 });
