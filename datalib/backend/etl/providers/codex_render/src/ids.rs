@@ -43,13 +43,17 @@ pub fn thread(source_id: &str, thread_id: &str) -> Identity {
     identity(source_id, KIND_THREAD, thread_id.to_string(), None)
 }
 
-/// One line of a rollout, by its number within the thread; the raw
-/// store's record id.
+/// One line of a rollout, by its number within the thread.
+///
+/// Through `composite_key`, not `format!`, so a thread id that ever
+/// carried a `#` could not make two lines share a key — the raw
+/// store's own spelling of this key is its business, and
+/// `the_natural_key_is_the_raw_stores_spelling` holds the two together.
 pub fn record(source_id: &str, thread_id: &str, line_no: i64, date_ms: Option<i64>) -> Identity {
     identity(
         source_id,
         KIND_RECORD,
-        datalib_etl_codex::ingest::parse::record_id(thread_id, line_no),
+        composite_key(&[thread_id, &line_no.to_string()]),
         date_ms,
     )
 }
@@ -113,6 +117,16 @@ mod tests {
     #[test]
     fn the_source_is_part_of_every_id() {
         assert_ne!(thread("a", "t1").uuid, thread("b", "t1").uuid);
+    }
+
+    /// `upstream_id` is what a person takes back to the rollout, so it
+    /// has to be the key the raw store used. Nothing forces the two
+    /// spellings to agree — the raw key is built in the ingest crate,
+    /// which cannot see this one — so assert it.
+    #[test]
+    fn the_natural_key_is_the_raw_stores_spelling() {
+        let raw = datalib_etl_codex::ingest::parse::record_id("t1", 7);
+        assert_eq!(record("src", "t1", 7, None).natural_key, raw);
     }
 
     #[test]

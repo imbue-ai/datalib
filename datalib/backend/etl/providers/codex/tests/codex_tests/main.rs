@@ -2,3 +2,4 @@
 //! behaviour.
 
 mod fixture_e2e;
+mod rescan_is_content_stable;
