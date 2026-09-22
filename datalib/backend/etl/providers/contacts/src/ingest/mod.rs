@@ -74,10 +74,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         event = "carddav_discovery",
         principal = %principal_url,
         addressbook_home_set = %home_set_url,
+        "discovered the principal and the addressbook home"
     );
 
     let books = list_addressbooks(&home_set_url, &mut summary, &opts.latchkey).await?;
-    info!(event = "carddav_addressbook_count", n = books.len());
+    info!(
+        event = "carddav_addressbook_count",
+        n = books.len(),
+        "listed the addressbooks"
+    );
     for book in &books {
         db.upsert_addressbook(
             &account_id,
@@ -124,6 +129,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     event = "carddav_addressbook_sync_failed",
                     addressbook = %book.href,
                     error = %e,
+                    "an addressbook could not be synced"
                 );
             }
         }
@@ -136,7 +142,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // store. `None` is a reader, which never reaches this path.
     if let Some(cas) = db.cas() {
         if let Err(e) = photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_photo_lift_failed", error = %e);
+            warn!(event = "carddav_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
         }
     }
 
@@ -242,6 +248,7 @@ async fn sync_addressbook(
             warn!(
                 event = "carddav_sync_collection_unsupported",
                 addressbook_url = %book_url,
+                "the server does not support sync-collection; walking whole"
             );
             return Ok(());
         }
@@ -272,6 +279,7 @@ async fn apply_multistatus(
             warn!(
                 event = "carddav_vcard_missing_uid",
                 href = %href,
+                "a vCard has no UID; keyed on its href"
             );
             summary.errors += 1;
             continue;

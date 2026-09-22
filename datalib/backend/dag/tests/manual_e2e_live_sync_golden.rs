@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use datalib_dag::RunState;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -245,6 +246,10 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
     ("sync_scope_config", &["updated_at_utc"]),
+    // The store's record of which build wrote it: the stamp is the wall
+    // clock, and the `git_hash` row (redacted below, by key) is a new
+    // commit on every bake. The versions and the schema hash stay.
+    ("_datalib_meta", &["written_at_utc"]),
     // A store's size on disk wobbles run-to-run at equal row counts
     // (page layout, chunk ordering), the same way the extract-metrics
     // `bytes_*` did; `items` carries the signal.
@@ -629,30 +634,46 @@ fn manual_e2e_live_sync_golden() {
     // makes run 2 re-query the trailing 30 days and whatever traffic fell
     // inside that window on the day of the bake.
 
-    // ── Third run: reset, then re-download; content stability ─────────
-    let stability_dbs = ["tiny-slack/ingest/entities.doltlite_db"];
-    // Skip (loudly) any db this config didn't produce, so a reduced config via
-    // DATALIB_TEST_CONFIG doesn't crash here. On the full config a missing db
-    // means its source failed — which run 1's status assertion already caught.
-    let before: Vec<(&str, Value)> = stability_dbs
+    // ── Third run: reset every source, then re-download every one ─────
+    //
+    // Every ingest step is emptied with its CAS and synced again, and
+    // each store's own history is the witness: the diff from the commit
+    // before the reset to the commit after the refill must be empty on
+    // every content table. Re-fetching an unchanged upstream object
+    // must land identical bytes at the same key, so a row that differs
+    // is per-fetch bookkeeping leaking into a content payload.
+    let ingest_steps: Vec<String> = stanzas
         .iter()
-        .filter(|name| {
-            let present = data_root.join(name).is_file();
-            if !present {
-                eprintln!("[test] WARNING: stability db absent, skipping: {name}");
-            }
-            present
+        .filter(|s| data_root.join(s).join("ingest").is_dir())
+        .map(|s| format!("{s}/ingest"))
+        .collect();
+    assert!(
+        !ingest_steps.is_empty(),
+        "no <group>/ingest under {}",
+        data_root.display()
+    );
+    let stores_before: Vec<StoreAtCommit> = ingest_steps
+        .iter()
+        .flat_map(|step| {
+            ["entities", "blobs"].map(|db| data_root.join(step).join(format!("{db}.doltlite_db")))
         })
-        .map(|name| (*name, content_tables(&data_root.join(name))))
+        .filter(|p| p.is_file())
+        .map(|p| StoreAtCommit::head(&data_root, &p))
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
+    let reset_all = ingest_steps
+        .iter()
+        .map(|s| format!("{s}+blobs"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sync_all = ingest_steps.join(",");
     let run3 = run_pipeline(
         &bin,
         &cfg_path,
         &run_root,
         now3,
-        &["--reset", "tiny-slack/ingest", "--sync", "tiny-slack/ingest"],
+        &["--reset", &reset_all, "--sync", &sync_all],
     );
     assert!(
         run3.status.success(),
@@ -662,135 +683,298 @@ fn manual_e2e_live_sync_golden() {
     );
     assert_step_statuses_ok(&run3.run_summary().expect("run 3 run_summary"));
 
-    for (name, before_v) in &before {
-        let after_v = content_tables(&data_root.join(name));
-        // A path-level diff, not `assert_eq!` on two whole Values: these
-        // are multi-megabyte structures, and eyeballing two offset 2MB
-        // dumps invites you to "find" differences that are only
-        // misalignment.
-        let drifts = json_diff_paths(before_v, &after_v, DRIFT_REPORT_LIMIT);
-        assert!(
-            drifts.is_empty(),
-            "{name}: content tables drifted across a reset and re-download.\n\
-             Re-fetching an unchanged upstream object must land identical \
-             bytes, so a drifting field is per-fetch bookkeeping leaking into \
-             a content payload — declare it in that entity's \
-             *_VOLATILE_PATHS and route the upsert through \
-             bulk_upsert_with_tape_split (see data_architecture_ingestion.md \
-             §\"Volatile-field split\").\n\n{}",
-            drifts.join("\n")
-        );
+    let drifts: Vec<String> = stores_before
+        .iter()
+        .flat_map(StoreAtCommit::content_drift_to_head)
+        .collect();
+    assert!(
+        drifts.is_empty(),
+        "content tables drifted across a reset and re-download.\n\
+         Re-fetching an unchanged upstream object must land identical \
+         bytes, so a drifting field is per-fetch bookkeeping leaking into \
+         a content payload — declare it in that entity's \
+         *_VOLATILE_PATHS and route the upsert through \
+         bulk_upsert_with_tape_split (see data_architecture_ingestion.md \
+         §\"Volatile-field split\").\n\n{}",
+        drifts.join("\n")
+    );
+}
+
+/// One raw store and the commit it was at before run 3's reset; what
+/// the store's own diff says moved between then and `HEAD` is the
+/// content-stability finding.
+struct StoreAtCommit {
+    name: String,
+    path: PathBuf,
+    commit: String,
+    tables: Vec<String>,
+}
+
+impl StoreAtCommit {
+    fn head(data_root: &Path, path: &Path) -> Self {
+        let name = path
+            .strip_prefix(data_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for store head");
+        let (commit, tables) = rt.block_on(async {
+            use sqlx::Row;
+
+            let pool = open_readonly(path).await;
+            let commit: String = sqlx::query("SELECT commit_hash FROM dolt_log() LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: dolt_log: {e}"))
+                .get(0);
+            let tables = content_table_names(&pool).await;
+            pool.close().await;
+            (commit, tables)
+        });
+        StoreAtCommit {
+            name,
+            path: path.to_path_buf(),
+            commit,
+            tables,
+        }
+    }
+
+    fn content_drift_to_head(&self) -> Vec<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for store diff");
+        rt.block_on(self.content_drift_to_head_async())
+    }
+
+    async fn content_drift_to_head_async(&self) -> Vec<String> {
+        use sqlx::{Column, Row};
+
+        let pool = open_readonly(&self.path).await;
+        let mut findings = Vec::new();
+        let now = content_table_names(&pool).await;
+        for t in &self.tables {
+            if !now.contains(t) {
+                findings.push(format!("{}#{t}: gone after the re-download", self.name));
+            }
+        }
+        for t in &now {
+            if !self.tables.contains(t) {
+                findings.push(format!("{}#{t}: new after the re-download", self.name));
+                continue;
+            }
+            let stat = sqlx::query(
+                "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?, 'HEAD', ?)",
+            )
+            .bind(&self.commit)
+            .bind(t)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{}#{t}: dolt_diff_stat: {e}", self.name));
+            // No row at all is how an unchanged table answers.
+            let Some(stat) = stat else {
+                continue;
+            };
+            let (added, deleted, modified): (i64, i64, i64) =
+                (stat.get(0), stat.get(1), stat.get(2));
+            if added + deleted + modified == 0 {
+                continue;
+            }
+            // Which columns moved, row by row: `dolt_diff_<t>` pairs every
+            // column as `from_<c>` / `to_<c>`. A modified row whose only
+            // differences are known stamp leaks is not a finding. The
+            // table name was read out of this store's own `sqlite_master`,
+            // and the refs are bound.
+            // `payload` is JSONB, so it is read back through `json()`.
+            let info = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
+                .fetch_all(&pool)
+                .await
+                .expect("table_info");
+            let select_list = info
+                .iter()
+                .map(|r| r.get::<String, _>("name"))
+                .flat_map(|c| {
+                    ["from", "to"].map(|side| {
+                        if c == "payload" {
+                            format!("json({side}_payload) AS {side}_payload")
+                        } else {
+                            format!("\"{side}_{c}\"")
+                        }
+                    })
+                })
+                .chain(["diff_type".to_string()])
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {select_list} FROM \"dolt_diff_{t}\" WHERE from_ref = ? AND to_ref = 'HEAD'"
+            )))
+            .bind(&self.commit)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{}#{t}: dolt_diff_{t}: {e}", self.name));
+            let exempt = |c: &str| KNOWN_STAMP_LEAKS.contains(&(t.as_str(), c));
+            let mut moved: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            let mut leaked_only = 0usize;
+            let mut example: Option<String> = None;
+            for row in &rows {
+                let kind: String = row.try_get("diff_type").unwrap_or_default();
+                let mut here: Vec<String> = Vec::new();
+                for col in row.columns() {
+                    let Some(c) = col.name().strip_prefix("to_") else {
+                        continue;
+                    };
+                    if c == "commit" || c == "commit_date" {
+                        continue;
+                    }
+                    let from = format!("from_{c}");
+                    if row.columns().iter().all(|k| k.name() != from) {
+                        continue;
+                    }
+                    let a = cell_for_diff(row, &from);
+                    let b = cell_for_diff(row, col.name());
+                    if a == b || exempt(c) {
+                        continue;
+                    }
+                    let (a, b) = if c == "payload" {
+                        let keys: Vec<&str> = KNOWN_STAMP_LEAKS
+                            .iter()
+                            .filter(|(table, _)| *table == t)
+                            .filter_map(|(_, path)| path.strip_prefix("payload."))
+                            .collect();
+                        (without_keys(&a, &keys), without_keys(&b, &keys))
+                    } else {
+                        (a, b)
+                    };
+                    if a == b {
+                        continue;
+                    }
+                    *moved.entry(c.to_string()).or_default() += 1;
+                    if here.len() < 4 {
+                        here.push(format!("{c}: {} → {}", short_cell(&a), short_cell(&b)));
+                    }
+                }
+                if kind == "modified" && here.is_empty() {
+                    leaked_only += 1;
+                    continue;
+                }
+                if example.is_none() {
+                    example = Some(format!("{kind}: {}", here.join("; ")));
+                }
+            }
+            if added + deleted == 0 && leaked_only as i64 == modified {
+                eprintln!(
+                    "[test] {}#{t}: {modified} row(s) differ only in a known stamp leak",
+                    self.name
+                );
+                continue;
+            }
+            findings.push(format!(
+                "{}#{t}: added={added} removed={deleted} modified={modified} \
+                 (of which {leaked_only} only in a known stamp leak); columns \
+                 differing: {}; e.g. {}",
+                self.name,
+                moved
+                    .iter()
+                    .map(|(c, n)| format!("{c}×{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                example.unwrap_or_default()
+            ));
+        }
+        pool.close().await;
+        findings
     }
 }
 
-/// How many drifting paths to name before truncating. Enough to see whether
-/// the drift is one stray field or a systemic shape change; not so many that
-/// the message becomes the thing that hides the answer.
-const DRIFT_REPORT_LIMIT: usize = 40;
+/// A cell for comparison: a BLOB that is text — a JSON payload — is
+/// compared as text, and any other BLOB by its bytes.
+fn cell_for_diff(row: &sqlx::sqlite::SqliteRow, name: &str) -> Value {
+    use sqlx::{Row, TypeInfo, ValueRef};
 
-fn json_diff_paths(a: &Value, b: &Value, limit: usize) -> Vec<String> {
-    fn short(v: &Value) -> String {
-        let s = match v {
-            Value::String(s) => format!("{s:?}"),
-            other => other.to_string(),
+    let raw = row.try_get_raw(name).expect("try_get_raw");
+    if !raw.is_null() && raw.type_info().into_owned().name() == "BLOB" {
+        let bytes: Vec<u8> = row.try_get(name).unwrap_or_default();
+        return match String::from_utf8(bytes) {
+            Ok(text) => Value::String(text),
+            Err(e) => {
+                let bytes = e.into_bytes();
+                use std::hash::{Hash, Hasher};
+                let mut h = std::hash::DefaultHasher::new();
+                bytes.hash(&mut h);
+                Value::String(format!("<bytes {} hash={:016x}>", bytes.len(), h.finish()))
+            }
         };
-        if s.chars().count() > 80 {
-            let head: String = s.chars().take(77).collect();
-            format!("{head}...")
-        } else {
-            s
-        }
     }
-    fn row_id(v: &Value) -> Option<&str> {
-        v.get("id").and_then(Value::as_str)
-    }
-    fn walk(path: &str, a: &Value, b: &Value, out: &mut Vec<String>, limit: usize) {
-        if out.len() >= limit {
-            return;
-        }
-        match (a, b) {
-            (Value::Object(ma), Value::Object(mb)) => {
-                let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).collect();
-                keys.sort_unstable();
-                keys.dedup();
-                for k in keys {
-                    let p = if path.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{path}.{k}")
-                    };
-                    match (ma.get(k), mb.get(k)) {
-                        (Some(x), Some(y)) => walk(&p, x, y, out, limit),
-                        (Some(x), None) => {
-                            out.push(format!("  {p}: before={} after=<missing>", short(x)))
-                        }
-                        (None, Some(y)) => {
-                            out.push(format!("  {p}: before=<missing> after={}", short(y)))
-                        }
-                        (None, None) => {}
-                    }
-                    if out.len() >= limit {
-                        return;
-                    }
-                }
+    cell_value(row, name, false)
+}
+
+/// The JSON text with the named top-level keys removed; anything that is
+/// not a JSON object comes back as it was.
+fn without_keys(v: &Value, keys: &[&str]) -> Value {
+    let Value::String(text) = v else {
+        return v.clone();
+    };
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(mut map)) => {
+            for k in keys {
+                map.remove(*k);
             }
-            (Value::Array(xa), Value::Array(xb)) => {
-                // Match by `id` when every element has one; else positionally.
-                let ida: Option<Vec<&str>> = xa.iter().map(row_id).collect();
-                let idb: Option<Vec<&str>> = xb.iter().map(row_id).collect();
-                if let (Some(ia), Some(ib)) = (ida, idb) {
-                    let ma: std::collections::BTreeMap<&str, &Value> =
-                        ia.into_iter().zip(xa.iter()).collect();
-                    let mb: std::collections::BTreeMap<&str, &Value> =
-                        ib.into_iter().zip(xb.iter()).collect();
-                    let mut ids: Vec<&&str> = ma.keys().chain(mb.keys()).collect();
-                    ids.sort_unstable();
-                    ids.dedup();
-                    for id in ids {
-                        let p = format!("{path}[id={id}]");
-                        match (ma.get(*id), mb.get(*id)) {
-                            (Some(x), Some(y)) => walk(&p, x, y, out, limit),
-                            (Some(_), None) => {
-                                out.push(format!("  {p}: row present before, gone after"))
-                            }
-                            (None, Some(_)) => {
-                                out.push(format!("  {p}: row absent before, present after"))
-                            }
-                            (None, None) => {}
-                        }
-                        if out.len() >= limit {
-                            return;
-                        }
-                    }
-                } else {
-                    if xa.len() != xb.len() {
-                        out.push(format!(
-                            "  {path}: array length {} -> {}",
-                            xa.len(),
-                            xb.len()
-                        ));
-                    }
-                    for (i, (x, y)) in xa.iter().zip(xb.iter()).enumerate() {
-                        walk(&format!("{path}[{i}]"), x, y, out, limit);
-                        if out.len() >= limit {
-                            return;
-                        }
-                    }
-                }
-            }
-            _ => {
-                if a != b {
-                    out.push(format!("  {path}: before={} after={}", short(a), short(b)));
-                }
-            }
+            Value::Object(map)
         }
+        _ => v.clone(),
     }
-    let mut out = Vec::new();
-    walk("", a, b, &mut out, limit);
-    if out.len() >= limit {
-        out.push(format!("  … truncated at {limit} differing paths"));
+}
+
+fn short_cell(v: &Value) -> String {
+    let s = match v {
+        Value::String(s) => format!("{s:?}"),
+        other => other.to_string(),
+    };
+    if s.chars().count() > 80 {
+        let cut: String = s.chars().take(77).collect();
+        format!("{cut}…")
+    } else {
+        s
     }
-    out
+}
+
+async fn open_readonly(path: &Path) -> sqlx::SqlitePool {
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+        .expect("sqlite uri")
+        .create_if_missing(false)
+        .read_only(true);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()))
+}
+
+/// The tables whose rows are the source's content: every user table but
+/// the `*_bookkeeping` sidecars and [`NON_CONTENT_TABLES`].
+async fn content_table_names(pool: &sqlx::SqlitePool) -> Vec<String> {
+    use sqlx::Row;
+
+    sqlx::query(
+        "SELECT name FROM sqlite_master \
+         WHERE type='table' AND name NOT LIKE 'sqlite_%' \
+         ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("list tables")
+    .iter()
+    .map(|r| r.get::<String, _>(0))
+    .filter(|t| !t.ends_with("_bookkeeping") && !NON_CONTENT_TABLES.contains(&t.as_str()))
+    .collect()
 }
 
 /// One invocation of `datalib-dag`, with its stderr captured.
@@ -857,17 +1041,18 @@ fn assert_step_statuses_ok(summary: &Value) {
         .and_then(Value::as_array)
         .expect("run_summary.steps");
     assert!(!steps.is_empty(), "run_summary carried zero steps");
-    // `skipped_up_to_date` is a SUCCESS: the scheduler content-hashed the
-    // step's inputs, found them unchanged, and correctly did nothing. Runs 2
-    // and 3 are expected to be full of these — that is what incrementality
-    // looks like. Only `failed` and `blocked` are real problems.
-    const OK_STATUSES: &[&str] = &["succeeded", "skipped_up_to_date"];
+    // The runner's own definition of "finished without failing", so a
+    // state it adds is judged here the way it judges it: run 2 is full of
+    // `skipped_up_to_date` (that is what incrementality looks like) and
+    // run 3, a per-source sync, leaves every other step `not_selected`.
+    // A spelling this build cannot parse is a failure, not a pass.
     let bad: Vec<String> = steps
         .iter()
         .filter(|s| {
             !s.get("status")
                 .and_then(Value::as_str)
-                .is_some_and(|st| OK_STATUSES.contains(&st))
+                .and_then(RunState::parse)
+                .is_some_and(RunState::is_ok)
         })
         .map(|s| {
             format!(
@@ -968,27 +1153,28 @@ fn index_problems(data_root: &Path) -> Value {
 }
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
-/// is excluded from the content-stability comparison:
+/// is excluded from the content-stability comparison: the store's record
+/// of itself, of its runs and cursors, and of the files or scans a
+/// file-backed ingest has already been through.
 const NON_CONTENT_TABLES: &[&str] = &[
+    "_datalib_meta",
     "sync_runs",
     "sync_scope_state",
     "sync_scope_config",
     "problems",
+    "ingested_files",
+    "scan_meta",
+    "media_scan_meta",
+    "pdf_scan_meta",
 ];
 
-/// Dump only the entity *content* tables of a doltlite DB for the
-/// reset-then-resync stability assertion: drops every
-/// `*_bookkeeping` sidecar (per-fetch stamps + the `volatile_payload`
-/// split-outs) plus [`NON_CONTENT_TABLES`].
-fn content_tables(path: &Path) -> Value {
-    let mut v = dump_doltlite_db(path);
-    if let Value::Object(map) = &mut v {
-        map.retain(|table, _| {
-            !table.ends_with("_bookkeeping") && !NON_CONTENT_TABLES.contains(&table.as_str())
-        });
-    }
-    v
-}
+/// Stamps a store mints inside a content row, each a known leak: the
+/// row reads as modified on every re-fetch, so a render that diffs the
+/// raw store re-renders it every run. A `payload.<key>` entry names a
+/// key inside the JSON payload. An entry is deleted when its stamp
+/// moves to a bookkeeping sidecar or out of the payload; the check
+/// then holds that table to the byte. Empty is the goal.
+const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
 /// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
@@ -1262,7 +1448,7 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
     use std::str::FromStr;
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use sqlx::{Column, Row, TypeInfo, ValueRef};
+    use sqlx::{Column, Row};
 
     // JSON-bearing TEXT columns: parse to Value rather than leaving as
     // an embedded string. Everything else passes through verbatim.
@@ -1395,47 +1581,7 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
             let mut obj = serde_json::Map::new();
             for col in row.columns() {
                 let name = col.name();
-                // Per-row dynamic type. We can't trust the *column*'s
-                // declared type because aliased function results (e.g.
-                // `json(payload) AS payload`) have no declared type and
-                // would fall through to NULL. ValueRef gives the actual
-                // SQLite storage class for *this* cell.
-                let raw = row.try_get_raw(name).expect("try_get_raw");
-                let value: Value = if raw.is_null() {
-                    Value::Null
-                } else {
-                    let type_info = raw.type_info().into_owned();
-                    let kind = type_info.name(); // TEXT/INTEGER/REAL/BLOB
-                    match kind {
-                        "TEXT" => row
-                            .try_get::<String, _>(name)
-                            .ok()
-                            .map(|s| {
-                                if JSON_TEXT_COLUMNS.contains(&name) {
-                                    serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
-                                } else {
-                                    Value::String(s)
-                                }
-                            })
-                            .unwrap_or(Value::Null),
-                        "INTEGER" => row
-                            .try_get::<i64, _>(name)
-                            .ok()
-                            .map(Value::from)
-                            .unwrap_or(Value::Null),
-                        "REAL" => row
-                            .try_get::<f64, _>(name)
-                            .ok()
-                            .and_then(|n| serde_json::Number::from_f64(n).map(Value::Number))
-                            .unwrap_or(Value::Null),
-                        "BLOB" => row
-                            .try_get::<Vec<u8>, _>(name)
-                            .ok()
-                            .map(|b| Value::String(format!("<bytes {}>", b.len())))
-                            .unwrap_or(Value::Null),
-                        _ => Value::Null,
-                    }
-                };
+                let value = cell_value(row, name, JSON_TEXT_COLUMNS.contains(&name));
                 obj.insert(name.to_string(), value);
             }
             row_vals.push(Value::Object(obj));
@@ -1461,9 +1607,61 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
                 }
             }
         }
+        if t == "_datalib_meta" {
+            for row in row_vals.iter_mut() {
+                if let Value::Object(map) = row {
+                    if map.get("key").and_then(Value::as_str) == Some("git_hash") {
+                        map.insert("value".into(), Value::String(REDACTED.into()));
+                    }
+                }
+            }
+        }
         out.insert(t, Value::Array(row_vals));
     }
     Value::Object(out)
+}
+
+/// One cell as JSON, typed by the cell's own storage class. The
+/// *column*'s declared type cannot be trusted: an aliased function
+/// result (`json(payload) AS payload`) has none and would fall through
+/// to NULL. `parse_json` turns a JSON-bearing TEXT into a Value.
+fn cell_value(row: &sqlx::sqlite::SqliteRow, name: &str, parse_json: bool) -> Value {
+    use sqlx::{Row, TypeInfo, ValueRef};
+
+    let raw = row.try_get_raw(name).expect("try_get_raw");
+    if raw.is_null() {
+        return Value::Null;
+    }
+    let type_info = raw.type_info().into_owned();
+    match type_info.name() {
+        "TEXT" => row
+            .try_get::<String, _>(name)
+            .ok()
+            .map(|s| {
+                if parse_json {
+                    serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
+                } else {
+                    Value::String(s)
+                }
+            })
+            .unwrap_or(Value::Null),
+        "INTEGER" => row
+            .try_get::<i64, _>(name)
+            .ok()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        "REAL" => row
+            .try_get::<f64, _>(name)
+            .ok()
+            .and_then(|n| serde_json::Number::from_f64(n).map(Value::Number))
+            .unwrap_or(Value::Null),
+        "BLOB" => row
+            .try_get::<Vec<u8>, _>(name)
+            .ok()
+            .map(|b| Value::String(format!("<bytes {}>", b.len())))
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
 }
 
 fn strip_volatile(v: &mut Value) {

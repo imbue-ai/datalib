@@ -1,5 +1,6 @@
 //! Slack render stage: raw → typed buckets ready for render.
 
+pub mod ids;
 pub mod mrkdwn;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
@@ -11,44 +12,12 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 
-// UUIDv5 recipes for Slack message and thread ids live in
-// `ingest::schema_raw`. Re-export here so existing
-// `crate::render::slack_message_uuid` callers outside this crate
-// keep resolving.
-pub use datalib_etl_slack::ingest::schema_raw::{slack_message_uuid, slack_thread_uuid};
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 
-/// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
-/// (`"1728499573.123456"`) — into an offsetted instant. `None` on a
-/// shape we do not recognize; the message's caller records that.
-pub fn parse_slack_ts(ts: &str) -> Option<IsoOffsetTimestamp> {
-    let (secs_str, frac_str) = ts.split_once('.').unwrap_or((ts, ""));
-    let secs: i64 = secs_str.parse().ok()?;
-    let micros: i64 = if frac_str.is_empty() {
-        0
-    } else {
-        let mut frac = frac_str.to_string();
-        if frac.len() < 6 {
-            frac.push_str(&"0".repeat(6 - frac.len()));
-        } else {
-            frac.truncate(6);
-        }
-        frac.parse().ok()?
-    };
-    let base = IsoOffsetTimestamp::from_unix_millis(secs.checked_mul(1000)?)?;
-    Some(base.bump_micros(micros))
-}
-
-pub fn ts_to_iso(ts: &str) -> Option<String> {
-    parse_slack_ts(ts).map(|t| t.to_rfc3339_micros())
-}
-
-pub fn ts_to_ms(ts: &str) -> Option<i64> {
-    parse_slack_ts(ts).map(|t| t.to_unix_millis())
-}
+pub use datalib_etl_slack::ingest::schema_raw::{slack_message_key, slack_thread_key};
+pub use ids::{parse_slack_ts, ts_to_iso, ts_to_ms};
 
 #[derive(Debug, Clone)]
 pub struct User {
@@ -146,11 +115,13 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn uuid(&self) -> String {
-        slack_message_uuid(&self.team_id, &self.channel_id, &self.ts)
+    /// The raw store's key for this message.
+    pub fn key(&self) -> String {
+        slack_message_key(&self.team_id, &self.channel_id, &self.ts)
     }
-    pub fn thread_uuid(&self) -> String {
-        slack_thread_uuid(&self.team_id, &self.channel_id, &self.effective_thread_ts)
+    /// The raw store's key for this message's thread: the bucket key.
+    pub fn thread_key(&self) -> String {
+        slack_thread_key(&self.team_id, &self.channel_id, &self.effective_thread_ts)
     }
 }
 

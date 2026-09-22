@@ -262,8 +262,8 @@ async fn run_sync(
     if !opts.only_labels.is_empty() {
         info!(
             event = "gmail_label_filter",
-            labels = ?opts.only_labels,
-            ids = ?filter_label_ids,
+            labels = %opts.only_labels.join(", "),
+            ids = %filter_label_ids.join(", "),
             unresolved = summary.problems.len(),
             "restricting enumeration server-side",
         );
@@ -299,13 +299,13 @@ async fn run_sync(
     info!(
         event = "gmail_plan",
         account = %account_id,
-        stored_cursor = stored.as_deref().unwrap_or("<none>"),
+        stored_cursor = stored.as_deref(),
         full_resync = cfg.full_resync,
-        label_change = ?label_change,
+        label_change = label_change.as_str(),
         history = plan.history.as_ref().map(|c| c.added.len() + c.relabeled.len() + c.deleted.len()),
-        walk = ?plan.walk.as_deref().map(describe_walk),
-        "{}",
-        plan.describe(),
+        walk = plan.walk.as_deref().map(describe_walk),
+        plan = %plan.describe(),
+        "planned the walk"
     );
 
     // ── fetch ───────────────────────────────────────────────────────
@@ -444,7 +444,7 @@ async fn run_sync(
         messages_failed = summary.messages_failed,
         quota_units_spent = summary.quota_units_spent,
         full_sync = summary.full_sync,
-        backfilled_labels = ?summary.backfilled_labels,
+        backfilled_labels = %summary.backfilled_labels.join(", "),
         "gmail sync finished",
     );
     Ok(summary)
@@ -746,7 +746,7 @@ async fn fetch_ids(
             Err(e) if is_not_found(&e) => {
                 // Deleted between the list and the get: normal on a busy
                 // mailbox, and nothing to come back for.
-                info!(event = "gmail_message_deleted_before_fetch", id = %id);
+                info!(event = "gmail_message_deleted_before_fetch", id = %id, "a listed message was gone before it could be fetched");
                 continue;
             }
             // The retry loop backed off for as long as the run's give-up
@@ -760,7 +760,7 @@ async fn fetch_ids(
             Err(e) => {
                 // Not a deletion, so this message still exists and we
                 // still want it. Counted, and the count holds the cursor.
-                warn!(event = "gmail_message_failed", id = %id, error = %e);
+                warn!(event = "gmail_message_failed", id = %id, error = %e, "a message could not be fetched");
                 summary.messages_failed += 1;
                 continue;
             }
@@ -771,7 +771,7 @@ async fn fetch_ids(
         let ingested = match ingest::ingest(state.account_id, state.index, &msg) {
             Ok(i) => i,
             Err(e) => {
-                warn!(event = "gmail_ingest_failed", id = %msg.id, error = %e);
+                warn!(event = "gmail_ingest_failed", id = %msg.id, error = %e, "a message could not be stored");
                 continue;
             }
         };

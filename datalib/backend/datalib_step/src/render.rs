@@ -79,7 +79,7 @@ pub async fn run(
     tracing::info!(
         docs = report.docs,
         removed = report.removed,
-        "render: docs (re)rendered"
+        "docs (re)rendered"
     );
     progress.metric("documents_removed", &[], report.removed as i64);
     if report.removed > 0 {
@@ -110,7 +110,7 @@ pub async fn run(
             source = %name,
             errors,
             warnings,
-            "render: rows this source could not fully project \
+            "rows this source could not fully project \
              (see `problems` in its indexed_markdown.doltlite_db)"
         );
         progress.set_message(&format!(
@@ -211,7 +211,7 @@ pub fn render_source(
     );
     if let RenderPlan::Everything(why) = &plan {
         progress.set_message(&format!("{why}; re-rendering this source in full"));
-        tracing::info!(source = %name, why, "render: rendering every document");
+        tracing::info!(source = %name, why, "rendering every document");
     }
     let render_everything = matches!(plan, RenderPlan::Everything(_));
     let raw_cursor: Option<String> = match plan {
@@ -221,7 +221,7 @@ pub fn render_source(
     tracing::info!(
         source = %name,
         cursor = raw_cursor.as_deref().unwrap_or("none"),
-        "render: starting"
+        "starting the render"
     );
     let (raw_pin, stale_buckets) =
         reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
@@ -390,7 +390,7 @@ pub fn render_source(
         tracing::info!(
             source = %name,
             buckets = buckets.len(),
-            "render: buckets declared with their inputs"
+            "buckets declared with their inputs"
         );
     }
 
@@ -472,7 +472,7 @@ pub(crate) fn seal_run(
                 sealed.removed += 1;
                 tracing::info!(
                     document = %uuid,
-                    "render: this source no longer produces this document; dropped it",
+                    "this source no longer produces this document; dropped it",
                 );
             }
         }
@@ -492,7 +492,7 @@ pub(crate) fn seal_run(
             tracing::info!(
                 document = %uuid,
                 bucket,
-                "render: this bucket no longer produces this document; dropped it",
+                "this bucket no longer produces this document; dropped it",
             );
         }
         // The report is skipped whole when no count moved: its byte
@@ -506,7 +506,7 @@ pub(crate) fn seal_run(
             let same_counts =
                 crate::introspect::counts_unchanged(&store.latest_items()?, &m.samples);
             if same_version && same_counts {
-                tracing::debug!("render: storage unchanged since the last run");
+                tracing::debug!("storage unchanged since the last run");
             } else {
                 m.write_report().context("write the storage report")?;
                 store
@@ -569,7 +569,7 @@ fn reverse_lookup(
                         table,
                         from,
                         error = %format!("{e:#}"),
-                        "render: reverse lookup could not diff this table; leaving the scan to the provider"
+                        "reverse lookup could not diff this table; leaving the scan to the provider"
                     );
                     return Ok((Some(to), None));
                 }
@@ -579,7 +579,7 @@ fn reverse_lookup(
         tracing::info!(
             changed_rows = changed.len(),
             stale_buckets = stale.len(),
-            "render: reverse lookup"
+            "reverse lookup from the changed rows to the buckets"
         );
         Ok((Some(to), Some(stale)))
     })();
@@ -716,7 +716,7 @@ fn one_consumed_commit(source: &str, consumed: &[Option<String>]) -> Option<Stri
                 source,
                 first,
                 other,
-                "render: processors pinned different raw commits; the cursor takes the first"
+                "processors pinned different raw commits; the cursor takes the first"
             );
         }
     }
@@ -736,7 +736,7 @@ pub(crate) fn tree_is_from_an_older_renderer(
     tracing::warn!(
         ?on_disk,
         ?current,
-        "render: rendered tree came from a different renderer version; \
+        "rendered tree came from a different renderer version; \
          rendering every document again and sweeping what the walk does not produce"
     );
     true

@@ -11,10 +11,11 @@ use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
+use super::ids;
 use super::parse::{parent_block_of, ParsedNotion};
-use super::render::{notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel};
-
-pub const RENDER_VERSION: u32 = 1;
+use super::render::{
+    notion_thread_url, notion_url, page_qmd_path_rel, thread_qmd_path_rel, RENDER_VERSION,
+};
 
 fn page_title_from(page: &Value) -> String {
     let props = page.get("properties");
@@ -126,8 +127,9 @@ fn page_row(
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let id = ids::page(stanza, &pid, created_at.as_deref());
     GridRow::builder()
-        .uuid(pid.clone())
+        .uuid(id.uuid.clone())
         .provider(Provider::Notion)
         .kind("Notion Page")
         .source_label("Notion")
@@ -136,13 +138,15 @@ fn page_row(
         .modified_at(modified_at)
         .author(resolved_author(author_id, users))
         .conversation_name(Some(title.to_string()))
-        .conversation_uuid(pid.clone())
-        .entire_chat(format!("/notion/page/{pid}"))
+        .conversation_uuid(id.uuid.clone())
+        .entire_chat(format!("/chat/{}", id.uuid))
         .text(title.to_string())
         .qmd_path(Some(page_qmd_path_rel(stanza, &pid)))
         .source_url(Some(notion_url(&pid)))
-        .notion_page_uuid(Some(pid.clone()))
-        .markdown_uuid(Some(pid.clone()))
+        .upstream_id(Some(id.natural_key))
+        .upstream_entity_kind(Some(id.entity_kind.to_string()))
+        .notion_page_uuid(Some(id.uuid.clone()))
+        .markdown_uuid(Some(id.uuid))
         .build_or_record(stanza, &pid, RENDER_VERSION, problems)
 }
 
@@ -162,6 +166,8 @@ fn thread_rows(
     }
     let thread_qmd = thread_qmd_path_rel(stanza, page_id, disc_id);
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
+    let thread = ids::discussion(stanza, disc_id);
+    let page_uuid = ids::page(stanza, page_id, None).uuid;
     let mut rows: Vec<GridRow> = Vec::new();
     let first = &members_sorted[0];
     let mut aggregated_text: String = members_sorted
@@ -178,7 +184,7 @@ fn thread_rows(
     }
     rows.extend(
         GridRow::builder()
-            .uuid(disc_id)
+            .uuid(thread.uuid.clone())
             .provider(Provider::Notion)
             .kind("Notion Comment Thread")
             .source_label("Notion")
@@ -204,28 +210,32 @@ fn thread_rows(
             )
             .author(comment_author(first))
             .conversation_name(Some(page_title.to_string()))
-            .conversation_uuid(disc_id)
-            .entire_chat(format!("/notion/thread/{disc_id}"))
+            .conversation_uuid(thread.uuid.clone())
+            .entire_chat(format!("/chat/{}", thread.uuid))
             .text(aggregated_text)
             .qmd_path(Some(thread_qmd.clone()))
             .source_url(Some(thread_url.clone()))
-            .notion_page_uuid(Some(page_id.to_string()))
+            .upstream_id(Some(thread.natural_key.clone()))
+            .upstream_entity_kind(Some(thread.entity_kind.to_string()))
+            .notion_page_uuid(Some(page_uuid.clone()))
             .notion_block_uuid(parent_block_id.map(String::from))
-            .markdown_uuid(Some(disc_id.to_string()))
+            .markdown_uuid(Some(thread.uuid.clone()))
             .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
     );
     for (idx, c) in members_sorted.iter().enumerate() {
+        let created_time = c.get("created_time").and_then(|v| v.as_str());
+        let id = ids::comment(
+            stanza,
+            c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            created_time,
+        );
         rows.extend(
             GridRow::builder()
-                .uuid(c.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+                .uuid(id.uuid)
                 .provider(Provider::Notion)
                 .kind("Notion Comment")
                 .source_label("Notion")
-                .created_at(
-                    c.get("created_time")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                )
+                .created_at(created_time.map(str::to_string))
                 .modified_at(
                     c.get("last_edited_time")
                         .and_then(|v| v.as_str())
@@ -234,15 +244,17 @@ fn thread_rows(
                 )
                 .author(comment_author(c))
                 .conversation_name(Some(page_title.to_string()))
-                .conversation_uuid(disc_id)
+                .conversation_uuid(thread.uuid.clone())
                 .message_index(Some(idx as i64))
-                .entire_chat(format!("/notion/thread/{disc_id}"))
+                .entire_chat(format!("/chat/{}", thread.uuid))
                 .text(comment_text_plain(c))
                 .qmd_path(Some(thread_qmd.clone()))
                 .source_url(Some(thread_url.clone()))
-                .notion_page_uuid(Some(page_id.to_string()))
+                .upstream_id(Some(id.natural_key))
+                .upstream_entity_kind(Some(id.entity_kind.to_string()))
+                .notion_page_uuid(Some(page_uuid.clone()))
                 .notion_block_uuid(parent_block_id.map(String::from))
-                .markdown_uuid(Some(disc_id.to_string()))
+                .markdown_uuid(Some(thread.uuid.clone()))
                 .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
         );
     }
@@ -258,7 +270,10 @@ pub struct DocumentRows {
 }
 
 pub struct PageDocument {
+    /// Notion's page id: the bucket key and the path segment.
     pub page_uuid: String,
+    /// The id datalib minted for it: the document's `markdown_uuid`.
+    pub markdown_uuid: String,
     pub page_title: String,
     /// Every raw row this document read; render adds its own reads and
     /// declares the bucket with the total.
@@ -270,7 +285,10 @@ pub struct PageDocument {
 }
 
 pub struct ThreadDocument {
+    /// Notion's discussion id: the bucket key and the path segment.
     pub discussion_uuid: String,
+    /// The id datalib minted for it: the document's `markdown_uuid`.
+    pub markdown_uuid: String,
     pub page_uuid: String,
     pub page_title: String,
     /// The block this thread hangs off, when it hangs off one. Render
@@ -330,7 +348,9 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         if let Some(r) = page_row(page, &title, stanza, users, &mut problems) {
             rows.push(r);
         }
+        let created_time = page.get("created_time").and_then(|v| v.as_str());
         pages.push(PageDocument {
+            markdown_uuid: ids::page(stanza, &pid, created_time).uuid,
             page_uuid: pid,
             page_title: title,
             inputs,
@@ -387,6 +407,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             &mut problems,
         );
         threads.push(ThreadDocument {
+            markdown_uuid: ids::discussion(stanza, disc_id).uuid,
             discussion_uuid: disc_id.clone(),
             page_uuid: page_id,
             page_title: title,
@@ -402,6 +423,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         pages = pages.len(),
         threads = threads.len(),
         elapsed_ms = t0.elapsed().as_millis() as u64,
+        "gathered the documents to render"
     );
     Ok(DocumentRows { pages, threads })
 }
@@ -458,8 +480,23 @@ mod tests {
         assert_eq!(t.page_title, "Standup Notes");
         // thread row + one row per comment, oldest first
         assert_eq!(t.rows.len(), 3);
-        assert_eq!(t.rows[1].uuid, "c1");
-        assert_eq!(t.rows[2].uuid, "c2");
+        assert_eq!(t.rows[0].uuid, t.markdown_uuid);
+        assert_eq!(t.rows[1].upstream_id.as_deref(), Some("c1"));
+        assert_eq!(t.rows[2].upstream_id.as_deref(), Some("c2"));
+        // A comment's id carries its `created_time`, so the two sort in
+        // time order as text; the thread's carries none.
+        assert!(t.rows[1].uuid < t.rows[2].uuid);
+        assert_eq!(datalib_id::stamp_of(&t.rows[0].uuid), None);
+        assert_eq!(
+            datalib_id::stamp_of(&t.rows[1].uuid),
+            datalib_time::record_stamp_ms("2026-01-01T00:00:00.000Z")
+        );
+        // The page's document row and its thread's rows agree on the
+        // page's datalib id.
+        assert_eq!(
+            t.rows[1].notion_page_uuid.as_deref(),
+            Some(docs.pages[0].markdown_uuid.as_str())
+        );
     }
 
     /// A page object carries only `created_by.id`, so a page author

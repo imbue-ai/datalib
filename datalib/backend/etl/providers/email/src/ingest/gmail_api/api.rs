@@ -144,7 +144,7 @@ impl QuotaThrottle {
              for the rest of the run (configured {}, floor {}), and the bucket is empty",
             self.units_per_minute,
             self.configured_units_per_minute,
-            floor.round() as u32,
+            floor.round() as u32
         );
     }
 
@@ -244,7 +244,12 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         let body = resp.body_str();
         // Scope problems and expired tokens both land here and have very
         // different fixes, so quote Google rather than guessing.
-        warn!(event = "gmail_auth_error", status = resp.status, url);
+        warn!(
+            event = "gmail_auth_error",
+            status = resp.status,
+            url,
+            "the Gmail API refused the credential"
+        );
         return anyhow!(
             "Gmail API {url} → HTTP {}: {body}\n\
              If this says ACCESS_TOKEN_SCOPE_INSUFFICIENT, re-run \

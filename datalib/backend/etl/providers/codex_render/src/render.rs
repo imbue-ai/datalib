@@ -19,6 +19,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_id::Identity;
 use serde_json::Value;
 
 use datalib_etl_codex::ingest::{db_path_for, RawDb};
@@ -30,7 +31,7 @@ pub const RENDER_VERSION: u32 = 1;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Codex,
         source_label: "Codex".to_string(),
         chat_kind: "Codex Thread".to_string(),
@@ -83,7 +84,7 @@ pub fn render(
     // No early return on an empty store: a run that deleted every
     // thread still has to declare their buckets empty so the documents
     // go.
-    let all_chats = build_chats(&transcripts, &records, max_tool_result_bytes);
+    let all_chats = build_chats(source_id, &transcripts, &records, max_tool_result_bytes);
 
     let mut outcome = RenderOutcome {
         new_head: scan.new_head.clone(),
@@ -104,7 +105,7 @@ pub fn render(
         .render
         .iter()
         .flatten()
-        .map(|tid| ids::thread(tid).uuid)
+        .map(|tid| ids::thread(source_id, tid).uuid)
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -198,6 +199,7 @@ async fn scan_diff(
 }
 
 fn build_chats(
+    source_id: &str,
     transcripts: &[(String, Value)],
     records: &[RecordRow],
     max_tool_result_bytes: usize,
@@ -217,6 +219,7 @@ fn build_chats(
         rows.sort_by_key(|r| r.2);
         let parent_title = str_of(meta, "parent_thread_id").and_then(|p| titles.get(p).copied());
         chats.push(build_chat(
+            source_id,
             tid,
             meta,
             &rows,
@@ -228,6 +231,7 @@ fn build_chats(
 }
 
 fn build_chat(
+    source_id: &str,
     tid: &str,
     meta: &Value,
     rows: &[&RecordRow],
@@ -288,6 +292,7 @@ fn build_chat(
             }
             Some("response_item") => {
                 if let Some(it) = response_item(
+                    source_id,
                     tid,
                     *line_no,
                     p,
@@ -301,7 +306,9 @@ fn build_chat(
                 }
             }
             Some("compacted") => {
-                if let Some(it) = compacted_item(tid, *line_no, p, ms, max_tool_result_bytes) {
+                if let Some(it) =
+                    compacted_item(source_id, tid, *line_no, p, ms, max_tool_result_bytes)
+                {
                     items.push(it);
                 }
             }
@@ -316,7 +323,7 @@ fn build_chat(
         (true, None) => format!("{own_title} — sub-agent"),
         (false, _) => own_title.clone(),
     };
-    let id = ids::thread(tid);
+    let id = ids::thread(source_id, tid);
     NormalizedChat {
         path_prefix: None,
         id: tid.to_string(),
@@ -328,13 +335,16 @@ fn build_chat(
         project: str_of(meta, "cwd").map(project_of),
         external_id: Some(id.natural_key.clone()),
         source_url: None,
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: id.uuid,
+            // One document per thread, keyed on the thread's own id and
+            // kind, so the row's backpointer is the chat's.
+            source_ref: None,
             items,
         }],
         inputs: inputs.declared(),
@@ -343,6 +353,7 @@ fn build_chat(
 
 #[allow(clippy::too_many_arguments)]
 fn response_item(
+    source_id: &str,
     tid: &str,
     line_no: i64,
     p: &Value,
@@ -378,7 +389,7 @@ fn response_item(
                 text = clamp(&text, max_bytes);
             }
             Some(item(
-                ids::record(tid, line_no),
+                ids::record(source_id, tid, line_no, ms),
                 author_id,
                 author.to_string(),
                 ms,
@@ -394,7 +405,7 @@ fn response_item(
             }
             let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
             Some(item(
-                ids::record(tid, line_no),
+                ids::record(source_id, tid, line_no, ms),
                 "thinking",
                 model.to_string(),
                 ms,
@@ -408,7 +419,7 @@ fn response_item(
             let body = str_of(p, "arguments")
                 .map(|a| fenced_json_or_text(a, max_bytes))
                 .unwrap_or_default();
-            Some(tool_call(tid, line_no, p, ms, model, name, body))
+            Some(tool_call(source_id, tid, line_no, p, ms, model, name, body))
         }
         "local_shell_call" => {
             let command = p
@@ -423,6 +434,7 @@ fn response_item(
                 })
                 .unwrap_or_default();
             Some(tool_call(
+                source_id,
                 tid,
                 line_no,
                 p,
@@ -437,7 +449,7 @@ fn response_item(
             let body = str_of(p, "input")
                 .map(|i| fenced(&clamp(i, max_bytes)))
                 .unwrap_or_default();
-            Some(tool_call(tid, line_no, p, ms, model, name, body))
+            Some(tool_call(source_id, tid, line_no, p, ms, model, name, body))
         }
         "web_search_call" => {
             let body = p
@@ -445,7 +457,16 @@ fn response_item(
                 .filter(|a| !a.is_null())
                 .map(|a| fenced_json_or_text(&a.to_string(), max_bytes))
                 .unwrap_or_default();
-            Some(tool_call(tid, line_no, p, ms, model, "web_search", body))
+            Some(tool_call(
+                source_id,
+                tid,
+                line_no,
+                p,
+                ms,
+                model,
+                "web_search",
+                body,
+            ))
         }
         "function_call_output" | "custom_tool_call_output" => {
             let call_id = str_of(p, "call_id").unwrap_or("");
@@ -461,9 +482,9 @@ fn response_item(
                 format!("Tool result: {name}")
             };
             let id = if call_id.is_empty() {
-                ids::record(tid, line_no)
+                ids::record(source_id, tid, line_no, ms)
             } else {
-                ids::tool_result(tid, call_id)
+                ids::tool_result(source_id, tid, call_id, ms)
             };
             Some(item(
                 id,
@@ -481,6 +502,7 @@ fn response_item(
 
 #[allow(clippy::too_many_arguments)]
 fn tool_call(
+    source_id: &str,
     tid: &str,
     line_no: i64,
     p: &Value,
@@ -490,8 +512,8 @@ fn tool_call(
     body: String,
 ) -> NormalizedChatItem {
     let id = match str_of(p, "call_id") {
-        Some(c) => ids::tool_use(tid, c),
-        None => ids::record(tid, line_no),
+        Some(c) => ids::tool_use(source_id, tid, c, ms),
+        None => ids::record(source_id, tid, line_no, ms),
     };
     item(
         id,
@@ -507,6 +529,7 @@ fn tool_call(
 /// Codex folded the history into a summary; the summary is what the
 /// model saw from then on.
 fn compacted_item(
+    source_id: &str,
     tid: &str,
     line_no: i64,
     p: &Value,
@@ -515,7 +538,7 @@ fn compacted_item(
 ) -> Option<NormalizedChatItem> {
     let message = str_of(p, "message").filter(|m| !m.trim().is_empty())?;
     let mut it = item(
-        ids::record(tid, line_no),
+        ids::record(source_id, tid, line_no, ms),
         "system",
         "Codex".to_string(),
         ms,
@@ -608,7 +631,7 @@ fn output_text(output: Option<&Value>) -> (String, bool) {
 }
 
 fn item(
-    id: ids::Identity,
+    id: Identity,
     author_id: &str,
     author_display: String,
     date_ms: Option<i64>,
@@ -777,7 +800,7 @@ mod tests {
             rec("t1", 13, "2364-04-11T10:00:07.000Z", "event_msg", json!({"type": "agent_message", "message": "Dish realigned."})),
             rec("t1", 14, "2364-04-11T10:00:07.000Z", "event_msg", json!({"type": "task_complete", "turn_id": "u1"})),
         ];
-        let chats = build_chats(&transcripts, &records, 1024);
+        let chats = build_chats("codex", &transcripts, &records, 1024);
         assert_eq!(chats.len(), 1);
         let c = &chats[0];
         assert_eq!(c.display, "Realign the deflector dish");
@@ -862,7 +885,7 @@ mod tests {
                 user("<environment_context>\n<cwd>/x</cwd>\n</environment_context>"),
             ),
         ];
-        let items = build_chats(&transcripts, &records, 1024)
+        let items = build_chats("codex", &transcripts, &records, 1024)
             .remove(0)
             .buckets
             .remove(0)
@@ -882,7 +905,7 @@ mod tests {
             rec("t1", 1, t, "response_item", user("Realign")),
             rec("t2", 1, t, "response_item", user("Scan the logs")),
         ];
-        let chats = build_chats(&transcripts, &records, 1024);
+        let chats = build_chats("codex", &transcripts, &records, 1024);
         assert_eq!(chats.len(), 2);
         let agent = chats.iter().find(|c| c.id == "t2").unwrap();
         assert_eq!(
@@ -928,7 +951,7 @@ mod tests {
                 json!({"type": "reasoning", "summary": [], "encrypted_content": "xxx"}),
             ),
         ];
-        let items = build_chats(&transcripts, &records, 1024)
+        let items = build_chats("codex", &transcripts, &records, 1024)
             .remove(0)
             .buckets
             .remove(0)

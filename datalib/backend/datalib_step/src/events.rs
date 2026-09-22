@@ -150,7 +150,7 @@ impl ProgressSink for EmitterSink {
             msg: format!("finish: {msg}"),
             ts: None,
             stream: None,
-            target: None,
+            target: Some("datalib_step::progress".into()),
             thread: None,
             fields: None,
         });

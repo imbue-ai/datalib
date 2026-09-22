@@ -362,7 +362,7 @@ async fn scan_diff(
     // The driver names buckets by the chat uuid; the load wants chat ids.
     let by_uuid: HashMap<String, &str> = chats
         .keys()
-        .map(|id| (super::signal_chat_uuid(source_id, id), id.as_str()))
+        .map(|id| (super::ids::chat(source_id, id).uuid, id.as_str()))
         .collect();
     let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
         by_uuid.get(key).map(|id| id.to_string())

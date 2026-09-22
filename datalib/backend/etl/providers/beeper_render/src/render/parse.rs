@@ -117,15 +117,20 @@ pub struct ParsedBeeper {
 
 // Entry point
 
-pub fn parse_raw_dir(input: &Path) -> Result<ParsedBeeper> {
-    parse(input, Period::Month, RawRange::cold())
+pub fn parse_raw_dir(input: &Path, source_id: &str) -> Result<ParsedBeeper> {
+    parse(input, source_id, Period::Month, RawRange::cold())
 }
 
 /// Open the doltlite raw store at `<input>/entities.doltlite_db` (or
 /// the path itself if it's already that file) and produce one
 /// [`DocBucket`] per `(room, period)` pair with events ready for
 /// rendering.
-pub fn parse(input: &Path, period: Period, range: RawRange<'_>) -> Result<ParsedBeeper> {
+pub fn parse(
+    input: &Path,
+    source_id: &str,
+    period: Period,
+    range: RawRange<'_>,
+) -> Result<ParsedBeeper> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         // Empty mirror is a valid configuration (download step
@@ -140,11 +145,16 @@ pub fn parse(input: &Path, period: Period, range: RawRange<'_>) -> Result<Parsed
     // is already inside `#[tokio::main]`.
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, period, range).await })
+            .block_on(async move { parse_async(&db_path, source_id, period, range).await })
     })
 }
 
-async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Result<ParsedBeeper> {
+async fn parse_async(
+    db_path: &Path,
+    source_id: &str,
+    period: Period,
+    range: RawRange<'_>,
+) -> Result<ParsedBeeper> {
     // Pinned at open — at the driver's commit, else HEAD — with the views
     // installed before anything reads. No commit means nothing has been
     // committed here to render: emptiness, not a reason to read the
@@ -190,7 +200,12 @@ async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Res
     // ── which rooms to load ────────────────────────────────────────
     // A new or changed event, room or attachment names its room; a
     // changed row a room already declared reaches it through the
-    // driver. The bucket key is the room uuid itself.
+    // driver, which names buckets by the chat's entity id — mapped
+    // back to the room's raw key here.
+    let room_by_bucket: HashMap<String, &str> = rooms
+        .keys()
+        .map(|room| (super::ids::room(source_id, room).uuid, room.as_str()))
+        .collect();
     let forward = datalib_etl::doltlite_raw::scan_buckets(
         &pool,
         range.cursor,
@@ -217,7 +232,9 @@ async fn parse_async(db_path: &Path, period: Period, range: RawRange<'_>) -> Res
         },
     )
     .await?;
-    let narrowed = range.narrow_by(forward.render.as_ref(), |key| Some(key.to_string()));
+    let narrowed = range.narrow_by(forward.render.as_ref(), |key| {
+        room_by_bucket.get(key).map(|r| r.to_string())
+    });
     let scan = ScanResult {
         render: narrowed.render,
         gone: narrowed.gone,

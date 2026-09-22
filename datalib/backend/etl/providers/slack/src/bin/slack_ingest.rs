@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
     let span = info_span!(
         "slack_ingest",
         out = %args.out.display(),
-        channels = ?opts.channels,
+        channels = opts.channels.as_deref().map(|c| c.join(",")),
         media = opts.media,
         dms = opts.dms,
     );
@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
         media_downloaded = summary.media.get("downloaded").copied().unwrap_or(0),
         media_skipped = summary.media.get("skipped").copied().unwrap_or(0),
         media_errors = summary.media.get("error").copied().unwrap_or(0),
+        "the slack download is done"
     );
     Ok(())
 }

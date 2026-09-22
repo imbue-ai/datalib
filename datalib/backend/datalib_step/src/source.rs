@@ -130,7 +130,7 @@ impl StepEnv {
                 tracing::warn!(
                     step = %self.step,
                     raw = %rel,
-                    "render: this step declares no inputs; reading the group's own ingest tree"
+                    "this step declares no inputs; reading the group's own ingest tree"
                 );
                 rel
             }

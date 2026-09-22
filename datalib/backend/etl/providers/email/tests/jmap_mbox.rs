@@ -11,8 +11,13 @@ use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
+use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::parse;
-use datalib_etl_email_render::render::render::{render_all, thread_uuid, OutlinkFormat};
+use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
+
+fn thread_uuid(account_id: &str, thread_id: &str) -> String {
+    ids::thread("star-trek-mbox", account_id, thread_id).uuid
+}
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 
@@ -206,7 +211,13 @@ async fn mbox_only_labels_filters_extraction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(&db_path_for(&db_path), RawRange::cold(), false).expect("parse cold start");
+    let parsed = parse(
+        &db_path_for(&db_path),
+        "star-trek-mbox",
+        RawRange::cold(),
+        false,
+    )
+    .expect("parse cold start");
 
     // "Sent" is a flat mbox label, so its full path equals its name.
     let sent_id = parsed
@@ -260,7 +271,13 @@ async fn render_only_labels_filters_to_thread_subset() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(&db_path_for(&db_path), RawRange::cold(), false).expect("parse cold start");
+    let parsed = parse(
+        &db_path_for(&db_path),
+        "star-trek-mbox",
+        RawRange::cold(),
+        false,
+    )
+    .expect("parse cold start");
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();

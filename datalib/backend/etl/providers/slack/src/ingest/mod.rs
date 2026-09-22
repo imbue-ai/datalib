@@ -83,6 +83,7 @@ async fn fetch_self(
         event = "slack_fetch_self_done",
         team_id = %team_id,
         elapsed_ms = t0.elapsed().as_millis() as u64,
+        "fetched the workspace identity"
     );
     Ok((team_id, self_user_id))
 }
@@ -99,7 +100,7 @@ pub(crate) fn conversation_types(dms: bool) -> &'static str {
     }
 }
 
-#[instrument(skip(db, progress))]
+#[instrument(skip(db, progress, latchkey))]
 async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
@@ -121,6 +122,7 @@ async fn fetch_channels(
                 reason = "ttl",
                 age_s = age_s,
                 ttl_s = MANIFEST_TTL.num_seconds(),
+                "the channel listing is fresh enough; not re-listing"
             );
             progress.set_message(&format!(
                 "conversations.list cached ({age_s}s old, TTL {}s)",
@@ -169,6 +171,7 @@ async fn fetch_channels(
         pages = pages,
         channels = total,
         elapsed_ms = t0.elapsed().as_millis() as u64,
+        "listed the channels"
     );
     db.record_manifest_sweep(&sweep_key).await?;
     db.channels_for_fetch(members_only, include_archived, dms)
@@ -190,6 +193,7 @@ async fn fetch_users(
                 reason = "ttl",
                 age_s = age_s,
                 ttl_s = MANIFEST_TTL.num_seconds(),
+                "the user listing is fresh enough; not re-listing"
             );
             progress.set_message(&format!(
                 "users.list cached ({age_s}s old, TTL {}s)",
@@ -230,6 +234,7 @@ async fn fetch_users(
         pages = pages,
         users = count,
         elapsed_ms = elapsed_ms,
+        "listed the users"
     );
     db.record_manifest_sweep(sweep_key).await?;
     Ok(count)
@@ -489,7 +494,7 @@ impl Adjustments {
             out.force_full_walk = true;
             info!(
                 event = "slack_blob_limit_relaxed",
-                limit = ?inputs.blob_size_limit_bytes,
+                limit = inputs.blob_size_limit_bytes,
                 "re-walking history so previously-oversize attachments get fetched",
             );
         }
@@ -551,6 +556,7 @@ async fn export_channel(
         resumed = channel_latest_ts.is_some() && !adjust.force_full_walk,
         force_full_walk = adjust.force_full_walk,
         backfill_below_oldest = adjust.backfill_below_oldest,
+        "planned one channel's walk"
     );
     list_history(
         db,
@@ -639,6 +645,7 @@ async fn export_channel(
                     channel = %channel_id,
                     from = since_ts,
                     to = oldest,
+                    "backfilling below the oldest message stored"
                 );
                 list_history(
                     db,
@@ -719,7 +726,7 @@ async fn export_channel(
     // End-of-channel flush: CAS put_many + slack_attachments bulk
     // upsert. Mirrors chatgpt/claude's per-conv flush pattern.
     if let Err(e) = api::flush_channel_attachments(db, &attach).await {
-        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e);
+        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e, "a channel's attachments could not be written");
     }
 
     Ok(())
@@ -796,6 +803,7 @@ async fn list_history(
             inclusive = params.get("inclusive").map(String::as_str).unwrap_or("-"),
             cursor = params.get("cursor").map(String::as_str).unwrap_or("-"),
             returned = messages.len(),
+            "fetched one page of history"
         );
 
         let rows: Vec<MessageInput> = messages
@@ -904,7 +912,7 @@ async fn paginate_replies(
             .unwrap_or_default();
         for m in &msgs {
             if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
-                seen_ids.insert(schema_raw::slack_message_uuid(team_id, channel_id, ts));
+                seen_ids.insert(schema_raw::slack_message_key(team_id, channel_id, ts));
             }
         }
 
@@ -963,7 +971,7 @@ async fn paginate_replies(
     if drained == Drained::Yes {
         totals.pruned += db
             .prune_thread_replies(
-                &schema_raw::slack_thread_uuid(team_id, channel_id, thread_ts),
+                &schema_raw::slack_thread_key(team_id, channel_id, thread_ts),
                 &seen_ids,
             )
             .await?;
@@ -1084,9 +1092,7 @@ pub struct FetchSummary {
     pub media: BTreeMap<String, usize>,
 }
 
-#[instrument(skip_all, fields(
-    db = %opts.db.pool().connect_options().get_filename().display()
-))]
+#[instrument(skip_all)]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
@@ -1131,6 +1137,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         threads_with_replies = latest_reply_map.len(),
         attachments_with_bytes = blake3_by_file.len(),
         elapsed_ms = t_scan.elapsed().as_millis() as u64,
+        "read what the store already has, to resume from"
     );
 
     let mut grand = FetchSummary {
@@ -1200,7 +1207,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // conversation has no messages".
             warn!(
                 event = "slack_dm_conversations_unmatched",
-                entries = ?plan.unmatched_dms,
+                entries = %plan.unmatched_dms.join(", "),
                 "no direct message matches these `dm_conversations` entries — \
                  they will not be mirrored",
             );
@@ -1220,6 +1227,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             dms = opts.dms,
             dm_targets = plan.dm_targets,
             media = opts.media,
+            "planned the export"
         );
         let targets = plan.targets;
 
@@ -1229,7 +1237,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // makes every `wrote` a seal), so end here rather than start a
             // channel whose first request the transport would refuse.
             if opts.control.stop.requested() {
-                info!(event = "slack_interrupted", next_channel = %name);
+                info!(event = "slack_interrupted", next_channel = %name, "told to stop; leaving the rest for the next run");
                 break;
             }
             opts.progress.set_message(name);
@@ -1285,7 +1293,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Err(e) => {
                     channel_failures += 1;
-                    warn!(event = "slack_channel_failed", channel = %name, error = %e);
+                    warn!(event = "slack_channel_failed", channel = %name, error = %e, "a channel could not be walked");
                 }
             }
         }
@@ -1316,6 +1324,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         event = "slack_export_complete",
         messages = grand.messages,
         replies = grand.replies,
+        "the export is done"
     );
     Ok(grand)
 }

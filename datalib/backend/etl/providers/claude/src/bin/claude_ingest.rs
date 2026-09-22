@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
         errors = summary.errors,
         requests = summary.requests,
         network_seconds = summary.network_seconds,
+        "the claude download is done"
     );
     Ok(())
 }

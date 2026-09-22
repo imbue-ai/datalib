@@ -128,122 +128,65 @@ rust_test(
     ],
 )
 
-# End-to-end test for POST /api/feedback against a doltlite file in a
-# temp dir. No subprocess, no port — runs anywhere.
+# The hermetic endpoint tests, one binary: each `tests/http_tests/*.rs`
+# is one endpoint or one contract. Linking the server stack is most of
+# what a test here costs, so they share the link; a test that installs
+# the process's tracing subscriber stays its own target below.
+# `remote_media` reaches a stand-in host on loopback (issue #648), hence
+# the env that lifts the private-address guard; `worker_failure_tail`
+# runs the real runner, hence the data.
 rust_test(
-    name = "feedback_endpoint_test",
-    srcs = ["tests/feedback_endpoint.rs"],
+    name = "http_tests",
+    srcs = glob(["tests/http_tests/*.rs"]),
+    crate_root = "tests/http_tests/main.rs",
+    data = ["//datalib/backend/dag:datalib_dag_bin"],
     edition = "2021",
+    env = {
+        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE": "1",
+    },
     deps = [
         ":datalib_http",
+        "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runs:datalib_runs",
         "@datalib_crates//:axum",
+        "@datalib_crates//:futures",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
+        "@datalib_crates//:url",
     ],
 )
 
-# The first-run onboarding action: POST /api/config/init, which turns an
-# empty folder into a data library. Hermetic — no applet is started.
+# Both start real applet processes and bind loopback ports (python3 for
+# the proxy's fixture server), so neither can be sandboxed — same
+# treatment as //datalib/ui:e2e_test. Pure store semantics stay
+# hermetic as unit tests in src/frontend.rs.
 rust_test(
-    name = "config_init_test",
-    srcs = ["tests/config_init.rs"],
+    name = "applet_tests",
+    srcs = glob(["tests/applet_tests/*.rs"]),
+    crate_root = "tests/applet_tests/main.rs",
+    data = ["//datalib/backend/applets:datalib_applet"],
     edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
+    env = {
+        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
+    },
+    tags = [
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
     ],
-)
-
-# `GET /api/dag` carries the runner's per-step run record — what
-# replaced inferring a step's status from the whole-run job queue.
-# Bytes on disk: the shape of the answer, and the freshness contract
-# behind `?refresh=1`.
-rust_test(
-    name = "pipeline_storage_test",
-    srcs = ["tests/pipeline_storage.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# `GET /api/pipeline/history`: a tree's doltlite commit log, read from
-# a store written in a temp dir. Hermetic.
-rust_test(
-    name = "pipeline_history_test",
-    srcs = ["tests/pipeline_history.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-rust_test(
-    name = "dag_run_state_test",
-    srcs = ["tests/dag_run_state.rs"],
-    edition = "2021",
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# `GET /api/manage/rows` assembles the Manage screen's tree from the
-# config, the runner's record and the job queue.
-rust_test(
-    name = "manage_rows_test",
-    srcs = ["tests/manage_rows.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/problems:datalib_problems",
-        "//datalib/backend/runs:datalib_runs",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# The run endpoints read what the runner wrote to `system/runs/runs.sqlite`.
-rust_test(
-    name = "runs_endpoints_test",
-    srcs = ["tests/runs_endpoints.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
@@ -305,27 +248,6 @@ rust_test(
     ],
 )
 
-# The worker's failure tail, against the real runner: a config the
-# runner refuses is only ever said on its stderr, and that has to land
-# in the job's error.
-rust_test(
-    name = "worker_failure_tail_test",
-    srcs = ["tests/worker_failure_tail.rs"],
-    data = ["//datalib/backend/dag:datalib_dag_bin"],
-    edition = "2021",
-    env = {
-        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
-    },
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/app_schema:app_schema",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/runs:datalib_runs",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
 # Ctrl-C against the real binary while a client holds the SSE stream
 # open: the graceful wait that would otherwise never end.
 rust_test(
@@ -339,138 +261,6 @@ rust_test(
     },
     deps = [
         "@datalib_crates//:tempfile",
-    ],
-)
-
-# Regression guard for issue #138: the token gate that fronts every
-# route (`src/auth.rs`).
-rust_test(
-    name = "auth_endpoint_test",
-    srcs = ["tests/auth_endpoint.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# CI-visible stand-in for the browser-driven CSP spec (the e2e suite is
-# excluded from the CI gate today — see FIXME(e2e) in test.yml).
-rust_test(
-    name = "dactal_csp_test",
-    srcs = ["tests/dactal_csp.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# `GET /api/remote_media` and the allow-list, against a stand-in remote
-# host on loopback (issue #648) — hence the env, which lifts the
-# private-address guard for this process. Binds a port, as
-# shutdown_test does.
-rust_test(
-    name = "remote_media_test",
-    size = "small",
-    srcs = ["tests/remote_media.rs"],
-    edition = "2021",
-    env = {
-        "DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE": "1",
-    },
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:futures",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-rust_test(
-    name = "lib_endpoint_test",
-    srcs = ["tests/lib_endpoint.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# Starts real applet processes and binds loopback ports, so it cannot
-# be sandboxed — same treatment as //datalib/ui:e2e_test. Pure store
-# semantics stay hermetic as unit tests in src/frontend.rs.
-rust_test(
-    name = "applet_endpoint_test",
-    srcs = ["tests/applet_endpoint.rs"],
-    data = ["//datalib/backend/applets:datalib_applet"],
-    edition = "2021",
-    env = {
-        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
-    },
-    tags = [
-        "no-remote-exec",
-        "no-sandbox",
-        "requires-network",
-    ],
-    deps = [
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/schema:datalib_schema",
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
-)
-
-# Binds loopback ports and runs programs from the ambient environment
-# (python3 for the fixture server), so it cannot be sandboxed — same
-# treatment as //datalib/ui:e2e_test. The hermetic half of the applet
-# coverage stays in :applet_endpoint_test.
-rust_test(
-    name = "applet_proxy_test",
-    srcs = ["tests/applet_proxy.rs"],
-    data = ["//datalib/backend/applets:datalib_applet"],
-    edition = "2021",
-    env = {
-        "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
-    },
-    tags = [
-        "no-remote-exec",
-        "no-sandbox",
-        "requires-network",
-    ],
-    deps = [
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/schema:datalib_schema",
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/dag:datalib_dag",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
     ],
 )
 

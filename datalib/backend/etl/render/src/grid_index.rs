@@ -398,7 +398,7 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
 
     tracing::warn!(
         drift = %drift.join("; "),
-        "grid_index: index schema predates this build; dropping and rebuilding \
+        "index schema predates this build; dropping and rebuilding \
          every index table from the per-source render stores (no re-download, \
          no re-render)"
     );
@@ -425,110 +425,6 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
 /// Bump when the rendered `.md` layout changes for every provider at
 /// once: every document's version then differs from its store's.
 pub const RENDERER_VERSION: &str = "rust-v1";
-
-// ── Cross-source id collision detection ─────────────────────────────
-
-/// One id claimed by two different sources inside a single index run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdCollision {
-    /// Which id space collided — `"markdown_uuid"` or `"grid_rows.uuid"`.
-    pub id_kind: &'static str,
-    /// The contested id.
-    pub id: String,
-    /// Source that claimed it first (sidecars are walked in sorted order, so
-    /// "first" is stable across runs).
-    pub first_source: String,
-    /// `markdown_uuid` the first claim arrived under.
-    pub first_markdown_uuid: String,
-    /// Source that claimed it second — the one whose data would have won or
-    /// blown up.
-    pub second_source: String,
-    /// `markdown_uuid` the second claim arrived under.
-    pub second_markdown_uuid: String,
-}
-
-impl std::fmt::Display for IdCollision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "two sources claim the same {}: {} \
-             — first from source {:?} (markdown {}), then from source {:?} (markdown {}). \
-             Either the same upstream account is configured twice, or this provider's id \
-             recipe is missing a discriminator. Nothing was written; fix the config (or the \
-             recipe) and re-run.",
-            self.id_kind,
-            self.id,
-            self.first_source,
-            self.first_markdown_uuid,
-            self.second_source,
-            self.second_markdown_uuid,
-        )
-    }
-}
-
-/// Which source claimed each id during ONE index run.
-///
-/// Two sources emitting the same `markdown_uuid` or `grid_rows.uuid` is not a
-/// benign duplicate: a full overlap erases the first source's rows with no
-/// error and no row-count change, and a partial one rolls the batch back with
-/// an error naming neither source. This makes both loud, and names both sides.
-///
-/// Run-scoped on purpose — checking ids already in the database would flag a
-/// source *rename*, which is legitimate.
-#[derive(Debug, Default)]
-pub struct IdClaims {
-    /// markdown_uuid → source that claimed it.
-    markdowns: HashMap<String, String>,
-    /// grid_rows.uuid → (source, markdown_uuid) that claimed it.
-    rows: HashMap<String, (String, String)>,
-}
-
-impl IdClaims {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record one sidecar's claims, returning the first collision found.
-    /// Same-source re-claims are impossible by construction, so any repeat is
-    /// a genuine cross-source clash.
-    pub fn claim(
-        &mut self,
-        source_id: &str,
-        markdown_uuid: &str,
-        rows: &[GridRow],
-    ) -> Option<IdCollision> {
-        if let Some(prior) = self.markdowns.get(markdown_uuid) {
-            return Some(IdCollision {
-                id_kind: "markdown_uuid",
-                id: markdown_uuid.to_string(),
-                first_source: prior.clone(),
-                first_markdown_uuid: markdown_uuid.to_string(),
-                second_source: source_id.to_string(),
-                second_markdown_uuid: markdown_uuid.to_string(),
-            });
-        }
-        self.markdowns
-            .insert(markdown_uuid.to_string(), source_id.to_string());
-
-        for row in rows {
-            if let Some((prior_source, prior_md)) = self.rows.get(&row.uuid) {
-                return Some(IdCollision {
-                    id_kind: "grid_rows.uuid",
-                    id: row.uuid.clone(),
-                    first_source: prior_source.clone(),
-                    first_markdown_uuid: prior_md.clone(),
-                    second_source: source_id.to_string(),
-                    second_markdown_uuid: markdown_uuid.to_string(),
-                });
-            }
-            self.rows.insert(
-                row.uuid.clone(),
-                (source_id.to_string(), markdown_uuid.to_string()),
-            );
-        }
-        None
-    }
-}
 
 /// Map a grid_rows display `kind` to the `documents.kind` enum. Anything
 /// unlisted is a child row and shouldn't be the canonical document row, but
@@ -679,6 +575,13 @@ pub async fn build_grid_index_for(
     // copy is wholesale per source: the pinned store is the complete
     // truth about that source's problems, so there is nothing to diff.
     let mut problems: Vec<(String, Vec<ProblemRow>)> = Vec::new();
+    // One line per pass says what the pass found; the per-source lines
+    // are `debug` unless a source moved, because a streaming pass runs
+    // on every producer checkpoint and most sources moved on none.
+    let mut not_yet_rendered = 0usize;
+    let mut read_whole = 0usize;
+    let mut sources_changed = 0usize;
+    let mut documents_changed = 0usize;
     {
         let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
         for source in sources {
@@ -688,7 +591,8 @@ pub async fn build_grid_index_for(
             if crate::indexed_markdown::path_for(&rendered_root).is_file() {
                 stanzas.push((source.clone(), rendered_root));
             } else {
-                tracing::info!(source, "index: no render store yet; skipping it this run");
+                not_yet_rendered += 1;
+                tracing::debug!(source, "no render store yet; skipping it this pass");
             }
         }
         stanzas.sort();
@@ -707,8 +611,8 @@ pub async fn build_grid_index_for(
             else {
                 tracing::warn!(
                     source = %stanza,
-                    "index: this store names no commit, so there is nothing \
-                     committed to index; skipping it this run"
+                    "this render store names no commit, so there is nothing \
+                     committed to index; skipping it this pass"
                 );
                 continue;
             };
@@ -717,26 +621,41 @@ pub async fn build_grid_index_for(
             let scan = store
                 .changed_since(cursor, &pin)
                 .with_context(|| format!("diff render store for {stanza}"))?;
-            // Say which path was taken, every time: a cold start that fires
-            // silently on every run looks exactly like a fast one from the
-            // outside — it just does more work and still gets the right answer.
+            // Say which path was taken: a cold start that fires silently
+            // on every run looks exactly like a fast one from the outside
+            // — it just does more work and still gets the right answer.
             match (&scan.render, cursor) {
-                (None, None) => tracing::info!(
+                (None, None) => {
+                    read_whole += 1;
+                    tracing::info!(
+                        source = %stanza,
+                        "no cursor for this source; reading its whole render store"
+                    )
+                }
+                (None, Some(from)) => {
+                    read_whole += 1;
+                    tracing::warn!(
+                        source = %stanza,
+                        from,
+                        "cursor unusable against this render store (reset, rebuilt, or \
+                         no dolt_diff); falling back to reading it whole"
+                    )
+                }
+                (Some(changed), _) if changed.is_empty() => tracing::debug!(
                     source = %stanza,
-                    "index: no cursor for this source; reading its whole store"
-                ),
-                (None, Some(from)) => tracing::warn!(
-                    source = %stanza,
-                    from,
-                    "index: cursor unusable against this store (reset, rebuilt, or no \
-                     dolt_diff); falling back to reading it whole"
-                ),
-                (Some(changed), _) => tracing::info!(
-                    source = %stanza,
-                    changed = changed.len(),
                     scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
-                    "index: documents changed since the last index"
+                    "no documents changed since the last index"
                 ),
+                (Some(changed), _) => {
+                    sources_changed += 1;
+                    documents_changed += changed.len();
+                    tracing::info!(
+                        source = %stanza,
+                        changed = changed.len(),
+                        scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
+                        "documents changed since the last index"
+                    )
+                }
             }
             let found = store
                 .documents_matching(out_dir, scan.render.as_ref(), &pin)
@@ -782,6 +701,14 @@ pub async fn build_grid_index_for(
             docs.extend(found.into_iter().map(|d| (stanza.clone(), d)));
         }
     }
+    tracing::info!(
+        sources = sources.len(),
+        not_yet_rendered,
+        read_whole,
+        sources_changed,
+        documents_changed,
+        "read the render stores"
+    );
 
     let mut summary = GridIndexSummary {
         markdowns_total: docs.len(),
@@ -852,8 +779,6 @@ async fn load_all_batch(
     progress: &impl Fn(&str),
     summary: &mut GridIndexSummary,
 ) -> Result<()> {
-    // See [`IdClaims`]: catches two sources writing the same id.
-    let mut claims = IdClaims::new();
     for (stanza, md) in docs {
         // The stanza dir name is the source's id.
         let source_id = if stanza.is_empty() {
@@ -865,10 +790,6 @@ async fn load_all_batch(
             stanza.clone()
         };
 
-        if let Some(collision) = claims.claim(&source_id, &md.markdown_uuid, &md.rows) {
-            return Err(anyhow::anyhow!("{collision}"))
-                .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
-        }
         // Every document the diff named is applied. One whose rows come
         // out identical writes identical rows, and doltlite's tables are
         // content-addressed: the next commit carries no diff for it.
@@ -1006,7 +927,7 @@ async fn apply_markdown(
         delete_document_rows(conn, &md.markdown_uuid).await?;
         tracing::info!(
             document = %md.markdown_uuid,
-            "render: this document has no rows left; dropped it",
+            "this document has no rows left; dropped it",
         );
         return Ok(0);
     }
@@ -1317,7 +1238,7 @@ mod insert_round_trip_tests {
             git_sha: Some("0123456789abcdef".into()),
             upstream_id: Some("upstream-1701".into()),
             upstream_entity_kind: Some("conversation".into()),
-            upstream_scope: Some("claude.ai".into()),
+            upstream_account: Some("claude.ai".into()),
             notion_page_uuid: Some("notion-page-1701".into()),
             notion_block_uuid: Some("notion-block-1701".into()),
             markdown_uuid: Some("md-1701".into()),
@@ -1391,130 +1312,6 @@ mod insert_round_trip_tests {
 }
 
 #[cfg(test)]
-mod id_claim_tests {
-    //! [`IdClaims`] is the tripwire for two configured sources minting the
-    //! same id. A full overlap used to be silent (the second document erased
-    //! the first's rows and the run reported success); a partial overlap blew
-    //! the batch up with an error naming neither source. These pin both.
-    use super::*;
-    use datalib_schema::grid_rows::GridRow;
-    use datalib_schema::providers::Provider;
-
-    fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
-        GridRow {
-            uuid: uuid.into(),
-            provider: Provider::Claude.as_str().into(),
-            kind: "Chat".into(),
-            source_label: "Claude".into(),
-            created_at: None,
-            modified_at: None,
-            // The claims these tests make are about uuids, not documents.
-            is_document: false,
-            author: None,
-            account: None,
-            project: None,
-            org_uuid: None,
-            org_name: None,
-            channel: None,
-            conversation_name: None,
-            conversation_uuid: markdown_uuid.into(),
-            message_index: None,
-            entire_chat: format!("/chat/{markdown_uuid}"),
-            text: String::new(),
-            qmd_path: None,
-            source_url: None,
-            git_sha: None,
-            upstream_id: None,
-            upstream_entity_kind: None,
-            upstream_scope: None,
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(markdown_uuid.into()),
-            byte_size: None,
-            item_count: None,
-            diff_status: None,
-            diff_changed_columns: None,
-        }
-    }
-
-    #[test]
-    fn distinct_sources_with_distinct_ids_are_clean() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim(
-                "claude-api",
-                "md-a",
-                &[row("r1", "md-a"), row("r2", "md-a")]
-            )
-            .is_none());
-        assert!(claims
-            .claim("slack-work", "md-b", &[row("r3", "md-b")])
-            .is_none());
-    }
-
-    /// The silent case: `claude_api` and `claude_export` over one
-    /// account both key on Anthropic's `conversation_uuid`, so both
-    /// documents carry the same `markdown_uuid`. Whichever applied
-    /// second used to delete the other's rows and rewrite `md_path`
-    /// and `source_id` to its own — no error, no row-count delta.
-    #[test]
-    fn same_markdown_uuid_from_two_sources_is_reported() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim("claude-api", "conv-1", &[row("r1", "conv-1")])
-            .is_none());
-        let hit = claims
-            .claim("claude-export", "conv-1", &[row("r1", "conv-1")])
-            .expect("overlapping markdown_uuid must be reported");
-        assert_eq!(hit.id_kind, "markdown_uuid");
-        assert_eq!(hit.id, "conv-1");
-        assert_eq!(hit.first_source, "claude-api");
-        assert_eq!(hit.second_source, "claude-export");
-        // Naming both sides is the whole point — it is the only thing that
-        // tells an operator which two stanzas to look at.
-        let msg = hit.to_string();
-        assert!(msg.contains("claude-api"), "{msg}");
-        assert!(msg.contains("claude-export"), "{msg}");
-    }
-
-    /// The loud-but-useless case: two sources whose documents differ but
-    /// whose *rows* collide. This used to surface as a bare sqlx PRIMARY KEY
-    /// error deep inside a rolled-back batch.
-    #[test]
-    fn same_row_uuid_under_different_markdowns_is_reported() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim("papers", "md-a", &[row("doc-blake3", "md-a")])
-            .is_none());
-        let hit = claims
-            .claim("archive", "md-b", &[row("doc-blake3", "md-b")])
-            .expect("overlapping row uuid must be reported");
-        assert_eq!(hit.id_kind, "grid_rows.uuid");
-        assert_eq!(hit.id, "doc-blake3");
-        assert_eq!(hit.first_source, "papers");
-        assert_eq!(hit.first_markdown_uuid, "md-a");
-        assert_eq!(hit.second_source, "archive");
-        assert_eq!(hit.second_markdown_uuid, "md-b");
-    }
-
-    /// Changing a source's id must stay legal: the same document and row
-    /// ids arrive under a new `source_id`, one claimant per id within the
-    /// run. Run-scoping the tracker is precisely what keeps this working.
-    #[test]
-    fn a_source_that_changed_id_reclaiming_its_own_ids_is_clean() {
-        let mut first_run = IdClaims::new();
-        assert!(first_run
-            .claim("slack", "md-a", &[row("r1", "md-a")])
-            .is_none());
-
-        let mut second_run = IdClaims::new();
-        assert!(second_run
-            .claim("slack-work", "md-a", &[row("r1", "md-a")])
-            .is_none());
-    }
-}
-
-#[cfg(test)]
 // Test diagnostics; cargo test captures and prints them per-test.
 #[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
@@ -1560,7 +1357,7 @@ mod write_lock_tests {
             git_sha: None,
             upstream_id: None,
             upstream_entity_kind: None,
-            upstream_scope: None,
+            upstream_account: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(uuid.clone()),
@@ -1932,7 +1729,7 @@ mod schema_reconcile_tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        for added in ["upstream_id", "upstream_entity_kind", "upstream_scope"] {
+        for added in ["upstream_id", "upstream_entity_kind", "upstream_account"] {
             assert!(
                 cols.iter().any(|c| c == added),
                 "grid_rows must have gained {added}"
@@ -1963,7 +1760,7 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid, \
+             entire_chat, text, upstream_id, upstream_entity_kind, upstream_account, markdown_uuid, \
              is_document) \
              VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
              'upstream-1', 'conversation', '', 'md-1', 1)",

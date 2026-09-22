@@ -16,7 +16,7 @@ use datalib_etl::http::{
 use datalib_etl::latchkey::latchkey_curl_command;
 
 use super::db::RawDb;
-use super::schema_raw::{slack_message_uuid, SlackAttachmentRow};
+use super::schema_raw::{slack_message_key, SlackAttachmentRow};
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -124,7 +124,7 @@ async fn call_slack_once(
     Ok(data)
 }
 
-#[instrument(skip(params), fields(method = method))]
+#[instrument(skip(params, latchkey), fields(method = method))]
 pub async fn call_slack(
     method: &str,
     params: &BTreeMap<String, String>,
@@ -190,7 +190,7 @@ pub async fn download_files_for_messages(
         let Some(message_ts) = m.get("ts").and_then(|v| v.as_str()) else {
             continue;
         };
-        let message_uuid = slack_message_uuid(team_id, channel_id, message_ts);
+        let message_uuid = slack_message_key(team_id, channel_id, message_ts);
         let Some(files) = m.get("files").and_then(|f| f.as_array()) else {
             continue;
         };
@@ -214,6 +214,7 @@ pub async fn download_files_for_messages(
         skipped = counts.get("skipped").copied().unwrap_or(0),
         errors = counts.get("error").copied().unwrap_or(0),
         external = counts.get("external").copied().unwrap_or(0),
+        "what became of one channel's media"
     );
     Ok(counts)
 }
@@ -275,6 +276,7 @@ async fn download_one_file(
                 file_id = file_id,
                 size = size,
                 limit = limit,
+                "a file is over the size limit; skipped it"
             );
             attach.add_failed(
                 message_uuid,
@@ -321,6 +323,7 @@ async fn download_one_file(
             name = name.unwrap_or(""),
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
+            "a file could not be downloaded"
         );
         attach.add_failed(message_uuid, file_id, tail.trim().to_string());
         return Ok("error");
@@ -344,7 +347,8 @@ async fn download_one_file(
     debug!(
         event = "slack_media_downloaded",
         file_id = file_id,
-        bytes = len
+        bytes = len,
+        "downloaded one file"
     );
     Ok("downloaded")
 }

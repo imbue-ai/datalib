@@ -167,13 +167,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             event = "chatgpt_me",
             email = me.get("email").and_then(|v| v.as_str()).unwrap_or(""),
             id = me.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            "signed in as this account"
         );
 
         if !opts.conv_uuids.is_empty() {
             opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
             for raw in &opts.conv_uuids {
                 if opts.control.stop.requested() {
-                    info!(event = "chatgpt_interrupted");
+                    info!(
+                        event = "chatgpt_interrupted",
+                        "told to stop; leaving the rest for the next run"
+                    );
                     break;
                 }
                 opts.progress.inc(1);
@@ -213,10 +217,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         if let Some(sealer) = opts.sealer.as_ref() {
                             sealer.wrote(1).await;
                         }
-                        info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
+                        info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target, "fetched one conversation by id");
                     }
                     Err(e) => {
-                        warn!(event = "chatgpt_fetch_error", raw = raw, id = %target, error = %e);
+                        warn!(event = "chatgpt_fetch_error", raw = raw, id = %target, error = %e, "a conversation could not be fetched");
                         return Err(anyhow::anyhow!("fetch {raw}: {e}"));
                     }
                 }
@@ -234,7 +238,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(
             event = "chatgpt_listing",
             convs = listing.len(),
-            complete = listing_complete
+            complete = listing_complete,
+            "listed the conversations"
         );
         summary.listing = listing.len();
 
@@ -316,6 +321,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stale = stale.len(),
             up_to_date = up_to_date,
             out_of_scope = summary.out_of_scope,
+            "sorted the listing into what to fetch"
         );
         summary.skipped += up_to_date;
 
@@ -325,13 +331,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Asked to stop: the conversation that just landed sealed with
             // its blobs, so end here.
             if opts.control.stop.requested() {
-                info!(event = "chatgpt_interrupted");
+                info!(
+                    event = "chatgpt_interrupted",
+                    "told to stop; leaving the rest for the next run"
+                );
                 break;
             }
             opts.progress.inc(1);
             if let Some(limit) = opts.limit {
                 if summary.fetched + summary.errors >= limit {
-                    info!(event = "chatgpt_limit_reached", limit = limit);
+                    info!(
+                        event = "chatgpt_limit_reached",
+                        limit = limit,
+                        "reached the configured fetch limit; stopping here"
+                    );
                     break;
                 }
             }
@@ -346,7 +359,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     let payload = match serde_json::to_string(&full) {
                         Ok(s) => s,
                         Err(e) => {
-                            warn!(event = "chatgpt_serialize_error", cid = cid, error = %e);
+                            warn!(event = "chatgpt_serialize_error", cid = cid, error = %e, "a conversation could not be serialized for the store");
                             summary.errors += 1;
                             continue;
                         }
@@ -387,11 +400,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         path = %path,
                         reason = %reason,
                         fetched = summary.fetched,
+                        "giving up on this request after the rate-limit retries"
                     );
                     break;
                 }
                 Err(ChatGPTError::Permanent(msg)) => {
-                    warn!(event = "chatgpt_fetch_error", cid = cid, error = %msg);
+                    warn!(event = "chatgpt_fetch_error", cid = cid, error = %msg, "a conversation could not be fetched");
                     let _ = db.record_conversation_error(cid, &msg).await;
                     summary.errors += 1;
                 }
@@ -642,7 +656,7 @@ async fn fetch_attachments_for(
                 summary.failed_blobs += 1;
             }
             Err(e) => {
-                warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e);
+                warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e, "a media download failed in a way this build does not classify");
                 attach.add_failed(cid, &file_id, e.to_string());
                 summary.failed_blobs += 1;
             }
@@ -660,7 +674,7 @@ async fn fetch_attachments_for(
         })
         .await;
     if let Err(e) = flush_result {
-        warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e);
+        warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e, "a conversation's attachments could not be written");
     }
     let _ = now;
 }
@@ -689,6 +703,7 @@ async fn download_one_file(
                 event = "chatgpt_media_meta_failed",
                 file_id = file_id,
                 error = %e,
+                "a file's metadata could not be fetched"
             );
             return Ok(None);
         }
@@ -696,7 +711,11 @@ async fn download_one_file(
     let signed = match meta.get("download_url").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
-            warn!(event = "chatgpt_media_no_download_url", file_id = file_id);
+            warn!(
+                event = "chatgpt_media_no_download_url",
+                file_id = file_id,
+                "a file's metadata carries no download URL; skipped it"
+            );
             return Ok(None);
         }
     };
@@ -736,6 +755,7 @@ async fn download_one_file(
             file_id = file_id,
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
+            "a file could not be downloaded"
         );
         return Ok(None);
     }
@@ -758,7 +778,7 @@ struct Listing {
     complete: bool,
 }
 
-#[instrument(skip(client))]
+#[instrument(skip_all, fields(max_pages, since_secs))]
 async fn list_all_conversations(
     client: &mut ChatGPTClient,
     max_pages: Option<usize>,
@@ -786,6 +806,7 @@ async fn list_all_conversations(
             got = page_items.len(),
             total = total.unwrap_or(0),
             cum = items.len() + page_items.len(),
+            "listed one page of conversations"
         );
         let got = page_items.len();
         items.extend(page_items);
@@ -809,7 +830,11 @@ async fn list_all_conversations(
             break;
         }
         if page_ends_before_since {
-            info!(event = "chatgpt_listing_since_stop", pages = pages);
+            info!(
+                event = "chatgpt_listing_since_stop",
+                pages = pages,
+                "the listing reached what the last run already had; stopping"
+            );
             break;
         }
         if let Some(t) = total {
@@ -820,7 +845,11 @@ async fn list_all_conversations(
         }
         if let Some(cap) = max_pages {
             if pages >= cap {
-                info!(event = "chatgpt_listing_capped", max_pages = cap);
+                info!(
+                    event = "chatgpt_listing_capped",
+                    max_pages = cap,
+                    "the listing stopped at the configured page cap"
+                );
                 break;
             }
         }

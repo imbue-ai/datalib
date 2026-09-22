@@ -620,7 +620,7 @@ async fn open_inner(
     // "database is locked" on dolt_commit.
     let started = std::time::Instant::now();
     let store = path_label(db_path);
-    tracing::info!(store, "doltlite_raw::open: opening {store}");
+    tracing::info!(store, "opening the store");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
@@ -804,11 +804,7 @@ async fn open_inner(
         db_path.display()
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    tracing::info!(
-        store,
-        elapsed_ms,
-        "doltlite_raw::open: {store} ready in {elapsed_ms}ms"
-    );
+    tracing::info!(store, elapsed_ms, "the store is open");
     Ok(pool)
 }
 
@@ -1421,19 +1417,8 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     // `message` is the sentence's own field name in tracing, so the
     // commit message goes under another.
     match &hash {
-        Some(hash) => tracing::debug!(
-            store,
-            hash,
-            commit_message = msg,
-            elapsed_ms,
-            "dolt_commit: committed {hash} to {store} ({msg}) in {elapsed_ms}ms"
-        ),
-        None => tracing::debug!(
-            store,
-            commit_message = msg,
-            elapsed_ms,
-            "dolt_commit: nothing to commit to {store} ({msg})"
-        ),
+        Some(hash) => tracing::debug!(store, hash, commit_message = msg, elapsed_ms, "committed"),
+        None => tracing::debug!(store, commit_message = msg, elapsed_ms, "nothing to commit"),
     }
     Ok(hash)
 }
@@ -1453,6 +1438,40 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
         .fetch_optional(pool)
         .await
         .context("read dolt_log head")
+}
+
+/// The content tables whose rows differ between two commits: every
+/// table but the `*_bookkeeping` sidecars, [`SHARED_TABLES`] and
+/// `ingested_files`. The question a provider's test asks after
+/// ingesting the same input twice under two different nows — the
+/// answer must be empty, or a stamp the store mints is sitting in a
+/// content row, and every consumer that diffs the store will find
+/// that row changed on every run.
+pub async fn content_tables_changed(
+    pool: &SqlitePool,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT coalesce(to_table_name, from_table_name) FROM dolt_diff_summary \
+         WHERE from_ref = ? AND to_ref = ? AND data_change = 1",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("dolt_diff_summary")?;
+    let mut changed: Vec<String> = rows
+        .into_iter()
+        .filter(|t| {
+            !t.ends_with("_bookkeeping")
+                && !SHARED_TABLES.contains(&t.as_str())
+                && t != crate::file_checkpoint::INGESTED_FILES_TABLE
+        })
+        .collect();
+    changed.sort();
+    changed.dedup();
+    Ok(changed)
 }
 
 /// [`head_commit`] against a store on disk; `Ok(None)` if nobody has

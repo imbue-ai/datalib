@@ -91,24 +91,11 @@ pub fn known_file(table: &str) -> Option<&'static KnownFile> {
     KNOWN_FILES.iter().find(|f| f.table == table)
 }
 
-/// Tables whose raw-row `id` is a uuidv5 *derived from* the natural key
-/// rather than the raw key string itself. `connections` is first-class:
-/// its id is a stable UUID minted from the member's LinkedIn profile URL
-/// (see [`connection_uuid`]), so the same connection keeps one identity
-/// across re-exports and the rendered contact agrees with the raw row.
-pub const UUID_KEYED_TABLES: &[&str] = &["connections"];
-
-pub fn is_uuid_keyed(table: &str) -> bool {
-    UUID_KEYED_TABLES.contains(&table)
-}
-
-/// Stable UUID for a LinkedIn connection, derived from their profile
-/// `URL`. Both the raw `connections.id` and the rendered contact's
-/// `contact_uuid` use this, so they agree. Recipe:
-/// `uuidv5(NS, "connections:{url}")` — matches what the download walker
-/// mints for the `connections` table's natural (`URL`) key.
-pub fn connection_uuid(url: &str) -> String {
-    ns_id(&format!("connections:{url}"))
+/// The raw `connections.id`: the member's profile URL, the export's
+/// one stable field for a connection, so the same connection keeps
+/// one row across re-exports and the photo fetch joins on it.
+pub fn connection_key(url: &str) -> String {
+    url.to_string()
 }
 
 /// Canonical table names of the message-shaped feeds, in manifest order.

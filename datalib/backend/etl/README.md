@@ -50,7 +50,16 @@ was in — the pair every stamp we mint is stored as (AGENTS.md,
 
 The split keeps `dolt diff` over the data tables reflecting upstream change
 only, not re-fetch churn — which is what makes the reset-then-resync
-"did anything actually change?" assertion mean anything.
+"did anything actually change?" assertion mean anything, and what
+keeps a render from re-doing every document on every run: render
+diffs the tables a document declared as inputs, and a `last_seen_at_utc`
+on one of them is a change every time. That includes a scan's
+`*_scan_meta` row, which every document of a file-backed source reads
+its root from. A provider that opts out of the sidecar for scale
+(`bulk_upsert_entity_in_tx`, fsindex's entry tables) keeps no stamp
+at all on those rows. `content_tables_changed` is the check: ingest
+the same input twice under two nows and it must name no table — each
+file-backed provider's tests do exactly that.
 
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
@@ -247,7 +256,9 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   land in one or two leaves (~10 KB written); 500 rows with random keys
   land in ~500 leaves (~2 MB written, 99% of it copies of neighbours).
   Random keys are uuidv4s, uuidv5s and content hashes. Adjacent keys are
-  `(device_id, ts_ms)`, `"{metric}#{date}"`, a time-prefixed uuid.
+  `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
+  `datalib_id` mints: a message's `grid_rows.uuid` starts with its
+  `created_at`, so a sync's new rows land at the tree's right edge.
 - **A commit pins whatever its transaction wrote.** Commit once at the
   end and `dolt_gc()` reclaims every intermediate page: 430 MB → 15 MB.
   Commit after each of 200 transactions and gc reclaims nothing
@@ -274,10 +285,10 @@ Two recoveries, both available:
   chunks at the next gc. Squash only commits older than every
   consumer's cursor, with the writer lock held.
 - **Key for adjacency.** The right fix where the key is ours to
-  choose: see the practice note in
-  `docs/dev/data_architecture_ingestion_practices.md` § "Key a table for
-  what one run writes together", and `docs/dev/entity_ids.md` for the
-  time-prefixed `entity_id` proposal.
+  choose, and the one every entity id now takes: see the practice note
+  in `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
+  for what one run writes together", and `docs/dev/entity_ids.md` § "The
+  layout" for what the stamp in an id is and is not.
 
 ## Schema self-healing: additive changes land, anything else refuses
 

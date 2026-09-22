@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::Row;
 
-use super::schema_raw::connection_uuid;
+use super::schema_raw::connection_key;
 use super::RawDb;
 
 /// The shared contact→photo edge table name (same in the contacts
@@ -108,7 +108,7 @@ pub async fn fetch_connection_photos(
         if url.is_empty() {
             continue;
         }
-        let owner_id = connection_uuid(url);
+        let owner_id = connection_key(url);
         if already.contains(&owner_id) {
             continue;
         }
@@ -165,7 +165,7 @@ enum Outcome {
 }
 
 /// Render-side: load every stored connection photo as
-/// `owner_id (connection_uuid) → (bytes, content_type)`. Joins
+/// `owner_id (the connection's URL) → (bytes, content_type)`. Joins
 /// `contact_photos` → `cas_objects`. Empty when photos were never
 /// fetched (the table won't exist). Never fails on a missing table.
 /// A fetched photo: the `contact_photos` row it came through (what a
@@ -262,7 +262,7 @@ async fn fetch_one(profile_url: &str) -> Outcome {
     let page = match latchkey_curl(&photo_request(profile_url)).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(event = "linkedin_photo_page_failed", url = profile_url, error = %e);
+            tracing::warn!(event = "linkedin_photo_page_failed", url = profile_url, error = %e, "a profile page could not be fetched for its photo");
             return Outcome::Transient;
         }
     };
@@ -279,7 +279,7 @@ async fn fetch_one(profile_url: &str) -> Outcome {
     let img = match latchkey_curl(&photo_request(&img_url)).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(event = "linkedin_photo_image_failed", url = %img_url, error = %e);
+            tracing::warn!(event = "linkedin_photo_image_failed", url = %img_url, error = %e, "a profile photo could not be downloaded");
             return Outcome::Transient;
         }
     };

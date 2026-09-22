@@ -382,6 +382,7 @@ async fn search_since(
                         event = "notion_search_reached_resume_cursor",
                         resume_cursor = s,
                         discovered = ids.len(),
+                        "the search reached what the last run already had; stopping"
                     );
                     return Ok((ids, newest_edited));
                 }
@@ -866,6 +867,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 event = "notion_search_pass",
                 since = since.as_deref().unwrap_or("(cold start)"),
                 discovered = ids.len(),
+                "one pass of the search"
             );
             let mut q: VecDeque<String> = VecDeque::new();
             for id in ids {

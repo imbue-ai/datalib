@@ -55,7 +55,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "maps_photo_failed", path = %f.path.display(), error = %e);
+                warn!(event = "maps_photo_failed", path = %f.path.display(), error = %e, "a maps photo could not be ingested");
             }
         }
     }

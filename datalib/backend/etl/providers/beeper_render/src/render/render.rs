@@ -22,7 +22,13 @@ use super::parse::ParsedBeeper;
 /// Bump when Beeper's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
 /// `datalib_etl_chat_common::LAYOUT_VERSION`.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: ids are minted through `datalib_id` under the configured source,
+///     every row carries its backpointer, and an event's id carries its
+///     `timestamp_ms` in its leading bits (`datalib_id`'s v8 layout).
+///     The raw store keys rooms, users and events by their Matrix ids,
+///     so an existing root resets and downloads again; every uuid
+///     moved, `chat_uuid` among them.
+pub const RENDER_VERSION: u32 = 3;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
@@ -55,7 +61,7 @@ pub fn render_all(
         ..Default::default()
     };
 
-    for network in to_networks(parsed) {
+    for network in to_networks(parsed, source_id) {
         let s = datalib_etl_chat_common::render_all(
             &network.profile,
             &network.chats,

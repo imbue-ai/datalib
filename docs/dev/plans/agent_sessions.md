@@ -76,8 +76,8 @@ before designing the row.
 **Identity is mostly easy.** Every one of these tools mints a UUID per
 session (Claude Code and Cowork a v4, Codex a v7, Gemini CLI a v4 plus
 a per-project hash), so `grid_rows.uuid` follows the
-`docs/dev/entity_ids.md` rule with `Scope::ProviderGlobal` and no
-hashing of our own. Per record, only Claude Code mints a UUID; a Codex
+`docs/dev/entity_ids.md` rule, with no account — none of these tools
+names one on a record — and no hashing of our own. Per record, only Claude Code mints a UUID; a Codex
 rollout line carries `timestamp`, `type` and `payload` and nothing
 else (measured, 0.104–0.115; a newer Codex adds an `ordinal`), so its
 key is the line's number within the thread, which the append-only

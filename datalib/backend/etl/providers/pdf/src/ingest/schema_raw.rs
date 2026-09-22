@@ -32,9 +32,7 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
     pdf_id_permanent         TEXT NULL,
     xmp_document_id          TEXT NULL,
     xmp_instance_id          TEXT NULL,
-    xmp_original_document_id TEXT NULL,
-    first_seen_at_utc        TEXT NOT NULL,
-    tz_offset                TEXT NULL
+    xmp_original_document_id TEXT NULL
 )";
 
 /// Lineage lookups (`WHERE xmp_document_id = ?`) are point queries
@@ -56,17 +54,13 @@ pub const PDF_DOCUMENTS_INDEXES: &[&str] = &[
 
 pub const PDF_PATHS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_paths (
     id               TEXT PRIMARY KEY,
-    blake3           TEXT NOT NULL,
-    last_seen_at_utc TEXT NOT NULL,
-    tz_offset        TEXT NULL
+    blake3           TEXT NOT NULL
 )";
 
 /// Where the scan actually ran.
 pub const PDF_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_scan_meta (
     id             TEXT PRIMARY KEY,
-    abs_root       TEXT NOT NULL,
-    scanned_at_utc TEXT NOT NULL,
-    tz_offset      TEXT NULL
+    abs_root       TEXT NOT NULL
 )";
 
 pub const PDF_PATHS_INDEXES: &[&str] = &[
@@ -75,12 +69,25 @@ pub const PDF_PATHS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_pdf_paths_blake3 ON pdf_paths (blake3)",
 ];
 
+/// The tables written through the paired sidecar: when a row was last
+/// written is `<table>_bookkeeping.fetched_at_utc`, not a column of the
+/// row, so a scan that finds nothing changed changes no content row.
+/// For the content-keyed `pdf_documents` that stamp is when the
+/// document was first identified, because a document is only written
+/// when its hash is new.
+pub const STAMPED_TABLES: &[&str] = &["pdf_documents", "pdf_paths", "pdf_scan_meta"];
+
 pub fn full_ddl() -> Vec<String> {
     let mut out = vec![
         PDF_DOCUMENTS_DDL.to_string(),
         PDF_PATHS_DDL.to_string(),
         PDF_SCAN_META_DDL.to_string(),
     ];
+    out.extend(
+        STAMPED_TABLES
+            .iter()
+            .map(|t| datalib_etl::doltlite_raw::bookkeeping_ddl_for(t)),
+    );
     out.extend(PDF_DOCUMENTS_INDEXES.iter().map(|s| s.to_string()));
     out.extend(PDF_PATHS_INDEXES.iter().map(|s| s.to_string()));
     out
@@ -150,10 +157,6 @@ pub struct PdfDocumentRow {
     pub xmp_document_id: Option<String>,
     pub xmp_instance_id: Option<String>,
     pub xmp_original_document_id: Option<String>,
-    /// UTC; `tz_offset` is the offset the scan's clock was in. The same
-    /// pair on every stamp-bearing table in this store.
-    pub first_seen_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for PdfDocumentRow {
@@ -179,8 +182,6 @@ impl BulkUpsertable for PdfDocumentRow {
         "xmp_document_id",
         "xmp_instance_id",
         "xmp_original_document_id",
-        "first_seen_at_utc",
-        "tz_offset",
     ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
@@ -209,8 +210,6 @@ impl BulkUpsertable for PdfDocumentRow {
             .bind(self.xmp_document_id.as_deref())
             .bind(self.xmp_instance_id.as_deref())
             .bind(self.xmp_original_document_id.as_deref())
-            .bind(&self.first_seen_at_utc)
-            .bind(self.tz_offset.as_deref())
     }
 }
 
@@ -222,13 +221,11 @@ pub struct PdfPathRow {
     /// Hex blake3 of the bytes at this path — the FK into
     /// `pdf_documents`.
     pub blake3: String,
-    pub last_seen_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for PdfPathRow {
     const TABLE: &'static str = "pdf_paths";
-    const TYPED_COLUMNS: &'static [&'static str] = &["blake3", "last_seen_at_utc", "tz_offset"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["blake3"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -239,10 +236,7 @@ impl BulkUpsertable for PdfPathRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.blake3)
-            .bind(&self.last_seen_at_utc)
-            .bind(self.tz_offset.as_deref())
+        q.bind(&self.id).bind(&self.blake3)
     }
 }
 
@@ -252,13 +246,11 @@ pub struct PdfScanMetaRow {
     /// The source name from config (`tng_pdfs`), not the path.
     pub id: String,
     pub abs_root: String,
-    pub scanned_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for PdfScanMetaRow {
     const TABLE: &'static str = "pdf_scan_meta";
-    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at_utc", "tz_offset"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -269,10 +261,7 @@ impl BulkUpsertable for PdfScanMetaRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.abs_root)
-            .bind(&self.scanned_at_utc)
-            .bind(self.tz_offset.as_deref())
+        q.bind(&self.id).bind(&self.abs_root)
     }
 }
 
@@ -311,7 +300,7 @@ mod tests {
 
     #[test]
     fn documents_table_is_not_truncated_between_scans() {
-        // Truncating it would drop `first_seen_at_utc` and re-convert every
+        // Truncating it would drop the document's bookkeeping and re-convert every
         // document whose path merely moved. Only the path table is
         // rebuilt.
         assert_eq!(DATA_TABLES, &["pdf_paths"]);

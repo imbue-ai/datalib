@@ -128,7 +128,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let text = match std::fs::read_to_string(&f.path) {
             Ok(t) => t,
             Err(e) => {
-                warn!(event = "claude_code_file_unreadable", path = %f.path.display(), error = %e);
+                warn!(event = "claude_code_file_unreadable", path = %f.path.display(), error = %e, "a transcript file could not be read");
                 summary.unreadable += 1;
                 continue;
             }

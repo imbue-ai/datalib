@@ -36,6 +36,6 @@ pub async fn run(env: &StepEnv, data_root: &Path, part: &str) -> Result<Vec<Outp
         }
         (function, part) => anyhow::bail!("`{function}` has no {part:?} to reset"),
     }
-    tracing::info!(step = %env.step, part, "reset: emptied");
+    tracing::info!(step = %env.step, part, "reset: emptied what the step wrote");
     Ok(Vec::new())
 }

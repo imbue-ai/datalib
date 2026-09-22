@@ -204,9 +204,12 @@ export type DocEntry = {
 };
 // --- Remote media (issue #648) --------------------------------------------
 // A document's images on remote hosts are held back until a person lets
-// them load. A decision is an allow row in `system/remote_media`; the
-// bytes of a URL let through are fetched once by the server into its
-// download CAS and served from there. Mirrors `app_schema::remote_media`.
+// them load. A decision is an allow row in `system/remote_media`, and the
+// server is the one judge of what a row covers: the page asks it which
+// of a document's references may load, and the bytes of a URL let
+// through are fetched once by the server into its download CAS and
+// served from there. Mirrors `app_schema::remote_media` and
+// `http/src/remote_media.rs`.
 
 export type AllowScope = "url" | "document" | "host" | "source";
 
@@ -223,16 +226,43 @@ export type RemoteAllow = {
 export const REMOTE_ALLOW_TABLE = "/api/remote_media/allow";
 export const REMOTE_FETCHED_TABLE = "/api/remote_media/fetched";
 
-/// A remote image or media file, fetched by the server on the page's
-/// behalf: the app's CSP lets the page reach no remote host itself
-/// (`cards/remoteMedia.ts`).
-export function remoteMediaUrl(url: string): string {
-  return `/api/remote_media?url=${encodeURIComponent(url)}`;
+/// What a document is, for the rows that name it or its source; sent
+/// with every ask and every fetch, since a `document` or `source` row
+/// covers only what is loaded for it.
+export type RemoteContext = { document: string | null; source: string | null };
+
+function remoteContextParams(ctx: RemoteContext): string {
+  const p = new URLSearchParams();
+  if (ctx.document) p.set("document", ctx.document);
+  if (ctx.source) p.set("source", ctx.source);
+  const s = p.toString();
+  return s ? `&${s}` : "";
 }
 
-export async function fetchRemoteAllows(signal?: AbortSignal): Promise<RemoteAllow[]> {
-  const table = await getJson<{ rows: RemoteAllow[] }>(REMOTE_ALLOW_TABLE, signal);
-  return table.rows;
+/// A remote image or media file, fetched by the server on the page's
+/// behalf — and only when a row lets it: the app's CSP lets the page
+/// reach no remote host itself (`cards/remoteMedia.ts`).
+export function remoteMediaUrl(url: string, ctx: RemoteContext): string {
+  return `/api/remote_media?url=${encodeURIComponent(url)}${remoteContextParams(ctx)}`;
+}
+
+/// Which of `urls` a row lets load for `ctx`, each with its row. A
+/// URL not in the answer is held.
+export async function checkRemote(
+  ctx: RemoteContext,
+  urls: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, RemoteAllow>> {
+  if (urls.length === 0) return new Map();
+  const r = await fetch("/api/remote_media/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ document: ctx.document, source: ctx.source, urls }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`POST /api/remote_media/check → ${r.status}: ${await r.text()}`);
+  const { allowed } = (await r.json()) as { allowed: { url: string; rule: RemoteAllow }[] };
+  return new Map(allowed.map((a) => [a.url, a.rule]));
 }
 
 export async function allowRemote(scope: AllowScope, key: string): Promise<RemoteAllow> {

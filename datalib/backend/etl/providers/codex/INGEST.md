@@ -110,5 +110,11 @@ One document per thread, through chat-common. In line order:
 
 Consecutive asides fold into one collapsed block. Stamps come from
 each line's `timestamp` and never run backwards, though many lines
-share one millisecond. Ids are `ProviderGlobal` under
-`IdNamespace::Codex` (`docs/dev/entity_ids.md`).
+share one millisecond.
+
+Ids are minted through `datalib_id` under `IdNamespace::Codex`, with
+no account — a rollout names none — and each item's own stamp in the
+id's leading bits, to the second the row stores it. A thread's
+document carries no stamp: its row's is derived from its items, and an
+older line arriving would re-key its `/chat/` URL.
+`docs/dev/entity_ids.md` is the reference.

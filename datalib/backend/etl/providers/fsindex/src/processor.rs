@@ -57,7 +57,7 @@ impl DataProcessor for FsindexIngest {
             event = "fsindex_cache_open",
             path = %cache.path().display(),
             "reading this host's fingerprint cache from {}",
-            cache.path().display(),
+            cache.path().display()
         );
         let s = ingest::fetch(ingest::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for

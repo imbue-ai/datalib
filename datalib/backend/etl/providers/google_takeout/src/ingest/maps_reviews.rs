@@ -19,7 +19,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Reviews.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(event = "maps_reviews_no_features", path = FILE_REL);
+            warn!(
+                event = "maps_reviews_no_features",
+                path = FILE_REL,
+                "the reviews file has no features"
+            );
             return Ok(Vec::new());
         };
         let mut rows: Vec<MapsReviewRow> = Vec::with_capacity(features.len());
@@ -34,7 +38,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 .and_then(extract_ftid)
                 .unwrap_or("");
             if ftid.is_empty() || date.is_empty() {
-                warn!(event = "maps_review_missing_key", path = FILE_REL);
+                warn!(
+                    event = "maps_review_missing_key",
+                    path = FILE_REL,
+                    "a review has no key; skipped it"
+                );
                 continue;
             }
             let id = ns_id(&format!("maps_review:{ftid}:{date}"));

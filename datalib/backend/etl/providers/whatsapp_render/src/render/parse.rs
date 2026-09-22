@@ -14,6 +14,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::periodize::Period;
+use datalib_etl_chat_common::types::UpstreamRef;
 use datalib_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction,
@@ -22,9 +23,7 @@ use datalib_etl_render::inputs::{Inputs, RawRange};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use super::{
-    whatsapp_chat_uuid, whatsapp_markdown_uuid, whatsapp_message_uuid, whatsapp_reaction_uuid,
-};
+use super::ids;
 
 /// SQL projection resolving an attachment's `ref_id` — the file's
 /// blake3, which render stamps onto each `NormalizedAttachment` — to
@@ -261,7 +260,7 @@ async fn parse_async(
             event = "wa_media_unresolved",
             count = unresolved.len(),
             total_media = media_rows.len(),
-            examples = ?unresolved.iter().take(3).collect::<Vec<_>>(),
+            examples = %unresolved.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
             "message_media.file_path matched no wa_media_files row; \
              those attachments render as placeholders",
         );
@@ -307,16 +306,17 @@ async fn parse_async(
             None if from_me == 1 => "Me".to_string(),
             None => "?".to_string(),
         };
+        // A NULL `timestamp` column is "we don't know when", which is a
+        // null `created_at` — not 1970.
+        let id = ids::reaction(source_id, chat_jid, &key_id, from_me, timestamp);
         reactions_by_parent
             .entry(parent.clone())
             .or_default()
             .push(NormalizedReaction {
-                reaction_uuid: whatsapp_reaction_uuid(source_id, chat_jid, &key_id, from_me),
+                reaction_uuid: id.uuid,
                 reactor_display,
-                source_ref: None,
+                source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                 emoji: emoji.unwrap_or_else(|| "?".to_string()),
-                // A NULL `timestamp` column is "we don't know when",
-                // which is a null `created_at` — not 1970.
                 date_ms: timestamp,
             });
     }
@@ -361,7 +361,7 @@ async fn parse_async(
     // 6) Materialize into NormalizedChat.
     let mut out: Vec<NormalizedChat> = Vec::with_capacity(chats.len());
     for ch in chats.into_iter().filter(|c| !c.items_by_period.is_empty()) {
-        let chat_uuid = whatsapp_chat_uuid(source_id, &ch.chat_jid);
+        let chat_id = ids::chat(source_id, &ch.chat_jid);
         let mut keys: Vec<String> = ch.items_by_period.keys().cloned().collect();
         keys.sort();
         let mut buckets: Vec<NormalizedDoc> = Vec::with_capacity(keys.len());
@@ -369,10 +369,12 @@ async fn parse_async(
         for k in keys {
             let mut items = items_by_period.remove(&k).unwrap_or_default();
             items.sort_by_key(|i| i.date_ms);
+            let period = ids::period(source_id, &ch.chat_jid, &k);
             buckets.push(NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 period_key: k.clone(),
-                markdown_uuid: whatsapp_markdown_uuid(&chat_uuid, &k),
+                markdown_uuid: period.uuid,
+                source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
                 items,
             });
         }
@@ -380,14 +382,14 @@ async fn parse_async(
             inputs: ch.inputs.declared(),
             path_prefix: None,
             id: ch.chat_jid.clone(),
-            chat_uuid,
+            chat_uuid: chat_id.uuid,
             display: ch.display,
             author: None,
             account: None,
             project: None,
-            external_id: Some(ch.chat_jid),
+            external_id: Some(chat_id.natural_key),
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -487,8 +489,15 @@ fn build_item(
         }
     };
 
+    let id = ids::message(
+        source_id,
+        &key.chat_jid,
+        &key.key_id,
+        key.from_me,
+        timestamp,
+    );
     NormalizedChatItem {
-        message_uuid: whatsapp_message_uuid(source_id, &key.chat_jid, &key.key_id, key.from_me),
+        message_uuid: id.uuid,
         author_id,
         author_display,
         // A NULL `timestamp` column is "we don't know when", which is a
@@ -502,7 +511,7 @@ fn build_item(
         system_note: None,
         source_url: None,
         kind_label: None,
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         problems: Vec::new(),
     }

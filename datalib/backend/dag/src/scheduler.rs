@@ -781,6 +781,11 @@ impl Runner {
             // checkpoint. Streaming is the existing rules evaluated
             // earlier, not a second set of them.
             if was_early {
+                self.sink.emit(&Event::PassEnd {
+                    step: graph.steps[i].id.clone(),
+                    exit_code: exit.and_then(|e| e.code),
+                    signal: exit.and_then(|e| e.signal),
+                });
                 if let StepStatus::Failed { .. } = st {
                     // Not fatal here. The final pass will run the step
                     // again and report properly; failing the run on a

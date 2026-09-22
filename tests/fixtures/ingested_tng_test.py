@@ -35,13 +35,16 @@ since run 3 wipes the cursor and then re-creates it.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import unittest
 import uuid as uuidlib
+from datetime import datetime
 from pathlib import Path
 
 # Bazel runfiles layout: under bzlmod, the workspace dir is `_main`.
@@ -91,37 +94,16 @@ NON_UUID_PK_PROVIDERS: frozenset[str] = frozenset()
 # deterministic. Recomputing it here from the columns the renderer
 # stored pins the actual contract: that `upstream_id` and
 # `upstream_entity_kind` really are the inputs `uuid` was derived from,
-# and that the wire format hasn't drifted. A renderer that stamps a
-# plausible-looking but wrong backpointer fails here and nowhere else.
+# that the stamp in the id is the row's `created_at`, and that the wire
+# format hasn't drifted. A renderer that stamps a plausible-looking but
+# wrong backpointer fails here and nowhere else.
 #
 # Source of truth: datalib/backend/id/src/lib.rs. If that file's
-# namespace, separator or component order changes, this must change with
-# it — which is the point.
+# namespace, separator, component order or layout changes, this must
+# change with it — which is the point.
 DATALIB_ID_NS = uuidlib.UUID(bytes=b"datalib-id-ns-v1")
 ID_SEP = "\x1f"
-
-# Which `Scope` variant each ported provider mints under. Scope is a
-# provider-level design decision, not a per-row one, so a table is the
-# right shape — and it has to live here because `upstream_scope` is NULL
-# for both `ProviderGlobal` and `Content`, making the two
-# indistinguishable from the row alone.
-#
-# Grow this as providers are ported; a provider absent from it is
-# skipped by the round-trip check below, and `PORTED_PROVIDERS` keeps
-# that from being silent.
-SCOPE_TAG_BY_PROVIDER = {
-    "claude": ("pg", ""),
-    "chatgpt": ("pg", ""),
-    # Slack scopes on `team_id`, which the row carries in
-    # `upstream_scope`. Resolved per-row rather than from a constant
-    # here — see `_roundtrip_failures`.
-    "slack": ("up", None),
-}
-
-# Providers whose rows MUST round-trip. Separate from the table above so
-# a typo in a provider name shows up as "no rows checked" rather than as
-# a silent pass.
-PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
+MAX_STAMP_MS = (1 << 48) - 1
 
 # Every `problems` row the fixture produces, per source. The ids are
 # `datalib_id::problem_id` over (source, stage, scope, item, field,
@@ -136,10 +118,13 @@ PORTED_PROVIDERS = frozenset({"claude", "chatgpt", "slack"})
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
 # a nulled `created_at` on that message.
 POISONED_PROBLEM = (
-    "37f8fe60-9c94-5398-a0d9-4be95d77089b"  # problem_uuid
+    "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
-    "|fb0232cd-d04b-5372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
-    "|dcce3451-eb4f-53dd-bce7-7e0b22d3af16"  # the reply's item uuid
+    "|00000000-0000-8fda-8a1d-506771450366"  # the conversation's markdown_uuid
+    # The reply's item uuid. Its `created_at` would not parse, so the
+    # item inherited the previous message's stamp — which is what the
+    # id's leading bits carry.
+    "|0b75c4b3-d900-82bf-a477-9591b8f289e5"
     "|created_at|coercion_failed|stardate 47988.1"
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
@@ -162,15 +147,39 @@ EXPECTED_PROBLEMS = {
 }
 
 
-def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key):
-    """UUIDv5 over the five-component recipe, joined with \x1f.
+def datalib_entity_id(namespace, source_id, account, entity_kind, natural_key, at_ms):
+    """The v8 layout: `at_ms` in the leading 48 bits (0 for none), the
+    version nibble 8, and the rest of a UUIDv5 over the five-component
+    recipe joined with \x1f.
 
-    `namespace` is `IdNamespace::as_str`, which for every ported
-    provider happens to equal its `grid_rows.provider` tag — they are
-    still two vocabularies, and a provider ported later may well differ.
+    `namespace` is `IdNamespace::as_str`, which for every provider
+    equals its `grid_rows.provider` tag — they are still two
+    vocabularies, and a provider added later may differ. `source_id` is
+    the group id the row rendered under, which is why two sources cannot
+    share an id; `account` is `upstream_account`, empty when the record
+    names no account.
     """
-    name = ID_SEP.join([namespace, scope_tag, scope_val, entity_kind, natural_key])
-    return str(uuidlib.uuid5(DATALIB_ID_NS, name))
+    name = ID_SEP.join([namespace, source_id, account, entity_kind, natural_key])
+    b = bytearray(uuidlib.uuid5(DATALIB_ID_NS, name).bytes)
+    ms = min(max(at_ms or 0, 0), MAX_STAMP_MS)
+    b[0:6] = ms.to_bytes(6, "big")
+    b[6] = 0x80 | (b[6] & 0x0F)
+    return str(uuidlib.UUID(bytes=bytes(b)))
+
+
+def stamp_of(uuid_str: str) -> int:
+    """The unix milliseconds in a datalib id's leading 48 bits."""
+    return int.from_bytes(uuidlib.UUID(uuid_str).bytes[0:6], "big")
+
+
+def stored_stamp_ms(created_at_utc: str) -> int | None:
+    """What `created_at_utc` (`2026-06-05T19:18:39.123000Z`) reads as in
+    unix milliseconds, clamped the way the id layout clamps it."""
+    if not created_at_utc:
+        return None
+    dt = datetime.fromisoformat(created_at_utc)
+    ms = int(dt.timestamp() * 1000)
+    return min(max(ms, 0), MAX_STAMP_MS)
 
 
 # Canonical 8-4-4-4-12 hex form. Deliberately not a version-specific
@@ -234,6 +243,12 @@ EXPECTED_PROVIDERS = frozenset(
     }
 )
 
+# Providers whose rows MUST round-trip: every source in the fixture that
+# renders. A provider absent from it is skipped by the round-trip check
+# below, so the row-count assertion beside it keeps a typo from being a
+# silent pass.
+PORTED_PROVIDERS = frozenset(EXPECTED_PROVIDERS - {"datalib"})
+
 
 def _sql_in(names) -> str:
     """Render a set of provider names as a SQL IN-list literal.
@@ -260,6 +275,12 @@ def _argv():
            spec; see that script's docstring for why they're appended)
     """
     return sys.argv[1:]
+
+
+# Run 2's `--now`: the pinned fixture stamp (argv[6], `2369-04-15T00:00:00+00:00`)
+# plus five minutes, same day, so anything the driver keys on the date
+# (garmin's window) agrees between the runs.
+FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
 
 
 class IngestedTngPipelineTest(unittest.TestCase):
@@ -373,8 +394,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Sources that rendered documents but carry no storage rows.
 
         Every source's render wave ends by measuring its raw store, so
-        every source in `markdowns` should also appear as an
-        `upstream_scope` on some `provider='datalib'` row.
+        every source in `markdowns` should also own the document of some
+        `provider='datalib'` row.
 
         The failure this catches is silent and partial. A full walk ends
         in a sweep that deletes anything the run did not produce —
@@ -389,8 +410,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._index_db,
             "SELECT DISTINCT m.source_id FROM markdowns m "
             "WHERE m.source_id NOT IN ("
-            "  SELECT upstream_scope FROM grid_rows "
-            "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
+            "  SELECT d.source_id FROM grid_rows g "
+            "  JOIN markdowns d ON d.markdown_uuid = g.markdown_uuid "
+            "  WHERE g.provider = 'datalib'"
             f") AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)}) ORDER BY m.source_id;",
         )
 
@@ -560,34 +582,49 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
 
     def _roundtrip_failures(self) -> list[str]:
-        """Ported rows whose backpointer does not regenerate their uuid.
+        """Rows whose backpointer does not regenerate their uuid.
 
-        For every row from a provider in `SCOPE_TAG_BY_PROVIDER`,
-        recompute `entity_id(provider, scope, upstream_entity_kind,
-        upstream_id)` and compare to the stored `uuid`. A mismatch
-        means the backpointer is decorative — it names something that
-        would not produce this row — and the round-trip back to the
-        upstream API is broken in a way nothing else would notice,
-        because both columns still look perfectly plausible.
+        For every row from a provider in `PORTED_PROVIDERS`, recompute
+        `entity_id(provider, source, upstream_account,
+        upstream_entity_kind, upstream_id, stamp)` from the row's own
+        columns and compare to the stored `uuid`. A mismatch means the
+        backpointer is decorative — it names something that would not
+        produce this row — and the round-trip back to the upstream API
+        is broken in a way nothing else would notice, because both
+        columns still look perfectly plausible.
 
-        A diff group's rows are left out: they carry the source's
-        provider and its `upstream_id` — the backpointer to the real
-        thing — but their uuid is minted under the diff group
-        (`docs/dev/entity_ids.md` §"Rows datalib itself mints"), so the
-        source's recipe is not meant to regenerate it.
+        The stamp in the id's leading bits is checked on its own: it is
+        the row's `created_at_utc`, or zero. Zero is allowed beside a
+        non-null `created_at` because a document's stamp is derived from
+        its items and a provider may decline to embed it; a non-zero
+        stamp that is not the row's is the bug this catches.
+
+        A diff group's rows are included: the source's processors ran
+        under the diff group's name, so its rows carry the source's
+        provider and backpointer and regenerate under the diff group's
+        id, like any other source's.
         """
         rows = self._query(
             self._index_db,
-            "SELECT provider, uuid, IFNULL(upstream_entity_kind, ''), "
-            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, '') "
-            "FROM grid_rows "
-            f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
-            "  AND diff_status IS NULL "
-            "ORDER BY uuid;",
+            "SELECT g.provider, g.uuid, IFNULL(g.upstream_entity_kind, ''), "
+            "       IFNULL(g.upstream_id, ''), IFNULL(g.upstream_account, ''), "
+            "       IFNULL(g.created_at_utc, ''), m.source_id "
+            "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid "
+            f"WHERE g.provider IN ({_sql_in(PORTED_PROVIDERS)}) "
+            "ORDER BY g.uuid;",
         )
         failures = []
+        stamped = 0
         for line in rows:
-            provider, row_uuid, entity_kind, native_id, row_scope = line.split("|", 4)
+            (
+                provider,
+                row_uuid,
+                entity_kind,
+                native_id,
+                row_scope,
+                created,
+                source_id,
+            ) = line.split("|", 6)
             if not entity_kind or not native_id:
                 failures.append(
                     f"{provider} {row_uuid}: ported provider left "
@@ -595,27 +632,30 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     f"upstream_id={native_id!r}"
                 )
                 continue
-            scope_tag, scope_val = SCOPE_TAG_BY_PROVIDER[provider]
-            # An `Upstream` scope's value is per-row, so the table
-            # stores None and the row supplies it. A ported provider
-            # that scopes upstream but leaves `upstream_scope` empty is
-            # itself the bug.
-            if scope_val is None:
-                if not row_scope:
+            at_ms = stamp_of(row_uuid)
+            if at_ms != 0:
+                stamped += 1
+                if at_ms != stored_stamp_ms(created):
                     failures.append(
-                        f"{provider} {row_uuid}: upstream-scoped but "
-                        f"upstream_scope is empty"
+                        f"{provider} {row_uuid}: stamp {at_ms} is not the "
+                        f"row's created_at_utc {created!r}"
                     )
                     continue
-                scope_val = row_scope
             want = datalib_entity_id(
-                provider, scope_tag, scope_val, entity_kind, native_id
+                provider, source_id, row_scope, entity_kind, native_id, at_ms
             )
             if want != row_uuid:
                 failures.append(
                     f"{provider} {row_uuid}: ({entity_kind!r}, "
-                    f"{native_id!r}) regenerates {want}"
+                    f"{native_id!r}, {at_ms}) regenerates {want}"
                 )
+        # A layout that embeds nothing would pass every check above
+        # vacuously; most rows in this fixture are dated messages.
+        if rows and stamped < len(rows) // 2:
+            failures.append(
+                f"only {stamped} of {len(rows)} rows carry a stamp; the "
+                "v8 layout is not being used"
+            )
         return failures
 
     def _ported_provider_row_counts(self) -> dict[str, int]:
@@ -745,7 +785,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # The step's tracing event, as it reaches stderr: JSON nested inside
     # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
-    _GRID_INDEX_READ = re.compile(r'build_grid_index done.*?\\?"read\\?":\s*(\d+)')
+    _GRID_INDEX_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
 
     def _grid_index_reads(self, stderr: str) -> list[int]:
         """How many documents each grid_index step in a run READ.
@@ -757,7 +797,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
 
-    def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
+    def _run_pipeline(
+        self, *, reset: bool, now: str | None = None
+    ) -> subprocess.CompletedProcess:
+        now = now or self.now
         env = {**os.environ}
         if reset:
             env["INGESTED_TNG_RESET"] = "1"
@@ -770,7 +813,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.step_bin,
             self.signal_bin,
             self.whatsapp_bin,
-            self.now,
+            now,
             str(self.workspace),
             *self.fixture_paths,
         ]
@@ -838,6 +881,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return result
 
     def test_pipeline_resume_and_reset(self) -> None:
+        self.maxDiff = None
         # --- Run 1: fresh workspace. Full ingest.
         run1 = self._run_pipeline(reset=False)
         self.assertNotIn(
@@ -1174,10 +1218,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             len(cursor1), 1, f"expected one ingested_backups row, got {cursor1}"
         )
 
-        # --- Run 2: same data root, no flags. Signal's
+        # --- Run 2: same data root, no flags, five minutes on. Signal's
         # ingested_backups cursor MUST short-circuit the second
-        # download.
-        run2 = self._run_pipeline(reset=False)
+        # download. A later `now` than run 1's, deliberately: a run
+        # under the same stamp cannot tell a stamp that is content from
+        # one that is bookkeeping, since it writes the same value either
+        # way, and that is how a scan stamp on an input row re-rendered
+        # every pdf on every real run while this test stayed green.
+        run2 = self._run_pipeline(reset=False, now=FIVE_MINUTES_ON)
         self.assertIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run2.stderr,
@@ -1264,6 +1312,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
         )
+        # The stronger claim, one level up from the index: nothing was
+        # re-rendered either. The index reading nothing only says the
+        # render stores did not move, and a document re-rendered to the
+        # same bytes does not move them — which is how pdf re-converted
+        # every document on every run for months while this passed: a
+        # scan stamp on a row the documents declared as an input.
+        self.assertEqual(
+            self._documents_rendered_in_newest_run(),
+            {},
+            "a steady-state run must render no document in any source",
+        )
 
         # --- Run 3: reset, then sync. The reset empties signal's
         # ingested_backups row, so the cursor MUST NOT short-circuit. (If
@@ -1316,17 +1375,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         #
         # What it does NOT catch, because both runs see them identically:
         #
-        #   * an id derived from `config.toml`. The driver regenerates
-        #     the same step ids every run, so a recipe keyed on the
-        #     source name is byte-identical here. Catching that needs a
-        #     run over the same fixture under *different* step ids,
-        #     which the driver cannot do today — its source names are a
-        #     hardcoded dict and three raw stores are seeded at paths
-        #     built from them. What stands in for it is
-        #     `SCOPE_TAG_BY_PROVIDER`: a ported provider whose ids
-        #     depend on configuration has to declare that as the `src`
-        #     scope and store the value in `upstream_scope`, or the
-        #     round-trip check above fails it.
+        #   * an id that reads more of `config.toml` than the source's
+        #     group id, which every id carries by design. The driver
+        #     regenerates the same group ids every run. What stands in
+        #     for it is the round-trip check above: a uuid has to come
+        #     back from the row's own columns and its source, so
+        #     anything else a recipe folded in fails there.
         #   * an id derived from the data-root path, which is the same
         #     directory both times.
         #   * anything that varies between upstream *responses* rather
@@ -1538,6 +1592,119 @@ class IngestedTngPipelineTest(unittest.TestCase):
             EXPECTED_PROVIDERS,
             "run 6 removed one pull request, not a provider",
         )
+
+        self._assert_run_store_hygiene()
+
+    # ── the run store ───────────────────────────────────────────────
+
+    def _documents_rendered_in_newest_run(self) -> dict[str, int]:
+        """`step → documents (re)rendered` for the newest run, only the
+        steps that rendered any."""
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            rows = con.execute(
+                "SELECT step, fields FROM log "
+                # The runs share a pinned `--now` (run 2 is five minutes on),
+                # so insertion order, not the stamp, says which is newest.
+                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1) "
+                "AND msg = 'docs (re)rendered'"
+            ).fetchall()
+        finally:
+            con.close()
+        rendered = {}
+        for step, fields in rows:
+            docs = json.loads(fields).get("docs", 0)
+            if docs:
+                rendered[step] = rendered.get(step, 0) + docs
+        return rendered
+
+    # How often one message may repeat within one step attempt at `info`
+    # or above before it counts as spam. The number is a policy, not a
+    # measurement: a walk that says the same thing per page is fine at
+    # tens, and a fan-in that said the same thing per source per pass
+    # reached six hundred.
+    _SPAM_CEILING = 100
+
+    # A field value that is Rust's `Debug` rendering of an Option, a
+    # struct or a list: `?value` at the call site. Nothing can filter on
+    # it; the site wanted `%value`, `.as_deref()` or a join.
+    _DEBUG_FORMATTED = re.compile(r"^Some\(|^None$|^\w+ \{ .* \}$|^\[\".*\"\]$")
+
+    def _assert_run_store_hygiene(self) -> None:
+        """What every run of the real pipeline must leave in the run store.
+
+        Every rule here was broken by a line seen in a live bake: a
+        streaming pass whose process never ended, a runner line with
+        no target, a field holding `Some(Origin)`, a fan-in saying the
+        same thing per source per pass. Plain SQLite, so the reader is
+        stdlib `sqlite3` and not doltlite.
+        """
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        self.assertTrue(store.exists(), f"no run store at {store}")
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            open_processes = con.execute(
+                "SELECT step, count(*) FROM processes WHERE process = 'step' "
+                "AND (finished_at_utc IS NULL OR (exit_code IS NULL AND signal IS NULL)) "
+                "GROUP BY step"
+            ).fetchall()
+            self.assertEqual(
+                open_processes,
+                [],
+                "every step process the runner started has an end and an exit "
+                "(a streaming pass included)",
+            )
+            untargeted = con.execute(
+                "SELECT count(*), min(msg) FROM log WHERE target IS NULL OR target = ''"
+            ).fetchone()
+            self.assertEqual(
+                untargeted[0], 0, f"a line has no target, e.g. {untargeted[1]!r}"
+            )
+            silent = con.execute(
+                "SELECT p.step FROM processes p LEFT JOIN log l USING (process_id) "
+                "WHERE p.process = 'step' GROUP BY p.process_id HAVING count(l.seq) = 0"
+            ).fetchall()
+            self.assertEqual(silent, [], "a step process wrote no line at all")
+            debug_formatted = []
+
+            def walk(msg: str, prefix: str, obj: dict) -> None:
+                # `span` is the current span's fields, nested one level.
+                for key, value in obj.items():
+                    if key.startswith("log."):
+                        debug_formatted.append(
+                            (msg, prefix + key, "bridged log.* field")
+                        )
+                    elif isinstance(value, dict):
+                        walk(msg, prefix + key + ".", value)
+                    elif isinstance(value, str) and self._DEBUG_FORMATTED.search(value):
+                        debug_formatted.append((msg, prefix + key, value[:60]))
+
+            for msg, fields in con.execute(
+                "SELECT msg, fields FROM log WHERE fields IS NOT NULL"
+            ):
+                walk(msg, "", json.loads(fields))
+            self.assertEqual(
+                debug_formatted[:10],
+                [],
+                f"{len(debug_formatted)} field(s) carry a Debug rendering or a "
+                "bridged log.* duplicate",
+            )
+            spam = con.execute(
+                "SELECT run_id, step, attempt, target, msg, count(*) n FROM log "
+                "WHERE level IN ('info', 'warn', 'error') "
+                "GROUP BY run_id, step, attempt, target, msg HAVING n > ? "
+                "ORDER BY n DESC",
+                (self._SPAM_CEILING,),
+            ).fetchall()
+            self.assertEqual(
+                spam,
+                [],
+                f"a message repeats more than {self._SPAM_CEILING} times in one "
+                "step attempt at info or above",
+            )
+        finally:
+            con.close()
 
 
 if __name__ == "__main__":

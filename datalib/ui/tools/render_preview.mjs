@@ -6,7 +6,7 @@
 //
 // The fidelity comes from reading the app's own sources rather than
 // re-stating them: markdown-it with the same options as
-// `src/cards/ChatBody.ce.vue`, the CSS variables lifted out of
+// `src/cards/renderDocument.ts`, the CSS variables lifted out of
 // `src/App.vue`, every `<style>` block of the two card components
 // verbatim, and `src/cards/chatSections.js` — the very module the
 // component imports — inlined into the page. Nothing about the layout

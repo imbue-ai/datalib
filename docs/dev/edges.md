@@ -16,9 +16,12 @@ One row =
 The src and dst sides are symmetric: each can be either a whole
 document (anchor is NULL) or a span inside one (anchor is the value
 the renderer baked into the body as `data-section-uuid`). The PK
-(`edge_uuid`) is a UUIDv5 over the canonical tuple so re-ingest is
-idempotent — the grid_index step deletes-then-inserts every edge whose
-`src_markdown_uuid` matches the doc being re-applied.
+(`edge_uuid`) is `datalib_id::edge_id` over the canonical tuple so
+re-ingest is idempotent — the grid_index step deletes-then-inserts
+every edge whose `src_markdown_uuid` matches the doc being re-applied.
+It takes the stamp of its source end (the anchor's, else the
+document's), so the edges a render writes beside a message sort beside
+its row; see `docs/dev/entity_ids.md` § "The layout".
 
 ## Producers today
 

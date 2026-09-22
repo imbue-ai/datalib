@@ -5,8 +5,12 @@
 use std::collections::BTreeMap;
 
 use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_facebook::ingest::schema_raw::{ns_id, COMMENTS_TABLE, REACTIONS_TABLE};
+use datalib_etl_chat_common::types::{
+    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+};
+use datalib_etl_facebook::ingest::schema_raw::{COMMENTS_TABLE, REACTIONS_TABLE};
+
+use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
@@ -17,11 +21,11 @@ use crate::common::{
 use crate::processor::Owner;
 
 pub fn comments_profile() -> RenderProfile {
-    profile("Facebook Comments", "Facebook Comment")
+    profile("Facebook Comments", "Facebook Comment", ids::KIND_FEED)
 }
 
 pub fn reactions_profile() -> RenderProfile {
-    profile("Facebook Reactions", "Facebook Reaction")
+    profile("Facebook Reactions", "Facebook Reaction", ids::KIND_FEED)
 }
 
 pub const COMMENTS_CHAT: &str = "comments";
@@ -54,15 +58,17 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .filter_map(|e| e.get("media"))
             .filter_map(|m| media_attachment(m, row_id, &inputs))
             .collect();
+        let date_ms = ts_ms(v, "timestamp");
+        let item_id = ids::comment(&owner.source_id, row_id, date_ms);
         items.push(NormalizedChatItem {
-            message_uuid: ns_id(&format!("msg:comment:{row_id}")),
+            message_uuid: item_id.uuid,
             author_id: if author == owner.name {
                 "me".to_string()
             } else {
                 author.clone()
             },
             author_display: author,
-            date_ms: ts_ms(v, "timestamp"),
+            date_ms,
             text: (!text.is_empty()).then_some(text),
             kind: if attachments.is_empty() {
                 ItemKind::Text
@@ -74,7 +80,7 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             system_note: None,
             source_url: None,
             kind_label: None,
-            source_ref: None,
+            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
             is_aside: false,
             problems: Vec::new(),
         });
@@ -146,9 +152,10 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             // The URL rides on `source_url` alone: the message header
             // draws it as the `↗` link, so the body need not repeat it.
             let text = format!("{emoji} {what}");
-            let key = r.row_ids.join("+");
+            let row_ids: Vec<&str> = r.row_ids.iter().map(String::as_str).collect();
+            let item_id = ids::reaction(&owner.source_id, &row_ids, Some(ms));
             NormalizedChatItem {
-                message_uuid: ns_id(&format!("msg:reaction:{key}")),
+                message_uuid: item_id.uuid,
                 author_id: "me".to_string(),
                 author_display: owner.name.clone(),
                 date_ms: Some(ms),
@@ -159,7 +166,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
                 system_note: None,
                 source_url: r.url.clone(),
                 kind_label: None,
-                source_ref: None,
+                source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
                 is_aside: false,
                 problems: Vec::new(),
             }
@@ -240,28 +247,33 @@ fn monthly_chat(
             .or_default()
             .push(item);
     }
+    let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
         inputs: inputs.declared(),
         path_prefix: None,
         id: id.to_string(),
-        chat_uuid: ns_id(&format!("chat:{id}")),
+        chat_uuid: feed.uuid,
         display: display.to_string(),
         title: None,
         author: Some(owner.name.clone()),
         account: owner.account.clone(),
         project: None,
-        external_id: None,
+        external_id: Some(feed.natural_key),
         source_url: None,
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: by_month
             .into_iter()
-            .map(|(period_key, items)| NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                markdown_uuid: ns_id(&format!("doc:{id}:{period_key}")),
-                period_key,
-                items,
+            .map(|(period_key, items)| {
+                let month = ids::feed_month(&owner.source_id, id, &period_key);
+                NormalizedDoc {
+                    orphan_reactions: Vec::new(),
+                    markdown_uuid: month.uuid,
+                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    period_key,
+                    items,
+                }
             })
             .collect(),
     }
@@ -274,6 +286,7 @@ mod tests {
 
     fn owner() -> Owner {
         Owner {
+            source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
             account: None,
             inputs: Vec::new(),

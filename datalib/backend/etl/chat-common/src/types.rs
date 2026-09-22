@@ -73,7 +73,8 @@ pub struct NormalizedReaction {
     /// for why this is an `Option` and what `None` costs downstream.
     pub date_ms: Option<i64>,
     /// What this reaction is upstream, for its grid_row's backpointer
-    /// columns. `None` for providers not yet ported onto `datalib_id`.
+    /// columns. Every provider sets it; a `None` row cannot be taken
+    /// back upstream and fails the fixture's round-trip check.
     pub source_ref: Option<UpstreamRef>,
 }
 
@@ -118,8 +119,8 @@ pub struct NormalizedChatItem {
     /// the markdown layout.
     pub kind_label: Option<String>,
     /// What this item is upstream, for the message-level grid_row's
-    /// backpointer columns. `None` for providers not yet ported onto
-    /// `datalib_id`.
+    /// backpointer columns. Every provider sets it; a `None` row cannot
+    /// be taken back upstream and fails the fixture's round-trip check.
     pub source_ref: Option<UpstreamRef>,
     /// Machinery rather than conversation — an assistant's tool calls
     /// and their results. The renderer folds each *run* of adjacent
@@ -213,9 +214,16 @@ pub struct OrphanReactions {
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedDoc {
     pub period_key: String,
-    /// Stable per-bucket UUID minted by the provider (typically v5 over
-    /// `(chat_uuid, period_key)`).
+    /// Stable per-bucket UUID minted by the provider: the chat's own
+    /// for a chat rendered whole, else one minted from `(chat,
+    /// period_key)`.
     pub markdown_uuid: String,
+    /// What this bucket is upstream, for the document row's backpointer
+    /// columns, when `markdown_uuid` was minted from something other
+    /// than the chat's own key and kind — a period of a chat, a
+    /// subagent's transcript within a session. `None` means the row
+    /// takes the chat's (`external_id`, `RenderProfile::chat_entity_kind`).
+    pub source_ref: Option<UpstreamRef>,
     pub items: Vec<NormalizedChatItem>,
     /// Empty for every provider that buckets a whole chat into one
     /// document, which is most of them, and empty for a period-bucketed
@@ -260,11 +268,11 @@ pub struct NormalizedChat {
     /// `{channel_id}:{thread_ts}`). Goes into the chat-level grid_row's
     /// `upstream_id` column and the .md frontmatter.
     pub external_id: Option<String>,
-    /// The `Scope::Upstream` value every row in this chat was minted
-    /// under — the exact provider-issued string fed to
-    /// `datalib_id::entity_id`, stamped into `grid_rows.upstream_scope`.
-    /// `None` for chats minted under `ProviderGlobal` or `Content`.
-    pub upstream_scope: Option<String>,
+    /// The upstream account every row in this chat was minted under —
+    /// the exact provider-issued string fed to `datalib_id::entity_id`
+    /// as `account`, stamped into `grid_rows.upstream_account`. `None`
+    /// when the upstream names no account on the record.
+    pub upstream_account: Option<String>,
     /// Optional public URL for the conversation's source artifact (a
     /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
     /// link in the page title and the chat-level grid_row's `source_url`.

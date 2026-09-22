@@ -206,6 +206,7 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(remote_media::delete_allow),
         )
         .route("/api/remote_media/fetched", get(remote_media::list_media))
+        .route("/api/remote_media/check", post(remote_media::check))
         // Component code, addressed by content. Flat across every
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.

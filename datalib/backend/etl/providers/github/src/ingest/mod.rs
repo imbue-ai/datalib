@@ -154,7 +154,7 @@ async fn discover_prs(
     let mut failed_scopes = 0usize;
     for scope in scopes {
         let since = since_for_scope(state, scope, refresh_window_days, full, prior);
-        tracing::info!(scope, ?since, "searching PRs");
+        tracing::info!(scope, since, "searching PRs");
         let results = match search_prs(client, scope, since.as_deref()).await {
             Ok(v) => v,
             Err(e) => {

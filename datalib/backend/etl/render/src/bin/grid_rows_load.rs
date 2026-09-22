@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
         event = "grid_rows_load_start",
         out = %args.out.display(),
         db = %db_path.display(),
+        "loading grid rows"
     );
 
     let pool = open_index(&db_path).await?;
@@ -79,7 +80,12 @@ async fn main() -> Result<()> {
         &args.out,
         |msg| {
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            debug!(event = "grid_rows_load_progress", count = n, message = msg);
+            debug!(
+                event = "grid_rows_load_progress",
+                count = n,
+                message = msg,
+                "loading grid rows"
+            );
         },
         None,
     )
@@ -90,6 +96,7 @@ async fn main() -> Result<()> {
         markdowns_total = summary.markdowns_total,
         markdowns_loaded = summary.markdowns_loaded,
         rows_inserted = summary.rows_inserted,
+        "loaded the grid rows"
     );
 
     drop(_enter);
@@ -101,12 +108,12 @@ async fn main() -> Result<()> {
         // that has a rendered tree.
         opts.groups = discover_groups(&args.out)?;
         opts.retire_collections = vec![LEGACY_COLLECTION_NAME.to_string()];
-        info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed);
+        info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed, "building the qmd index");
         let outcome = tokio::task::spawn_blocking(move || run_index(&opts))
             .await
             .context("qmd-indexer task panicked")?
             .context("qmd-indexer failed")?;
-        info!(event = "qmd_index_complete", index = %outcome.index_path.display());
+        info!(event = "qmd_index_complete", index = %outcome.index_path.display(), "built the qmd index");
     }
     Ok(())
 }

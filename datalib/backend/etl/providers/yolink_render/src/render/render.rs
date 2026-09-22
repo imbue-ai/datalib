@@ -8,11 +8,10 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use once_cell::sync::Lazy;
-use uuid::Uuid;
 
 use super::parse::{ParsedYolink, Series};
 use datalib_etl_timeseries_render::plot::{standalone_html, Trace};
@@ -23,29 +22,24 @@ use datalib_etl_timeseries_render::text::{
 use super::units::{self, series_label, spec_for, Quantity, QUANTITIES};
 use super::RENDER_VERSION;
 
-/// Namespace for every UUIDv5 this renderer mints. A fixed, arbitrary
-/// UUID — the same role `GITHUB_UUID_NS` plays for that provider.
-pub static YOLINK_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("6b1d6f2c-9c1a-5f7e-b0d4-2f9a7c4e0001").expect("valid yolink ns uuid")
-});
+const ID_NAMESPACE: IdNamespace = IdNamespace::Yolink;
+const KIND_PAGE: &str = "timeseries";
+const KIND_DEVICE: &str = "device";
 
-/// The page's `markdown_uuid`. Derived from the stanza name, not from
-/// anything upstream: there is exactly one page per stanza, and it must
-/// keep its identity across every re-render.
+/// The page's `markdown_uuid`: there is exactly one page per source and
+/// nothing upstream behind it, so its key is the source id. No stamp:
+/// the page's `created_at` is its earliest reading, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
-    Uuid::new_v5(
-        &YOLINK_UUID_NS,
-        format!("yolink:{source_id}:timeseries").as_bytes(),
-    )
-    .to_string()
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_PAGE, source_id, None)
 }
 
+/// A device's row, keyed on its config name. The ids YoLink issues a
+/// device (`device_udid`, `family_device_id`) are read secrets, and a
+/// natural key is stored in `upstream_id` in the clear, so neither can
+/// be the key. No stamp: the row's `created_at` is its latest reading,
+/// which moves every sync.
 pub fn device_uuid(source_id: &str, device: &str) -> String {
-    Uuid::new_v5(
-        &YOLINK_UUID_NS,
-        format!("yolink:{source_id}:device:{device}").as_bytes(),
-    )
-    .to_string()
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_DEVICE, device, None)
 }
 
 /// Counts for the step's one-line run summary.
@@ -475,6 +469,8 @@ fn build_grid_rows(
         .text(doc_text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
+        .upstream_id(Some(source_id.to_string()))
+        .upstream_entity_kind(Some(KIND_PAGE.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
@@ -508,8 +504,8 @@ fn build_grid_rows(
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .text(text)
                 .qmd_path(Some(md_rel.to_string()))
-                .upstream_id(Some(dev.kind.clone()))
-                .upstream_entity_kind(Some("device".to_string()))
+                .upstream_id(Some(dev.name.clone()))
+                .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );

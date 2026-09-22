@@ -2,8 +2,8 @@
 // Renders a chat conversation. The backend serves the QMD body verbatim
 // (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
 // wrappers emitted by the ingest renderer — one wrapper per message,
-// plus nested ones for tool_use / tool_result / thinking blocks); we
-// run markdown-it once.
+// plus nested ones for tool_use / tool_result / thinking blocks);
+// `renderDocument` runs markdown-it and the sanitizer once per body.
 //
 // `selectedSectionUuid` picks which section to scroll to and visually
 // highlight via the `.msg.selected` CSS rule. The value must match the
@@ -16,12 +16,9 @@
 // highlight.js stylesheet is injected by documentView's vueCard call
 // (imported with `?inline`).
 import { ref, computed, watch, nextTick, onMounted } from "vue";
-import MarkdownIt from "markdown-it";
-import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
-import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
-import { decorateRemoteMedia, type RemoteRef } from "./remoteMedia";
-import { sanitizeRenderedHtml } from "./sanitize";
+import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
+import { renderDocument } from "./renderDocument";
 import { isBrowserClick } from "./chatLink";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
@@ -69,6 +66,8 @@ const props = defineProps<{
    * A new function re-renders the body under the new answer.
    */
   remoteAccept?: (url: string) => boolean;
+  /** What this body is, for the server's answer (`remoteMedia.ts`). */
+  remoteContext?: RemoteContext;
 }>();
 
 const emit = defineEmits<{
@@ -87,68 +86,10 @@ const emit = defineEmits<{
   (e: "hover-edge", target: { md: string; anchor: string | null } | null): void;
 }>();
 
-function highlight(code: string, lang: string): string {
-  if (lang && hljs.getLanguage(lang)) {
-    try {
-      return hljs.highlight(code, { language: lang }).value;
-    } catch {
-      /* fall through to escape */
-    }
-  }
-  return code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-const md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  breaks: false,
-  highlight,
-});
-
-// Rewrite relative asset references (`blobs/foo.png`, `plots/x.html`) to
-// backend asset URLs. Absolute paths (`/...`) and full URLs
-// (`http://...`, `data:...`, `//cdn/...`) pass through unchanged. The
-// rules live in `./asset_urls` so they are unit-testable on their own.
-function envUuid(env: unknown): string | null {
-  return (env as { markdownUuid?: string | null } | undefined)?.markdownUuid ?? null;
-}
-const defaultImageRender =
-  md.renderer.rules.image ||
-  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
-md.renderer.rules.image = (tokens, idx, options, env, self) => {
-  const token = tokens[idx];
-  const srcIdx = token.attrIndex("src");
-  if (srcIdx >= 0 && token.attrs) {
-    // markdown-it 15 types an attribute value as `string | number` (it
-    // ships its own types now; @types/markdown-it 14 said `string`).
-    // Anything the parser produces for `src` is a string — the number
-    // arm is for tokens built programmatically — so narrow rather than
-    // coerce, and leave a non-string alone.
-    const raw = token.attrs[srcIdx][1];
-    const src = typeof raw === "string" ? raw : null;
-    const uuid = envUuid(env);
-    if (uuid && src && !isAbsoluteOrUrl(src)) {
-      token.attrs[srcIdx][1] = assetUrl(uuid, src);
-    }
-  }
-  return defaultImageRender(tokens, idx, options, env, self);
-};
-
-// Same rewrite for `<iframe src>`, which arrives as raw HTML rather than
-// as a parsed token — see `rewriteIframeSrcs`.
-for (const rule of ["html_block", "html_inline"] as const) {
-  const fallback = md.renderer.rules[rule];
-  md.renderer.rules[rule] = (tokens, idx, options, env, self) => {
-    const rendered = fallback ? fallback(tokens, idx, options, env, self) : tokens[idx].content;
-    return rewriteIframeSrcs(rendered, envUuid(env));
-  };
-}
-
-// Sanitized last, after every rewrite: the body is whatever the source
-// sent, and `html: true` above lets it through as HTML.
 const sanitized = computed(() =>
-  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }), {
+  renderDocument(props.body || "", props.markdownUuid ?? null, {
     accept: props.remoteAccept,
+    context: props.remoteContext,
   }),
 );
 const html = computed(() => sanitized.value.html);
