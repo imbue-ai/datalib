@@ -29,6 +29,7 @@ import {
   renameGroup,
   replaceSteps,
   sourceStepsOf,
+  fanInNames,
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
@@ -176,6 +177,7 @@ const editing = ref<{
   group: ConfiguredGroup;
   entry: CatalogEntry;
   steps: SourceSteps;
+  qmdIndexed: boolean;
 } | null>(null);
 
 /// Non-null when the table is empty for a reason worth shouting about
@@ -1001,7 +1003,8 @@ function openEdit(groupId: string) {
   const steps = sourceStepsOf(group.id, sources.value);
   const entry = groupEntry(group, steps);
   if (!entry) return;
-  editing.value = { group, entry, steps };
+  const qmdIndexed = steps.render ? fanInNames(sources.value, "qmd_index", steps.render.id) : true;
+  editing.value = { group, entry, steps, qmdIndexed };
   wizardKey.value++;
   wizardOpen.value = true;
 }
@@ -1014,6 +1017,7 @@ async function onWizardSubmit(payload: {
   groupBody: string | null;
   stepsBody: string;
   renderId: string | null;
+  qmdIndex: boolean;
 }) {
   const current = editing.value;
   let next: string;
@@ -1043,8 +1047,12 @@ async function onWizardSubmit(payload: {
 
   // The fan-ins name their inputs, so a render step added without this
   // renders happily and is never indexed. Idempotent, so re-saving an
-  // edit doesn't duplicate the entry.
-  if (payload.renderId) next = wireIntoFanIns(next, payload.renderId);
+  // edit doesn't duplicate the entry. Semantic search is the one fan-in
+  // the wizard asks about, so it is the one that can be taken back out.
+  if (payload.renderId) {
+    next = wireIntoFanIns(next, payload.renderId);
+    if (!payload.qmdIndex) next = unwireFromFanIns(next, payload.renderId, "qmd_index");
+  }
 
   // Banners are for a person, so they say the name; the id is what the
   // config and the disk use.
