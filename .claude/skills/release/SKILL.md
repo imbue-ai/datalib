@@ -41,7 +41,11 @@ published from a local machine — the tag is the trigger.
 
 0. Run the release's own steps on Linux before anything is bumped —
    `release.yml` runs the tag's tree, so a bug in a step costs a
-   release (v0.35.0 and v0.35.1 each lost their tarballs that way):
+   release (v0.35.0, v0.35.1 and v0.36.0 each lost their tarballs that
+   way — and v0.36.0 got through a green step 0, because the test
+   staged `:bin_unstamped`, which lacks the read-only `git-hash` the
+   release overwrites; a green step 0 is only as good as what the
+   test's tree has in it):
 
    ```sh
    bazelisk run //tools:release_steps_docker
