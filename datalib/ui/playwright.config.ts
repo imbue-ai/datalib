@@ -488,6 +488,7 @@ export default defineConfig({
         /selected-message-outline\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
         /url-sync\.spec\.ts/,
+        /miller-reveal\.spec\.ts/,
         /yolink-plots\.spec\.ts/,
         /gallery\.spec\.ts/,
         // The sandboxed DACTAL iframe: an opaque origin loading module

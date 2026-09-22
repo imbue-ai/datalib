@@ -1197,9 +1197,10 @@ async function deleteRows(targets: Row[]) {
 /// Leave the Manage screen for this row's data: one card, the grid,
 /// already filtered to the source and carrying its type's columns.
 ///
-/// A card stack IS the URL (see router/columns.ts), so this is an
-/// ordinary navigation — the card is bookmarkable, shareable, and the
-/// back button returns here.
+/// A card stack IS the URL (see router/columns.ts), so the result is
+/// bookmarkable and shareable. Not yet a history entry: the miller
+/// layout writes the URL with `replace`, so the back button does not
+/// return here (docs/dev/plans/browser_navigation.md).
 function openBrowse(row: Row) {
   if (!row.browseSource) return;
   // Beside this card, in whatever layout is showing it.

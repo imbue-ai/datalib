@@ -15,6 +15,7 @@ import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns"
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { setCardHelp } from "@/cards/help";
+import { revealScrollLeft } from "@/views/millerReveal";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
@@ -149,6 +150,9 @@ function openColumnsAfter(afterId: string, sources: string[]): string[] {
     prev = openColumnAfter(prev, source);
     ids.push(prev);
   }
+  // The end of the chain is what the click was for; showing it keeps
+  // as much of the chain (and the caller) on screen as fits.
+  if (ids.length > 0) revealColumn(ids[ids.length - 1]);
   return ids;
 }
 
@@ -242,14 +246,21 @@ function showCard(source: string) {
 
 const columnsEl = useTemplateRef<HTMLDivElement>("columnsEl");
 
-// Scroll a column to the left edge of the row once it has rendered.
-// `inline: "start"`, not "nearest": a column wider than the viewport
-// that is already partly on screen counts as "nearest" and never moves.
+// Scroll the row to show a column once it has rendered (millerReveal.ts
+// says where). Not scrollIntoView: its "nearest" never moves a column
+// wider than the row, and its "start" would push the caller off screen.
 function revealColumn(id: string) {
   void nextTick(() => {
-    columnsEl.value
-      ?.querySelector(`[data-slot-id="${id}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "start", behavior: "smooth" });
+    const row = columnsEl.value;
+    const el = row?.querySelector<HTMLElement>(`[data-slot-id="${id}"]`);
+    if (!row || !el) return;
+    const start =
+      el.getBoundingClientRect().left - row.getBoundingClientRect().left + row.scrollLeft;
+    const left = revealScrollLeft(
+      { start: row.scrollLeft, width: row.clientWidth },
+      { start, width: el.offsetWidth },
+    );
+    row.scrollTo({ left, behavior: "smooth" });
   });
 }
 
