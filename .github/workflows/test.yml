@@ -56,10 +56,24 @@ permissions:
   packages: read  # to pull the devcontainer image from GHCR
 
 # Cancel superseded PR runs — pushing a fixup commit shouldn't keep the
-# previous run burning a runner. main pushes don't cancel so the
-# BuildBuddy cache fill from every merged commit is preserved.
+# previous run burning a runner. Every other run gets a group of its
+# own, so nothing ever queues behind or displaces another.
+#
+# **A concurrency group holds at most one PENDING run.**
+# `cancel-in-progress: false` protects the run that is executing; it
+# does not protect the one waiting behind it, which a newly queued run
+# evicts. Grouping every main push under the ref therefore did the
+# opposite of what the comment here used to claim: a merge landing
+# while the previous merge's run was still going cancelled the run in
+# between, before it started a single job. 25 of the 98 completed main
+# runs between 2026-09-18 and 2026-09-22 went that way, each one a
+# commit whose actions never reached the release cache a tag build
+# replays — and `warm-contributor-cache` (#672) would have inherited
+# the same hole. `github.run_id` is unique per run, so a main push and
+# a dispatch are now each alone in their group and simply queue for a
+# runner.
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}
+  group: test-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Two bazel jobs, deliberately (`deny` is a third, a one-minute lockfile

@@ -194,6 +194,18 @@ lines are usually the whole diagnosis:
 compare the run's `created_at` with the job's `started_at`. Median
 queue is seconds; the tail has been over an hour.
 
+**A run with no jobs at all was cancelled while pending.** `gh run
+view <id> --json jobs --jq '.jobs | length'` says `0`, and its
+`updatedAt` is within seconds of the *next* run's `createdAt`. A
+concurrency group holds at most one pending run, so a newly queued run
+evicts the one already waiting — `cancel-in-progress: false` protects
+only the run that is executing. This used to hit `main`: every push
+shared one group, so 25 of the 98 completed main runs between
+2026-09-18 and 2026-09-22 were cancelled before starting, each a
+commit whose actions never reached the release cache. Since #674 a
+push and a dispatch each get a group of their own
+(`github.run_id`), and only PR runs supersede one another.
+
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
 and re-runs most of the suite. A rising median means cold runs got
