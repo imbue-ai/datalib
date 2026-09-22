@@ -11,4 +11,6 @@ pub mod render;
 
 /// Bump when the rendered page or the grid row shape changes enough
 /// that an existing `index.md` must be re-rendered.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids are minted through `datalib_id` under the configured source
+///     and every row carries its backpointer. Every uuid moved.
+pub const RENDER_VERSION: u32 = 2;

@@ -2,13 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use datalib_id::composite_key;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids are minted through `datalib_id` under `Upstream(repo)`,
+///     every row carries its backpointer, and an id carries the
+///     record's `created_at` in its leading bits (`datalib_id`'s v8
+///     layout). Every uuid moved.
+pub const RENDER_VERSION: u32 = 2;
 
 /// Sort comments into rendered order (matches `render.rs`).
 fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {
@@ -113,7 +118,10 @@ pub fn rows_for_pr(
             .qmd_path(Some(qmd.clone()))
             .source_url(pr.html_url.clone())
             .git_sha(pr.head_sha.clone())
-            .upstream_id(Some(pr.pr_number.to_string()))
+            .upstream_id(Some(composite_key(&[
+                &pr.repo_full_name,
+                &pr.pr_number.to_string(),
+            ])))
             .upstream_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
             .markdown_uuid(Some(pr.uuid.clone()))
             .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
@@ -140,7 +148,10 @@ pub fn rows_for_pr(
                 .qmd_path(Some(qmd.clone()))
                 .source_url(c.html_url.clone())
                 .git_sha(c.commit_id.clone())
-                .upstream_id(Some(c.external_id.to_string()))
+                .upstream_id(Some(composite_key(&[
+                    &pr.repo_full_name,
+                    &c.external_id.to_string(),
+                ])))
                 // `issue_comment` / `pr_review` / `pr_review_comment` —
                 // the three live in separate GitHub API namespaces and
                 // their numeric ids overlap freely, so the bare id is

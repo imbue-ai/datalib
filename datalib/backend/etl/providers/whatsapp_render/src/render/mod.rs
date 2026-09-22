@@ -1,5 +1,6 @@
 //! WhatsApp render stage.
 
+pub mod ids;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring
@@ -9,14 +10,6 @@ pub mod parse;
 // inception elsewhere still fails the build.
 #[allow(clippy::module_inception)]
 pub mod render;
-
-// The UUIDv5 identity recipes live in `datalib_etl_whatsapp::schema_raw` (identity
-// recipes belong next to the schema). Re-export so existing
-// `crate::render::whatsapp_*` callers keep resolving.
-pub use datalib_etl_whatsapp::schema_raw::{
-    whatsapp_chat_uuid, whatsapp_markdown_uuid, whatsapp_message_uuid, whatsapp_reaction_uuid,
-    WHATSAPP_UUID_NS,
-};
 
 pub use datalib_etl::periodize::Period;
 pub use parse::parse;

@@ -256,7 +256,9 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   land in one or two leaves (~10 KB written); 500 rows with random keys
   land in ~500 leaves (~2 MB written, 99% of it copies of neighbours).
   Random keys are uuidv4s, uuidv5s and content hashes. Adjacent keys are
-  `(device_id, ts_ms)`, `"{metric}#{date}"`, a time-prefixed uuid.
+  `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
+  `datalib_id` mints: a message's `grid_rows.uuid` starts with its
+  `created_at`, so a sync's new rows land at the tree's right edge.
 - **A commit pins whatever its transaction wrote.** Commit once at the
   end and `dolt_gc()` reclaims every intermediate page: 430 MB → 15 MB.
   Commit after each of 200 transactions and gc reclaims nothing
@@ -283,10 +285,10 @@ Two recoveries, both available:
   chunks at the next gc. Squash only commits older than every
   consumer's cursor, with the writer lock held.
 - **Key for adjacency.** The right fix where the key is ours to
-  choose: see the practice note in
-  `docs/dev/data_architecture_ingestion_practices.md` § "Key a table for
-  what one run writes together", and `docs/dev/entity_ids.md` for the
-  time-prefixed `entity_id` proposal.
+  choose, and the one every entity id now takes: see the practice note
+  in `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
+  for what one run writes together", and `docs/dev/entity_ids.md` § "The
+  layout" for what the stamp in an id is and is not.
 
 ## Schema self-healing: additive changes land, anything else refuses
 

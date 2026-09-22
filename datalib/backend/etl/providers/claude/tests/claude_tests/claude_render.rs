@@ -74,7 +74,7 @@ async fn ingest_fixture(raw: &Path) {
 async fn renders_tng_fixture() {
     let raw = tempfile::tempdir().expect("raw");
     ingest_fixture(raw.path()).await;
-    let parsed = parse(raw.path(), RawRange::cold()).expect("parse");
+    let parsed = parse(raw.path(), "claude_export", RawRange::cold()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut docs = Vec::new();
     render_all(

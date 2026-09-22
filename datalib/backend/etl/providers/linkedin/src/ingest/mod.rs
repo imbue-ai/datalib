@@ -339,9 +339,8 @@ async fn replace_table(
 }
 
 /// PK for a row:
-///   * the joined natural-key columns when hinted and present — as a
-///     uuidv5 of `"{table}:{joined}"` for [`schema_raw::is_uuid_keyed`]
-///     tables (`connections`, keyed by profile URL), else the raw join;
+///   * the joined natural-key columns when hinted and present (a
+///     connection's is its profile URL alone — [`schema_raw::connection_key`]);
 ///   * otherwise a uuidv5 over `table` + the row's canonical JSON.
 fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
     if let Some(cols) = id_cols {
@@ -351,12 +350,7 @@ fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
             .filter(|s| !s.is_empty())
             .collect();
         if !parts.is_empty() {
-            let joined = parts.join("\u{1f}");
-            return if schema_raw::is_uuid_keyed(table) {
-                schema_raw::ns_id(&format!("{table}:{joined}"))
-            } else {
-                joined
-            };
+            return parts.join("\u{1f}");
         }
     }
     let recipe = format!("{table}\u{0}{payload}");
@@ -548,11 +542,11 @@ mod tests {
             row_id("invitations", &inv, Some(&["inviterProfileUrl"])),
             "https://x/in/abc"
         );
-        // `connections` is uuid-keyed: the id is a uuidv5 derived from
-        // the URL, and matches schema_raw::connection_uuid.
+        // `connections` is keyed by the URL itself, which is what the
+        // photo fetch joins on.
         let conn_id = row_id("connections", &v, Some(&["URL"]));
-        assert_eq!(conn_id.len(), 36);
-        assert_eq!(conn_id, schema_raw::connection_uuid("https://x/in/abc"));
+        assert_eq!(conn_id, schema_raw::connection_key("https://x/in/abc"));
+        assert_eq!(conn_id, "https://x/in/abc");
         // Empty hinted column → hash fallback (stable, 36-char uuid).
         let empty: Value = serde_json::json!({"URL": ""});
         let id = row_id("connections", &empty, Some(&["URL"]));

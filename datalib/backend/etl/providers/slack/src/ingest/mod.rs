@@ -912,7 +912,7 @@ async fn paginate_replies(
             .unwrap_or_default();
         for m in &msgs {
             if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
-                seen_ids.insert(schema_raw::slack_message_uuid(team_id, channel_id, ts));
+                seen_ids.insert(schema_raw::slack_message_key(team_id, channel_id, ts));
             }
         }
 
@@ -971,7 +971,7 @@ async fn paginate_replies(
     if drained == Drained::Yes {
         totals.pruned += db
             .prune_thread_replies(
-                &schema_raw::slack_thread_uuid(team_id, channel_id, thread_ts),
+                &schema_raw::slack_thread_key(team_id, channel_id, thread_ts),
                 &seen_ids,
             )
             .await?;

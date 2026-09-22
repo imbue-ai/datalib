@@ -111,7 +111,7 @@ pub struct GridRowBuilder {
     git_sha: Option<String>,
     upstream_id: Option<String>,
     upstream_entity_kind: Option<String>,
-    upstream_scope: Option<String>,
+    upstream_account: Option<String>,
     notion_page_uuid: Option<String>,
     notion_block_uuid: Option<String>,
     markdown_uuid: Option<String>,
@@ -173,7 +173,7 @@ impl GridRowBuilder {
     opt_setter!(git_sha);
     opt_setter!(upstream_id);
     opt_setter!(upstream_entity_kind);
-    opt_setter!(upstream_scope);
+    opt_setter!(upstream_account);
     opt_setter!(notion_page_uuid);
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
@@ -314,7 +314,7 @@ impl GridRowBuilder {
             git_sha: self.git_sha,
             upstream_id: self.upstream_id,
             upstream_entity_kind: self.upstream_entity_kind,
-            upstream_scope: self.upstream_scope,
+            upstream_account: self.upstream_account,
             notion_page_uuid: self.notion_page_uuid,
             notion_block_uuid: self.notion_block_uuid,
             markdown_uuid: self.markdown_uuid,

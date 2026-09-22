@@ -15,7 +15,7 @@ fn fixture_dir() -> PathBuf {
 
 #[test]
 fn parses_tng_fixture() {
-    let parsed = parse_api_dir(&fixture_dir()).expect("parse");
+    let parsed = parse_api_dir(&fixture_dir(), "chatgpt_api").expect("parse");
 
     assert_eq!(parsed.accounts.len(), 1);
     assert_eq!(parsed.accounts[0].name.as_deref(), Some("Lt. Cmdr. Data"));

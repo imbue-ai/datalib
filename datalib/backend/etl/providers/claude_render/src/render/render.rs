@@ -25,6 +25,7 @@ use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ProjectRow,
     ShreddedConversation,
 };
+use datalib_id::Identity;
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
@@ -44,11 +45,14 @@ use datalib_schema::providers::Provider;
 /// v7: `account` is the account's email rather than Anthropic's user
 ///     UUID, and a project page carries the account that downloaded it
 ///     rather than its creator — who moves to `author`.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout), so a sync's rows land in adjacent
+///     leaves of the render store and the index.
+pub const RENDER_VERSION: u32 = 8;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Chat".to_string(),
@@ -68,7 +72,7 @@ fn profile() -> RenderProfile {
 /// for why those anchors are load-bearing.
 fn project_profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Claude,
         source_label: "Claude".to_string(),
         chat_kind: "Project".to_string(),
@@ -128,7 +132,13 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let chat = build_chat(&shredded, &c.inputs, &parsed.project_name_by_uuid, parsed);
+        let chat = build_chat(
+            source_id,
+            &shredded,
+            &c.inputs,
+            &parsed.project_name_by_uuid,
+            parsed,
+        );
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
     }
@@ -153,7 +163,7 @@ pub fn render_all(
         let project_chats: Vec<NormalizedChat> = parsed
             .projects
             .iter()
-            .map(|p| build_project_page(p, &options, parsed))
+            .map(|p| build_project_page(source_id, p, &options, parsed))
             .collect();
         let no_blobs: HashMap<String, BlobBundle> = HashMap::new();
         let projects = cc_render_all(
@@ -173,6 +183,7 @@ pub fn render_all(
 }
 
 fn build_chat(
+    source_id: &str,
     shredded: &ShreddedConversation,
     inputs: &Inputs,
     project_names: &HashMap<String, String>,
@@ -292,7 +303,6 @@ fn build_chat(
                 continue;
             }
             let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
-            let block_id = block_identity(&m.message_uuid, b.block_index, btype, &raw_obj);
             // A block inherits its message's stamp, offset by its
             // index so blocks keep their order. `None` only when the
             // message had none either.
@@ -304,6 +314,14 @@ fn build_chat(
                 &mut block_problems,
             )
             .or_else(|| msg_ms.map(|ms| ms + (b.block_index as i64) + 1));
+            let block_id = block_identity(
+                source_id,
+                &m.message_uuid,
+                b.block_index,
+                btype,
+                &raw_obj,
+                block_ms,
+            );
             let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
@@ -330,7 +348,7 @@ fn build_chat(
         // The message's own item: its text blocks + extracted-text
         // attachments + downloadable files. Always emitted (even empty)
         // so the per-message grid row survives.
-        let msg_id = ids::message(&m.message_uuid);
+        let msg_id = ids::message(source_id, &m.message_uuid, msg_ms);
         let body = body_parts.join("\n\n");
         let kind = if norm_atts.is_empty() {
             ItemKind::Text
@@ -368,7 +386,7 @@ fn build_chat(
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
-    let chat_uuid = ids::conversation(&conv_uuid).uuid;
+    let chat_uuid = ids::conversation(source_id, &conv_uuid).uuid;
     // The account row and the project row are looked up per chat, and
     // declared as they are.
     inputs.read("users", &conv.account_uuid);
@@ -392,13 +410,14 @@ fn build_chat(
         // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
         source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
+            source_ref: None,
             items,
         }],
         inputs: inputs.declared(),
@@ -406,12 +425,13 @@ fn build_chat(
 }
 
 fn build_project_page(
+    source_id: &str,
     project: &ProjectRow,
     options: &RenderOptions,
     parsed: &ParsedExport,
 ) -> NormalizedChat {
     let project_uuid = project.project_uuid.clone();
-    let page_uuid = ids::project(&project_uuid).uuid;
+    let page_uuid = ids::project(source_id, &project_uuid).uuid;
     let name = project
         .name
         .clone()
@@ -433,19 +453,17 @@ fn build_project_page(
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     if let Some(text) = project.description.clone().and_then(filter_nonempty) {
         items.push(project_item(
-            ids::project_description(&project_uuid),
+            ids::project_description(source_id, &project_uuid, base_ms.map(|b| b + 1)),
             "Description",
             "Project Description",
-            base_ms.map(|b| b + 1),
             text,
         ));
     }
     if let Some(text) = project.prompt_template.clone().and_then(filter_nonempty) {
         items.push(project_item(
-            ids::project_instructions(&project_uuid),
+            ids::project_instructions(source_id, &project_uuid, base_ms.map(|b| b + 2)),
             "Custom instructions",
             "Project Instructions",
-            base_ms.map(|b| b + 2),
             text,
         ));
     }
@@ -469,7 +487,7 @@ fn build_project_page(
             .as_deref()
             .map(|c| clamp_doc_text(c, options.max_project_doc_bytes))
             .and_then(filter_nonempty);
-        let doc_id = ids::project_document(&doc.doc_uuid);
+        let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
             message_uuid: doc_id.uuid.clone(),
             author_id: "project_doc".into(),
@@ -516,13 +534,14 @@ fn build_project_page(
         // conversation's, see `build_chat`.
         external_id: Some(project_uuid.clone()),
         source_url: Some(format!("https://claude.ai/project/{project_uuid}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: page_uuid,
+            source_ref: None,
             items,
         }],
         inputs: project.inputs.declared(),
@@ -555,17 +574,16 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
 }
 
 fn project_item(
-    id: ids::Identity,
+    id: Identity,
     author_display: &str,
     kind_label: &str,
-    date_ms: Option<i64>,
     text: String,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_id: kind_label.to_string(),
         author_display: author_display.to_string(),
-        date_ms,
+        date_ms: id.at,
         text: Some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),
@@ -612,11 +630,13 @@ fn iso_to_ms(s: &str) -> Option<i64> {
 // Block / attachment rendering (the markdown that becomes item.text).
 
 pub(crate) fn block_identity(
+    source_id: &str,
     msg_uuid: &str,
     block_index: usize,
     btype: &str,
     raw_obj: &serde_json::Map<String, Value>,
-) -> ids::Identity {
+    date_ms: Option<i64>,
+) -> Identity {
     let field = match btype {
         "tool_use" => "id",
         "tool_result" => "tool_use_id",
@@ -626,12 +646,12 @@ pub(crate) fn block_identity(
         .then(|| raw_obj.get(field).and_then(Value::as_str))
         .flatten();
     match (btype, upstream) {
-        ("tool_use", Some(id)) => ids::tool_use(msg_uuid, id),
-        ("tool_result", Some(id)) => ids::tool_result(msg_uuid, id),
-        ("thinking", _) => ids::thinking_block(msg_uuid, block_index),
+        ("tool_use", Some(id)) => ids::tool_use(source_id, msg_uuid, id, date_ms),
+        ("tool_result", Some(id)) => ids::tool_result(source_id, msg_uuid, id, date_ms),
+        ("thinking", _) => ids::thinking_block(source_id, msg_uuid, block_index, date_ms),
         // A tool block whose id field is absent. Position is all that
         // is left, and it is still stable for a given message.
-        _ => ids::block_fallback(msg_uuid, block_index),
+        _ => ids::block_fallback(source_id, msg_uuid, block_index, date_ms),
     }
 }
 

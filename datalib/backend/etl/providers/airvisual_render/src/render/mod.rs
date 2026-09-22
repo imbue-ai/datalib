@@ -15,4 +15,6 @@ pub mod units;
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params`, so a bump invalidates the "HEAD unchanged → skip"
 /// fast path too.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids moved to `datalib_id`'s v8 layout (none carries a stamp
+///     here, but the layout changed under them).
+pub const RENDER_VERSION: u32 = 2;

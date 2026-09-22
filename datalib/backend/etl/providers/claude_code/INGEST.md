@@ -126,7 +126,7 @@ cloud session gets `https://claude.ai/code/<cse_id>` as its link.
 ## Identity
 
 Every key is one Claude Code minted and mints unique across machines,
-so ids are `Scope::ProviderGlobal` under `IdNamespace::ClaudeCode`:
+so they are the keys under `IdNamespace::ClaudeCode`, with no account:
 `session` on the session id, `agent_transcript` on
 `<session_id>#<agent_id>`, `record` on the record uuid, and
 `tool_use` / `tool_result` / `thinking_block` on

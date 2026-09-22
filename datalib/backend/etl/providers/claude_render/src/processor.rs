@@ -47,7 +47,7 @@ impl RenderProcessor for ClaudeRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_range())
+        let parsed = parse(&self.raw_path, &self.name, ctx.raw_range())
             .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
@@ -66,8 +66,11 @@ impl RenderProcessor for ClaudeRender {
         // that this run did not produce goes. The rendered ones follow
         // and replace that.
         for bucket in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::conversation(bucket).uuid, &[])?;
-            ctx.declare_bucket(&crate::render::ids::project(bucket).uuid, &[])?;
+            ctx.declare_bucket(
+                &crate::render::ids::conversation(&self.name, bucket).uuid,
+                &[],
+            )?;
+            ctx.declare_bucket(&crate::render::ids::project(&self.name, bucket).uuid, &[])?;
         }
         for bucket in &parsed.scan.gone {
             ctx.declare_bucket(bucket, &[])?;

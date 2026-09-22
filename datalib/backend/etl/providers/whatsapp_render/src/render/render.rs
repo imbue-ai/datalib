@@ -10,7 +10,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::{
-    render::{Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION},
+    render::{Bucket, Buckets, RenderProfile},
     NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -21,20 +21,23 @@ use datalib_schema::providers::Provider;
 /// that we need every existing WhatsApp doc rebuilt. v6: the raw store
 /// is msgstore mirrored table for table, and the render cursor of a
 /// store written the old way (`wa_*` tables) names a commit nothing can
-/// diff against.
-pub const RENDER_VERSION: u32 = 6;
+/// diff against. v7: ids are minted through `datalib_id` under
+/// the configured source, every row carries its backpointer, and a message's
+/// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
+/// Every uuid moved, `chat_uuid` among them.
+pub const RENDER_VERSION: u32 = 7;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: super::ids::STAMP_PRECISION,
         provider: Provider::Whatsapp,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "WhatsApp Chat".to_string(),
         message_kind: "WhatsApp Message".to_string(),
         reaction_kind: "WhatsApp Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
     }
 }
@@ -116,7 +119,7 @@ pub fn render_all(
             .iter()
             .flatten()
             .chain(scan.changed.iter().flat_map(|c| c.gone.iter()))
-            .map(|jid| crate::render::whatsapp_chat_uuid(source_id, jid))
+            .map(|jid| super::ids::chat(source_id, jid).uuid)
             .collect();
         named.extend(narrowed.gone);
         (filtered, scan.head, named)
@@ -471,8 +474,7 @@ mod tests {
             "after modifying one chat, render should emit exactly one doc, got {docs3:?}"
         );
         assert!(gone3.is_empty(), "nothing was deleted, got {gone3:?}");
-        let alice_chat_uuid = crate::render::whatsapp_chat_uuid("test", "alice@s.whatsapp.net");
-        let expected = crate::render::whatsapp_markdown_uuid(&alice_chat_uuid, "all");
+        let expected = super::super::ids::period("test", "alice@s.whatsapp.net", "all").uuid;
         assert_eq!(
             docs3[0], expected,
             "rendered doc should belong to alice's chat"
@@ -511,10 +513,7 @@ mod tests {
         );
         assert_eq!(
             gone4,
-            vec![crate::render::whatsapp_chat_uuid(
-                "test",
-                "bob@s.whatsapp.net"
-            )]
+            vec![super::super::ids::chat("test", "bob@s.whatsapp.net").uuid]
         );
     }
 

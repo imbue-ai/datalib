@@ -137,7 +137,7 @@ fn fixture_db() -> PathBuf {
 
 /// Every page rendered for one chat, concatenated.
 fn pages(docs: &[RenderedMarkdown], chat_guid: &str) -> String {
-    let uuid = chat_uuid(chat_guid);
+    let uuid = chat_uuid("messages", chat_guid);
     let mut out = String::new();
     for doc in docs
         .iter()
@@ -240,7 +240,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     );
     assert_eq!(
         docs[0].bucket_key.as_deref(),
-        Some(chat_uuid(BRIDGE).as_str())
+        Some(chat_uuid("messages", BRIDGE).as_str())
     );
     assert!(pages(&docs, BRIDGE).contains("Recalibrating now."));
     Ok(())

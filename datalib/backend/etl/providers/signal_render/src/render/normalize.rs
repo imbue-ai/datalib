@@ -9,12 +9,12 @@ use std::collections::HashMap;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::inputs::{Inputs, Lookup};
 
+use super::ids;
 use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
-use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
 
 /// One `NormalizedChat` per *bucket*, not per chat.
 ///
@@ -42,7 +42,7 @@ pub fn to_chats(
             );
             continue;
         };
-        let chat_uuid = signal_chat_uuid(source_id, &chat.id);
+        let chat_id = ids::chat(source_id, &chat.id);
         let bundle_key = format!("{}#{}", chat.id, doc.period_key);
         // Recipients are declared as they are looked up, on the chat's
         // inputs — every period of the chat shares one declaration.
@@ -65,7 +65,7 @@ pub fn to_chats(
         chats.push(NormalizedChat {
             path_prefix: None,
             id: bundle_key.clone(),
-            chat_uuid: chat_uuid.clone(),
+            chat_uuid: chat_id.uuid,
             display: recipient_display(recipients, chat),
             // `None`, so chat-common derives the familiar
             // "Signal · {recipient}" heading rather than us restating it.
@@ -73,17 +73,21 @@ pub fn to_chats(
             author: None,
             account: None,
             project: None,
-            external_id: None,
-            upstream_scope: None,
+            external_id: Some(chat_id.natural_key),
+            upstream_account: None,
             // Signal Android backups expose no per-thread web URL.
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                period_key: doc.period_key.clone(),
-                markdown_uuid: signal_markdown_uuid(&chat_uuid, &doc.period_key),
-                items,
+            buckets: vec![{
+                let period = ids::period(source_id, &chat.id, &doc.period_key);
+                NormalizedDoc {
+                    orphan_reactions: Vec::new(),
+                    period_key: doc.period_key.clone(),
+                    markdown_uuid: period.uuid,
+                    source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
+                    items,
+                }
             }],
             inputs: inputs.declared(),
         });
@@ -121,8 +125,9 @@ fn to_item(
         })
         .collect();
 
+    let id = ids::message(source_id, &chat.id, &item.author_id, item.date_sent);
     NormalizedChatItem {
-        message_uuid: signal_message_uuid(source_id, &chat.id, &item.author_id, item.date_sent),
+        message_uuid: id.uuid,
         author_id: item.author_id.clone(),
         author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
@@ -137,7 +142,7 @@ fn to_item(
         system_note: None,
         source_url: None,
         kind_label: None,
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         problems: Vec::new(),
     }
