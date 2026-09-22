@@ -243,14 +243,29 @@ pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, Times
     ))
 }
 
-/// Coerce an upstream ISO-8601 timestamp into a grid-ready `created_at`:
-/// RFC 3339 with an explicit offset.
+/// How much of an upstream epoch-millis stamp a provider keeps in the
+/// `created_at` it stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordStampPrecision {
     /// `2026-06-05T19:18:39+00:00` — chat-common, signal.
     Seconds,
     /// `2026-06-05T19:18:39.123+00:00` — beeper.
     Millis,
+}
+
+impl RecordStampPrecision {
+    /// The instant [`record_stamp_from_unix_millis`] would store for
+    /// `ms`, read back as epoch millis: the value to put in an entity
+    /// id's stamp so it equals the row's `created_at` exactly. `None`
+    /// whenever the stored stamp would be null.
+    pub fn stored_ms(self, ms: Option<i64>) -> Option<i64> {
+        let ms = ms?;
+        IsoOffsetTimestamp::from_unix_millis(ms)?;
+        Some(match self {
+            RecordStampPrecision::Seconds => ms.div_euclid(1000) * 1000,
+            RecordStampPrecision::Millis => ms,
+        })
+    }
 }
 
 /// An upstream epoch-millis stamp as a grid-ready `created_at`, or `None` when
@@ -374,6 +389,15 @@ pub fn coerce_record_stamp(s: &str) -> Option<String> {
     None
 }
 
+/// The instant a stored record stamp (`grid_rows.created_at`, as the
+/// source wrote it) reads back as from `created_at_utc`, in epoch
+/// millis: the value an entity id's stamp must carry to equal the
+/// row's. `None` for anything [`split_record_stamp`] would not split.
+pub fn record_stamp_ms(s: &str) -> Option<i64> {
+    let (utc, _) = split_record_stamp(s)?;
+    parse_strict(&utc).ok().map(|t| t.to_unix_millis())
+}
+
 pub fn split_record_stamp(s: &str) -> Option<(String, String)> {
     if s.is_empty() {
         return None;
@@ -474,6 +498,43 @@ pub fn split_stamp(iso: &str) -> StoredStamp {
 
 #[cfg(test)]
 mod tests {
+    /// `stored_ms` is what the stored stamp reads back as, so an id
+    /// minted from it matches the row's `created_at`. Floors toward
+    /// minus infinity so a pre-1970 stamp behaves like the string does.
+    #[test]
+    fn stored_ms_agrees_with_the_stored_stamp() {
+        use super::{record_stamp_from_unix_millis, RecordStampPrecision};
+        for (precision, ms) in [
+            (RecordStampPrecision::Seconds, 1_700_000_000_999),
+            (RecordStampPrecision::Seconds, -1_500),
+            (RecordStampPrecision::Millis, 1_700_000_000_999),
+        ] {
+            let stored = record_stamp_from_unix_millis(Some(ms), precision).unwrap();
+            let back = super::parse_strict(&stored).unwrap().to_unix_millis();
+            assert_eq!(precision.stored_ms(Some(ms)), Some(back), "{stored}");
+        }
+        assert_eq!(RecordStampPrecision::Seconds.stored_ms(None), None);
+        assert_eq!(
+            RecordStampPrecision::Seconds.stored_ms(Some(i64::MAX)),
+            None
+        );
+    }
+
+    /// The stamp an id carries is what the row's `created_at_utc` reads
+    /// back as, whatever spelling the source used.
+    #[test]
+    fn record_stamp_ms_reads_the_stored_column_back() {
+        for (s, ms) in [
+            ("2023-11-14T22:13:20Z", 1_700_000_000_000),
+            ("2023-11-14T22:13:20+00:00", 1_700_000_000_000),
+            ("2023-11-15T00:13:20.5+02:00", 1_700_000_000_500),
+        ] {
+            assert_eq!(super::record_stamp_ms(s), Some(ms), "{s}");
+        }
+        assert_eq!(super::record_stamp_ms(""), None);
+        assert_eq!(super::record_stamp_ms("stardate 47988.1"), None);
+    }
+
     /// The UTC half sorts as text the way the instants sort; the offset
     /// half is what the stamp would have shown where it was made.
     #[test]

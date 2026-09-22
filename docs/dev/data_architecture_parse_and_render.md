@@ -386,7 +386,7 @@ rule, and the tree already follows it in four places:
 | faithful column | unified companion | what the unification buys |
 | --- | --- | --- |
 | `created_at` — source offset preserved verbatim | `created_at_utc` + `created_offset`, derived at load by `split_record_stamp` | one zone and one width, so lexical order *is* chronological order |
-| `upstream_id` + `upstream_entity_kind` + `upstream_scope` — the provider's own identity, byte-exact | `uuid` — our v5 over the five-component recipe | one id space across every provider; stable across re-render |
+| `upstream_id` + `upstream_entity_kind` + `upstream_account` — the provider's own identity, byte-exact | `uuid` — our v5 over the five-component recipe | one id space across every provider; stable across re-render |
 | `upstream_entity_kind` — the upstream's own word, which "may not [be reworded], because `uuid` derives from it" | `kind` — the grid's display label, which "may be reworded freely" | one Kind column the UI can filter on |
 | `blake3` — the whole file | `payload_blake3` — the metadata-excluding digest | "same audio, different tags" becomes a query |
 
@@ -406,7 +406,7 @@ recipe is possible.** `media` does this and explains why in one
 sentence: two payload hashes "are only comparable under one recipe, so
 the recipe is stored beside the digest" — hence `payload_scheme`
 (`mp3.frames.v1`), and any change to what a recipe excludes bumps its
-version. `upstream_scope` is the same move for identity: the exact
+version. `upstream_account` is the same move for identity: the exact
 string a `uuid` was minted under, kept so the id can be regenerated and
 checked.
 

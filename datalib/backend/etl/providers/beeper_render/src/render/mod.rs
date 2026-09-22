@@ -8,15 +8,9 @@ pub mod parse;
 // `parse.rs`. Renaming it would break the symmetry in all twelve
 // providers. Allowed here rather than repo-wide so an unintentional
 // inception elsewhere still fails the build.
+pub mod ids;
 #[allow(clippy::module_inception)]
 pub mod render;
-
-// The UUIDv5 identity recipes live in `ingest::schema_raw` (identity
-// recipes belong next to the schema). Re-export so existing
-// `crate::render::beeper_*` callers keep resolving.
-pub use datalib_etl_beeper::ingest::schema_raw::{
-    beeper_event_uuid, beeper_markdown_uuid, beeper_room_uuid, beeper_user_uuid, BEEPER_UUID_NS,
-};
 
 // Period
 

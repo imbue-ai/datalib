@@ -49,7 +49,7 @@ impl RenderProcessor for BeeperRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, self.period, ctx.raw_range())
+        let parsed = parse(&self.raw_path, &self.name, self.period, ctx.raw_range())
             .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;
         let raw_db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
         let mut on_doc = |md| ctx.emit_doc(md);
@@ -66,7 +66,7 @@ impl RenderProcessor for BeeperRender {
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.
         for room in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(room, &[])?;
+            ctx.declare_bucket(&crate::render::ids::room(&self.name, room).uuid, &[])?;
         }
         for bucket in &parsed.scan.gone {
             ctx.declare_bucket(bucket, &[])?;

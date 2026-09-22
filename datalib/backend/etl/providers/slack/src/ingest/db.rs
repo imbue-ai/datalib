@@ -20,8 +20,8 @@ use datalib_etl::event_tape::EventTape;
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
-    full_ddl, join_dm_user_ids, parse_dm_user_ids, slack_message_uuid, slack_thread_uuid,
-    ChannelRow, MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, USER_VOLATILE_PATHS,
+    full_ddl, join_dm_user_ids, parse_dm_user_ids, slack_message_key, slack_thread_key, ChannelRow,
+    MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -384,10 +384,9 @@ impl RawDb {
         }
         let mut prepared: Vec<Prepared> = Vec::with_capacity(inputs.len());
         for m in inputs {
-            let id = slack_message_uuid(&m.team_id, &m.channel_id, &m.ts);
+            let id = slack_message_key(&m.team_id, &m.channel_id, &m.ts);
             let effective_thread_ts = m.thread_ts.as_deref().unwrap_or(m.ts.as_str());
-            let thread_root_uuid =
-                slack_thread_uuid(&m.team_id, &m.channel_id, effective_thread_ts);
+            let thread_root_uuid = slack_thread_key(&m.team_id, &m.channel_id, effective_thread_ts);
             let payload_str = serde_json::to_string(&m.payload).context("serialize message")?;
             prepared.push(Prepared {
                 row: MessageRow {

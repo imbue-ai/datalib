@@ -44,7 +44,8 @@ impl RenderProcessor for SlackRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_range())
+        use datalib_etl_slack::ingest::schema_raw::split_thread_key as slack_thread_key_parts;
+        let parsed = parse(&self.raw_path, &self.name, ctx.raw_range())
             .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
         // Users are read whole every run; messages only for the changed
         // threads on a narrowed run.
@@ -59,8 +60,14 @@ impl RenderProcessor for SlackRender {
         // A thread this run looked at that has no message left builds no
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.
-        for thread_uuid in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(thread_uuid, &[])?;
+        for key in parsed.scan.render.iter().flatten() {
+            let Some((team, channel, ts)) = slack_thread_key_parts(key) else {
+                continue;
+            };
+            ctx.declare_bucket(
+                &crate::render::ids::thread(&self.name, team, channel, ts).uuid,
+                &[],
+            )?;
         }
         for bucket in &summary.buckets {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;

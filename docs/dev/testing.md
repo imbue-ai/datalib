@@ -33,8 +33,8 @@ sibling `.update` target (via the `insta_update` macro in
 [`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
 
 ```bash
-bazel run //datalib/backend/unified_index:fixture_db_snapshot_test.update
-bazel run //datalib/backend/etl/providers/slack:slack_translate.update
+bazel run //datalib/backend/unified_index:unified_index_tests.update
+bazel run //datalib/backend/etl/providers/slack:slack_tests.update
 ```
 
 The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`, which
@@ -45,6 +45,14 @@ insta snapshot: a test that writes its file when `INSTA_UPDATE=always` is
 set and compares otherwise (`//datalib/backend/datalib_step:ingest_methods.update`
 is one). The live tests need `LATCHKEY_CURL` pointed at the router curl,
 never the impersonator (`docs/dev/curl_impersonate.md`).
+
+A package's integration tests share one binary (below), so its
+snapshots are named for that binary and the whole package has one
+`.update`: `slack_tests.update` refreshes the goldens of every module
+in `tests/slack_tests/`. Where a package also has a `live` module, its
+goldens come from the network, so the two are separate runs:
+`<p>_tests.update` carries `test_args = ["--skip", "live::"]` and
+`<p>_live.update` carries `test_args = ["live::"]`.
 
 When adding an insta-using test, declare a sibling `.update`:
 
@@ -68,6 +76,57 @@ insta_update(
     extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
 )
 ```
+
+## A package's integration tests are one binary
+
+`tests/<name>/main.rs` with a `mod` line per file, one `rust_test`
+named `<name>` over `tests/<name>/*.rs`. Not one target per file: a
+`rust_test` is a whole opt-mode link of everything the crate reaches,
+which is most of what a test here costs, and 207 of them made cold CI
+runs long (`docs/dev/ci.md` § "blast radius" has the measurement).
+
+Two things follow from sharing a process:
+
+* **Anything process-global is now shared.** The playback transport is
+  chosen by an environment variable each test points at its own fixture
+  tree, so the provider binaries set `RUST_TEST_THREADS = "1"` and say
+  so in `main.rs`. A tracing subscriber is the same story from the
+  other side: `datalib/backend/http`'s three log tests each install the
+  process's only one, so they stay separate targets.
+* **insta names a snapshot after the module path.** The goldens live in
+  `tests/<name>/snapshots/` and are called
+  `<name>__<module>__<snapshot>.snap`. Keep the target name equal to
+  the directory name, because cargo discovers `tests/<dir>/main.rs`
+  under that name too and the two must agree on the path.
+
+A test that cannot share — a different `tags` (`no-sandbox`,
+`external`, `manual`), or a process-global it must own — is its own
+target, and its header says which of the two it is.
+
+### The `live` module
+
+A provider's live test — the one that talks to the real service through
+`latchkey` — is a module named `live` in the same binary, not a target
+of its own. Its tests are therefore named `live::<fn>`, the `rust_test`
+carries `args = ["--skip", "live::"]`, and a sibling `live_run` target
+(`tools/live.bzl`) runs exactly what that skips:
+
+```bash
+bazel run //datalib/backend/etl/providers/claude:claude_live
+```
+
+`bazel run`, because a `bazel test` of the same target would still apply
+its `--skip`, and because these tests need the invoking shell's
+environment — the host keyring, and `LATCHKEY_CURL` pointed at the
+router curl. The gain is that the live code compiles with the rest of
+the package's tests instead of in a link of its own, and still cannot
+rot.
+
+**Not `#[ignore]`.** That is one flag for the whole binary and
+`insta_update`'s `test_args = ["--ignored"]` already spends it on tests
+that are ignored for the ordinary reason
+(`//datalib/backend/dag:manual_e2e_live_sync_golden`). Two meanings in
+one binary would be indistinguishable.
 
 ## The Playwright suite runs in two engines
 

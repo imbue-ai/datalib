@@ -16,11 +16,11 @@ Matrix event shapes without any bridge-specific knowledge.
 
 ## UUIDs
 
-Beeper translate uses its own v5 namespace
-(`translate::BEEPER_UUID_NS`) to derive deterministic row UUIDs from
-`(matrix_room_id, matrix_event_id)`. A `matrix_generic`-translated row
-keeps the same `uuid` if it's later replaced by a bridge-specific
-translator — same cutover discipline as the slack provider.
+The raw store keys rooms, users and events by their Matrix ids, so a
+`matrix_generic`-translated row keeps its row if it's later replaced by
+a bridge-specific translator. Every rendered id is `render::ids` over
+that Matrix id under the configured source; an event's carries its
+`timestamp_ms` in its leading bits — `docs/dev/entity_ids.md`.
 
 ## Status
 

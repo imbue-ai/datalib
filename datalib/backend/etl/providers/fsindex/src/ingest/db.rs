@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_entity_in_tx;
+use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw as dr;
 
 use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow, DATA_TABLES};
@@ -52,7 +52,7 @@ impl RawDb {
     /// bookkeeping (`sync_runs`) is left alone.
     pub async fn reset(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin truncate tx")?;
-        for table in DATA_TABLES {
+        for table in DATA_TABLES.iter().copied().chain(["scan_meta_bookkeeping"]) {
             // Audited: `table` iterates a `&'static str` const array of our own
             // table names; no runtime data reaches the statement.
             sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
@@ -225,9 +225,11 @@ impl RawDb {
         Some(c)
     }
 
-    pub async fn write_scan_meta(&self, row: &ScanMetaRow, _now: &str) -> Result<()> {
+    pub async fn write_scan_meta(&self, row: &ScanMetaRow, now: &str) -> Result<()> {
+        let now = datalib_time::parse_strict(now)
+            .with_context(|| format!("parse the run's now {now:?}"))?;
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row)).await?;
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), &now).await?;
         tx.commit().await.context("commit scan_meta tx")?;
         Ok(())
     }

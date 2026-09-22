@@ -50,40 +50,23 @@ rust_test(
     edition = "2021",
 )
 
-# The interpretation, tested against its intermediate representation:
-# `analyze()` is a pure function from `Inputs` to `DiffResult`, so move
-# pairing, subtree rollup, delete-vs-copy-remains and in-tree duplicate
-# grouping are asserted on plain data — no doltlite, no HTML, no
-# browser.
+# Every hermetic dirtree_diff test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "analyze_test",
-    size = "small",
-    srcs = ["tests/analyze_test.rs"],
-    crate_root = "tests/analyze_test.rs",
+    name = "dirtree_diff_tests",
+    srcs = glob(["tests/dirtree_diff_tests/*.rs"]),
+    crate_root = "tests/dirtree_diff_tests/main.rs",
     edition = "2021",
     deps = [
-        ":datalib_dirtree_diff",
-        "@datalib_crates//:serde_json",
-    ],
-)
-
-# The doltlite side, against real stores: two independent files unify
-# through `file://` remotes and the prolly diff works across them, reads
-# go through a pin rather than the working set, and the vtab-registry
-# trap that forces `unify` to hand back a closed pool stays pinned.
-rust_test(
-    name = "store_test",
-    size = "small",
-    srcs = ["tests/store_test.rs"],
-    crate_root = "tests/store_test.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_dirtree_diff",
         "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        ":datalib_dirtree_diff",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:hex",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
+

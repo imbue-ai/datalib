@@ -105,7 +105,7 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         account: Some("acct-1701".to_string()),
         project: None,
         external_id: Some(format!("upstream-{id}")),
-        upstream_scope: None,
+        upstream_account: None,
         source_url: Some(format!("https://example.invalid/chat/{id}")),
         org_uuid: None,
         org_name: None,
@@ -113,6 +113,7 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
             markdown_uuid: id.to_string(),
+            source_ref: None,
             items,
             orphan_reactions: Vec::new(),
         }],

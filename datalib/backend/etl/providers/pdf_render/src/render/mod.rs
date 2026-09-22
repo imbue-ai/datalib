@@ -75,7 +75,7 @@ pub async fn load(raw_dir: &Path, range: RawRange<'_>) -> Result<Option<Loaded>>
             // No scan has run against this store yet.
             None => (None, Vec::new()),
         };
-        let scan = scan_changed(&db, range, &targets).await?;
+        let scan = scan_changed(&db, range).await?;
         Ok::<_, anyhow::Error>(Loaded {
             targets,
             scan_meta_id,
@@ -112,11 +112,11 @@ pub fn buckets_of(
         .into_iter()
         .flatten()
         .map(|blake3| Bucket {
-            key: grid_rows::document_uuid(blake3),
+            key: blake3.clone(),
             inputs: Vec::new(),
         })
         .chain(converted.iter().map(|t| Bucket {
-            key: grid_rows::document_uuid(&t.blake3),
+            key: t.blake3.clone(),
             inputs: inputs_of(t, scan_meta_id),
         }))
         .collect()
@@ -145,7 +145,12 @@ pub fn render_targets(
     for t in targets {
         progress.inc(1);
         let md_path = md_path_for(out_dir, &t.blake3);
-        let doc_uuid = grid_rows::document_uuid(&t.blake3);
+        let doc_uuid = grid_rows::document(
+            source_id,
+            &t.blake3,
+            grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
+        )
+        .uuid;
         match render_one(t, &md_path, source_id, &doc_uuid) {
             Ok(rendered) => {
                 summary.converted += 1;
@@ -232,7 +237,13 @@ fn render_one(
         // Per-page section wrapper. The `data-section-uuid` must be
         // byte-equal to the page grid row's `uuid` or row→preview
         // navigation silently fails (see `etl::section` docs).
-        let uuid = grid_rows::page_uuid(&t.blake3, p.number);
+        let uuid = grid_rows::page(
+            source_id,
+            &t.blake3,
+            p.number,
+            grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
+        )
+        .uuid;
         body.push_str(&msg_div_open(&uuid, grid_rows::PROVIDER));
         body.push('\n');
         body.push_str(&p.text);
@@ -258,13 +269,15 @@ fn render_one(
         modified_at: t.doc_modified_at.as_deref(),
         qmd_path: Some(&qmd_rel),
     };
-    let rows = grid_rows::rows_for_document(&meta, &page_rows);
+    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
 
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(doc_uuid.to_string()),
+        // The bucket is the raw row, not the document: the id carries a
+        // stamp the diff cannot see.
+        bucket_key: Some(t.blake3.clone()),
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,
@@ -327,9 +340,6 @@ pub struct PdfScan {
     /// the ones the diff named. `None` → convert everything the corpus
     /// holds.
     pub render: Option<std::collections::HashSet<String>>,
-    /// Bucket keys the driver found stale that name no document the diff
-    /// knows — declared with nothing so their pages go.
-    pub gone: Vec<String>,
     pub new_head: Option<String>,
     pub elapsed: Option<std::time::Duration>,
 }
@@ -342,11 +352,7 @@ pub struct PdfScan {
 /// new path is how a document enters the corpus, even when its bytes
 /// were already known. A `pdf_scan_meta` change reaches every document
 /// through the row each declared.
-async fn scan_changed(
-    db: &RawDb,
-    range: RawRange<'_>,
-    targets: &[RenderTarget],
-) -> Result<PdfScan> {
+async fn scan_changed(db: &RawDb, range: RawRange<'_>) -> Result<PdfScan> {
     let pin = db
         .pin()
         .expect("open_reader returns a pinned handle")
@@ -372,17 +378,9 @@ async fn scan_changed(
         },
     )
     .await?;
-    // The driver names stale buckets by document uuid; the diff by blake3.
-    let by_uuid: std::collections::HashMap<String, &str> = targets
-        .iter()
-        .map(|t| (grid_rows::document_uuid(&t.blake3), t.blake3.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
-        by_uuid.get(key).map(|b| b.to_string())
-    });
+    // The driver names stale buckets by blake3, as the diff does.
     Ok(PdfScan {
-        render: narrowed.render,
-        gone: narrowed.gone,
+        render: range.narrow(scan.render.as_ref()),
         new_head: scan.new_head,
         elapsed: scan.scan_elapsed,
     })

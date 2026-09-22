@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_entity_in_tx;
+use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;
+use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
 
@@ -145,7 +146,16 @@ impl RawDb {
     /// path present last scan and absent now is simply not re-inserted.
     pub async fn reset_paths(&self) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin truncate tx")?;
-        for table in DATA_TABLES {
+        // A path's bookkeeping goes with the path.
+        let sidecars: Vec<String> = DATA_TABLES
+            .iter()
+            .map(|t| format!("{t}_bookkeeping"))
+            .collect();
+        for table in DATA_TABLES
+            .iter()
+            .copied()
+            .chain(sidecars.iter().map(String::as_str))
+        {
             // Audited: `table` iterates a `&'static str` const array of our own table
             // names; no runtime data reaches the statement.
             sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
@@ -159,9 +169,13 @@ impl RawDb {
 
     /// Record where this scan ran, so the render step does not have to
     /// be told again. See [`super::schema_raw::PDF_SCAN_META_DDL`].
-    pub async fn write_scan_meta(&self, row: &PdfScanMetaRow) -> Result<()> {
+    pub async fn write_scan_meta(
+        &self,
+        row: &PdfScanMetaRow,
+        now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row))
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert pdf_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;
@@ -189,12 +203,17 @@ impl RawDb {
         }))
     }
 
-    pub async fn write_batch(&self, docs: &[PdfDocumentRow], paths: &[PdfPathRow]) -> Result<()> {
+    pub async fn write_batch(
+        &self,
+        docs: &[PdfDocumentRow],
+        paths: &[PdfPathRow],
+        now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin write tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, docs)
+        bulk_upsert_in_tx(&mut tx, docs, now)
             .await
             .context("upsert pdf_documents")?;
-        bulk_upsert_entity_in_tx(&mut tx, paths)
+        bulk_upsert_in_tx(&mut tx, paths, now)
             .await
             .context("upsert pdf_paths")?;
         tx.commit().await.context("commit write tx")?;
@@ -302,8 +321,6 @@ mod tests {
             xmp_document_id: None,
             xmp_instance_id: None,
             xmp_original_document_id: None,
-            first_seen_at_utc: NOW.to_string(),
-            tz_offset: None,
         }
     }
 
@@ -311,8 +328,6 @@ mod tests {
         PdfPathRow {
             id: id.to_string(),
             blake3: blake3.to_string(),
-            last_seen_at_utc: NOW.to_string(),
-            tz_offset: None,
         }
     }
 
@@ -336,7 +351,7 @@ mod tests {
             .iter()
             .map(|d| path_row(&format!("{}.pdf", d.blake3), &d.blake3))
             .collect();
-        db.write_batch(&docs, &paths).await?;
+        db.write_batch(&docs, &paths, &NOW.parse().unwrap()).await?;
 
         let got: Vec<String> = db
             .convertible_documents(Path::new("/corpus"))

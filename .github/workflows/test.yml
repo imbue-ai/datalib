@@ -202,12 +202,13 @@ jobs:
           buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
-      # dist build uses, so the BuildBuddy action cache populated here
-      # on every PR / main push warms exactly the entries tag-time
-      # release builds will hit (instead of fastbuild entries the
-      # release path's opt-mode actions can't use). Side benefit:
-      # tests run against the same binaries we ship, which catches
-      # opt-mode-only behaviors before release.
+      # dist build uses. On a `push` to main that warms exactly the
+      # entries a tag-time release build will hit, because a main push
+      # writes the *release* BuildBuddy org (see docs/dev/ci.md § "Two
+      # caches"); a PR run writes the contributor org, which the
+      # release never reads, so there the opt mode buys only the second
+      # thing: tests run against the same binaries we ship, which
+      # catches opt-mode-only behaviors before release.
       #
       # `--build_metadata=ROLE=CI` tags the invocation in the BuildBuddy
       # UI so CI runs are filterable from contributor invocations.

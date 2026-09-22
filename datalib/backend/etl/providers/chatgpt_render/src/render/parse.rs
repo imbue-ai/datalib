@@ -465,14 +465,14 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
     rows
 }
 
-pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
-    parse(path, RawRange::cold())
+pub fn parse_api_dir(path: &Path, source_id: &str) -> Result<ParsedChatGPTApi> {
+    parse(path, source_id, RawRange::cold())
 }
 
-pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
+pub fn parse(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, range);
+        return parse_doltlite(&db_path, source_id, range);
     }
     if path.is_dir() {
         return parse_api_json_dir(path);
@@ -486,14 +486,22 @@ pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
     Ok(ParsedChatGPTApi::default())
 }
 
-fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
+fn parse_doltlite(
+    db_path: &Path,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedChatGPTApi> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, range).await })
+            .block_on(async move { parse_doltlite_async(db_path, source_id, range).await })
     })
 }
 
-async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedChatGPTApi> {
+async fn parse_doltlite_async(
+    db_path: &Path,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedChatGPTApi> {
     // Pinned at open — at the driver's commit, else HEAD — with the views
     // installed before anything reads. No commit means nothing has been
     // committed here to render: emptiness, not a reason to read the
@@ -530,7 +538,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let all_convs = load_conversations(&pool, &mut unparsed).await?;
     let total_convs = all_convs.len();
-    let scan = scan_diff(&pool, range, &pin, &all_convs).await?;
+    let scan = scan_diff(&pool, source_id, range, &pin, &all_convs).await?;
 
     let (filtered, docs_skipped): (Vec<LoadedConversation>, usize) = match &scan.render {
         None => (all_convs, 0usize),
@@ -702,6 +710,7 @@ async fn load_conversations(
 /// through the `me` row each one declared, so nothing fans out.
 async fn scan_diff(
     pool: &SqlitePool,
+    source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
     conversations: &[LoadedConversation],
@@ -731,7 +740,12 @@ async fn scan_diff(
     // the upstream id.
     let by_key: HashMap<String, &str> = conversations
         .iter()
-        .map(|c| (super::ids::conversation(&c.id).uuid, c.id.as_str()))
+        .map(|c| {
+            (
+                super::ids::conversation(source_id, &c.id).uuid,
+                c.id.as_str(),
+            )
+        })
         .collect();
     let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
         by_key.get(key).map(|id| id.to_string())
@@ -1028,7 +1042,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
     }

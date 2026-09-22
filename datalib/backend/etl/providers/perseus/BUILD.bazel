@@ -30,7 +30,6 @@ rust_library(
         # tokenized by `tokenizers`. See `src/translate/align/embed.rs`.
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:uuid",
     ],
 )
 

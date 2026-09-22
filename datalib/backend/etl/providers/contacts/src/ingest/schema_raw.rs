@@ -1,7 +1,5 @@
 //! Raw-store schema for the CardDAV (contacts) provider.
 
-use std::sync::OnceLock;
-
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;
@@ -183,36 +181,6 @@ pub fn synthesized_name_uid(given: &str, family: &str) -> String {
         .to_string()
 }
 
-// ── Render-side grid identity ────────────────────────────────────
-
-/// Stable namespace for the render-side contact / addressbook
-/// UUIDs. Picked once + frozen so re-ingests are idempotent across
-/// machines.
-pub fn contacts_uuid_ns() -> &'static Uuid {
-    static NS: OnceLock<Uuid> = OnceLock::new();
-    NS.get_or_init(|| {
-        Uuid::parse_str("3f4c6e9a-7c2b-4f1d-8b5a-1c2d3e4f5a6b").expect("valid contacts uuid ns")
-    })
-}
-
-/// PK derivation for a contact across the whole stack: vCards from
-/// the same UID under the same `(account, addressbook)` collapse
-/// into the same row, no matter whether they came from a
-/// sync-collection REPORT or a `.vcf` file on disk.
-pub fn contact_uuid(account_id: &str, addressbook_label: &str, uid: &str) -> String {
-    let name = format!("contact:{account_id}:{addressbook_label}:{uid}");
-    Uuid::new_v5(contacts_uuid_ns(), name.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
-
-pub fn addressbook_uuid(account_id: &str, addressbook_label: &str) -> String {
-    let name = format!("addressbook:{account_id}:{addressbook_label}");
-    Uuid::new_v5(contacts_uuid_ns(), name.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
-
 // contact_photos — CAS edge for contact pictures
 
 /// Edge table name. Shared (by convention, not code) with the LinkedIn
@@ -284,14 +252,5 @@ mod tests {
             synthesized_name_uid("John", "Smith"),
             synthesized_name_uid("John", "Smith"),
         );
-    }
-
-    #[test]
-    fn contact_uuid_is_stable() {
-        let a = contact_uuid("contacts.icloud.com", "Personal", "uid-1");
-        let b = contact_uuid("contacts.icloud.com", "Personal", "uid-1");
-        assert_eq!(a, b);
-        let c = contact_uuid("contacts.icloud.com", "Work", "uid-1");
-        assert_ne!(a, c);
     }
 }

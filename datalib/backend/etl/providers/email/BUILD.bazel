@@ -1,6 +1,6 @@
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load("//tools:live.bzl", "live_run")
 
 exports_files(["Cargo.toml"])
 
@@ -81,60 +81,28 @@ rust_test(
     ],
 )
 
+# Every hermetic email test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "jmap_render",
-    srcs = ["tests/jmap_render.rs"],
-    crate_root = "tests/jmap_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":fixtures"],
+    name = "email_tests",
+    srcs = glob(["tests/email_tests/*.rs"]),
+    args = ["--skip", "live::"],
+    crate_root = "tests/email_tests/main.rs",
+    data = glob(["tests/email_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":fixtures",
+    ],
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
         "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
+        "RUST_TEST_THREADS": "1",
     },
     deps = [
-        ":datalib_etl_email",
         "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
-        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-    ],
-)
-
-rust_test(
-    name = "jmap_mbox",
-    srcs = ["tests/jmap_mbox.rs"],
-    crate_root = "tests/jmap_mbox.rs",
-    data = [":fixtures"],
-    edition = "2021",
-    env = {
-        "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
-    },
-    deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# Hermetic Gmail download test: synthesized fixtures replayed through
-# DATALIB_HTTP_PLAYBACK, so it needs no credential and no network.
-# A `messages.get` that fails is work the run did not do, so it must not
-# advance the cursor. Hermetic: fixtures replayed through playback.
-rust_test(
-    name = "gmail_failed_fetch_holds_cursor",
-    srcs = ["tests/gmail_failed_fetch_holds_cursor.rs"],
-    crate_root = "tests/gmail_failed_fetch_holds_cursor.rs",
-    edition = "2021",
-    deps = [
         ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -143,114 +111,16 @@ rust_test(
     ],
 )
 
-# Widening `only_extract_labels` on a mirror that already has a cursor:
-# `history.list` never names mail that merely existed outside the old
-# filter, so the run has to notice the filter moved and walk it.
-rust_test(
-    name = "gmail_widened_labels_backfill",
-    srcs = ["tests/gmail_widened_labels_backfill.rs"],
-    crate_root = "tests/gmail_widened_labels_backfill.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
+insta_update(
+    name = "email_tests.update",
+    test = ":email_tests",
+    test_args = ["--skip", "live::"],
 )
 
-rust_test(
-    name = "gmail_label_union",
-    srcs = ["tests/gmail_label_union.rs"],
-    crate_root = "tests/gmail_label_union.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "jmap_playback_roundtrip",
-    srcs = ["tests/playback_roundtrip.rs"],
-    crate_root = "tests/playback_roundtrip.rs",
-    data = [":fixtures"],
-    edition = "2021",
-    env = {
-        "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
-    },
-    deps = [
-    ],
-)
-
-# Live test — talks to api.fastmail.com via latchkey. Manual.
-# Live Gmail REST API test: mirrors one label out of a real account and
-# asserts against the doltlite store it wrote. Needs a `google-gmail`
-# credential in the host's latchkey (hence no-sandbox) and talks to
-# Google (hence external).
-rust_test(
+# The live tests of `email_tests`'s `live` module — the ones its
+# `--skip live::` leaves out. `bazel run`, so they inherit the
+# shell's `LATCHKEY_CURL` and reach the host keyring.
+live_run(
     name = "gmail_live",
-    srcs = ["tests/gmail_live.rs"],
-    crate_root = "tests/gmail_live.rs",
-    edition = "2021",
-    tags = [
-        "external",  # talks to gmail.googleapis.com
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",  # latchkey reads the host keyring
-    ],
-    deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "jmap_live",
-    srcs = ["tests/jmap_live.rs"],
-    crate_root = "tests/jmap_live.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",
-    ],
-    deps = [
-    ],
-)
-
-insta_update(
-    name = "jmap_render.update",
-    test = ":jmap_render",
-)
-
-insta_update(
-    name = "jmap_live.update",
-    test = ":jmap_live",
-    test_args = ["--ignored"],
-)
-
-# `manual` keeps these out of `//...`, so nothing else ever builds them.
-# See scripts/lint_repo.py check 7.
-build_test(
-    name = "manual_targets_build",
-    targets = [
-        ":gmail_live",
-        ":jmap_live",
-    ],
+    test = ":email_tests",
 )

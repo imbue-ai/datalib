@@ -275,7 +275,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let case_sensitive = !matches!(os.as_str(), "macos");
     // FIXME(inode_stable-heuristic): assumed true for now.
     let inode_stable = true;
-    let stamp = datalib_time::split_stamp(&now);
     let scan_meta = ScanMetaRow {
         id: opts.source_id.clone(),
         abs_path: opts.root.to_string_lossy().into_owned(),
@@ -283,8 +282,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         case_sensitive,
         inode_stable,
         options_fingerprint: options_fp,
-        last_scan_at_utc: stamp.utc,
-        tz_offset: stamp.tz_offset,
         scanner_version: env!("CARGO_PKG_VERSION").to_string(),
     };
     let scan_meta_start = Instant::now();

@@ -569,7 +569,7 @@ carries a byte-count history, so it is a function of the run.
 
 One function: `render_store::logical_dump(path) → String`, sorted
 rows of the four tables with the volatile columns dropped, plus the
-`.md` tree as `(relative path, blake3)`. `fixture_db_snapshot_test`
+`.md` tree as `(relative path, blake3)`. `unified_index_tests`'s `fixture_db_snapshot`
 does most of this for the index (`stable_source_url`); lift it into `datalib_etl_render` as a test
 utility so both layers and that snapshot share one notion of
 "the same".
@@ -615,7 +615,7 @@ prose we have now.
 
 ### Order
 
-1. The dump/compare helper, lifted from `fixture_db_snapshot_test`.
+1. The dump/compare helper, lifted from `unified_index_tests`'s `fixture_db_snapshot`.
 2. Layer 1 — the synthetic provider and the model test. Worth doing
    before the ingest half of this plan (items 2 and 4 above), because
    the driver is about to be relied on harder and this is the test

@@ -1168,22 +1168,11 @@ const NON_CONTENT_TABLES: &[&str] = &[
 
 /// Stamps a store mints inside a content row, each a known leak: the
 /// row reads as modified on every re-fetch, so a render that diffs the
-/// raw store re-renders it every run — media and pdfs do today. A
-/// `payload.<key>` entry names a key inside the JSON payload. Delete an
-/// entry when its stamp moves to a bookkeeping sidecar or a volatile
-/// path; the check then holds that table to the byte.
-const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[
-    ("cas_objects", "first_seen_at_utc"),
-    ("media_files", "last_seen_at_utc"),
-    ("media_items", "first_seen_at_utc"),
-    ("media_playlists", "last_seen_at_utc"),
-    ("pdf_documents", "first_seen_at_utc"),
-    ("pdf_paths", "last_seen_at_utc"),
-    // Notion answers every request with its own `request_id`, and the
-    // provider stores the answer whole.
-    ("pages", "payload.request_id"),
-    ("users", "payload.request_id"),
-];
+/// raw store re-renders it every run. A `payload.<key>` entry names a
+/// key inside the JSON payload. An entry is deleted when its stamp
+/// moves to a bookkeeping sidecar or out of the payload; the check
+/// then holds that table to the byte. Empty is the goal.
+const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
 /// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under

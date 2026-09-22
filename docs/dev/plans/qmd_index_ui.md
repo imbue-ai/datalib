@@ -216,7 +216,8 @@ re-rendered but not-yet-reindexed document as indexed; the hash join
 reports it as not indexed, which is what search will actually do.
 
 Verified against the real fixture index by
-`//datalib/backend/unified_index:qmd_index_state_test`, which walks the
+`//datalib/backend/unified_index:unified_index_tests`'s
+`qmd_index_state` module, which walks the
 rendered tree and asserts two things that would otherwise rot silently:
 
 * every rendered document matches a `documents.hash` (the claim a qmd

@@ -16,11 +16,12 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
-        "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -35,6 +36,7 @@ rust_test(
     crate = ":datalib_etl_whatsapp_render",
     edition = "2021",
     deps = [
+        "//datalib/backend/etl/providers/whatsapp:datalib_etl_whatsapp",
         "@datalib_crates//:tempfile",
     ],
 )

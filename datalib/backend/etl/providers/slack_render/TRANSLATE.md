@@ -22,12 +22,11 @@ For each thread we emit:
   * **N message rows** (`kind = "slack_message"`) — one per message,
     with `message_index` set so the thread can be reassembled in order.
 
-`document_uuid` is the thread's UUID, derived deterministically from
-`(team_id, channel_id, thread_ts)` via the shared
-`SLACK_UUID_NS` v5 namespace. The Python translator uses the same
-namespace, so a Rust-translated row and a Python-translated row for
-the same Slack thread collide on UUID — the cutover is a write-through
-swap, not a re-keying.
+`document_uuid` is the thread's UUID, `render::ids::thread` over
+`(channel_id, thread_ts)` under the configured source and the
+workspace's `team_id`; a message's carries its `ts` in its leading bits
+(`docs/dev/entity_ids.md`). The raw store keys messages and threads by
+`{team}#{channel}#{ts}` — the upstream's own key, never an entity id.
 
 ## Markdown rendering
 

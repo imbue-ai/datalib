@@ -409,7 +409,8 @@ survive too.
 reconciled every scan (see above), so a deleted file disappears on its
 own. `media_items`, `media_audio` and `media_visual` are **not** — they
 are keyed on content, which has no notion of "no longer present", and
-dropping them would lose `first_seen_at_utc` and force a re-parse of every
+dropping them would lose when the item was first seen
+(`media_items_bookkeeping.fetched_at_utc`) and force a re-parse of every
 item whose path merely moved.
 
 So deleting the last copy of an item leaves an unreferenced

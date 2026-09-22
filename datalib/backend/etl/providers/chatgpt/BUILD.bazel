@@ -1,6 +1,6 @@
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load("//tools:live.bzl", "live_run")
 
 exports_files(["Cargo.toml"])
 
@@ -58,29 +58,30 @@ rust_binary(
     ],
 )
 
+# Every hermetic ChatGPT test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "chatgpt_playback_roundtrip",
-    srcs = ["tests/playback_roundtrip.rs"],
-    crate_root = "tests/playback_roundtrip.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_chatgpt",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
+    name = "chatgpt_tests",
+    srcs = glob(["tests/chatgpt_tests/*.rs"]),
+    args = ["--skip", "live::"],
+    crate_root = "tests/chatgpt_tests/main.rs",
+    data = glob(["tests/chatgpt_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":tng_fixture",
     ],
-)
-
-rust_test(
-    name = "chatgpt_incremental_skip",
-    srcs = ["tests/incremental_skip.rs"],
-    crate_root = "tests/incremental_skip.rs",
     edition = "2021",
+    env = {
+        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+        "INSTA_WORKSPACE_ROOT": ".",
+        "RUST_TEST_THREADS": "1",
+    },
     deps = [
-        ":datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
+        ":datalib_etl_chatgpt",
         "@datalib_crates//:chrono",
+        "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -98,76 +99,12 @@ rust_test(
     },
 )
 
-# Translate smoke test against the in-crate TNG fixture. The fixture
-# lives in-crate; bazel stages it via `data` and points
-# CHATGPT_FIXTURE_DIR at the runfiles-relative path (the test source
-# reads that env var with CARGO_MANIFEST_DIR as the cargo fallback).
-rust_test(
-    name = "chatgpt_translate_test",
-    srcs = ["tests/chatgpt_translate.rs"],
-    crate_root = "tests/chatgpt_translate.rs",
-    data = [":tng_fixture"],
-    edition = "2021",
-    env = {
-        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-    },
-    deps = [
-        "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
-    ],
-)
-
-# Downloads one real conversation through latchkey and snapshots it;
-# `#[ignore]`d and manual because it talks to chatgpt.com. Run it with
-# `bazelisk run //datalib/backend/etl/providers/chatgpt:chatgpt_live.update`.
-rust_test(
-    name = "chatgpt_live",
-    srcs = ["tests/chatgpt_live.rs"],
-    crate_root = "tests/chatgpt_live.rs",
-    data = glob(["tests/snapshots/chatgpt_live__*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",  # talks to chatgpt.com
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
-    ],
-    deps = [
-        ":datalib_etl_chatgpt",
-        "@datalib_crates//:insta",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "chatgpt_render",
-    srcs = ["tests/chatgpt_render.rs"],
-    crate_root = "tests/chatgpt_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
-    edition = "2021",
-    env = {
-        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    deps = [
-        "@datalib_crates//:serde_json",
-        "//datalib/backend/etl/providers/chatgpt_render:datalib_etl_chatgpt_render",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:insta",
-        "@datalib_crates//:tempfile",
-    ],
-)
-
 # `bazel run //...:foo.update` siblings that re-run the insta-using
 # test with INSTA_UPDATE=always and write back into the source tree.
 insta_update(
-    name = "chatgpt_render.update",
-    test = ":chatgpt_render",
+    name = "chatgpt_tests.update",
+    test = ":chatgpt_tests",
+    test_args = ["--skip", "live::"],
     extra_data = [":tng_fixture"],
     extra_env = {
         "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
@@ -176,15 +113,14 @@ insta_update(
 
 insta_update(
     name = "chatgpt_live.update",
-    test = ":chatgpt_live",
-    test_args = ["--ignored"],
+    test = ":chatgpt_tests",
+    test_args = ["live::"],
 )
 
-# `manual` keeps these out of `//...`, so nothing else ever builds them.
-# See scripts/lint_repo.py check 7.
-build_test(
-    name = "manual_targets_build",
-    targets = [
-        ":chatgpt_live",
-    ],
+# The live tests of `chatgpt_tests`'s `live` module — the ones its
+# `--skip live::` leaves out. `bazel run`, so they inherit the
+# shell's `LATCHKEY_CURL` and reach the host keyring.
+live_run(
+    name = "chatgpt_live",
+    test = ":chatgpt_tests",
 )

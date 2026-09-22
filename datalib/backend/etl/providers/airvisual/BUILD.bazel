@@ -57,41 +57,29 @@ insta_update(
     test = ":airvisual_unittests",
 )
 
-# End-to-end render over a doltlite store the test builds itself; same
-# shape as yolink's.
+# Every hermetic AirVisual test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "airvisual_render_e2e",
-    size = "small",
-    srcs = ["tests/render_e2e.rs"],
+    name = "airvisual_tests",
+    srcs = glob(["tests/airvisual_tests/*.rs"]),
+    crate_root = "tests/airvisual_tests/main.rs",
+    data = [
+        ":tng_fixture",
+    ],
     edition = "2021",
+    env = {
+        "AIRVISUAL_FIXTURE_DIR": "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+    },
     deps = [
-        ":datalib_etl_airvisual",
+        "//datalib/backend/etl/providers/airvisual_config:datalib_etl_airvisual_config",
         "//datalib/backend/etl/providers/airvisual_render:datalib_etl_airvisual_render",
-        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        ":datalib_etl_airvisual",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
 
-rust_test(
-    name = "airvisual_fixture_e2e",
-    size = "small",
-    srcs = ["tests/fixture_e2e.rs"],
-    data = [":tng_fixture"],
-    edition = "2021",
-    env = {
-        "AIRVISUAL_FIXTURE_DIR": "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
-    },
-    deps = [
-        ":datalib_etl_airvisual",
-        "//datalib/backend/etl/providers/airvisual_config:datalib_etl_airvisual_config",
-        "//datalib/backend/etl/providers/airvisual_render:datalib_etl_airvisual_render",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)

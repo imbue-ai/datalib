@@ -426,110 +426,6 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
 /// once: every document's version then differs from its store's.
 pub const RENDERER_VERSION: &str = "rust-v1";
 
-// ── Cross-source id collision detection ─────────────────────────────
-
-/// One id claimed by two different sources inside a single index run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdCollision {
-    /// Which id space collided — `"markdown_uuid"` or `"grid_rows.uuid"`.
-    pub id_kind: &'static str,
-    /// The contested id.
-    pub id: String,
-    /// Source that claimed it first (sidecars are walked in sorted order, so
-    /// "first" is stable across runs).
-    pub first_source: String,
-    /// `markdown_uuid` the first claim arrived under.
-    pub first_markdown_uuid: String,
-    /// Source that claimed it second — the one whose data would have won or
-    /// blown up.
-    pub second_source: String,
-    /// `markdown_uuid` the second claim arrived under.
-    pub second_markdown_uuid: String,
-}
-
-impl std::fmt::Display for IdCollision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "two sources claim the same {}: {} \
-             — first from source {:?} (markdown {}), then from source {:?} (markdown {}). \
-             Either the same upstream account is configured twice, or this provider's id \
-             recipe is missing a discriminator. Nothing was written; fix the config (or the \
-             recipe) and re-run.",
-            self.id_kind,
-            self.id,
-            self.first_source,
-            self.first_markdown_uuid,
-            self.second_source,
-            self.second_markdown_uuid,
-        )
-    }
-}
-
-/// Which source claimed each id during ONE index run.
-///
-/// Two sources emitting the same `markdown_uuid` or `grid_rows.uuid` is not a
-/// benign duplicate: a full overlap erases the first source's rows with no
-/// error and no row-count change, and a partial one rolls the batch back with
-/// an error naming neither source. This makes both loud, and names both sides.
-///
-/// Run-scoped on purpose — checking ids already in the database would flag a
-/// source *rename*, which is legitimate.
-#[derive(Debug, Default)]
-pub struct IdClaims {
-    /// markdown_uuid → source that claimed it.
-    markdowns: HashMap<String, String>,
-    /// grid_rows.uuid → (source, markdown_uuid) that claimed it.
-    rows: HashMap<String, (String, String)>,
-}
-
-impl IdClaims {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record one sidecar's claims, returning the first collision found.
-    /// Same-source re-claims are impossible by construction, so any repeat is
-    /// a genuine cross-source clash.
-    pub fn claim(
-        &mut self,
-        source_id: &str,
-        markdown_uuid: &str,
-        rows: &[GridRow],
-    ) -> Option<IdCollision> {
-        if let Some(prior) = self.markdowns.get(markdown_uuid) {
-            return Some(IdCollision {
-                id_kind: "markdown_uuid",
-                id: markdown_uuid.to_string(),
-                first_source: prior.clone(),
-                first_markdown_uuid: markdown_uuid.to_string(),
-                second_source: source_id.to_string(),
-                second_markdown_uuid: markdown_uuid.to_string(),
-            });
-        }
-        self.markdowns
-            .insert(markdown_uuid.to_string(), source_id.to_string());
-
-        for row in rows {
-            if let Some((prior_source, prior_md)) = self.rows.get(&row.uuid) {
-                return Some(IdCollision {
-                    id_kind: "grid_rows.uuid",
-                    id: row.uuid.clone(),
-                    first_source: prior_source.clone(),
-                    first_markdown_uuid: prior_md.clone(),
-                    second_source: source_id.to_string(),
-                    second_markdown_uuid: markdown_uuid.to_string(),
-                });
-            }
-            self.rows.insert(
-                row.uuid.clone(),
-                (source_id.to_string(), markdown_uuid.to_string()),
-            );
-        }
-        None
-    }
-}
-
 /// Map a grid_rows display `kind` to the `documents.kind` enum. Anything
 /// unlisted is a child row and shouldn't be the canonical document row, but
 /// falls back to `"chat"` if it is the only candidate.
@@ -883,8 +779,6 @@ async fn load_all_batch(
     progress: &impl Fn(&str),
     summary: &mut GridIndexSummary,
 ) -> Result<()> {
-    // See [`IdClaims`]: catches two sources writing the same id.
-    let mut claims = IdClaims::new();
     for (stanza, md) in docs {
         // The stanza dir name is the source's id.
         let source_id = if stanza.is_empty() {
@@ -896,10 +790,6 @@ async fn load_all_batch(
             stanza.clone()
         };
 
-        if let Some(collision) = claims.claim(&source_id, &md.markdown_uuid, &md.rows) {
-            return Err(anyhow::anyhow!("{collision}"))
-                .with_context(|| format!("load {} from {stanza}", md.markdown_uuid));
-        }
         // Every document the diff named is applied. One whose rows come
         // out identical writes identical rows, and doltlite's tables are
         // content-addressed: the next commit carries no diff for it.
@@ -1348,7 +1238,7 @@ mod insert_round_trip_tests {
             git_sha: Some("0123456789abcdef".into()),
             upstream_id: Some("upstream-1701".into()),
             upstream_entity_kind: Some("conversation".into()),
-            upstream_scope: Some("claude.ai".into()),
+            upstream_account: Some("claude.ai".into()),
             notion_page_uuid: Some("notion-page-1701".into()),
             notion_block_uuid: Some("notion-block-1701".into()),
             markdown_uuid: Some("md-1701".into()),
@@ -1422,130 +1312,6 @@ mod insert_round_trip_tests {
 }
 
 #[cfg(test)]
-mod id_claim_tests {
-    //! [`IdClaims`] is the tripwire for two configured sources minting the
-    //! same id. A full overlap used to be silent (the second document erased
-    //! the first's rows and the run reported success); a partial overlap blew
-    //! the batch up with an error naming neither source. These pin both.
-    use super::*;
-    use datalib_schema::grid_rows::GridRow;
-    use datalib_schema::providers::Provider;
-
-    fn row(uuid: &str, markdown_uuid: &str) -> GridRow {
-        GridRow {
-            uuid: uuid.into(),
-            provider: Provider::Claude.as_str().into(),
-            kind: "Chat".into(),
-            source_label: "Claude".into(),
-            created_at: None,
-            modified_at: None,
-            // The claims these tests make are about uuids, not documents.
-            is_document: false,
-            author: None,
-            account: None,
-            project: None,
-            org_uuid: None,
-            org_name: None,
-            channel: None,
-            conversation_name: None,
-            conversation_uuid: markdown_uuid.into(),
-            message_index: None,
-            entire_chat: format!("/chat/{markdown_uuid}"),
-            text: String::new(),
-            qmd_path: None,
-            source_url: None,
-            git_sha: None,
-            upstream_id: None,
-            upstream_entity_kind: None,
-            upstream_scope: None,
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(markdown_uuid.into()),
-            byte_size: None,
-            item_count: None,
-            diff_status: None,
-            diff_changed_columns: None,
-        }
-    }
-
-    #[test]
-    fn distinct_sources_with_distinct_ids_are_clean() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim(
-                "claude-api",
-                "md-a",
-                &[row("r1", "md-a"), row("r2", "md-a")]
-            )
-            .is_none());
-        assert!(claims
-            .claim("slack-work", "md-b", &[row("r3", "md-b")])
-            .is_none());
-    }
-
-    /// The silent case: `claude_api` and `claude_export` over one
-    /// account both key on Anthropic's `conversation_uuid`, so both
-    /// documents carry the same `markdown_uuid`. Whichever applied
-    /// second used to delete the other's rows and rewrite `md_path`
-    /// and `source_id` to its own — no error, no row-count delta.
-    #[test]
-    fn same_markdown_uuid_from_two_sources_is_reported() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim("claude-api", "conv-1", &[row("r1", "conv-1")])
-            .is_none());
-        let hit = claims
-            .claim("claude-export", "conv-1", &[row("r1", "conv-1")])
-            .expect("overlapping markdown_uuid must be reported");
-        assert_eq!(hit.id_kind, "markdown_uuid");
-        assert_eq!(hit.id, "conv-1");
-        assert_eq!(hit.first_source, "claude-api");
-        assert_eq!(hit.second_source, "claude-export");
-        // Naming both sides is the whole point — it is the only thing that
-        // tells an operator which two stanzas to look at.
-        let msg = hit.to_string();
-        assert!(msg.contains("claude-api"), "{msg}");
-        assert!(msg.contains("claude-export"), "{msg}");
-    }
-
-    /// The loud-but-useless case: two sources whose documents differ but
-    /// whose *rows* collide. This used to surface as a bare sqlx PRIMARY KEY
-    /// error deep inside a rolled-back batch.
-    #[test]
-    fn same_row_uuid_under_different_markdowns_is_reported() {
-        let mut claims = IdClaims::new();
-        assert!(claims
-            .claim("papers", "md-a", &[row("doc-blake3", "md-a")])
-            .is_none());
-        let hit = claims
-            .claim("archive", "md-b", &[row("doc-blake3", "md-b")])
-            .expect("overlapping row uuid must be reported");
-        assert_eq!(hit.id_kind, "grid_rows.uuid");
-        assert_eq!(hit.id, "doc-blake3");
-        assert_eq!(hit.first_source, "papers");
-        assert_eq!(hit.first_markdown_uuid, "md-a");
-        assert_eq!(hit.second_source, "archive");
-        assert_eq!(hit.second_markdown_uuid, "md-b");
-    }
-
-    /// Changing a source's id must stay legal: the same document and row
-    /// ids arrive under a new `source_id`, one claimant per id within the
-    /// run. Run-scoping the tracker is precisely what keeps this working.
-    #[test]
-    fn a_source_that_changed_id_reclaiming_its_own_ids_is_clean() {
-        let mut first_run = IdClaims::new();
-        assert!(first_run
-            .claim("slack", "md-a", &[row("r1", "md-a")])
-            .is_none());
-
-        let mut second_run = IdClaims::new();
-        assert!(second_run
-            .claim("slack-work", "md-a", &[row("r1", "md-a")])
-            .is_none());
-    }
-}
-
-#[cfg(test)]
 // Test diagnostics; cargo test captures and prints them per-test.
 #[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
@@ -1591,7 +1357,7 @@ mod write_lock_tests {
             git_sha: None,
             upstream_id: None,
             upstream_entity_kind: None,
-            upstream_scope: None,
+            upstream_account: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
             markdown_uuid: Some(uuid.clone()),
@@ -1963,7 +1729,7 @@ mod schema_reconcile_tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        for added in ["upstream_id", "upstream_entity_kind", "upstream_scope"] {
+        for added in ["upstream_id", "upstream_entity_kind", "upstream_account"] {
             assert!(
                 cols.iter().any(|c| c == added),
                 "grid_rows must have gained {added}"
@@ -1994,7 +1760,7 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, upstream_id, upstream_entity_kind, upstream_scope, markdown_uuid, \
+             entire_chat, text, upstream_id, upstream_entity_kind, upstream_account, markdown_uuid, \
              is_document) \
              VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
              'upstream-1', 'conversation', '', 'md-1', 1)",
