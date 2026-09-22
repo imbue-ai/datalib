@@ -84,30 +84,9 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # tagged `manual`, never auto-run via `bazel test //...`. They
     # shell out to `latchkey`, which reads tokens from the host's
     # keychain / Secret Service — fundamentally non-hermetic.
-    "datalib/backend/etl/providers/claude:claude_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
     # Runs docs/user/docker.md against a published image: it needs the
     # host's docker daemon and a registry pull, and is `manual`.
     "datalib/docker:doc_test": "manual doc test, needs the host docker daemon",
-    "datalib/backend/etl/providers/chatgpt:chatgpt_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
-    "datalib/backend/etl/providers/github:github_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
-    "datalib/backend/etl/providers/email:jmap_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
-    "datalib/backend/etl/providers/email:gmail_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
-    "datalib/backend/etl/providers/gitlab:gitlab_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
-    "datalib/backend/etl/providers/notion:notion_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
     "datalib/backend/dag:manual_e2e_live_sync_golden": (
         "manual live golden, latchkey needs host keychain"
     ),

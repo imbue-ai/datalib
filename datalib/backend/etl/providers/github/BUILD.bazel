@@ -1,6 +1,6 @@
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load("//tools:live.bzl", "live_run")
 
 exports_files(["Cargo.toml"])
 
@@ -68,73 +68,28 @@ rust_test(
     ],
 )
 
+# Every hermetic GitHub test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "github_playback_roundtrip",
-    srcs = ["tests/playback_roundtrip.rs"],
-    crate_root = "tests/playback_roundtrip.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_github",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "github_child_prune",
-    srcs = ["tests/child_prune.rs"],
-    crate_root = "tests/child_prune.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_github",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "github_incremental_render",
-    srcs = ["tests/incremental_render.rs"],
-    crate_root = "tests/incremental_render.rs",
-    edition = "2021",
-    deps = [
-        "@datalib_crates//:sqlx",
-        ":datalib_etl_github",
-        "//datalib/backend/etl/providers/github_render:datalib_etl_github_render",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "github_live",
-    srcs = ["tests/github_live.rs"],
-    crate_root = "tests/github_live.rs",
-    data = glob(["tests/snapshots/github_live__*.snap"], allow_empty = True),
+    name = "github_tests",
+    srcs = glob(["tests/github_tests/*.rs"]),
+    args = ["--skip", "live::"],
+    crate_root = "tests/github_tests/main.rs",
+    data = glob(["tests/github_tests/snapshots/*.snap"], allow_empty = True),
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
+        "RUST_TEST_THREADS": "1",
     },
-    tags = [
-        "external",  # talks to api.github.com
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
-    ],
     deps = [
-        ":datalib_etl_github",
         "//datalib/backend/etl/providers/github_render:datalib_etl_github_render",
-        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        ":datalib_etl_github",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
@@ -142,15 +97,14 @@ rust_test(
 
 insta_update(
     name = "github_live.update",
-    test = ":github_live",
-    test_args = ["--ignored"],
+    test = ":github_tests",
+    test_args = ["live::"],
 )
 
-# `manual` keeps these out of `//...`, so nothing else ever builds them.
-# See scripts/lint_repo.py check 7.
-build_test(
-    name = "manual_targets_build",
-    targets = [
-        ":github_live",
-    ],
+# The live tests of `github_tests`'s `live` module — the ones its
+# `--skip live::` leaves out. `bazel run`, so they inherit the
+# shell's `LATCHKEY_CURL` and reach the host keyring.
+live_run(
+    name = "github_live",
+    test = ":github_tests",
 )

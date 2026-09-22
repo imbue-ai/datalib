@@ -38,33 +38,21 @@ rust_test(
     edition = "2021",
 )
 
-# The load-bearing experiment, run against the real engine: that
-# `doltlite_engine=sqlite` survives sqlx and reaches doltlite, so the
-# store on disk is stock SQLite. Everything else here rests on it.
+# Every hermetic run store test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "stock_sqlite_engine_test",
-    srcs = ["tests/stock_sqlite_engine.rs"],
+    name = "runs_tests",
+    srcs = glob(["tests/runs_tests/*.rs"]),
+    crate_root = "tests/runs_tests/main.rs",
     edition = "2021",
     deps = [
-        ":datalib_runs",
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/time:datalib_time",
+        ":datalib_runs",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
 
-# The store end to end: publish, read back, the coalescing rules, and
-# retention.
-rust_test(
-    name = "store_roundtrip_test",
-    srcs = ["tests/store_roundtrip.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_runs",
-        "//datalib/backend/time:datalib_time",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)

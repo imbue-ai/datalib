@@ -201,13 +201,18 @@ the whole stack — doltlite's C included — statically, in opt mode
 The rlibs underneath are cache hits; that last step is not, and a
 shared-crate edit repeats it once per test target. So one binary per
 `tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
-it 17 times for one crate before #664 made `tests/http_tests/` (one
-`main.rs` of `mod` lines, the files unchanged) and `tests/applet_tests/`.
-Split a crate's integration tests into binaries only along a line the
-process forces — a test that installs the global tracing subscriber
-(`server_log.rs`, `request_log.rs`, `ui_events.rs`, one each), or
-tags the others cannot share (`no-sandbox`). Inside one binary libtest
-already runs the functions in parallel.
+it 17 times for one crate. The layout now is one binary per package —
+`tests/<name>/main.rs` of `mod` lines, the files themselves unchanged
+(#664, #665) — which took the tree from 207 `rust_test` targets to
+159. Split a package's integration tests into binaries only along a
+line the process forces: a different `tags` (`no-sandbox`, `external`),
+or a process-global a test must own — `datalib/backend/http`'s three
+log tests each install the process's only tracing subscriber, so they
+stay separate. Where the global is shared rather than owned, the
+binary serializes instead: the provider tests choose their playback
+fixture through one environment variable, so those binaries set
+`RUST_TEST_THREADS = "1"`. `docs/dev/testing.md` § "A package's
+integration tests are one binary" is the reference.
 
 **A `[for tool]` suffix on a `Compiling Rust …` line is a second
 copy** — the crate built in the exec configuration as well as the
