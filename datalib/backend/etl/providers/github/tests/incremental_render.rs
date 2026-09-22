@@ -121,7 +121,7 @@ fn render_once(
     Option<String>,
 ) {
     let none = HashSet::new();
-    let parsed = parse_api_dir(raw, warm(cursor, &none)).unwrap();
+    let parsed = parse_api_dir(raw, "github", warm(cursor, &none)).unwrap();
     let mut docs = Vec::new();
     render_github(&parsed, out, "github", &Progress::noop(), &mut |d| {
         docs.push(d);

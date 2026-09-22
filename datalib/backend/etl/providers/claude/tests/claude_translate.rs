@@ -45,7 +45,7 @@ async fn parses_tng_api_fixture() {
             .expect("commit the ingest");
         db.close().await;
     }
-    let parsed = parse(raw.path(), RawRange::cold()).expect("parse");
+    let parsed = parse(raw.path(), "claude_export", RawRange::cold()).expect("parse");
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");
     assert!(!parsed.conversations.is_empty(), "expected conversations");

@@ -1512,7 +1512,7 @@ grid_rows
     git_sha
     upstream_id
     upstream_entity_kind
-    upstream_scope
+    upstream_account
     notion_page_uuid
     notion_block_uuid
     markdown_uuid

@@ -20,8 +20,13 @@ pub struct NormalizedContact {
     /// `external_id` then the uuid when absent.
     pub display_name: Option<String>,
     /// Upstream identifier surfaced as `external_id` and a frontmatter
-    /// key — the vCard `UID`, or the LinkedIn profile URL.
+    /// key, and stored in `grid_rows.upstream_id`: the exact
+    /// `natural_key` the provider fed `datalib_id::entity_id` to mint
+    /// `contact_uuid`, so the round-trip check regenerates the row.
     pub external_id: Option<String>,
+    /// The upstream account `contact_uuid` was minted under, for
+    /// `grid_rows.upstream_account`; `None` when the record names none.
+    pub upstream_account: Option<String>,
     /// When the contact came to be, where the source says (LinkedIn's
     /// "Connected On"). A vCard does not say; a person does not have a
     /// creation event. Never fabricated.

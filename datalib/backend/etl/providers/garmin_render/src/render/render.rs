@@ -8,37 +8,30 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
-use once_cell::sync::Lazy;
-use uuid::Uuid;
 
 use super::parse::ParsedGarmin;
 use super::plot::weight_html;
 use super::RENDER_VERSION;
 
-/// Namespace for every UUIDv5 this renderer mints. Fixed and arbitrary.
-pub static GARMIN_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("2f8c5b1e-3a4d-5e6f-8a9b-7c6d5e4f0002").expect("valid garmin ns uuid")
-});
+const ID_NAMESPACE: IdNamespace = IdNamespace::Garmin;
+const KIND_PAGE: &str = "weight";
+const KIND_DEVICE: &str = "device";
 
-/// The page's `markdown_uuid`: one page per source, stable across every
-/// re-render.
+/// The page's `markdown_uuid`: one page per source and no Garmin-side
+/// object behind it, so its key is the source id. No stamp: the page's
+/// `created_at` is its first weigh-in, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
-    Uuid::new_v5(
-        &GARMIN_UUID_NS,
-        format!("garmin:{source_id}:weight").as_bytes(),
-    )
-    .to_string()
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_PAGE, source_id, None)
 }
 
+/// A device's row, keyed on the id Garmin issues it. No stamp: the
+/// row's `created_at` is its last sync, which moves.
 pub fn device_uuid(source_id: &str, device_id: &str) -> String {
-    Uuid::new_v5(
-        &GARMIN_UUID_NS,
-        format!("garmin:{source_id}:device:{device_id}").as_bytes(),
-    )
-    .to_string()
+    entity_id_str(ID_NAMESPACE, source_id, None, KIND_DEVICE, device_id, None)
 }
 
 /// How many of the newest weigh-ins the table shows. The plot has all
@@ -315,6 +308,8 @@ fn build_grid_rows(
         .text(text)
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
+        .upstream_id(Some(source_id.to_string()))
+        .upstream_entity_kind(Some(KIND_PAGE.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
@@ -334,7 +329,7 @@ fn build_grid_rows(
                 .text(format!("{} (device {})", d.name, d.id))
                 .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(d.id.clone()))
-                .upstream_entity_kind(Some("device".to_string()))
+                .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );
@@ -385,11 +380,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uuids_are_stable_and_source_scoped() {
+    fn page_ids_are_source_scoped_and_device_ids_are_garmins() {
         assert_eq!(document_uuid("garmin"), document_uuid("garmin"));
         assert_ne!(document_uuid("garmin"), document_uuid("garmin-2"));
-        assert_ne!(device_uuid("garmin", "1"), device_uuid("garmin", "2"));
-        assert_ne!(document_uuid("garmin"), device_uuid("garmin", "1"));
+        assert_ne!(device_uuid("g", "1"), device_uuid("g", "2"));
+        assert_ne!(document_uuid("1"), device_uuid("1", "1"));
     }
 
     #[test]

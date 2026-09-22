@@ -258,7 +258,7 @@ Each slice is one PR that leaves the tree green.
    the new endpoints. Closes #161 and #164. The log panel offers every
    run the step took part in, not only the last; the worker's failure
    tail is checked end to end against the real runner
-   (`worker_failure_tail_test`).
+   (`http_tests/worker_failure_tail.rs`).
 3. ~~**Queue depth between steps**~~ **Done.** `rows` on `checkpoint`
    and on each `outcome` output; `QueueLedger` in `scheduler.rs` keeps,
    per consumer and producer, the seals not yet read and publishes

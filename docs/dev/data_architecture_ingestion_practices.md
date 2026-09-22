@@ -161,9 +161,13 @@ to choose, put the coordinate that grows first:
   device's run and land at its edge. A 13-digit millisecond stamp sorts
   lexically as a number until 2286, and `#` sorts below every digit and
   letter, so the text form needs no padding.
-- **Minted uuids**: a v5 hash scatters by design. The proposal to prefix
-  `entity_id` with the record's own `created_at` is in
-  [`entity_ids.md`](entity_ids.md#a-time-prefixed-recipe-proposal).
+- **Minted uuids**: `datalib_id::entity_id` puts the record's own
+  `created_at` in the leading 48 bits, so a message's row sorts by
+  when it was sent and a sync's new rows are adjacent. Pass the stamp
+  wherever the record has one of its own; what carries none, and why,
+  is in [`entity_ids.md`](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
+  Raw stores keep their upstream keys; where that key leads with a
+  time (slack's `{team}#{channel}#{ts}`) they have the property too.
 
 Two things this does *not* ask for. Don't sort rows before inserting:
 within one transaction the tree is built once, whichever order the

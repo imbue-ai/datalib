@@ -9,16 +9,18 @@ use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
 };
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_schema::problems::Problem;
 use serde_json::Value;
-use uuid::Uuid;
+
+use crate::ids;
 
 use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
@@ -27,7 +29,11 @@ use datalib_schema::providers::Provider;
 /// v2: a `created_date` / `when` we cannot parse gets a null `created_at`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: ids are minted through `datalib_id`, every row carries its
+///     backpointer, and a message's id carries its stamp in its leading
+///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
+///     among them.
+pub const RENDER_VERSION: u32 = 3;
 
 /// Projection for [`BlobBundle::load`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -37,38 +43,28 @@ const VOICE_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
      FROM pinned_voice_attachments voice_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
-fn ns() -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"google-takeout-chat.datalib")
-}
-
-fn uuid5(recipe: &str) -> String {
-    Uuid::new_v5(&ns(), recipe.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
-
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::GoogleTakeout,
         source_label: "Google Chat".to_string(),
         chat_kind: "Google Chat".to_string(),
         message_kind: "Google Chat Message".to_string(),
         reaction_kind: "Google Chat Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_SPACE,
         render_version: RENDER_VERSION,
     }
 }
 
 fn voice_profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::GoogleTakeout,
         source_label: "Google Voice".to_string(),
         chat_kind: "Google Voice Conversation".to_string(),
         message_kind: "Google Voice Message".to_string(),
         reaction_kind: "Google Voice Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_VOICE_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -133,9 +129,9 @@ pub fn render(
         return Ok(RenderOutcome::default());
     };
 
-    let mut all_chats = build_chats(&messages, &groups);
+    let mut all_chats = build_chats(source_id, &messages, &groups);
     let voice_start = all_chats.len();
-    all_chats.extend(build_voice_chats(&voice_messages));
+    all_chats.extend(build_voice_chats(source_id, &voice_messages));
 
     // Narrow to the conversations the diff named and the ones the driver
     // found stale through their declared inputs. The driver names them by
@@ -164,7 +160,7 @@ pub fn render(
         .flatten()
         .map(|id| match uuid_of.get(id.as_str()) {
             Some(uuid) => uuid.to_string(),
-            None => chat_uuid_for(id),
+            None => chat_uuid_for(source_id, id),
         })
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
@@ -214,11 +210,11 @@ pub fn render(
 /// The chat uuid a conversation id mints to, for a conversation the diff
 /// named that no longer has a message: a Google Chat space, or a Google
 /// Voice conversation carrying its `voice:` prefix.
-fn chat_uuid_for(id: &str) -> String {
+fn chat_uuid_for(source_id: &str, id: &str) -> String {
     if id.starts_with("voice:") {
-        uuid5(&format!("voice:chat:{id}"))
+        ids::voice_conversation(source_id, id).uuid
     } else {
-        uuid5(&format!("chat:{id}"))
+        ids::space(source_id, id).uuid
     }
 }
 
@@ -306,7 +302,11 @@ async fn load_voice_blobs(
 
 /// Messages as `(row id, payload)`, groups as `(dir name, payload)`;
 /// the ids are what each space declares it read.
-fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<NormalizedChat> {
+fn build_chats(
+    source_id: &str,
+    messages: &[(String, Value)],
+    groups: &[(String, Value)],
+) -> Vec<NormalizedChat> {
     // space id -> (group dir, participant display), from each group
     // dir's members.
     let mut display_by_space: HashMap<String, (String, String)> = HashMap::new();
@@ -359,8 +359,9 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     parse_date_ms,
                     &mut problems,
                 );
+                let msg_id = ids::message(source_id, id, date_ms);
                 NormalizedChatItem {
-                    message_uuid: uuid5(&format!("msg:{id}")),
+                    message_uuid: msg_id.uuid.clone(),
                     author_id: email.to_string(),
                     author_display: name.to_string(),
                     date_ms,
@@ -371,7 +372,7 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
                     system_note: None,
                     source_url: None,
                     kind_label: None,
-                    source_ref: None,
+                    source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
                     is_aside: false,
                     problems,
                 }
@@ -387,11 +388,15 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
-            .map(|(period_key, items)| NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                markdown_uuid: uuid5(&format!("doc:{space}:{period_key}")),
-                period_key,
-                items,
+            .map(|(period_key, items)| {
+                let month = ids::space_month(source_id, &space, &period_key);
+                NormalizedDoc {
+                    orphan_reactions: Vec::new(),
+                    markdown_uuid: month.uuid,
+                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    period_key,
+                    items,
+                }
             })
             .collect();
 
@@ -403,18 +408,19 @@ fn build_chats(messages: &[(String, Value)], groups: &[(String, Value)]) -> Vec<
             None => space.clone(),
         };
 
+        let chat_id = ids::space(source_id, &space);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
             id: space.clone(),
-            chat_uuid: uuid5(&format!("chat:{space}")),
+            chat_uuid: chat_id.uuid,
             display,
             author: None,
             account: None,
             project: None,
-            external_id: Some(space.clone()),
+            external_id: Some(chat_id.natural_key),
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -487,7 +493,7 @@ fn voice_attachment_refs(m: &Value) -> Vec<String> {
 /// each periodized into month buckets. Conversations are keyed on the
 /// phone number so name-labeled and number-labeled exports of the same
 /// contact merge (see `google_voice::derive_channel`).
-fn build_voice_chats(messages: &[(String, Value)]) -> Vec<NormalizedChat> {
+fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<NormalizedChat> {
     let mut by_chat: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
     for (row_id, m) in messages {
         let (rows, inputs) = by_chat.entry(voice_chat_id(m)).or_default();
@@ -515,12 +521,8 @@ fn build_voice_chats(messages: &[(String, Value)]) -> Vec<NormalizedChat> {
             })
             .unwrap_or(&chat_id)
             .to_string();
-        let external_id = chat_id
-            .strip_prefix("voice:")
-            .unwrap_or(&chat_id)
-            .to_string();
-
-        let mut items: Vec<NormalizedChatItem> = msgs.iter().map(|m| voice_item(m)).collect();
+        let mut items: Vec<NormalizedChatItem> =
+            msgs.iter().map(|m| voice_item(source_id, m)).collect();
         items.sort_by_key(|i| i.date_ms);
 
         // Month buckets (`YYYY-MM`), oldest first.
@@ -530,26 +532,31 @@ fn build_voice_chats(messages: &[(String, Value)]) -> Vec<NormalizedChat> {
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
-            .map(|(period_key, items)| NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                markdown_uuid: uuid5(&format!("voice:doc:{chat_id}:{period_key}")),
-                period_key,
-                items,
+            .map(|(period_key, items)| {
+                let month = ids::voice_month(source_id, &chat_id, &period_key);
+                NormalizedDoc {
+                    orphan_reactions: Vec::new(),
+                    markdown_uuid: month.uuid,
+                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    period_key,
+                    items,
+                }
             })
             .collect();
 
+        let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
             id: chat_id.clone(),
-            chat_uuid: uuid5(&format!("voice:chat:{chat_id}")),
+            chat_uuid: conversation.uuid,
             display,
             author: None,
             account: None,
             project: Some("Google Voice".to_string()),
-            external_id: Some(external_id),
+            external_id: Some(conversation.natural_key),
             source_url: None,
-            upstream_scope: None,
+            upstream_account: None,
             title: None,
             org_uuid: None,
             org_name: None,
@@ -559,15 +566,17 @@ fn build_voice_chats(messages: &[(String, Value)]) -> Vec<NormalizedChat> {
     chats
 }
 
-fn voice_item(m: &Value) -> NormalizedChatItem {
+fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("text");
-    let message_uuid = m
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid5(&m.to_string()));
     let mut problems = Vec::new();
     let date_ms = voice_date_ms(m, &mut problems);
+    let id = ids::voice_message(
+        source_id,
+        m.get("id").and_then(Value::as_str).unwrap_or(""),
+        date_ms,
+    );
+    let message_uuid = id.uuid.clone();
+    let source_ref = Some(UpstreamRef::new(id.entity_kind, id.natural_key));
 
     let attachments: Vec<NormalizedAttachment> = voice_attachment_refs(m)
         .into_iter()
@@ -620,7 +629,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
-                source_ref: None,
+                source_ref: source_ref.clone(),
                 is_aside: false,
                 problems: problems.clone(),
             }
@@ -651,7 +660,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
-                source_ref: None,
+                source_ref: source_ref.clone(),
                 is_aside: false,
                 problems: problems.clone(),
             }
@@ -677,7 +686,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 system_note: Some(format!("{note} — {}", party_display(party))),
                 source_url: None,
                 kind_label: None,
-                source_ref: None,
+                source_ref: source_ref.clone(),
                 is_aside: false,
                 problems: problems.clone(),
             }
@@ -781,7 +790,7 @@ mod tests {
             "DM AAA".to_string(),
             json!({"members":[{"name":"Jean-Luc Picard"},{"name":"William Riker"}]}),
         )];
-        let chats = build_chats(&with_ids(&messages, "message_id"), &groups);
+        let chats = build_chats("gt", &with_ids(&messages, "message_id"), &groups);
         assert_eq!(chats.len(), 1, "two messages in one space => one chat");
         assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
@@ -803,7 +812,7 @@ mod tests {
             json!({"message_id":"BBB/T2/M2","created_date":"Wednesday, March 5, 2025 at 9:34:00\u{202f}PM UTC","creator":{"name":"Riker","email":"r@e"},"text":"March."}),
         ];
         let groups: Vec<(String, Value)> = vec![];
-        let chats = build_chats(&with_ids(&messages, "message_id"), &groups);
+        let chats = build_chats("gt", &with_ids(&messages, "message_id"), &groups);
         assert_eq!(chats.len(), 1);
         let keys: Vec<&str> = chats[0]
             .buckets
@@ -881,7 +890,7 @@ mod tests {
             json!({"id":"u1","kind":"text","conversation_key":"+1410","conversation_display":"Wes Blackwell","when":"2019-08-01T14:49:00.742-07:00","sender":{"tel":"+1410","name":"Wes Blackwell"},"is_me":false,"body":"Hello","attachments":[]}),
             json!({"id":"u2","kind":"text","conversation_key":"+1410","conversation_display":"+1410","when":"2019-09-02T10:00:00.000-07:00","sender":{"tel":"+6506","name":null},"is_me":true,"body":"Hi back","attachments":[]}),
         ];
-        let chats = build_voice_chats(&with_ids(&messages, "id"));
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         assert_eq!(chats.len(), 1);
         // Human name wins over the bare-number display.
         assert_eq!(chats[0].display, "Wes Blackwell");
@@ -901,7 +910,7 @@ mod tests {
             "when":"2010-02-18T16:10:05.000-08:00","party":{"tel":"+1555","name":"Jean-Luc Picard"},
             "transcript":"Make it so.","duration":"PT13S","audio":"vm.mp3"
         })];
-        let chats = build_voice_chats(&with_ids(&messages, "id"));
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.text.as_deref(), Some("**Voicemail:** Make it so."));
@@ -916,7 +925,7 @@ mod tests {
             "id":"c1","kind":"missed","conversation_key":"+1999","conversation_display":"Spammer",
             "when":"2009-03-06T09:50:34.000-08:00","party":{"tel":"+1999","name":"Spammer"}
         })];
-        let chats = build_voice_chats(&with_ids(&messages, "id"));
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::System);
         assert_eq!(item.system_note.as_deref(), Some("Missed call — Spammer"));
@@ -929,7 +938,7 @@ mod tests {
             "when":"2024-02-02T09:06:01.024-08:00","sender":{"tel":"+1202","name":null},"is_me":false,
             "body":"pic","attachments":["+1202 - Text - x-1-1.jpg"]
         })];
-        let chats = build_voice_chats(&with_ids(&messages, "id"));
+        let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
         let item = &chats[0].buckets[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments[0].mime_type.as_deref(), Some("image/jpeg"));

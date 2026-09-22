@@ -8,7 +8,6 @@ use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::progress::Progress;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
-use datalib_etl_linkedin::ingest::schema_raw::connection_uuid;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin::synthesize::LinkedinSynth;
 use datalib_etl_linkedin_render::connections;
@@ -404,7 +403,11 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         }
         assert_eq!(contact_docs.len(), 2, "two connection contacts");
         // Identity + grid row are keyed off the profile URL.
-        let picard_uuid = connection_uuid("https://www.linkedin.com/in/jlp");
+        let picard_uuid = datalib_etl_linkedin_render::ids::connection(
+            "linkedin",
+            "https://www.linkedin.com/in/jlp",
+        )
+        .uuid;
         let picard = contact_docs
             .iter()
             .find(|d| d.markdown_uuid == picard_uuid)
@@ -443,10 +446,11 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
         std::env::remove_var(PLAYBACK_ENV);
 
-        // The photo landed in CAS, keyed by the connection's uuid.
+        // The photo landed in CAS, keyed by the connection's URL — the
+        // raw row's key.
         let blobs = load_photo_blobs(&db, datalib_etl::pin::Reads::Own).await?;
         let photo = blobs
-            .get(&picard_uuid)
+            .get("https://www.linkedin.com/in/jlp")
             .expect("Picard's photo fetched into CAS");
         assert!(!photo.bytes.is_empty(), "photo bytes stored");
         assert_eq!(photo.content_type.as_deref(), Some("image/png"));

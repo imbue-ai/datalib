@@ -106,7 +106,7 @@ async fn snapshot_grid_rows_and_documents() {
         "SELECT uuid, provider, kind, source_label, created_at, author, account, \
                 project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
                 message_index, entire_chat, text, qmd_path, \
-                source_url, git_sha, upstream_id, upstream_entity_kind, upstream_scope, \
+                source_url, git_sha, upstream_id, upstream_entity_kind, upstream_account, \
                 notion_page_uuid, \
                 notion_block_uuid, markdown_uuid, byte_size, item_count \
          FROM grid_rows ORDER BY uuid",
@@ -151,7 +151,7 @@ async fn snapshot_grid_rows_and_documents() {
                 "git_sha": r.try_get::<Option<String>, _>("git_sha").ok().flatten(),
                 "upstream_id": r.try_get::<Option<String>, _>("upstream_id").ok().flatten(),
                 "upstream_entity_kind": r.try_get::<Option<String>, _>("upstream_entity_kind").ok().flatten(),
-                "upstream_scope": r.try_get::<Option<String>, _>("upstream_scope").ok().flatten(),
+                "upstream_account": r.try_get::<Option<String>, _>("upstream_account").ok().flatten(),
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
                 "notion_block_uuid": r.try_get::<Option<String>, _>("notion_block_uuid").ok().flatten(),
                 "markdown_uuid": r.try_get::<Option<String>, _>("markdown_uuid").ok().flatten(),
@@ -258,11 +258,14 @@ async fn snapshot_grid_rows_and_documents() {
         .partition(|r| r["provider"] == json!(provider_datalib()));
     let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for r in &storage {
-        // `upstream_scope`, not `account`: a storage row measures a
+        // `upstream_account`, not `account`: a storage row measures a
         // source and belongs to no upstream login, so it carries the
         // source name here and nothing in `account`.
         let key = (
-            r["upstream_scope"].as_str().unwrap_or_default().to_string(),
+            r["upstream_account"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             r["kind"].as_str().unwrap_or_default().to_string(),
         );
         by_source_kind.entry(key).or_default().push(format!(

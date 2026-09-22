@@ -154,7 +154,7 @@ async fn conv_uuids_scopes_conversations_not_projects() {
     );
     assert_eq!(s.project_docs_fetched, 3, "and their knowledge docs");
 
-    let parsed = parse(&raw, RawRange::cold()).expect("parse the raw store");
+    let parsed = parse(&raw, "claude_export", RawRange::cold()).expect("parse the raw store");
     assert_eq!(
         parsed.project_name_by_uuid.get(PROJECT).map(String::as_str),
         Some("Bridge Operations"),
@@ -206,7 +206,7 @@ async fn round_trip_and_only_refetch_when_upstream_moves() {
     assert_eq!(s1.project_docs_skipped, 0);
 
     // ── The doltlite → render read path ───────────────────────────
-    let parsed = parse(&raw, RawRange::cold()).expect("parse the raw store");
+    let parsed = parse(&raw, "claude_export", RawRange::cold()).expect("parse the raw store");
     assert_eq!(parsed.projects.len(), 2, "both projects should render");
     let p = parsed
         .projects
@@ -304,7 +304,7 @@ async fn project_uuids_bounds_the_walk() {
     assert_eq!(s.projects_fetched, 1, "only the named project is stored");
     assert_eq!(s.project_docs_fetched, 2, "and only its docs");
 
-    let parsed = parse(&raw, RawRange::cold()).expect("parse the raw store");
+    let parsed = parse(&raw, "claude_export", RawRange::cold()).expect("parse the raw store");
     let uuids: Vec<&str> = parsed
         .projects
         .iter()
@@ -333,7 +333,7 @@ async fn projects_can_be_disabled() {
     assert_eq!(s.project_docs_fetched, 0);
     assert_eq!(s.errors, 0);
 
-    let parsed = parse(&raw, RawRange::cold()).expect("parse the raw store");
+    let parsed = parse(&raw, "claude_export", RawRange::cold()).expect("parse the raw store");
     assert!(parsed.projects.is_empty(), "no projects should be stored");
     assert!(
         parsed.project_name_by_uuid.is_empty(),

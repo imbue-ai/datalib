@@ -10,9 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
-use once_cell::sync::Lazy;
 use serde_json::Value;
-use uuid::Uuid;
 
 use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
 use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
@@ -20,25 +18,6 @@ use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";
 pub const ENTITY_DISCUSSION: &str = "discussion";
-
-pub static GITLAB_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("c2b91d4b-2080-5e5c-ab34-8f4f3c9e0002").expect("valid gitlab ns uuid")
-});
-
-pub fn gitlab_mr_uuid(proj: &str, iid: u32) -> String {
-    Uuid::new_v5(
-        &GITLAB_UUID_NS,
-        format!("gitlab:{proj}:mr:{iid}").as_bytes(),
-    )
-    .to_string()
-}
-pub fn gitlab_note_uuid(proj: &str, id: i64) -> String {
-    Uuid::new_v5(
-        &GITLAB_UUID_NS,
-        format!("gitlab:{proj}:note:{id}").as_bytes(),
-    )
-    .to_string()
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct GitlabSelfIdentity {
@@ -118,7 +97,7 @@ pub struct ParsedGitlabApi {
 /// Every table an MR's document reads; the forward scan diffs each.
 const TABLES: [&str; 2] = ["merge_requests", "discussions"];
 
-pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGitlabApi> {
+pub fn parse_api_dir(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedGitlabApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -142,7 +121,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGitlabApi
     })
     .with_context(|| format!("load gitlab db {}", db_path.display()))?;
 
-    let mut parsed = parse_loaded(raw);
+    let mut parsed = parse_loaded(source_id, raw);
     parsed.head = head;
     // An MR's row id is its bucket key, so a changed MR names itself —
     // gone or not; a changed discussion names its MR through the row,
@@ -190,7 +169,7 @@ async fn read_everything(
     Ok((raw, Some(pin.commit().to_string()), changed))
 }
 
-pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
+pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> ParsedGitlabApi {
     let mut out = ParsedGitlabApi::default();
 
     if let Some(s) = raw.self_identity {
@@ -210,8 +189,12 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
         }
         let p = &mr.payload;
         let diff_refs = p.get("diff_refs");
+        let created_at = p
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         out.merge_requests.push(MergeRequestRow {
-            uuid: gitlab_mr_uuid(&proj, iid),
+            uuid: super::ids::merge_request(source_id, &proj, iid, created_at.as_deref()).uuid,
             row_id: mr.id,
             project_full_path: proj,
             mr_iid: iid,
@@ -244,10 +227,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 .and_then(|a| a.get("username"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: p
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            created_at,
             updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())
@@ -322,8 +302,13 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 Some(p) if p != id => Some(p),
                 _ => None,
             };
+            let created_at: String = n
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
             out.notes.push(NoteRow {
-                uuid: gitlab_note_uuid(&proj, id),
+                uuid: super::ids::note(source_id, &proj, id, Some(&created_at)).uuid,
                 row_id: row_id.clone(),
                 project_full_path: proj.clone(),
                 mr_iid: iid,
@@ -346,11 +331,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                     .and_then(|v| v.as_str())
                     .map(String::from),
                 system,
-                created_at: n
-                    .get("created_at")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .into(),
+                created_at,
                 updated_at: n
                     .get("updated_at")
                     .and_then(|v| v.as_str())
@@ -372,7 +353,8 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed =
+            parse_api_dir(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.merge_requests.is_empty());
         assert!(parsed.notes.is_empty());
         assert!(parsed.self_identity.is_none());

@@ -192,6 +192,23 @@ bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
+**Every `rust_test` is a whole test binary, and the binary is where the
+cost is.** A Rust test crate is not a `cc_test` linking prebuilt
+objects: rustc compiles the leaf crate, generates code for every
+generic it instantiates from tokio, sqlx, serde and axum, and links
+the whole stack — doltlite's C included — statically, in opt mode
+(the tests run in `-c opt` so the cache they warm is the release's).
+The rlibs underneath are cache hits; that last step is not, and a
+shared-crate edit repeats it once per test target. So one binary per
+`tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
+it 17 times for one crate before #664 made `tests/http_tests/` (one
+`main.rs` of `mod` lines, the files unchanged) and `tests/applet_tests/`.
+Split a crate's integration tests into binaries only along a line the
+process forces — a test that installs the global tracing subscriber
+(`server_log.rs`, `request_log.rs`, `ui_events.rs`, one each), or
+tags the others cannot share (`no-sandbox`). Inside one binary libtest
+already runs the functions in parallel.
+
 **A `[for tool]` suffix on a `Compiling Rust …` line is a second
 copy** — the crate built in the exec configuration as well as the
 target one, nothing shared. A `genrule` puts its `tools` there, so a
@@ -249,6 +266,7 @@ job, from that job's log. Each row's PR has the run ids.
 | 2026-09-17 | the image its own, with the pre-fetched output base (#500, #503) | 75.9 s; `Analyzed` at +72 s | 45 s; `Analyzed` at +16 s |
 | 2026-09-18 | e2e runfiles carry the embedding model alone (#550) | runs that execute the e2e suite: 349–463 s, with a 1.8 GB download of two models the suite never loads on the serial tail (~20 s quiet, ~60 s under load) | 376 s; no model download. A transfer cut inside the noise on a quiet day — the runs where the tail was 60 s were the ones where BuildBuddy was busy |
 | | test job wall clock, warm | ~250 s | ~144 s |
+| 2026-09-22 | `datalib/backend/http`'s 14 integration-test targets become 2 (#664) | for those targets: 447 s of `Compiling Rust bin`, 254 s of `Clippy`, 290 s of `Testing` | 39 s, 5 s, 24 s. The before run's box was saturated (713 sandbox actions) and the after run's was idle, so read it as "~10x, direction certain, factor approximate". The merged 13-file binary compiles in 23 s where each 1-file binary took 20–50 s: the per-file content is nearly free, the per-binary link is the whole cost |
 
 The container pull (`Initialize containers`) is 55–75 s and is the
 largest fixed cost left. Dropping the archives from the image brought

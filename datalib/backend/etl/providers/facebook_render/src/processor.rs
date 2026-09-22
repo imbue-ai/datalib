@@ -43,11 +43,14 @@ pub fn plan_render(
     })])
 }
 
-/// Whose export this is: the name every item is written under, the
-/// `account` label every row carries, and the profile rows both came
-/// from, which every document therefore declares.
+/// Whose export this is: the configured source it renders under, the
+/// name every item is written under, the `account` label every row
+/// carries, and the profile rows both came from, which every document
+/// therefore declares.
 #[derive(Debug, Clone, Default)]
 pub struct Owner {
+    /// The source's group id — a component of every id minted here.
+    pub source_id: String,
     pub name: String,
     pub account: Option<String>,
     pub inputs: Vec<Input>,
@@ -57,7 +60,7 @@ impl Owner {
     /// From the `profile_v2` record: the first listed email is the
     /// account, the full name is the author. An export always has one;
     /// a store without it falls back to "Me".
-    pub fn from_profile(rows: &[(String, Value)]) -> Owner {
+    pub fn from_profile(source_id: &str, rows: &[(String, Value)]) -> Owner {
         let inputs = rows
             .iter()
             .map(|(id, _)| Input::new(PROFILE_TABLE, id))
@@ -73,6 +76,7 @@ impl Owner {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         Owner {
+            source_id: source_id.to_string(),
             name: name.clone().unwrap_or_else(|| "Me".to_string()),
             account: datalib_etl_chat_common::account_label("", email, name.as_deref()),
             inputs,
@@ -164,7 +168,7 @@ pub fn render_source(
             let changed = changed_rows(db.pool(), range, &pin, ALL_TABLES).await?;
             let rows = |t: &str| tables.get(t).map(Vec::as_slice).unwrap_or(&[]);
 
-            let owner = Owner::from_profile(rows(PROFILE_TABLE));
+            let owner = Owner::from_profile(source.name, rows(PROFILE_TABLE));
             let mut posts = build_posts(rows(POSTS_TABLE), rows(OTHER_POSTS_TABLE), &owner);
             let mut albums = build_albums(rows(ALBUMS_TABLE), &owner);
             let mut comments = build_comments(rows(COMMENTS_TABLE), &owner);
@@ -376,7 +380,7 @@ mod tests {
                 "emails": {"emails": ["picard@enterprise.starfleet"]},
             }}),
         )];
-        let owner = Owner::from_profile(&rows);
+        let owner = Owner::from_profile("fb", &rows);
         assert_eq!(owner.name, "Jean-Luc Picard");
         assert_eq!(
             owner.account.as_deref(),
@@ -390,10 +394,10 @@ mod tests {
             json!({"profile_v2": {"name": {"full_name": "Data"}, "emails": {"emails": []}}}),
         )];
         assert_eq!(
-            Owner::from_profile(&no_email).account.as_deref(),
+            Owner::from_profile("fb", &no_email).account.as_deref(),
             Some("Data")
         );
-        let none = Owner::from_profile(&[]);
+        let none = Owner::from_profile("fb", &[]);
         assert_eq!(none.name, "Me");
         assert_eq!(none.account, None);
     }

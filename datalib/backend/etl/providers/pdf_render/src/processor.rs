@@ -101,9 +101,6 @@ impl RenderProcessor for PdfRender {
         for bucket in render::buckets_of(looked_at.as_ref(), &converted, scan_meta_id.as_deref()) {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
-        for bucket in &scan.gone {
-            ctx.declare_bucket(bucket, &[])?;
-        }
 
         if let Some(head) = scan.new_head.as_deref() {
             ctx.consumed(head);

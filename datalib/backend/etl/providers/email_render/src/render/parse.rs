@@ -87,26 +87,32 @@ pub struct EmailThreadBucket {
     pub inputs: Inputs,
 }
 
-pub fn parse_export(input: &Path) -> Result<ParsedEmail> {
-    parse(input, RawRange::cold(), false)
+pub fn parse_export(input: &Path, source_id: &str) -> Result<ParsedEmail> {
+    parse(input, source_id, RawRange::cold(), false)
 }
 
 /// `label_filter` says whether the render step filters threads by
 /// mailbox label: then which threads render depends on the whole
 /// mailbox tree, and a mailbox change renders everything.
-pub fn parse(input: &Path, range: RawRange<'_>, label_filter: bool) -> Result<ParsedEmail> {
+pub fn parse(
+    input: &Path,
+    source_id: &str,
+    range: RawRange<'_>,
+    label_filter: bool,
+) -> Result<ParsedEmail> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedEmail::default());
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, range, label_filter).await })
+            .block_on(async move { parse_async(&db_path, source_id, range, label_filter).await })
     })
 }
 
 async fn parse_async(
     db_path: &Path,
+    source_id: &str,
     range: RawRange<'_>,
     label_filter: bool,
 ) -> Result<ParsedEmail> {
@@ -156,7 +162,7 @@ async fn parse_async(
     let all = load_all_thread_keys(&pool).await?;
 
     // ── Phase 1: which threads changed since the cursor? ──────────
-    let scan = scan_diff(&pool, range, &pin, label_filter, &all).await?;
+    let scan = scan_diff(&pool, source_id, range, &pin, label_filter, &all).await?;
 
     let (to_load, docs_skipped) = match &scan.render {
         None => (all, 0usize),
@@ -305,6 +311,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// everything.
 async fn scan_diff(
     pool: &SqlitePool,
+    source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
     label_filter: bool,
@@ -351,7 +358,7 @@ async fn scan_diff(
     // `(account, thread)` pair.
     let by_uuid: HashMap<String, String> = all
         .iter()
-        .map(|(a, t)| (super::render::thread_uuid(a, t), format!("{a}|{t}")))
+        .map(|(a, t)| (super::ids::thread(source_id, a, t).uuid, format!("{a}|{t}")))
         .collect();
     let narrowed = range.narrow_by(scan.render.as_ref(), |key| by_uuid.get(key).cloned());
     let split = |set: HashSet<String>| {

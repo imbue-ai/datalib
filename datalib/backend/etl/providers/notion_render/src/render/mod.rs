@@ -2,6 +2,7 @@
 //! emit one document per Notion page, plus one per comment thread.
 
 pub mod grid_rows;
+pub mod ids;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring

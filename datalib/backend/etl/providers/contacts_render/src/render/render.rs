@@ -13,16 +13,18 @@ use datalib_etl_contact_common::{
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
 
+use super::ids;
 use super::parse::{ParsedContact, ParsedContacts};
-use super::{addressbook_uuid, contact_uuid};
 use datalib_schema::providers::Provider;
 
 /// Bump when the rendered layout changes enough that every existing
 /// contact doc needs re-rendering. Bumped to 2 when contacts adopted the
 /// shared contact-common layout (uuid-named files, generic frontmatter,
 /// richer grid-row search text); to 3 when `account` stopped carrying
-/// the source name.
-pub const RENDER_VERSION: u32 = 3;
+/// the source name; to 4 when ids moved onto `datalib_id` under
+/// the configured source and every row gained its backpointer — every uuid
+/// moved.
+pub const RENDER_VERSION: u32 = 4;
 
 /// Every bucket a pass looked at — named first with nothing, then the
 /// rendered ones with what they read — for the processor to declare.
@@ -38,6 +40,7 @@ pub fn render_all(
         provider: Provider::Contacts,
         source_label: humanize_source_label(source_id),
         contact_kind: "Contact".to_string(),
+        contact_entity_kind: ids::KIND_CONTACT,
         // A `.vcf` file has no login behind it.
         account: None,
         render_version: RENDER_VERSION,
@@ -118,12 +121,14 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
         fields.push(ContactField::new("Note", n.replace('\n', " <br> ")));
     }
 
+    let id = ids::contact(source_id, &contact.addressbook, &contact.uid);
     NormalizedContact {
-        contact_uuid: contact_uuid(source_id, &contact.addressbook, &contact.uid),
-        group_uuid: addressbook_uuid(source_id, &contact.addressbook),
+        contact_uuid: id.uuid,
+        group_uuid: ids::addressbook(source_id, &contact.addressbook).uuid,
         group_label: contact.addressbook.clone(),
         display_name: contact.display_name.clone(),
-        external_id: Some(contact.uid.clone()),
+        external_id: Some(id.natural_key),
+        upstream_account: None,
         // A card carries no creation stamp.
         created_at: None,
         // vCard `REV` is the revision stamp. Fastmail emits *basic* ISO
@@ -220,12 +225,16 @@ mod tests {
         let n = normalize(&sample(), "tng_contacts");
         assert_eq!(
             n.contact_uuid,
-            contact_uuid("tng_contacts", "Bridge", "tng-picard")
+            ids::contact("tng_contacts", "Bridge", "tng-picard").uuid
         );
-        assert_eq!(n.group_uuid, addressbook_uuid("tng_contacts", "Bridge"));
+        assert_eq!(
+            n.group_uuid,
+            ids::addressbook("tng_contacts", "Bridge").uuid
+        );
         assert_eq!(n.group_label, "Bridge");
         assert_eq!(n.display_name.as_deref(), Some("Jean-Luc Picard"));
-        assert_eq!(n.external_id.as_deref(), Some("tng-picard"));
+        assert_eq!(n.external_id.as_deref(), Some("Bridge#tng-picard"));
+        assert_eq!(n.upstream_account, None);
         assert_eq!(n.created_at, None, "a card has no creation stamp");
         assert_eq!(n.modified_at.as_deref(), Some("2370-04-15T00:00:00Z"));
         // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.

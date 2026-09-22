@@ -48,7 +48,7 @@ have least need of.
 | Jobs `system/jobs.doltlite_db`, usage `system/usage.doltlite_db` | `app_schema::sync_jobs`, `disk_usage` | same as feedback | same | none |
 | `system/dag_state.json` | `dag::state::DagState` (serde) | every field `#[serde(default)]` | an unknown field is ignored; a missing one reads as "no record", which re-runs the step | none |
 | `config.toml` | `dag::config` | the loader recognises one retired shape by its keys | a diagnostic naming `datalib-migrate-config`, which holds exactly one rewrite at a time | none |
-| uuid recipes (`docs/dev/entity_ids.md`) | code, per provider | not detected: a changed recipe just mints different uuids | every document re-keys on the next `RENDER_VERSION` bump; anything that stored the old uuid (feedback's `target_uuids`, a bookmark, an agent's notes) now points at nothing | `upstream_scope` beside the uuid, on some providers |
+| uuid recipes (`docs/dev/entity_ids.md`) | code, per provider | not detected: a changed recipe just mints different uuids | every document re-keys on the next `RENDER_VERSION` bump; anything that stored the old uuid (feedback's `target_uuids`, a bookmark, an agent's notes) now points at nothing | `upstream_account` beside the uuid, on some providers |
 | Enum spellings in `VARCHAR` columns | `strum` enums, `parse → Option` | at read: `RunState::parse`, `Severity::parse`, `problems::from_row` | a spelling this build lacks is `None` or an error, by the caller's choice — never a guess | the spelling is the version |
 | UI `localStorage` | three keys (dev mode, a handoff flag, expanded groups) | none | a stale value is a cosmetic default | none |
 
@@ -179,7 +179,7 @@ document the next time it renders. `docs/dev/entity_ids.md` documents
 the re-key as a `RENDER_VERSION` bump, which handles the render and
 index side. What it cannot handle is anything that *stored* a uuid
 expecting it to stay: feedback's `target_uuids` and `row_uuids`, and
-any agent or person who bookmarked `m-<uuid>`. `upstream_scope`
+any agent or person who bookmarked `m-<uuid>`. `upstream_account`
 (stamped beside the uuid on some providers) is the right start — the
 recipe input is kept, so the old id can be regenerated — but it is
 per-provider and nothing reads it back.
@@ -597,7 +597,7 @@ side.
   `release` skill drafts it from the commits that touched
   `MIGRATIONS`, `SCHEMA_VERSION`, `RENDER_VERSION`, `LAYOUT_VERSION`
   or `datalib_runs::SCHEMA_VERSION`.
-- **uuid recipes (§1.2(i)).** Stamp `upstream_scope` on every provider
+- **uuid recipes (§1.2(i)).** Stamp `upstream_account` on every provider
   that mints, not some; and when a recipe changes, the migration for
   the *feedback* store rewrites `target_uuids` from the old recipe to
   the new using the stamped inputs. That is the only store where a

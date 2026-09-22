@@ -43,7 +43,7 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
 
 #[test]
 fn renders_tng_fixture() {
-    let parsed = parse_api_dir(&fixture_dir()).expect("parse");
+    let parsed = parse_api_dir(&fixture_dir(), "chatgpt_api").expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut docs = Vec::new();
     render_all(
