@@ -118,7 +118,7 @@ MAX_STAMP_MS = (1 << 48) - 1
 # silent.
 SCOPE_TAG_BY_PROVIDER = {
     "airvisual": ("src", "pg"),
-    "beeper": ("up", None),
+    "beeper": (None, "pg"),
     "chatgpt": (None, "pg"),
     "claude": (None, "pg"),
     "claude_code": (None, "pg"),

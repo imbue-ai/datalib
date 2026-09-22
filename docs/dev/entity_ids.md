@@ -327,7 +327,7 @@ back by render as the natural key.
 |---|---|---|
 | airvisual | `SourceInstance` for the page, `ProviderGlobal` on the serial for a device | none — a device's stamp is its latest reading |
 | apple_messages | `ProviderGlobal` — `message.guid` is a UUID Messages mints; `chat.guid` is unique per Apple ID, so two sources from two Apple IDs texting one number contend, which `IdClaims` reports | messages, tapbacks |
-| beeper | `Upstream(store)` on Matrix ids; the raw store's keys are the same ids | events, at millisecond precision |
+| beeper | `ProviderGlobal` on Matrix ids; the raw store's keys are the same ids | events, at millisecond precision |
 | chatgpt | `ProviderGlobal` | messages |
 | claude | `ProviderGlobal` (see `claude_render/src/render/ids.rs` § Scope for why not `org_uuid`) | messages, blocks, project documents |
 | claude_code | `ProviderGlobal` — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |

@@ -17,8 +17,8 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_att
 /// `rooms` — one row per chat / channel / DM Beeper Texts knows
 /// about.
 ///
-/// PK choice: `crate::ids::room(source, native_room_id)`, the same id
-/// render puts on the chat. The native id (Matrix room id for index.db;
+/// PK choice: `crate::ids::room(native_room_id)`, the same id render
+/// puts on the chat. The native id (Matrix room id for index.db;
 /// `chat.guid` for the future Mac chat.db reader) lives alongside as
 /// its own column so cross-reference passes that arrive *after* the
 /// row was written (e.g. the megabridge enrichment pass keyed off
@@ -114,7 +114,7 @@ impl BulkUpsertable for RoomRow {
 /// `users` — one row per peer / participant Beeper Texts knows
 /// about, across every chat in a given `source` store.
 ///
-/// PK choice: `crate::ids::user(source,
+/// PK choice: `crate::ids::user(
 /// native_user_id)`.
 pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -184,8 +184,7 @@ impl BulkUpsertable for UserRow {
 /// `events` — one row per message / reaction / membership /
 /// edit / hidden event Beeper Texts has cached.
 ///
-/// PK choice: `crate::ids::event(source, native_event_id,
-/// timestamp_ms)`, the same id render puts on the message. Both
+/// PK choice: `crate::ids::event(native_event_id, timestamp_ms)`, the same id render puts on the message. Both
 /// index.db and the megabridge file expose a stable per-message Matrix
 /// event id (the `mxid` column), so the id keyed off `(source, mxid)`
 /// is upstream-stable across re-fetches; the stamp in its leading bits

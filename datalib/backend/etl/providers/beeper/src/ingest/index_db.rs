@@ -261,7 +261,7 @@ fn build_room_row(
         .and_then(|v| v.as_str())
         .map(String::from);
     RoomRow {
-        id: ids::room(SOURCE, thread_id).uuid,
+        id: ids::room(thread_id).uuid,
         source: SOURCE.to_string(),
         network: network.to_string(),
         native_room_id: thread_id.to_string(),
@@ -313,7 +313,7 @@ async fn ingest_participants(
             .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
         batch.users.push(UserRow {
-            id: ids::user(SOURCE, &user_id).uuid,
+            id: ids::user(&user_id).uuid,
             source: SOURCE.to_string(),
             network: Some(network.to_string()),
             native_user_id: user_id,
@@ -409,9 +409,9 @@ async fn ingest_messages(
             (None, None)
         };
 
-        let event_uuid = ids::event(SOURCE, &event_id, timestamp_ms).uuid;
-        let room_uuid = ids::room(SOURCE, thread_id).uuid;
-        let sender_uuid = sender.as_deref().map(|s| ids::user(SOURCE, s).uuid);
+        let event_uuid = ids::event(&event_id, timestamp_ms).uuid;
+        let room_uuid = ids::room(thread_id).uuid;
+        let sender_uuid = sender.as_deref().map(|s| ids::user(s).uuid);
         let row = EventRow {
             id: event_uuid.clone(),
             source: SOURCE.to_string(),
@@ -497,11 +497,11 @@ async fn ingest_reactions(
             .map(String::from);
         let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
         batch.events.push(EventRow {
-            id: ids::event(SOURCE, &reaction_id, timestamp_ms).uuid,
+            id: ids::event(&reaction_id, timestamp_ms).uuid,
             source: SOURCE.to_string(),
             network: network.to_string(),
-            room_uuid: ids::room(SOURCE, thread_id).uuid,
-            sender_uuid: sender.as_deref().map(|s| ids::user(SOURCE, s).uuid),
+            room_uuid: ids::room(thread_id).uuid,
+            sender_uuid: sender.as_deref().map(|s| ids::user(s).uuid),
             native_event_id: reaction_id,
             event_type: "REACTION".to_string(),
             timestamp_ms,

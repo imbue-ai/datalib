@@ -105,7 +105,7 @@ impl IdNamespace {
 pub enum Scope<'a> {
     /// Unique within one upstream account / workspace / organization,
     /// identified by a **provider-issued** id: a Slack `team_id`, a
-    /// JMAP `account_id`, a GitHub repository, Beeper's store name.
+    /// JMAP `account_id`, a GitHub repository.
     /// Never a secret: the value is stored in `grid_rows.upstream_scope`
     /// in the clear.
     Upstream(&'a str),

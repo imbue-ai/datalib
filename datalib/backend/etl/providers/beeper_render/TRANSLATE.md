@@ -17,7 +17,7 @@ Matrix event shapes without any bridge-specific knowledge.
 ## UUIDs
 
 Every id is `datalib_etl_beeper::ids` over the Matrix room, user or
-event id under the store it came from, and is also the raw row's key,
+event id, and is also the raw row's key,
 so a `matrix_generic`-translated row keeps the same `uuid` if it's
 later replaced by a bridge-specific translator. An event's id carries
 its `timestamp_ms` in its leading bits — `docs/dev/entity_ids.md`.

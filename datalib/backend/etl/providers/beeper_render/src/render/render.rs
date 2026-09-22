@@ -22,7 +22,7 @@ use super::parse::ParsedBeeper;
 /// Bump when Beeper's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
 /// `datalib_etl_chat_common::LAYOUT_VERSION`.
-/// v3: ids are minted through `datalib_id` under `Upstream(store)`,
+/// v3: ids are minted through `datalib_id` under `ProviderGlobal`,
 ///     every row carries its backpointer, and an event's id carries its
 ///     `timestamp_ms` in its leading bits (`datalib_id`'s v8 layout).
 ///     The raw store's keys are the same ids, so an existing root

@@ -134,11 +134,10 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
         author: None,
         account: room.account_id.clone(),
         project: room.external_workspace_id.clone(),
-        // The room's id is minted from its native (Matrix) id under the
-        // store it came from; the bridge's own id stays on `project`'s
-        // neighbour columns.
+        // The room's id is minted from its native (Matrix) id; the
+        // bridge's own id stays on `project`'s neighbour columns.
         external_id: Some(room.native_room_id.clone()),
-        upstream_scope: Some(room.source.clone()),
+        upstream_scope: None,
         source_url: None,
         org_uuid: None,
         org_name: None,
@@ -146,7 +145,7 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
         // on disk: `render_markdown/<network>/<room_uuid>/<period>.md`.
         path_prefix: Some(room.network.clone()),
         buckets: vec![{
-            let period = ids::period(&room.source, &room.native_room_id, &doc.period_key);
+            let period = ids::period(&room.native_room_id, &doc.period_key);
             NormalizedDoc {
                 period_key: doc.period_key.clone(),
                 markdown_uuid: period.uuid,
