@@ -78,10 +78,11 @@ done
 # docker image) and else from the fetched tree in the user's cache.
 install -m 0755 "$repo_root/scripts/latchkey-wrapper.sh" "$stage/latchkey"
 
-# The commit beside the binaries, for `datalib_runs::git_hash`: what a
-# log line's file and line number are relative to. A file, not a build
-# stamp, so no rustc action depends on the workspace status (test.yml
-# § stamping).
+# The commit beside the binaries, for `datalib_runtime::build_id`: what
+# a log line's file and line number are relative to. `:bin` stages one
+# already (a stamped genrule, not a rustc stamp — .bazelrc §stamping);
+# the release writes the workflow's own `GITHUB_SHA` over it, the same
+# value from the source the job trusts, and the test's tree has none.
 if [[ -n "${GITHUB_SHA:-}" ]]; then
     echo "$GITHUB_SHA" > "$stage/git-hash"
 else

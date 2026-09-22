@@ -13,7 +13,7 @@ use tracing_subscriber::Layer;
 
 use crate::store::{now_split, LogSink};
 
-pub use datalib_log_filter::DEFAULT_LOG_FILTER;
+pub use datalib_log_filter::{default_filter, filter_at, DEFAULT_LEVEL};
 
 pub struct StoreLayer {
     /// Weak on purpose: the subscriber is global and lives until the
