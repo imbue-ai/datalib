@@ -1,6 +1,9 @@
-//! Ingest the checked-in TNG fixture — two threads and a sub-agent in
+//! Ingest the checked-in TNG fixture — three threads and a sub-agent in
 //! the layout `~/.codex` has — then render it and read the documents
-//! back.
+//! back. Two of Codex's formats are in there: the 0.115 threads, where
+//! a `user_message` event is the only record of what the person typed,
+//! and the 0.155 one, where the message tags itself and there are no
+//! such events at all.
 
 use std::path::PathBuf;
 
@@ -16,6 +19,7 @@ const STANZA: &str = "codex";
 const THREAD_1: &str = "41b8781c-6a77-7fbf-9c78-8125d1a37f24";
 const THREAD_2: &str = "8233ca2a-6faa-78d9-85d7-170a69389bd3";
 const AGENT_1: &str = "0959dd40-b9f1-7ec2-b3d8-643ac3857878";
+const THREAD_3: &str = "72fb0cda-0eb6-754e-8bfd-a7dcc8d6c8f4";
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CODEX_FIXTURE_DIR") {
@@ -49,15 +53,15 @@ async fn the_tng_fixture_ingests_and_renders() {
     let s = fetch(opts()).await.unwrap();
     assert_eq!(
         (s.files, s.files_read),
-        (3, 3),
-        "two threads under sessions/ and one under archived_sessions/; history.jsonl is not under either"
+        (4, 4),
+        "three threads under sessions/ and one under archived_sessions/; history.jsonl is not under either"
     );
-    assert_eq!((s.threads, s.subagents), (3, 1));
+    assert_eq!((s.threads, s.subagents), (4, 1));
     assert_eq!(s.malformed_lines, 1, "the non-JSON line is stepped over");
     assert_eq!((s.not_transcripts, s.unreadable), (0, 0));
-    assert_eq!(s.records, 35 - 1 + 11 + 14);
+    assert_eq!(s.records, 35 - 1 + 11 + 14 + 29);
     let pool = db.pool();
-    assert_eq!(count(pool, "SELECT COUNT(*) FROM transcripts").await, 3);
+    assert_eq!(count(pool, "SELECT COUNT(*) FROM transcripts").await, 4);
     // Every line is a row; its type is read off the payload.
     assert_eq!(
         count(
@@ -65,8 +69,19 @@ async fn the_tng_fixture_ingests_and_renders() {
             "SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'session_meta'"
         )
         .await,
-        3
+        4
     );
+    // The line types only the newer Codex writes are stored like any
+    // other; nothing renders them.
+    for (kind, n) in [("world_state", 2), ("token_usage_record", 2)] {
+        let got: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE payload->>'$.type' = ?")
+                .bind(kind)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(got, n, "{kind}");
+    }
     assert_eq!(
         count(
             pool,
@@ -128,9 +143,34 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(meta["models"], serde_json::json!(["gpt-5.3-codex"]));
     assert_eq!(meta["item_counts"]["custom_tool_call"], 1);
 
+    // The 0.155 thread has no `user_message` event to take a title
+    // from; the message's own `user.text` tag is what names it.
+    let (title3, cli3): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT title, json(payload)->>'$.cli_version' FROM transcripts WHERE id = ?",
+    )
+    .bind(THREAD_3)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        title3.as_deref(),
+        Some("Audit the warp core containment logs and tell me what you find.")
+    );
+    assert_eq!(cli3.as_deref(), Some("0.155.1"));
+    assert_eq!(
+        count(
+            pool,
+            "SELECT COUNT(*) FROM records WHERE payload->>'$.payload.type' = 'user_message'"
+        )
+        .await,
+        4,
+        "two turns in thread 1, one each in the sub-agent and thread 2; \
+         the 0.155 thread carries none"
+    );
+
     // A second pass reads nothing.
     let again = fetch(opts()).await.unwrap();
-    assert_eq!((again.files, again.files_read), (3, 0));
+    assert_eq!((again.files, again.files_read), (4, 0));
 
     sqlx::query("SELECT dolt_commit('-Am', 'fixture ingest')")
         .execute(pool)
@@ -153,8 +193,8 @@ async fn the_tng_fixture_ingests_and_renders() {
         16 * 1024,
     )
     .unwrap();
-    assert_eq!(outcome.rendered, 3);
-    assert_eq!(docs.len(), 3);
+    assert_eq!(outcome.rendered, 4);
+    assert_eq!(docs.len(), 4);
 
     let title_of = |d: &RenderedMarkdown| {
         d.rows
@@ -215,6 +255,44 @@ async fn the_tng_fixture_ingests_and_renders() {
     let md = std::fs::read_to_string(&agent.md_path).unwrap();
     assert!(md.contains("Tool call: shell"));
     assert!(md.contains("aft-sensors.log"));
+
+    // The 0.155 thread: the tags decide what the person typed, the
+    // `exec` tool's JavaScript is the call, and a list of content items
+    // is its output.
+    let t3 = by_title("Audit the warp core containment logs");
+    let md = std::fs::read_to_string(&t3.md_path).unwrap();
+    assert!(md.contains("Tool call: exec"), "{md}");
+    assert!(md.contains("tools.exec_command"));
+    assert!(md.contains("Tool result: exec"));
+    assert!(md.contains("containment 0.94"));
+    assert!(md.contains("Two events crossed 0.9"));
+    assert!(
+        !md.contains("Reasoning"),
+        "an encrypted reasoning with no summary renders nothing"
+    );
+    assert!(
+        !md.contains("token_usage_record") && !md.contains("world_state"),
+        "the newer line types are stored, not rendered"
+    );
+    assert_eq!(
+        t3.rows.iter().filter(|r| r.kind == "User Input").count(),
+        2,
+        "two typed prompts — one of them opening with a tag, which only \
+         `user.text` tells from an injection — and the AGENTS.md under \
+         the same role is not one of them"
+    );
+    assert!(
+        md.contains("readings look wrong to me"),
+        "the prompt that looks injected is still a prompt"
+    );
+    assert!(
+        t3.rows.iter().any(|r| r.kind == "Harness Message"),
+        "and it is there as one"
+    );
+    assert!(t3
+        .rows
+        .iter()
+        .any(|r| r.author.as_deref() == Some("gpt-5.6-terra")));
 
     let t2 = by_title("Why does the replicator return cold Earl Grey");
     let md = std::fs::read_to_string(&t2.md_path).unwrap();

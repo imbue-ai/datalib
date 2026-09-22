@@ -1838,7 +1838,7 @@ last calibration: stardate 41153.7
 </div>
 </section>
 <section class="preview-source" id="src-codex">
-<h2 class="preview-source-name">codex <span class="preview-count">4 documents</span></h2>
+<h2 class="preview-source-name">codex <span class="preview-count">5 documents</span></h2>
 <div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/00000000-0000-86ab-b7b0-53153bf8d22e/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-86ab-b7b0-53153bf8d22e">Data (all)</h1>
@@ -2056,6 +2056,90 @@ The user interrupted the previous turn on purpose.
 </div>
 </div>
 <div class="preview-doc">
+<h3 class="preview-name">codex/render_markdown/00000000-0000-8bef-8ff5-58a96f311ccd/all.md</h3>
+<div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8bef-8ff5-58a96f311ccd">Audit the warp core containment logs and tell me what you find. (all)</h1>
+<details class="tool-group">
+<summary>🛠 1 tool step</summary>
+<div id="m-0b50f455-34d0-8b79-97d2-e8fe49e87953" data-section-uuid="0b50f455-34d0-8b79-97d2-e8fe49e87953" class="msg msg--codex">
+<h2><span class="msg-author">Codex</span> <time class="msg-ts" datetime="2364-04-13T09:15:14+00:00" title="2364-04-13 09:15:14 UTC">Mon Apr 13th, 2364 at 09:15</time></h2>
+<permissions instructions>
+Filesystem sandboxing: `workspace-write`.
+</div>
+</details>
+<div id="m-0b50f455-a230-8ce6-85fb-84218f5c9a3e" data-section-uuid="0b50f455-a230-8ce6-85fb-84218f5c9a3e" class="msg msg--codex">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-13T09:15:42+00:00" title="2364-04-13 09:15:42 UTC">Mon Apr 13th, 2364 at 09:15</time></h2>
+<p>Audit the warp core containment logs and tell me what you find.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 3 tool steps</summary>
+<div id="m-0b50f455-d8e0-8419-a37e-6968a88791ba" data-section-uuid="0b50f455-d8e0-8419-a37e-6968a88791ba" class="msg msg--codex">
+<h2><span class="msg-author">Codex</span> <time class="msg-ts" datetime="2364-04-13T09:15:56+00:00" title="2364-04-13 09:15:56 UTC">Mon Apr 13th, 2364 at 09:15</time></h2>
+<h1>AGENTS.md instructions for /Users/picard/src/enterprise</h1>
+<INSTRUCTIONS>
+# Agent Instructions
+<p>Run <code>diag</code> before touching any deflector setting, and never lower a threshold below 0.2.
+</INSTRUCTIONS></p>
+</div>
+<div id="m-0b50f456-2ae8-8558-9511-99c88025e43a" data-section-uuid="0b50f456-2ae8-8558-9511-99c88025e43a" class="msg msg--codex">
+<h2><span class="msg-author">gpt-5.6-terra</span> <time class="msg-ts" datetime="2364-04-13T09:16:17+00:00" title="2364-04-13 09:16:17 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<details><summary>Tool call: exec</summary>
+<pre><code>const r = await tools.exec_command({"cmd":"grep containment /var/log/warp-core.log | wc -l"});
+</code></pre>
+</details>
+</div>
+<div id="m-0b50f456-4640-8cdd-8648-f525ae733706" data-section-uuid="0b50f456-4640-8cdd-8648-f525ae733706" class="msg msg--codex">
+<h2><span class="msg-author">exec</span> <time class="msg-ts" datetime="2364-04-13T09:16:24+00:00" title="2364-04-13 09:16:24 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<details><summary>Tool result: exec</summary>
+<pre><code>Script completed
+Wall time 0.3 seconds
+Output:
+
+142
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0b50f456-6198-84dc-9c94-aad7f08d82f7" data-section-uuid="0b50f456-6198-84dc-9c94-aad7f08d82f7" class="msg msg--codex">
+<h2><span class="msg-author">gpt-5.6-terra</span> <time class="msg-ts" datetime="2364-04-13T09:16:31+00:00" title="2364-04-13 09:16:31 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<p>142 containment events in the log; I will check how many breached the 0.9 threshold.</p>
+</div>
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+<div id="m-0b50f456-9848-8cfa-aa74-9d57ce1e20ec" data-section-uuid="0b50f456-9848-8cfa-aa74-9d57ce1e20ec" class="msg msg--codex">
+<h2><span class="msg-author">gpt-5.6-terra</span> <time class="msg-ts" datetime="2364-04-13T09:16:45+00:00" title="2364-04-13 09:16:45 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<details><summary>Tool call: exec</summary>
+<pre><code>const r = await tools.exec_command({"cmd":"awk '$3 &gt; 0.9' /var/log/warp-core.log"});
+</code></pre>
+</details>
+</div>
+<div id="m-0b50f456-b3a0-86f0-adc6-c62523ac4e1d" data-section-uuid="0b50f456-b3a0-86f0-adc6-c62523ac4e1d" class="msg msg--codex">
+<h2><span class="msg-author">exec</span> <time class="msg-ts" datetime="2364-04-13T09:16:52+00:00" title="2364-04-13 09:16:52 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<details><summary>Tool result: exec</summary>
+<pre><code>Script completed
+Wall time 0.3 seconds
+Output:
+
+2364-04-13T02:14 containment 0.94
+2364-04-13T02:15 containment 0.97
+</code></pre>
+</details>
+</div>
+</details>
+<div id="m-0b50f456-cef8-8c38-9ab6-b288e3905706" data-section-uuid="0b50f456-cef8-8c38-9ab6-b288e3905706" class="msg msg--codex">
+<h2><span class="msg-author">gpt-5.6-terra</span> <time class="msg-ts" datetime="2364-04-13T09:16:59+00:00" title="2364-04-13 09:16:59 UTC">Mon Apr 13th, 2364 at 09:16</time></h2>
+<p>Two events crossed 0.9, both at 02:14-02:15. That is the window to look at; everything else sits under 0.6.</p>
+</div>
+<div id="m-0b50f457-8e60-819d-84de-1e0b21cf0beb" data-section-uuid="0b50f457-8e60-819d-84de-1e0b21cf0beb" class="msg msg--codex">
+<h2><span class="msg-author">User</span> <time class="msg-ts" datetime="2364-04-13T09:17:48+00:00" title="2364-04-13 09:17:48 UTC">Mon Apr 13th, 2364 at 09:17</time></h2>
+<p><containment> readings look wrong to me. Check the sensor calibration?</p>
+</div>
+<div id="m-0b50f457-c510-86a1-8cae-cfa484b11f27" data-section-uuid="0b50f457-c510-86a1-8cae-cfa484b11f27" class="msg msg--codex">
+<h2><span class="msg-author">gpt-5.6-terra</span> <time class="msg-ts" datetime="2364-04-13T09:18:02+00:00" title="2364-04-13 09:18:02 UTC">Mon Apr 13th, 2364 at 09:18</time></h2>
+<p>The sensor last calibrated stardate 41153.7; that is overdue.</p>
+</div>
+</div>
+</div>
+<div class="preview-doc">
 <h3 class="preview-name">codex/render_markdown/_datalib/storage.md</h3>
 <div class="chat-body markdown-body"><h1>codex — storage</h1>
 <p>Measured 2369-04-15T00:00:00+00:00.</p>
@@ -2088,21 +2172,21 @@ The user interrupted the previous turn on purpose.
 <td>Table</td>
 <td><code>codex/ingest/entities.doltlite_db#ingested_files</code></td>
 <td></td>
-<td>3 rows</td>
+<td>4 rows</td>
 <td><span id="m-00000000-0000-8524-9674-1c2b5f8829ae" data-section-uuid="00000000-0000-8524-9674-1c2b5f8829ae"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
 <td><code>codex/ingest/entities.doltlite_db#records</code></td>
 <td></td>
-<td>59 rows</td>
+<td>88 rows</td>
 <td><span id="m-00000000-0000-85d2-85b2-ec9dd8bfa7c2" data-section-uuid="00000000-0000-85d2-85b2-ec9dd8bfa7c2"><code>00000000</code></span></td>
 </tr>
 <tr>
 <td>Table</td>
 <td><code>codex/ingest/entities.doltlite_db#transcripts</code></td>
 <td></td>
-<td>3 rows</td>
+<td>4 rows</td>
 <td><span id="m-00000000-0000-842d-b06c-ea2ac96e0753" data-section-uuid="00000000-0000-842d-b06c-ea2ac96e0753"><code>00000000</code></span></td>
 </tr>
 </tbody>

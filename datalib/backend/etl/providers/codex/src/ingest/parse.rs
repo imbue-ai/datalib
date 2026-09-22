@@ -137,6 +137,9 @@ pub fn parse_rollout(text: &str, rel_path: &str) -> Option<ParsedRollout> {
             "response_item" => {
                 let item_type = str_field(payload, "type").unwrap_or_default();
                 *meta.item_counts.entry(item_type).or_default() += 1;
+                if meta.first_prompt.is_none() && is_typed_message(payload) == Some(true) {
+                    meta.first_prompt = message_text(payload).map(|m| first_line(&m));
+                }
             }
             "event_msg"
                 if meta.first_prompt.is_none()
@@ -166,6 +169,38 @@ pub fn parse_rollout(text: &str, rel_path: &str) -> Option<ParsedRollout> {
         records,
         stats,
     })
+}
+
+/// Whether a message is what the person typed, as the record itself
+/// says. A Codex from 0.155 on tags every message part with what it is
+/// — `user.text` for a prompt, `agents_md.instructions` and the rest
+/// for what Codex injected under the same role. `None` when the record
+/// carries no tags, which is every Codex before that.
+pub fn is_typed_message(payload: &Value) -> Option<bool> {
+    if payload.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let kinds = payload
+        .get("internal_chat_message_metadata_passthrough")?
+        .get("content_item_kinds")?
+        .as_array()?;
+    Some(
+        kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|k| k == "user.text"),
+    )
+}
+
+/// The text of a message's content items, in order.
+pub fn message_text(payload: &Value) -> Option<String> {
+    let parts: Vec<&str> = payload
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter_map(|c| c.get("text").and_then(Value::as_str))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
 fn note_session_meta(meta: &mut RolloutMeta, p: &Value) {

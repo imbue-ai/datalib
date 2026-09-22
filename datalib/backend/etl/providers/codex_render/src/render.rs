@@ -22,6 +22,7 @@ use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_id::Identity;
 use serde_json::Value;
 
+use datalib_etl_codex::ingest::parse::is_typed_message;
 use datalib_etl_codex::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
 
@@ -375,11 +376,17 @@ fn response_item(
             if text.trim().is_empty() {
                 return None;
             }
+            // What the person typed, as against what Codex injected
+            // under the same role: the record's own tags where it has
+            // them, else the UI events an older Codex wrote, else the
+            // shape of the text.
+            let typed_here = || {
+                is_typed_message(p)
+                    .unwrap_or_else(|| typed.contains(text.trim()) || !looks_injected(&text))
+            };
             let (author_id, author, label, aside) = match str_of(p, "role") {
                 Some("assistant") => ("assistant", model, "LLM Response", false),
-                Some("user") if typed.contains(text.trim()) || !looks_injected(&text) => {
-                    ("user", "User", "User Input", false)
-                }
+                Some("user") if typed_here() => ("user", "User", "User Input", false),
                 _ => ("system", "Codex", "Harness Message", true),
             };
             // An injected blob — a permissions primer, a whole AGENTS.md —

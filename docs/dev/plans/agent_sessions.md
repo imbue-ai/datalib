@@ -23,7 +23,7 @@ unverified.
 | Cowork (web/mobile) | `cloud` | origin | unknown — `cse_` ids, same id space as Claude Code cloud | claude.ai session or OAuth | **open question**, needs a browser probe |
 | Any of the above, Enterprise only | — | origin | Compliance API `/v1/compliance/apps/sessions/{local,remote}` | Compliance Access Key | documented and stable, but Enterprise plans only |
 | ChatGPT | `export` | files | `conversations.json` from the data-export zip | none | shape already parsed by the `api` method's renderer |
-| Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | **built** (rollouts; the SQLite is not read yet) |
+| Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | **built** (rollouts, both format generations; the SQLite is not read yet) |
 | Codex cloud | `cloud` | origin | `chatgpt.com/backend-api/wham/tasks/list`, `…/wham/tasks/{id}` | the ChatGPT bearer the `chatgpt` source already holds | *from source* (`openai/codex`); undocumented |
 | Gemini web | takeout | files | `My Activity/Gemini Apps/MyActivity.html` | none | **already built** (`google_takeout`) |
 | Gemini CLI | `local` | files | `~/.gemini/tmp/<project-hash>/chats/session-*.json` | none | *measured*: 22 sessions here |
@@ -269,6 +269,11 @@ Record `type` is one of `session_meta` (id, timestamp, cwd,
 `turn_context`, `response_item` (`payload.type` = `message`,
 `function_call`, `function_call_output`, `reasoning`, …) and
 `event_msg` (`user_message`, `task_started`, `task_complete`, …).
+**That last list is the 0.115 vocabulary.** By 0.155 the
+`user_message` event is gone — `item_completed` replaced it — and a
+message instead tags its own parts (`content_item_kinds`), which is
+the better signal and the one the provider prefers; see the provider's
+INGEST.md § "Two generations".
 Plain SQLite, so titles come from `state_5.sqlite` via the ordinary
 `sqlx` pool, not the mirror engine. Same append-only file, same
 byte-offset cursor as Claude Code.

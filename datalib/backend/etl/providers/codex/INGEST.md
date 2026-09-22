@@ -32,11 +32,12 @@ own file cursor (`codex/sessions`, `codex/archived_sessions`), and
 nothing else under the home.
 
 A rollout is append-only JSONL: Codex adds a line per event and never
-rewrites one. Every line is `{timestamp, type, payload}`; a newer Codex
-adds an `ordinal`. **A line has no id of its own** — unlike a Claude
-Code record, which carries a `uuid` — so a row is keyed
-`<thread id>#<line number>`, and the file being append-only is what
-makes that key stable. The `type` vocabulary:
+rewrites one. Every line is `{timestamp, type, payload}`; from 0.155
+there is also an `ordinal`, and a tool output carries a `metadata`
+key. **A line has no id of its own** — unlike a Claude Code record,
+which carries a `uuid` — so a row is keyed `<thread id>#<line number>`,
+and the file being append-only is what makes that key stable. The
+`type` vocabulary:
 
 | type | what it is |
 |---|---|
@@ -45,12 +46,44 @@ makes that key stable. The `type` vocabulary:
 | `response_item` | the model-visible history. `payload.type` is `message` (`role` user / assistant / developer, `content[]` of `input_text` / `output_text` / `input_image`), `reasoning` (a `summary[]`, and `encrypted_content` the page cannot show), `function_call` (`name`, `arguments` as a JSON string, `call_id`), `local_shell_call`, `custom_tool_call` (`apply_patch`, with `input` the patch), `function_call_output` / `custom_tool_call_output` (`call_id`, `output` a string or content items), `web_search_call`, and a few housekeeping kinds (`ghost_snapshot`, `context_compaction`) |
 | `event_msg` | what the UI was told: `user_message`, `agent_message`, `agent_reasoning`, `task_started` / `task_complete` / `turn_aborted`, `token_count`, `exec_command_begin` / `_end`. Every one repeats a `response_item` or describes progress — except `user_message`, which is the one record of what the person **typed** as against what Codex injected under the user role |
 | `compacted` | Codex folded the history into a summary `message`; what the model saw from then on |
+| `world_state` (0.155) | the whole context restated: the project's AGENTS.md, the environments, the collaboration mode |
+| `token_usage_record` (0.155) | per-turn and per-thread token counts |
 
-Measured on this machine (Codex 0.104–0.115): 20 rollouts, none with
-a tool call. The tool-call shapes above are from
-`codex-rs/protocol/src/models.rs` and the fixture is built from them;
-the first sync of a real tree with tool traffic is where to look if
-something renders oddly.
+## Two generations, and the one thing they disagree about
+
+**Which words the person actually typed** is the fact this provider has
+to get right, and the two Codex generations record it differently:
+
+- **Through 0.115**: a `user_message` **event** carries the text. A
+  message under the `user` role says nothing about itself, so what
+  Codex injected there (the project's AGENTS.md, an environment note)
+  and what the person typed look alike.
+- **From 0.155**: there are **no `user_message` events at all** — they
+  became `item_completed`, which carries the same text inside
+  `item.type: "UserMessage"` — and instead every message part is
+  tagged in
+  `internal_chat_message_metadata_passthrough.content_item_kinds`:
+  `user.text` for a prompt, `agents_md.instructions`,
+  `environments.environment_context`,
+  `permissions.instructions`, `host_skills.instructions` and friends
+  for what Codex put there.
+
+So the provider reads the tags where they exist and the events where
+they do not, and the title — the first typed prompt — comes from
+whichever answered. The fixture holds a thread of each generation for
+that reason: a build that reads only one signal titles half of them
+`(untitled)`, or files an injected AGENTS.md as something the person
+said, and only one of the two generations would catch it.
+
+Measured on this machine: 20 rollouts from Codex 0.104–0.115, none
+with a tool call, and one real 0.155.1 audit session with 18 `exec`
+calls and 3 `wait` calls. A 0.155 `exec` is a `custom_tool_call` whose
+`input` is **JavaScript** (`await tools.exec_command({cmd: …})`), and
+its output is a list of content items rather than the JSON string with
+an `exit_code` that 0.115 wrapped a shell result in; the renderer
+reads both. `local_shell_call`, `web_search_call` and `compacted` have
+still not been seen in the wild here — their shapes come from
+`codex-rs/protocol/src/models.rs`.
 
 A sub-agent thread — one Codex spawned from another — is its own
 rollout file with its own thread id, naming its parent in
@@ -92,21 +125,23 @@ One document per thread, through chat-common. In line order:
 
 - a `message` from the assistant is an **LLM Response**, by the model
   the turn's `turn_context` named; from the user, a **User Input** if
-  it is what the person typed — its text matches a `user_message`
-  event, or does not look injected (a leading tag, or the
-  `# AGENTS.md instructions` heading) — and otherwise a **Harness
-  Message** aside, as is anything under the `developer` role, cut at
+  it is what the person typed — its own `user.text` tag says so, else
+  its text matches a `user_message` event, else it does not look
+  injected (a leading tag, or the `# AGENTS.md instructions` heading)
+  — and otherwise a **Harness Message** aside, as is anything under the `developer` role, cut at
   `max_tool_result_bytes` like a tool output (a permissions primer is
   4 KB, a model-switch note 9 KB);
 - `reasoning` with a summary is an **LLM Thinking** aside; an
-  encrypted one with no summary adds nothing;
+  encrypted one with no summary adds nothing, which on 0.155 is every
+  one of them — the thinking is ciphertext and the summary is empty;
 - `function_call`, `local_shell_call`, `custom_tool_call` and
   `web_search_call` are **Tool Call** asides, and the outputs **Tool
   Result** asides named after the call they answer (`(error)` when an
   older Codex's wrapped shell output carries a non-zero exit code),
   cut at `max_tool_result_bytes`;
 - `compacted` is a System note;
-- `event_msg` lines render nothing.
+- `event_msg`, `world_state` and `token_usage_record` lines render
+  nothing.
 
 Consecutive asides fold into one collapsed block. Stamps come from
 each line's `timestamp` and never run backwards, though many lines
