@@ -26,7 +26,7 @@ bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_sc
 ```
 
 Most of those lived in provider packages, and a large share were purely
-about downloading: `chatgpt_live`, `claude_reset_and_redownload`,
+about downloading: `chatgpt_live`, `claude_reset_and_resync`,
 `github_child_prune`, `slack_dm_download`, `slack_history_prune`,
 `slack_config_change_backfill`, `lightroom_real_catalogs`,
 `notion_playback_roundtrip`, and every other `*_live` and

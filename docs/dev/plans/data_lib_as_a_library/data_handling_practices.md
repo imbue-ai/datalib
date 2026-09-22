@@ -57,7 +57,7 @@ fidelity with normalization deferred to render; the timestamp
 convention (preserve the source offset, never fabricate); sorting a bag
 before storing it; absent-vs-malformed for a whole source; a
 consecutive-failure budget and a give-up policy on fetch;
-`--reset-and-redownload` as a completeness check.
+a reset and resync as a completeness check.
 
 **Where the skill is ahead** — checked against the tree, not against our
 own prose:
@@ -69,7 +69,7 @@ own prose:
 | G3 | The **judgment-call table**: every lossy rule listed with the number of records it affected | No analogue anywhere |
 | G4 | A **systematic-breakage exit**: stop when a run drops more than some fraction of what it read | Nearest is a consecutive-failure budget on *fetch*. See [§"Detecting upstream shape drift"](../../data_architecture_ingestion_practices.md#detecting-upstream-shape-drift), recorded as an open question after `endpoint_shapes` was deleted |
 | G5 | A **spot check sharing no code with the code under test** (their `parse`; our render projection): N random exported rows compared against their raw records | Insta goldens, which assert output matches *what it matched last time* |
-| G6 | **Order-independence** asserted as a property, falling out of a `max((version, batch))` merge | Last-complete-write-wins, plus `--reset-and-redownload` for completeness only |
+| G6 | **Order-independence** asserted as a property, falling out of a `max((version, batch))` merge | Last-complete-write-wins, plus a reset and resync for completeness only |
 | G7 | **Retention**: bound the store, the ledger and the log inside the load itself | No pruning anywhere in the ingestion path; no CAS GC either |
 | G8 | Profiling the data before writing the projection | Nothing |
 
@@ -120,7 +120,7 @@ upstream-id primary keys; complete single-writer upserts; per-attempt
 bookkeeping on a sidecar table; wire fidelity with normalization
 deferred to render; the timestamp convention; sorting a bag before
 storing it; absent-vs-malformed for a whole source; a
-consecutive-failure budget on fetch; `--reset-and-redownload` as a
+consecutive-failure budget on fetch; a reset and resync as a
 completeness check.
 
 ## 3. The audit

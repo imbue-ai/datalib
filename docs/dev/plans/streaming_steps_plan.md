@@ -620,11 +620,11 @@ commits would put thousands of entries in `dolt_log` per run"
 20-minute download at 15s granularity adds ~80 commits, which is fine;
 a per-row commit would not be.
 
-### Truncate-and-refill is the case the flag does not cover
+### Truncate-and-refill is the case a reset does not cover
 
-`reset_and_redownload` maps to `Policy::Never` because a store mid-wipe
-reads as mass deletion. That is right, and it is not sufficient: three
-providers truncate on **every** run, flag or no flag, because the
+A reset (`datalib-dag --reset`) is its own committed operation, so no
+run is ever mid-wipe on its account. That is not sufficient: three
+providers truncate on **every** run, reset or no reset, because the
 truncate is what makes upstream deletions fall out.
 
 | provider | where |
@@ -654,10 +654,10 @@ consumer would faithfully propagate that.
 
 Three cases, and the first two are the same case:
 
-- **`reset_and_redownload`** truncates every data and bookkeeping table
-  and re-fetches ([`control.rs`](../../../datalib/backend/etl/src/control.rs)).
-  Checkpointing is disabled for the whole run when
-  `DATALIB_DAG_RESET_AND_REDOWNLOAD` is set.
+- **A reset** (`datalib-dag --reset`) empties every table in a commit of
+  its own before any run starts
+  ([`doltlite_raw::reset_store`](../../../datalib/backend/etl/src/doltlite_raw.rs));
+  the sync that follows is an ordinary first sync and checkpoints as one.
 - **Prune-to-snapshot** on the export-shaped ingests (the
   `claude_export` edge in AGENTS.md) deletes whatever the current
   snapshot does not contain. Same treatment: an ingest that declares
@@ -904,9 +904,9 @@ Each of these is a reviewable PR that leaves the tree green.
    the previous snapshot plus what this run has fetched — a superset,
    never a gap. A consumer reading one sees stale rows at worst, and the
    prune's deletions reach it through the same diff on the next pass. The
-   shape that would break it, a truncate before the refill, happens only
-   under `--reset-and-redownload` or `always_clear_before_ingest`, and
-   both already force `Policy::Never`.
+   shape that would break it, a truncate before the refill, does not
+   happen inside a run: a reset, and `always_clear_before_ingest`, are
+   a committed step of their own before the provider runs.
 
    It also mattered that none of these four *renderers* sweeps: they
    delete via `remove_conversation` driven by the diff's changed buckets,
