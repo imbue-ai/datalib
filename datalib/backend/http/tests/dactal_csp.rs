@@ -105,6 +105,20 @@ async fn the_app_page_carries_its_csp() {
             "object-src 'none'",
             "{csp}"
         );
+        // No remote host, ever: a rendered email's tracking pixel is an
+        // `<img>`, and this is the layer that holds when the sanitizer
+        // misses one (issue #648). A load the person asks for goes
+        // through `/api/remote`, which is 'self'.
+        assert_eq!(
+            header_directive(csp, "img-src"),
+            "img-src 'self' data: blob:",
+            "{csp}"
+        );
+        assert_eq!(
+            header_directive(csp, "media-src"),
+            "media-src 'self' data: blob:",
+            "{csp}"
+        );
         assert_eq!(
             header_directive(csp, "frame-ancestors"),
             "frame-ancestors 'none'",

@@ -20,6 +20,7 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
+import { decorateRemoteMedia, type RemoteRef } from "./remoteMedia";
 import { sanitizeRenderedHtml } from "./sanitize";
 import { isBrowserClick } from "./chatLink";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
@@ -66,6 +67,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
+  /** Every remote reference the body carries, after each render;
+   *  held back by the sanitizer, shown as placeholders here. */
+  (e: "remote-media", refs: RemoteRef[]): void;
   /**
    * Fired when the cursor enters or leaves an `.edge-source` span.
    * Payload is the edge's destination — `{ md, anchor }` — or null
@@ -134,9 +138,11 @@ for (const rule of ["html_block", "html_inline"] as const) {
 
 // Sanitized last, after every rewrite: the body is whatever the source
 // sent, and `html: true` above lets it through as HTML.
-const html = computed(() =>
+const sanitized = computed(() =>
   sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null })),
 );
+const html = computed(() => sanitized.value.html);
+watch(sanitized, (s) => emit("remote-media", s.remote), { immediate: true });
 const root = ref<HTMLElement | null>(null);
 
 async function onCopyClick(ev: MouseEvent) {
@@ -284,6 +290,7 @@ watch(html, async () => {
   await nextTick();
   if (root.value) {
     injectCopyUuidButtons(root.value);
+    decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
   decorateEdgeSources();
@@ -317,6 +324,7 @@ watch(
 onMounted(() => {
   if (root.value) {
     injectCopyUuidButtons(root.value);
+    decorateRemoteMedia(root.value);
     decorateLongMessages(root.value);
   }
   decorateEdgeSources();
@@ -600,6 +608,49 @@ onMounted(() => {
   background: var(--datalib-card-bg, #1f2937);
   outline: 2px solid var(--datalib-accent, #6366f1);
   border-radius: 3px;
+}
+/* A remote image or media element held back by the sanitizer
+   (`remoteMedia.ts`) has no source to show; the placeholder before it
+   says what it is and where it would load from. An email's tracking
+   pixel gets the same chip — that it is there is the point. */
+.chat-body .remote-blocked {
+  display: none;
+}
+.chat-body .remote-media {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  max-width: 100%;
+  margin: 0.15rem 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  color: var(--datalib-muted, #94a3b8);
+  background: var(--datalib-card-bg, #fafafa);
+  border: 1px dashed var(--datalib-border, #d8d8d8);
+  border-radius: 6px;
+  /* The full URL is in `title`; say so with the cursor. */
+  cursor: help;
+}
+.chat-body .remote-media .remote-media-icon {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+.chat-body .remote-media .remote-media-host {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.chat-body .remote-media .remote-media-alt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 24rem;
+  font-style: italic;
+}
+.chat-body .remote-media--pixel {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  opacity: 0.8;
 }
 /* Attachment images arrive at their original resolution; without a
    cap a phone photo renders thousands of pixels wide inside the pane.
