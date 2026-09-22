@@ -152,13 +152,12 @@ pub struct GridRow {
     /// one-way hash, so this preserves what it was minted from and lets a
     /// row be taken back to the provider's API.
     ///
-    /// With `upstream_entity_kind` and `upstream_scope` this is the whole
-    /// `entity_id` recipe minus the provider, so
-    /// `entity_id(provider, scope, upstream_entity_kind, upstream_id) == uuid`
-    /// holds by construction for a ported provider — which makes the
-    /// backpointer verifiable rather than decorative.
-    ///
-    /// Null for a provider not yet ported onto `datalib_id`.
+    /// With `upstream_entity_kind`, `upstream_scope` and `created_at_utc`
+    /// this is the whole `entity_id` recipe minus the provider, so
+    /// `entity_id(provider, scope, upstream_entity_kind, upstream_id, stamp) == uuid`
+    /// holds by construction, with `stamp` the row's `created_at_utc` or
+    /// nothing — which makes the backpointer verifiable rather than
+    /// decorative.
     #[col(sql = "VARCHAR(128)")]
     pub upstream_id: Option<String>,
     /// What sort of upstream thing this row is, in the provider's own
@@ -170,14 +169,13 @@ pub struct GridRow {
     /// label can be reworded freely. This cannot — the id depends on it, and
     /// without it a bare `12345` is ambiguous between a GitHub review and a
     /// review comment.
-    ///
-    /// Null for a provider not yet ported onto `datalib_id`.
     #[col(sql = "VARCHAR(32)")]
     pub upstream_entity_kind: Option<String>,
     /// The upstream account / workspace / organization `upstream_id` is
-    /// unique within: the `Scope::Upstream` value fed to `entity_id`. NULL
-    /// means `Scope::ProviderGlobal` or `Scope::Content`, where the natural
-    /// key needs no further scoping.
+    /// unique within: the `Scope::Upstream` value fed to `entity_id`, or
+    /// the source id under `Scope::SourceInstance`. NULL means
+    /// `Scope::ProviderGlobal` or `Scope::Content`, where the natural key
+    /// needs no further scoping.
     ///
     /// Prefer a provider-issued value (Anthropic `org_uuid`, Slack
     /// `team_id`, JMAP `account_id`) over our own step id: an
@@ -189,8 +187,8 @@ pub struct GridRow {
     /// the id was derived from and must not be.
     #[col(sql = "VARCHAR(96)")]
     pub upstream_scope: Option<String>,
-    /// Notion only. The page this row lives in, so the grid can filter every
-    /// row in a document. Equals `uuid` for page rows.
+    /// Notion only. The datalib id of the page this row lives in, so the
+    /// grid can filter every row in a document. Equals `uuid` for page rows.
     #[col(sql = "VARCHAR(96)")]
     pub notion_page_uuid: Option<String>,
     /// Notion only. The block this row is anchored to — the heading block,

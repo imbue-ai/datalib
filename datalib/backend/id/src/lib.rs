@@ -1,9 +1,18 @@
 //! The one place datalib mints an entity id.
 //!
 //! Every `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` anchor is
-//! a UUIDv5 derived here from one four-part recipe under one root namespace,
-//! so "could these two ids collide?" has one answer read off one file.
+//! minted here from one four-part recipe under one root namespace, so
+//! "could these two ids collide?" has one answer read off one file.
 //! Choosing a scope, and what each choice costs, is `docs/dev/entity_ids.md`.
+//!
+//! The layout is RFC 9562's version 8: the leading 48 bits are the
+//! record's own `created_at` in unix milliseconds, the rest a v5 hash of
+//! the recipe. Every store here is a doltlite prolly tree sorted by
+//! primary key, and a write rewrites every leaf its keys fall in, so
+//! keys that scatter (a plain hash) cost one leaf per row while keys
+//! that sort by time cost one leaf per batch — `etl/README.md` § "What a
+//! write costs" has the measurement. A record with no stamp of its own
+//! takes zero and sorts to the left edge.
 
 use uuid::Uuid;
 
@@ -28,9 +37,9 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// next run discard its rendered tree and re-render from the raw
 /// store — see `datalib_step::render`.
 ///
-/// Only the providers ported to this recipe appear here;
-/// `docs/dev/entity_ids.md` tracks the rest. [`IdNamespace::Datalib`]
-/// is the one entry that is not a provider at all.
+/// One entry per provider that renders anything, spelled as its
+/// `grid_rows.provider` tag; [`IdNamespace::Datalib`] is the one entry
+/// that is not a provider at all.
 #[derive(
     Debug,
     Clone,
@@ -51,6 +60,7 @@ pub enum IdNamespace {
     /// Apple's Messages app: chats and messages by the guids Messages
     /// mints for them.
     AppleMessages,
+    Beeper,
     /// Both `claude_api` and `claude_export` — one raw store, one
     /// keyspace, so an export-seeded mirror kept fresh by the API does
     /// not mint two ids for one conversation.
@@ -59,7 +69,24 @@ pub enum IdNamespace {
     /// session id, a record uuid, a tool-use id).
     ClaudeCode,
     Chatgpt,
+    Contacts,
+    /// Every email method — JMAP, the Gmail API, an mbox — one keyspace
+    /// per account id.
+    Email,
+    Facebook,
+    Garmin,
+    Github,
+    Gitlab,
+    GoogleTakeout,
+    Linkedin,
+    Notion,
+    Pdf,
+    Perseus,
+    Signal,
     Slack,
+    SmsBackupRestore,
+    Whatsapp,
+    Yolink,
     /// Not a provider: datalib's own measurements of a source's mirror,
     /// which are minted by this recipe like anything else. Kept in its
     /// own namespace so a storage row can never collide with a row from
@@ -77,15 +104,16 @@ impl IdNamespace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope<'a> {
     /// Unique within one upstream account / workspace / organization,
-    /// identified by a **provider-issued** id: an Anthropic
-    /// `org_uuid`, a Slack `team_id`, a JMAP `account_id`, a Signal
-    /// account identifier, a YoLink `family_device_id`.
+    /// identified by a **provider-issued** id: a Slack `team_id`, a
+    /// JMAP `account_id`, a GitHub repository, Beeper's store name.
+    /// Never a secret: the value is stored in `grid_rows.upstream_scope`
+    /// in the clear.
     Upstream(&'a str),
 
     /// The natural key is already unique across the entire provider,
-    /// so no further scoping is needed: a GitHub `{repo}:pr:{number}`,
-    /// a Notion `page_id`, a WhatsApp `chat_jid`, an Anthropic
-    /// `conversation_uuid`.
+    /// so no further scoping is needed: a Notion `page_id`, an
+    /// Anthropic `conversation_uuid`, a LinkedIn profile URL, a
+    /// Facebook `fbid`.
     ProviderGlobal,
 
     /// The configured source itself, identified by its **step id** —
@@ -113,12 +141,58 @@ impl Scope<'_> {
     }
 }
 
+/// The largest stamp the leading 48 bits can hold (the year 10889).
+/// A stamp outside `0..=MAX_STAMP_MS` is clamped to the nearer edge, on
+/// both sides of the round-trip check.
+pub const MAX_STAMP_MS: i64 = (1 << 48) - 1;
+
+/// An entity's identity: the id we mint, and what it was minted from.
+///
+/// Paired so `grid_rows.uuid` and its backpointer columns cannot drift —
+/// build the key once, use it twice. `at` is the stamp in the id's
+/// leading bits, and the one rule about it is that **it is the row's
+/// `created_at` or nothing**: the fixture's round-trip check reads the
+/// stamp back out of the uuid and compares it to `created_at_utc`, so
+/// a stamp that is not the row's own fails there. A record with no
+/// stamp, and a document whose stamp is derived from its items (a
+/// chat's first message can move), pass `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub uuid: String,
+    pub natural_key: String,
+    pub entity_kind: &'static str,
+    pub at: Option<i64>,
+}
+
+impl Identity {
+    pub fn mint(
+        namespace: IdNamespace,
+        scope: Scope<'_>,
+        entity_kind: &'static str,
+        natural_key: String,
+        at: Option<i64>,
+    ) -> Self {
+        Self {
+            uuid: entity_id_str(namespace, scope, entity_kind, &natural_key, at),
+            natural_key,
+            entity_kind,
+            at,
+        }
+    }
+}
+
 /// Mint the id for one entity.
 ///
 /// Components are joined with `\x1f` (ASCII unit separator), which cannot
 /// appear in any upstream id we ingest. Joining with `:` or `-` — as most of
 /// the recipes this replaced did — makes `("a:b", "c")` and `("a", "b:c")`
 /// hash identically.
+///
+/// `at` is the record's own `created_at` in unix milliseconds, at the
+/// precision the row stores it, or `None` — see [`Identity`] for the rule.
+/// It goes in the leading 48 bits and nowhere else: two ids that differ
+/// only in `at` share every hash bit, which is what lets the round-trip
+/// check regenerate the hash from the backpointer alone.
 ///
 /// **Feed the same `natural_key` string to `grid_rows.upstream_id`.** Using
 /// one spelling to derive the id and storing another produces a backpointer
@@ -128,13 +202,40 @@ pub fn entity_id(
     scope: Scope<'_>,
     entity_kind: &str,
     natural_key: &str,
+    at: Option<i64>,
 ) -> Uuid {
     let (scope_tag, scope_val) = scope.tag();
     let namespace = namespace.as_str();
     let recipe = format!(
         "{namespace}\u{1f}{scope_tag}\u{1f}{scope_val}\u{1f}{entity_kind}\u{1f}{natural_key}"
     );
-    Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
+    time_prefixed(Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes()), at)
+}
+
+/// Lay a v5 hash out as a v8 id: the stamp in the leading 48 bits, the
+/// version nibble set to 8, the variant bits and every other hash bit
+/// kept. The hash's own leading 48 bits are discarded, so the id keeps
+/// 74 bits of hash — plenty for a keyspace a person's data will reach.
+fn time_prefixed(hash: Uuid, at: Option<i64>) -> Uuid {
+    let ms = at.unwrap_or(0).clamp(0, MAX_STAMP_MS) as u64;
+    let mut b = hash.into_bytes();
+    b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
+    b[6] = 0x80 | (b[6] & 0x0f);
+    Uuid::from_bytes(b)
+}
+
+/// The stamp a datalib-minted id carries in its leading bits, as unix
+/// milliseconds; `None` for a zero stamp or a string that is not a uuid.
+/// What a derived id (an edge, a diff row) copies so it sorts beside the
+/// row it is about.
+pub fn stamp_of(id: &str) -> Option<i64> {
+    let b = Uuid::parse_str(id).ok()?.into_bytes();
+    let mut be = [0u8; 8];
+    be[2..].copy_from_slice(&b[..6]);
+    match u64::from_be_bytes(be) {
+        0 => None,
+        ms => Some(ms as i64),
+    }
 }
 
 /// Join the parts of a **composite natural key** — an Anthropic
@@ -157,8 +258,9 @@ pub fn entity_id_str(
     scope: Scope<'_>,
     entity_kind: &str,
     natural_key: &str,
+    at: Option<i64>,
 ) -> String {
-    entity_id(namespace, scope, entity_kind, natural_key)
+    entity_id(namespace, scope, entity_kind, natural_key, at)
         .as_hyphenated()
         .to_string()
 }
@@ -168,7 +270,9 @@ pub fn entity_id_str(
 /// Separate from [`entity_id`] because an edge is not scoped to a provider —
 /// it may join two documents from different ones — and its natural key is the
 /// tuple itself. Producers must derive edge ids this way, so a re-render
-/// replaces its edges instead of duplicating them.
+/// replaces its edges instead of duplicating them. The stamp is the
+/// source end's (the anchor's, else the document's), so the edges a
+/// render writes beside a message land in the leaf its row does.
 pub fn edge_id(
     src_markdown_uuid: &str,
     src_anchor_uuid: Option<&str>,
@@ -182,7 +286,10 @@ pub fn edge_id(
         dst_anchor_uuid.unwrap_or(""),
         label.unwrap_or(""),
     );
-    Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
+    let at = src_anchor_uuid
+        .and_then(stamp_of)
+        .or_else(|| stamp_of(src_markdown_uuid));
+    time_prefixed(Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes()), at)
         .as_hyphenated()
         .to_string()
 }
@@ -222,6 +329,14 @@ pub fn problem_id(
 mod tests {
     use super::*;
 
+    fn slack(scope: Scope<'_>, kind: &str, key: &str) -> Uuid {
+        entity_id(IdNamespace::Slack, scope, kind, key, None)
+    }
+
+    fn chatgpt(scope: Scope<'_>, kind: &str, key: &str) -> Uuid {
+        entity_id(IdNamespace::Chatgpt, scope, kind, key, None)
+    }
+
     /// Two problems on one record are two ids; the same problem twice
     /// is one.
     #[test]
@@ -260,40 +375,111 @@ mod tests {
         assert_ne!(a, other_field);
         assert_ne!(
             a,
-            entity_id_str(IdNamespace::Slack, Scope::ProviderGlobal, "problem", "md-1")
+            entity_id_str(
+                IdNamespace::Slack,
+                Scope::ProviderGlobal,
+                "problem",
+                "md-1",
+                None
+            )
         );
     }
 
     #[test]
     fn is_deterministic() {
-        let a = entity_id(
-            IdNamespace::Slack,
-            Scope::Upstream("T123"),
-            "message",
-            "C1:170.5",
-        );
-        let b = entity_id(
-            IdNamespace::Slack,
-            Scope::Upstream("T123"),
-            "message",
-            "C1:170.5",
-        );
+        let a = slack(Scope::Upstream("T123"), "message", "C1:170.5");
+        let b = slack(Scope::Upstream("T123"), "message", "C1:170.5");
         assert_eq!(a, b, "ids must be a pure function of their inputs");
     }
 
     #[test]
-    fn is_a_v5_uuid() {
-        let id = entity_id(
-            IdNamespace::Slack,
-            Scope::Upstream("T123"),
-            "message",
-            "C1:170.5",
+    fn is_a_v8_uuid() {
+        for at in [None, Some(1_700_000_000_000)] {
+            let id = entity_id(
+                IdNamespace::Slack,
+                Scope::Upstream("T123"),
+                "message",
+                "C1:170.5",
+                at,
+            );
+            assert_eq!(id.get_version_num(), 8);
+            assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
+            // The shape `ingested_tng_test` asserts on.
+            let s = id.as_hyphenated().to_string();
+            assert_eq!(s.len(), 36);
+            assert!(s.chars().all(|c| c.is_ascii_hexdigit() || c == '-'), "{s}");
+        }
+    }
+
+    /// The stamp is the leading 48 bits and nothing else: two ids that
+    /// differ only in `at` share every hash bit, and the stamp reads
+    /// back out exactly. What `ingested_tng_test` relies on to check a
+    /// row's uuid against its `created_at_utc` and its backpointer
+    /// separately.
+    #[test]
+    fn the_stamp_is_the_prefix_and_the_hash_is_the_rest() {
+        let mint = |at| {
+            entity_id(
+                IdNamespace::Slack,
+                Scope::Upstream("T1"),
+                "message",
+                "C1#1.1",
+                at,
+            )
+        };
+        let ms = 1_700_000_000_123;
+        let stamped = mint(Some(ms));
+        let bare = mint(None);
+        assert_eq!(stamp_of(&stamped.to_string()), Some(ms));
+        assert_eq!(stamp_of(&bare.to_string()), None);
+        assert_eq!(stamped.as_bytes()[6..], bare.as_bytes()[6..]);
+        assert_eq!(&bare.as_bytes()[..6], &[0, 0, 0, 0, 0, 0]);
+        assert!(bare.to_string().starts_with("00000000-0000-8"), "{bare}");
+        // Text order is time order, which is the whole point.
+        assert!(mint(Some(ms - 1)).to_string() < stamped.to_string());
+        assert!(stamped.to_string() < mint(Some(ms + 1)).to_string());
+    }
+
+    /// Stamps outside the 48-bit range clamp rather than wrap, so a
+    /// 1969 header sorts to the left edge instead of the year 10000.
+    #[test]
+    fn out_of_range_stamps_clamp() {
+        let mint = |at| entity_id(IdNamespace::Slack, Scope::ProviderGlobal, "k", "n", at);
+        assert_eq!(mint(Some(-5)), mint(Some(0)));
+        assert_eq!(mint(Some(i64::MAX)), mint(Some(MAX_STAMP_MS)));
+        assert_eq!(
+            stamp_of(&mint(Some(MAX_STAMP_MS)).to_string()),
+            Some(MAX_STAMP_MS)
         );
-        assert_eq!(id.get_version_num(), 5);
-        // The shape `ingested_tng_test` asserts on.
-        let s = id.as_hyphenated().to_string();
-        assert_eq!(s.len(), 36);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit() || c == '-'), "{s}");
+    }
+
+    #[test]
+    fn stamp_of_a_non_uuid_is_none() {
+        assert_eq!(stamp_of("not a uuid"), None);
+        assert_eq!(stamp_of(""), None);
+    }
+
+    #[test]
+    fn identity_carries_what_it_was_minted_from() {
+        let id = Identity::mint(
+            IdNamespace::Slack,
+            Scope::Upstream("T1"),
+            "message",
+            "C1#1.1".to_string(),
+            Some(42),
+        );
+        assert_eq!(
+            id.uuid,
+            entity_id_str(
+                IdNamespace::Slack,
+                Scope::Upstream("T1"),
+                "message",
+                "C1#1.1",
+                Some(42)
+            )
+        );
+        assert_eq!(id.at, Some(42));
+        assert_eq!(stamp_of(&id.uuid), Some(42));
     }
 
     /// Two providers that mint the same natural key must not collide.
@@ -305,8 +491,8 @@ mod tests {
         for (i, &a) in IdNamespace::VARIANTS.iter().enumerate() {
             for &b in &IdNamespace::VARIANTS[i + 1..] {
                 assert_ne!(
-                    entity_id(a, Scope::ProviderGlobal, "chat", "X"),
-                    entity_id(b, Scope::ProviderGlobal, "chat", "X"),
+                    entity_id(a, Scope::ProviderGlobal, "chat", "X", None),
+                    entity_id(b, Scope::ProviderGlobal, "chat", "X", None),
                     "{a} and {b} mint the same id",
                 );
             }
@@ -319,8 +505,8 @@ mod tests {
         // Signal's `chat_id` is an autoincrement local to a backup
         // file, so two accounts really do both have chat `1`.
         assert_ne!(
-            entity_id(IdNamespace::Slack, Scope::Upstream("acct-a"), "chat", "1"),
-            entity_id(IdNamespace::Slack, Scope::Upstream("acct-b"), "chat", "1"),
+            slack(Scope::Upstream("acct-a"), "chat", "1"),
+            slack(Scope::Upstream("acct-b"), "chat", "1"),
         );
     }
 
@@ -331,8 +517,8 @@ mod tests {
     fn entity_kind_separates_thread_root_from_its_message() {
         let key = "C1\u{1f}1700000000.000100";
         assert_ne!(
-            entity_id(IdNamespace::Slack, Scope::Upstream("T1"), "thread", key),
-            entity_id(IdNamespace::Slack, Scope::Upstream("T1"), "message", key),
+            slack(Scope::Upstream("T1"), "thread", key),
+            slack(Scope::Upstream("T1"), "message", key),
         );
     }
 
@@ -343,12 +529,12 @@ mod tests {
     #[test]
     fn component_boundaries_are_unambiguous() {
         assert_ne!(
-            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a:b", "c"),
-            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a", "b:c"),
+            chatgpt(Scope::ProviderGlobal, "a:b", "c"),
+            chatgpt(Scope::ProviderGlobal, "a", "b:c"),
         );
         assert_ne!(
-            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a-b", "c"),
-            entity_id(IdNamespace::Chatgpt, Scope::ProviderGlobal, "a", "b-c"),
+            chatgpt(Scope::ProviderGlobal, "a-b", "c"),
+            chatgpt(Scope::ProviderGlobal, "a", "b-c"),
         );
         // The concrete case: `th-{msg_uuid}-{block_index}` is
         // ambiguous between message `M` block `0` and a message
@@ -358,66 +544,48 @@ mod tests {
                 IdNamespace::Claude,
                 Scope::ProviderGlobal,
                 "thinking_block",
-                "M\u{1f}0"
+                "M\u{1f}0",
+                None
             ),
             entity_id(
                 IdNamespace::Claude,
                 Scope::ProviderGlobal,
                 "thinking_block",
-                "M-0"
+                "M-0",
+                None
             ),
         );
     }
 
-    /// A `Content`-scoped id must not collide with an `Upstream` one
-    /// carrying the same string, or a content hash reused as an
-    /// account label would alias.
     /// A source-instance id is scoped to the step id, so two
     /// configured sources of one type stay apart — the property the
     /// bare provider type cannot give.
     #[test]
     fn source_instance_separates_two_configured_sources() {
         assert_ne!(
-            entity_id(
-                IdNamespace::Slack,
-                Scope::SourceInstance("home-slack"),
-                "page",
-                "timeseries"
-            ),
-            entity_id(
-                IdNamespace::Slack,
-                Scope::SourceInstance("work-slack"),
-                "page",
-                "timeseries"
-            ),
+            slack(Scope::SourceInstance("home-slack"), "page", "timeseries"),
+            slack(Scope::SourceInstance("work-slack"), "page", "timeseries"),
         );
     }
 
+    /// A `Content`-scoped id must not collide with an `Upstream` one
+    /// carrying the same string, or a content hash reused as an
+    /// account label would alias.
     #[test]
     fn scope_variants_do_not_alias() {
         assert_ne!(
-            entity_id(IdNamespace::Chatgpt, Scope::Content, "document", "abc"),
-            entity_id(
-                IdNamespace::Chatgpt,
-                Scope::ProviderGlobal,
-                "document",
-                "abc"
-            ),
+            chatgpt(Scope::Content, "document", "abc"),
+            chatgpt(Scope::ProviderGlobal, "document", "abc"),
         );
         assert_ne!(
-            entity_id(IdNamespace::Chatgpt, Scope::Upstream(""), "document", "abc"),
-            entity_id(
-                IdNamespace::Chatgpt,
-                Scope::ProviderGlobal,
-                "document",
-                "abc"
-            ),
+            chatgpt(Scope::Upstream(""), "document", "abc"),
+            chatgpt(Scope::ProviderGlobal, "document", "abc"),
         );
         // An upstream account id and a step id are different spaces
         // even when they spell the same thing.
         assert_ne!(
-            entity_id(IdNamespace::Chatgpt, Scope::Upstream("x"), "k", "n"),
-            entity_id(IdNamespace::Chatgpt, Scope::SourceInstance("x"), "k", "n"),
+            chatgpt(Scope::Upstream("x"), "k", "n"),
+            chatgpt(Scope::SourceInstance("x"), "k", "n"),
         );
     }
 
@@ -430,12 +598,19 @@ mod tests {
         let key = composite_key(&["msg-1", "toolu_9"]);
         assert_eq!(key, "msg-1#toolu_9");
         assert_eq!(
-            entity_id_str(IdNamespace::Claude, Scope::ProviderGlobal, "tool_use", &key),
             entity_id_str(
                 IdNamespace::Claude,
                 Scope::ProviderGlobal,
                 "tool_use",
-                "msg-1#toolu_9"
+                &key,
+                None
+            ),
+            entity_id_str(
+                IdNamespace::Claude,
+                Scope::ProviderGlobal,
+                "tool_use",
+                "msg-1#toolu_9",
+                None
             ),
         );
     }
@@ -443,6 +618,35 @@ mod tests {
     #[test]
     fn composite_keys_do_not_alias_across_part_boundaries() {
         assert_ne!(composite_key(&["a", "bc"]), composite_key(&["ab", "c"]),);
+    }
+
+    /// An edge sorts beside its source end: the anchor's stamp when the
+    /// edge leaves a section, else the document's, else zero.
+    #[test]
+    fn edges_take_their_source_ends_stamp() {
+        let doc = entity_id_str(
+            IdNamespace::Slack,
+            Scope::ProviderGlobal,
+            "thread",
+            "t",
+            Some(1_000),
+        );
+        let msg = entity_id_str(
+            IdNamespace::Slack,
+            Scope::ProviderGlobal,
+            "message",
+            "m",
+            Some(2_000),
+        );
+        assert_eq!(
+            stamp_of(&edge_id(&doc, Some(&msg), "md-b", None, None)),
+            Some(2_000)
+        );
+        assert_eq!(
+            stamp_of(&edge_id(&doc, None, "md-b", None, None)),
+            Some(1_000)
+        );
+        assert_eq!(stamp_of(&edge_id("md-a", None, "md-b", None, None)), None);
     }
 
     #[test]

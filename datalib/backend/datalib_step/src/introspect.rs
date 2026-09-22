@@ -70,12 +70,15 @@ pub struct Subject {
 }
 
 impl Subject {
+    /// No stamp: a storage row's `created_at` is the run's now, and
+    /// the row is rewritten every run under one id.
     fn uuid(&self, source_id: &str) -> String {
         entity_id_str(
             IdNamespace::Datalib,
             Scope::SourceInstance(source_id),
             self.kind.as_str(),
             &self.path,
+            None,
         )
     }
 
@@ -564,6 +567,7 @@ mod tests {
             Scope::SourceInstance(row.upstream_scope.as_deref().unwrap()),
             row.upstream_entity_kind.as_deref().unwrap(),
             row.upstream_id.as_deref().unwrap(),
+            None,
         );
         assert_eq!(recomputed, row.uuid);
     }

@@ -16,7 +16,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
 use datalib_etl_render::section::{join, Section};
-use datalib_id::{entity_id_str, IdNamespace, Scope};
+use datalib_id::{entity_id_str, stamp_of, IdNamespace, Scope};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::render_cursor::RenderCursorRow;
@@ -418,7 +418,9 @@ pub fn render_diff_source(
 /// id are rewritten — the anchor attributes and the frontmatter keys —
 /// never a path: the file and its blobs are where the renderer put
 /// them. `upstream_id` stays too: it is the backpointer to the real
-/// thing, which is what a person copying it wants.
+/// thing, which is what a person copying it wants. The stamp in the
+/// source's id is kept, so a diff row sorts where the row it is about
+/// does.
 fn rekeyed(
     group: &str,
     markdown_uuid: &str,
@@ -432,6 +434,7 @@ fn rekeyed(
             Scope::SourceInstance(group),
             "diff",
             old,
+            stamp_of(old),
         )
     };
     let mut map: BTreeMap<String, String> = BTreeMap::new();
@@ -786,12 +789,14 @@ mod tests {
             Scope::SourceInstance("src-diff"),
             "diff",
             "chat-1",
+            None,
         );
         let new_row = entity_id_str(
             IdNamespace::Datalib,
             Scope::SourceInstance("src-diff"),
             "diff",
             "m-1",
+            None,
         );
         assert_eq!(doc.markdown_uuid, new_doc);
         assert_eq!(doc.source_id, "src-diff");
@@ -821,6 +826,45 @@ mod tests {
         assert_eq!(doc.edges[0].dst_markdown_uuid, "other-doc");
         assert_ne!(doc.edges[0].edge_uuid, "old");
         assert_eq!(doc.md_path, base.md_path);
+    }
+
+    /// A diff row keeps the stamp of the row it is about, so it sorts
+    /// beside it in the index.
+    #[test]
+    fn rekeying_keeps_the_sources_stamp() {
+        use datalib_schema::providers::Provider;
+        let old = entity_id_str(
+            IdNamespace::Slack,
+            Scope::ProviderGlobal,
+            "message",
+            "m",
+            Some(1_700_000_000_000),
+        );
+        let row = GridRow::builder()
+            .uuid(old.clone())
+            .provider(Provider::Test)
+            .kind("Message")
+            .source_label("Test")
+            .conversation_uuid("chat-1")
+            .entire_chat("/chat/chat-1")
+            .text("hi")
+            .build()
+            .unwrap();
+        let base = RenderedMarkdown {
+            markdown_uuid: "chat-1".into(),
+            source_id: "src".into(),
+            upstream_cursor: None,
+            bucket_key: None,
+            md_path: "/root/x.md".into(),
+            render_version: 1,
+            rows: vec![],
+            sections: vec![],
+            edges: vec![],
+            problems: vec![],
+        };
+        let doc = rekeyed("src-diff", "chat-1", &base, vec![row], vec![]);
+        assert_ne!(doc.rows[0].uuid, old);
+        assert_eq!(stamp_of(&doc.rows[0].uuid), Some(1_700_000_000_000));
     }
 
     #[test]
