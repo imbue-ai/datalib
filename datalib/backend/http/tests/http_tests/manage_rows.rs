@@ -123,6 +123,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "status",
             "chips",
             "chips",
+            "count",
             "timestamp",
             "timeseries"
         ]
@@ -130,8 +131,12 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     let rows = by_key(&got);
     assert_eq!(rows.len(), 8, "{got}");
     // Nothing has counted its problems, so no row claims a green zero.
+    // Nothing has counted its documents either, so no row claims a
+    // zero there — an empty store and a store nobody has looked in
+    // read the same to a person, and only one of them is true.
     for (key, row) in &rows {
         assert_eq!(row["problems"], serde_json::json!([]), "{key}: {row}");
+        assert_eq!(row["documents"], serde_json::Value::Null, "{key}: {row}");
     }
 
     // `system/` is a group the config never named, with the run log
@@ -478,4 +483,48 @@ async fn a_file_that_is_not_toml_is_an_error_not_an_empty_table() {
     assert_eq!(got["ok"], false);
     assert!(got["error"].as_str().is_some_and(|e| !e.is_empty()));
     assert_eq!(got["rows"].as_array().unwrap().len(), 0);
+}
+
+/// The Documents cell reads the `documents` metric the render step
+/// reports, whole store: the source's own row and the group above it
+/// show it, and every step that never reported it stays blank. That a
+/// counted zero survives as a zero is `manage::documents`' own test.
+#[tokio::test]
+async fn document_counts_reach_the_rows_from_the_run_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None);
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let metric = |step: &str, value: i64| datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: step.into(),
+            name: datalib_metrics::DOCUMENTS.into(),
+            labels: String::new(),
+            value,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        };
+        w.metric(metric("slack/render_markdown", 1204));
+    }
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(rows["slack/render_markdown"]["documents"], 1204);
+    assert_eq!(
+        rows["group:slack"]["documents"], 1204,
+        "the group shows its render step's"
+    );
+    for key in ["slack/ingest", "unified_index/grid_index", "system"] {
+        assert_eq!(
+            rows[key]["documents"],
+            serde_json::Value::Null,
+            "{key}: never counted is blank, not zero"
+        );
+    }
 }

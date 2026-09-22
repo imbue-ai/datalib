@@ -10,6 +10,7 @@
 //! step's Download/Import label.
 
 mod activity;
+mod documents;
 mod group;
 mod problems;
 mod status;
@@ -31,6 +32,7 @@ use crate::{usage, AppState, DagRecord, DagRunInfo};
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{EffectiveRun, StatusArgs, StatusFloor, StatusView, StepEdges, StepRecord};
 
+pub use documents::by_step as documents_by_step;
 pub use problems::{counts_by_step, ProblemCounts};
 pub use status::dropped_detail;
 
@@ -108,6 +110,8 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("What a running step has reported: what is queued ahead of it, what it has counted, and how fast."),
         ColumnSpec::new("problems", "Problems", ColumnType::Chips)
             .describe("Errors (records dropped) and warnings (records kept with something lost) the step's store holds, as of its last run. A green zero means it counted and found none; blank means it has never counted. Double-click for the list."),
+        ColumnSpec::new("documents", "Documents", ColumnType::Count)
+            .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
@@ -162,6 +166,10 @@ pub struct ManageRow {
     /// The errors and warnings its store holds — see `manage::problems`.
     /// A group shows its render step's, the union for the source.
     pub problems: Vec<Chip>,
+    /// Documents its store holds, as of the run it last counted in.
+    /// `None` — drawn blank — for a row that has never counted, which
+    /// is every row but a render step and the group above it.
+    pub documents: Option<i64>,
     pub last_synced: Option<String>,
     /// Bytes on disk, with the recent measurements behind the number.
     pub disk: Timeseries,
@@ -470,6 +478,7 @@ impl Snapshot<'_> {
             status_from: None,
             activity: vec![],
             problems: vec![],
+            documents: None,
             last_synced: None,
             disk,
             actions: vec![browse, sync()],
@@ -893,6 +902,10 @@ impl RowCtx<'_> {
             Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
             Entry::Applet(_) => vec![],
         };
+        let documents = match e {
+            Entry::Step(_) => self.snap.record.documents.get(&id).copied(),
+            Entry::Applet(_) => None,
+        };
         // A source is browsed as one thing, from its group's row. A
         // step's rows are not a separate view of the data; they are the
         // same rows.
@@ -930,6 +943,7 @@ impl RowCtx<'_> {
             status_from: None,
             activity,
             problems,
+            documents,
             disk,
             actions: vec![browse, sync],
             seeds,
@@ -1110,6 +1124,10 @@ impl RowCtx<'_> {
             .find(|r| !r.problems.is_empty())
             .map(|r| r.problems.clone())
             .unwrap_or_default();
+        // Only the render step counts documents, so the group shows
+        // that one child's number rather than a sum over children that
+        // would double it the day a second step reported one.
+        let documents = ordered.iter().find_map(|c| row_of(c.id()).documents);
         let last_synced = if dropped.is_some() {
             None
         } else {
@@ -1160,6 +1178,7 @@ impl RowCtx<'_> {
             status_from,
             activity,
             problems,
+            documents,
             last_synced,
             disk,
             actions: vec![browse, sync],

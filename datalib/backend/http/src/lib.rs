@@ -1253,6 +1253,9 @@ pub struct DagRecord {
     /// step id → the errors and warnings its store held the last time
     /// it counted, in whichever run that was.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
+    /// step id → how many documents its store held the last time it
+    /// counted. Only render steps report it.
+    pub documents: std::collections::HashMap<String, i64>,
 }
 
 pub async fn dag_record(root: &std::path::Path) -> DagRecord {
@@ -1317,6 +1320,9 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
 
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
+    let documents = manage::documents_by_step(
+        &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
+    );
 
     DagRecord {
         run,
@@ -1324,6 +1330,7 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
         last_runs,
         progress,
         problems,
+        documents,
     }
 }
 
@@ -1340,6 +1347,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         last_runs,
         progress,
         problems: _,
+        documents: _,
     } = dag_record(&s.root).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
