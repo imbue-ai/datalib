@@ -100,7 +100,7 @@ pub(crate) fn conversation_types(dms: bool) -> &'static str {
     }
 }
 
-#[instrument(skip(db, progress))]
+#[instrument(skip(db, progress, latchkey))]
 async fn fetch_channels(
     db: &RawDb,
     members_only: bool,

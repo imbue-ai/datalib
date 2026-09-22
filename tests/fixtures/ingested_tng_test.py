@@ -1591,14 +1591,23 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ).fetchall()
             self.assertEqual(silent, [], "a step process wrote no line at all")
             debug_formatted = []
+
+            def walk(msg: str, prefix: str, obj: dict) -> None:
+                # `span` is the current span's fields, nested one level.
+                for key, value in obj.items():
+                    if key.startswith("log."):
+                        debug_formatted.append(
+                            (msg, prefix + key, "bridged log.* field")
+                        )
+                    elif isinstance(value, dict):
+                        walk(msg, prefix + key + ".", value)
+                    elif isinstance(value, str) and self._DEBUG_FORMATTED.search(value):
+                        debug_formatted.append((msg, prefix + key, value[:60]))
+
             for msg, fields in con.execute(
                 "SELECT msg, fields FROM log WHERE fields IS NOT NULL"
             ):
-                for key, value in json.loads(fields).items():
-                    if key.startswith("log."):
-                        debug_formatted.append((msg, key, "bridged log.* field"))
-                    elif isinstance(value, str) and self._DEBUG_FORMATTED.search(value):
-                        debug_formatted.append((msg, key, value[:60]))
+                walk(msg, "", json.loads(fields))
             self.assertEqual(
                 debug_formatted[:10],
                 [],

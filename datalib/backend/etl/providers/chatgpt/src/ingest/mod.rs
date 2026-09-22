@@ -778,7 +778,7 @@ struct Listing {
     complete: bool,
 }
 
-#[instrument(skip(client))]
+#[instrument(skip_all, fields(max_pages, since_secs))]
 async fn list_all_conversations(
     client: &mut ChatGPTClient,
     max_pages: Option<usize>,
