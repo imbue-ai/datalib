@@ -3,7 +3,9 @@
 //! more — no profile URL, no id.
 
 use datalib_etl_contact_common::{ContactField, ContactRenderProfile, NormalizedContact};
-use datalib_etl_facebook::ingest::schema_raw::{ns_id, FRIENDS_TABLE};
+use datalib_etl_facebook::ingest::schema_raw::FRIENDS_TABLE;
+
+use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -18,6 +20,7 @@ pub fn friends_profile(owner: &Owner) -> ContactRenderProfile {
         provider: Provider::Facebook,
         source_label: SOURCE_LABEL.to_string(),
         contact_kind: "Contact".to_string(),
+        contact_entity_kind: ids::KIND_FRIEND,
         account: owner.account.clone(),
         render_version: RENDER_VERSION,
     }
@@ -35,12 +38,14 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<Normaliz
             let since = ts_ms(v, "timestamp")
                 .and_then(datalib_time::IsoOffsetTimestamp::from_unix_millis)
                 .map(|t| t.to_rfc3339_secs());
+            let id = ids::friend(row_id);
             NormalizedContact {
-                contact_uuid: ns_id(&format!("friend:{row_id}")),
-                group_uuid: ns_id("friends"),
+                contact_uuid: id.uuid,
+                group_uuid: ids::friends_group().uuid,
                 group_label: GROUP_LABEL.to_string(),
                 display_name: str_field(v, "name").map(str::to_string),
-                external_id: None,
+                external_id: Some(id.natural_key),
+                upstream_scope: None,
                 created_at: since.clone(),
                 modified_at: None,
                 source_url: None,

@@ -113,6 +113,7 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         buckets: vec![NormalizedDoc {
             period_key: "all".to_string(),
             markdown_uuid: id.to_string(),
+            source_ref: None,
             items,
             orphan_reactions: Vec::new(),
         }],

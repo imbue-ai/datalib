@@ -11,8 +11,8 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Inputs};
 use serde_json::Value;
 
+use datalib_etl_linkedin::ids;
 use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
-use datalib_etl_linkedin::ingest::schema_raw::{connection_uuid, ns_id};
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -136,6 +136,7 @@ pub fn render_connections(
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         contact_kind: "Contact".to_string(),
+        contact_entity_kind: ids::KIND_CONNECTION,
         account: account.map(str::to_string),
         render_version: RENDER_VERSION,
     };
@@ -156,16 +157,12 @@ fn to_contact(p: &Value) -> NormalizedContact {
     let name = full_name(p);
 
     // Identity from the profile URL (stable across re-exports). For the
-    // rare row with no URL, fall back to a name+company hash so distinct
+    // rare row with no URL, fall back to name and company so distinct
     // people don't collapse onto one empty-URL id.
-    let contact_uuid = if !url.is_empty() {
-        connection_uuid(url)
+    let id = if !url.is_empty() {
+        ids::connection(url)
     } else {
-        ns_id(&format!(
-            "connection-nourl:{}:{}",
-            name,
-            field(p, "Company")
-        ))
+        ids::connection_without_url(&name, field(p, "Company"))
     };
 
     let fields: Vec<ContactField> = FIELD_COLUMNS
@@ -178,11 +175,12 @@ fn to_contact(p: &Value) -> NormalizedContact {
 
     NormalizedContact {
         inputs: Vec::new(),
-        contact_uuid,
-        group_uuid: ns_id("group:connections"),
+        contact_uuid: id.uuid,
+        group_uuid: ids::connections_group().uuid,
         group_label: GROUP_LABEL.to_string(),
         display_name: (!name.is_empty()).then_some(name),
-        external_id: (!url.is_empty()).then(|| url.to_string()),
+        external_id: Some(id.natural_key),
+        upstream_scope: None,
         created_at: connected_on_to_stamp(field(p, "Connected On")),
         modified_at: None,
         source_url: (!url.is_empty()).then(|| url.to_string()),
@@ -248,7 +246,7 @@ mod tests {
         // Identity + web link both come from the profile URL.
         assert_eq!(
             c.contact_uuid,
-            connection_uuid("https://www.linkedin.com/in/angelicajeannelim")
+            ids::connection("https://www.linkedin.com/in/angelicajeannelim").uuid
         );
         assert_eq!(
             c.source_url.as_deref(),
@@ -291,7 +289,11 @@ mod tests {
         let c = to_contact(&v);
         assert_eq!(c.contact_uuid.len(), 36);
         assert_eq!(c.source_url, None);
-        assert_eq!(c.external_id, None);
+        // The backpointer is what the id was minted from.
+        assert_eq!(
+            c.external_id.as_deref(),
+            Some("Angelica Lim, Ph.D.#Simon Fraser University")
+        );
         // Two different people don't collide on the empty URL.
         let mut other = row();
         other["URL"] = json!("");

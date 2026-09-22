@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Buckets, ENTITY_KIND_CONVERSATION};
+use datalib_etl_chat_common::render::Buckets;
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_schema::providers::Provider;
@@ -21,7 +21,11 @@ use super::parse::ParsedSignal;
 /// Bump when Signal's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
 /// `datalib_etl_chat_common::LAYOUT_VERSION`.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: ids are minted through `datalib_id` under `SourceInstance`,
+///     every row carries its backpointer, and a message's id carries
+///     `date_sent` in its leading bits (`datalib_id`'s v8 layout).
+///     Every uuid moved, `chat_uuid` among them.
+pub const RENDER_VERSION: u32 = 6;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;
@@ -46,7 +50,7 @@ pub fn render_params(period: Period) -> serde_json::Value {
 
 pub fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: super::ids::STAMP_PRECISION,
         provider: PROVIDER,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: "Signal Chat".to_string(),
@@ -55,7 +59,7 @@ pub fn profile() -> RenderProfile {
         // parse does not read them yet, so nothing is ever tagged with
         // this. Named for when it does.
         reaction_kind: "Signal Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
     }
 }

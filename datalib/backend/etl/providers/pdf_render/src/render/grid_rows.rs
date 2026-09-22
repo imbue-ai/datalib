@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use datalib_id::{composite_key, IdNamespace, Identity, Scope};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
-use uuid::Uuid;
+use datalib_time::record_stamp_ms;
 
 pub const PROVIDER: Provider = Provider::Pdf;
 pub const SOURCE_LABEL: &str = "PDF";
@@ -19,23 +20,45 @@ pub const KIND_PAGE: &str = "PDF Page";
 pub const ENTITY_KIND_DOCUMENT: &str = "document";
 pub const ENTITY_KIND_PAGE: &str = "page";
 
-fn pdf_ns() -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"pdf.datalib")
+pub const ID_NAMESPACE: IdNamespace = IdNamespace::Pdf;
+
+/// Content-scoped: identity is the bytes, so the same PDF found under
+/// two scanned trees is deliberately one row. `when` is the stamp the
+/// row stores — the PDF's own creation or modification date, read from
+/// its Info dictionary, so a function of the same bytes — and the id
+/// carries it. Nothing here may depend on scan order, the file's path
+/// or the clock.
+fn identity(entity_kind: &'static str, natural_key: String, when: Option<&str>) -> Identity {
+    Identity::mint(
+        ID_NAMESPACE,
+        Scope::Content,
+        entity_kind,
+        natural_key,
+        when.and_then(record_stamp_ms),
+    )
 }
 
-/// Deterministic id from a recipe string. Re-running the pipeline over
-/// an unchanged corpus must produce byte-identical ids, so nothing here
-/// may depend on scan order or wall-clock.
-pub fn ns_id(recipe: &str) -> String {
-    Uuid::new_v5(&pdf_ns(), recipe.as_bytes()).to_string()
+pub fn document(blake3: &str, when: Option<&str>) -> Identity {
+    identity(ENTITY_KIND_DOCUMENT, blake3.to_string(), when)
 }
 
-pub fn document_uuid(blake3: &str) -> String {
-    ns_id(&format!("doc:{blake3}"))
+pub fn page(blake3: &str, number: u32, when: Option<&str>) -> Identity {
+    identity(
+        ENTITY_KIND_PAGE,
+        composite_key(&[blake3, &number.to_string()]),
+        when,
+    )
 }
 
-pub fn page_uuid(blake3: &str, page: u32) -> String {
-    ns_id(&format!("page:{blake3}:{page}"))
+/// The stamp a document's rows store: the authored creation date, else
+/// the modification date — the file existed by then. Never "now": an
+/// ingest timestamp masquerading as an authored one would sort the
+/// whole corpus to today.
+pub fn document_stamp<'a>(
+    created_at: Option<&'a str>,
+    modified_at: Option<&'a str>,
+) -> Option<&'a str> {
+    created_at.or(modified_at)
 }
 
 pub struct DocumentMeta<'a> {
@@ -99,17 +122,14 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
 /// Build the row set for one document: the document row followed by one
 /// row per page, in page order.
 pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Vec<GridRow> {
-    let doc_uuid = document_uuid(meta.blake3);
+    let when = document_stamp(meta.created_at, meta.modified_at);
+    let doc = document(meta.blake3, when);
+    let doc_uuid = doc.uuid.clone();
     let title = display_title(meta.title, meta.rel_path);
     let author = display_author(meta.author);
     // NULL rather than a bare path when the URL can't be formed; a
     // half-valid link is worse than an absent one.
     let source_url = file_url(meta.abs_path);
-    // Prefer the authored creation date; fall back to modification —
-    // the file existed by then. Never fall back to "now": an ingest
-    // timestamp masquerading as an authored one would sort the whole
-    // corpus to today.
-    let when = meta.created_at.or(meta.modified_at);
 
     let mut rows = Vec::with_capacity(pages.len() + 1);
 
@@ -143,11 +163,10 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
-        // Content-scoped: identity IS the bytes, so the same PDF found
-        // under two scanned trees is deliberately one row. `upstream_scope`
-        // stays NULL because a content hash needs no further scoping.
-        upstream_id: Some(meta.blake3.to_string()),
-        upstream_entity_kind: Some(ENTITY_KIND_DOCUMENT.to_string()),
+        // `upstream_scope` stays NULL: a content hash needs no further
+        // scoping.
+        upstream_id: Some(doc.natural_key),
+        upstream_entity_kind: Some(doc.entity_kind.to_string()),
         upstream_scope: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
@@ -159,9 +178,9 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
     });
 
     for (number, text) in pages {
-        let uuid = page_uuid(meta.blake3, *number);
+        let page = page(meta.blake3, *number, when);
         rows.push(GridRow {
-            uuid: uuid.clone(),
+            uuid: page.uuid,
             provider: PROVIDER.as_str().into(),
             kind: KIND_PAGE.into(),
             source_label: SOURCE_LABEL.into(),
@@ -187,8 +206,8 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
             qmd_path: meta.qmd_path.map(str::to_string),
             source_url: source_url.clone(),
             git_sha: None,
-            upstream_id: Some(format!("{}#{number}", meta.blake3)),
-            upstream_entity_kind: Some(ENTITY_KIND_PAGE.to_string()),
+            upstream_id: Some(page.natural_key),
+            upstream_entity_kind: Some(page.entity_kind.to_string()),
             upstream_scope: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
@@ -224,16 +243,42 @@ mod tests {
     fn ids_are_content_derived_so_a_move_preserves_identity() {
         // Same bytes at a different path must yield the same uuid, or
         // feedback and search history detach on every `mv`.
-        let a = document_uuid("deadbeef");
-        let b = document_uuid("deadbeef");
-        assert_eq!(a, b);
-        assert_ne!(a, document_uuid("cafebabe"));
+        let at = "2024-01-15T10:30:00-08:00";
+        let a = document("deadbeef", Some(at));
+        let b = document("deadbeef", Some(at));
+        assert_eq!(a.uuid, b.uuid);
+        assert_ne!(a.uuid, document("cafebabe", Some(at)).uuid);
+        assert_eq!(
+            datalib_id::stamp_of(&a.uuid),
+            datalib_time::record_stamp_ms(at)
+        );
     }
 
     #[test]
     fn page_ids_differ_per_page_and_per_document() {
-        assert_ne!(page_uuid("abc", 1), page_uuid("abc", 2));
-        assert_ne!(page_uuid("abc", 1), page_uuid("xyz", 1));
+        assert_ne!(page("abc", 1, None).uuid, page("abc", 2, None).uuid);
+        assert_ne!(page("abc", 1, None).uuid, page("xyz", 1, None).uuid);
+        assert_eq!(page("abc", 1, None).natural_key, "abc#1");
+    }
+
+    /// The backpointer regenerates the id, for both kinds.
+    #[test]
+    fn natural_key_regenerates_the_uuid() {
+        for got in [
+            document("abc", Some("2024-01-15T10:30:00-08:00")),
+            page("abc", 3, None),
+        ] {
+            assert_eq!(
+                got.uuid,
+                datalib_id::entity_id_str(
+                    ID_NAMESPACE,
+                    Scope::Content,
+                    got.entity_kind,
+                    &got.natural_key,
+                    got.at,
+                ),
+            );
+        }
     }
 
     #[test]

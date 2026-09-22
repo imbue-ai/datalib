@@ -19,15 +19,14 @@ rust_library(
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/id:datalib_id",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:once_cell",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
-        "@datalib_crates//:uuid",
     ],
 )
 

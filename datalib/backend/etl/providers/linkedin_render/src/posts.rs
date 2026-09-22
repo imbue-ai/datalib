@@ -7,17 +7,16 @@ use std::collections::HashMap;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
-};
+use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
+    NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
-use datalib_etl_linkedin::ingest::schema_raw::ns_id as uuid5;
+use datalib_etl_linkedin::ids;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -31,13 +30,13 @@ const ME: &str = "Me";
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Post".to_string(),
         message_kind: "LinkedIn Post Message".to_string(),
         reaction_kind: "LinkedIn Post Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_POST,
         render_version: RENDER_VERSION,
     }
 }
@@ -148,8 +147,8 @@ struct Thread<'a> {
     url: String,
     /// The rows this thread was built from.
     inputs: Inputs,
-    share: Option<&'a Value>,
-    comments: Vec<&'a Value>,
+    share: Option<(&'a str, &'a Value)>,
+    comments: Vec<(&'a str, &'a Value)>,
 }
 
 /// Shares and comments as `(row id, payload)`: the ids are what each
@@ -178,7 +177,7 @@ fn build_post_chats(
         }
         t.inputs.read("shares", row_id);
         // Keep the first share if a key somehow repeats (shouldn't).
-        t.share.get_or_insert(s);
+        t.share.get_or_insert((row_id.as_str(), s));
     }
     for (i, (row_id, c)) in comments.iter().enumerate() {
         let link = field(c, "Link");
@@ -193,7 +192,7 @@ fn build_post_chats(
             t.url = link.to_string();
         }
         t.inputs.read("comments", row_id);
-        t.comments.push(c);
+        t.comments.push((row_id.as_str(), c));
     }
 
     let mut chats = Vec::with_capacity(by_post.len());
@@ -205,7 +204,7 @@ fn build_post_chats(
 
         // Opening message: the post itself, or a note that the original
         // isn't in the export when we only have comments on it.
-        if let Some(s) = thread.share {
+        if let Some((row_id, s)) = thread.share {
             let date = field(s, "Date");
             let mut body = nonempty(field(s, "ShareCommentary"))
                 .unwrap_or("")
@@ -220,7 +219,12 @@ fn build_post_chats(
                     body.push_str(u);
                 }
             }
-            items.push(me_item(&key, "post", date, body, &thread.url));
+            items.push(me_item(
+                |at| ids::share(row_id, at),
+                date,
+                body,
+                &thread.url,
+            ));
         } else {
             // Earliest *real* comment date, or `None` when none of the
             // comments carry one — the placeholder then has no
@@ -228,31 +232,38 @@ fn build_post_chats(
             let earliest = thread
                 .comments
                 .iter()
-                .filter_map(|c| parse_date_ms(field(c, "Date")))
+                .filter_map(|(_, c)| parse_date_ms(field(c, "Date")))
                 .min();
             items.push(post_placeholder(&key, earliest, &thread.url));
         }
 
         // Comments, oldest-first.
         let mut crows = thread.comments.clone();
-        crows.sort_by_key(|c| parse_date_ms(field(c, "Date")));
-        for c in crows {
+        crows.sort_by_key(|(_, c)| parse_date_ms(field(c, "Date")));
+        for (row_id, c) in crows {
             let date = field(c, "Date");
             let body = nonempty(field(c, "Message")).unwrap_or("").to_string();
-            items.push(me_item(&key, "comment", date, body, &thread.url));
+            items.push(me_item(
+                |at| ids::comment(row_id, at),
+                date,
+                body,
+                &thread.url,
+            ));
         }
 
+        let post = ids::post(&key);
+        let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
             inputs: thread.inputs.declared(),
             path_prefix: None,
             id: format!("posts:{key}"),
-            chat_uuid: uuid5(&format!("chat:posts:{key}")),
-            display: thread_title(thread.share, &thread.comments),
+            chat_uuid: post.uuid.clone(),
+            display: thread_title(thread.share.map(|(_, s)| s), &comment_payloads),
             title: None,
             author: None,
             account: account.map(str::to_string),
             project: None,
-            external_id: nonempty(&key).map(str::to_string),
+            external_id: Some(post.natural_key),
             // Whole-post linkout on the thread header / chat-level row.
             source_url: nonempty(&thread.url).map(str::to_string),
             upstream_scope: None,
@@ -261,7 +272,8 @@ fn build_post_chats(
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
-                markdown_uuid: uuid5(&format!("doc:posts:{key}:all")),
+                markdown_uuid: post.uuid,
+                source_ref: None,
                 items,
             }],
         });
@@ -269,7 +281,14 @@ fn build_post_chats(
     chats
 }
 
-fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> NormalizedChatItem {
+/// `mint` gets the item's stamp once it is parsed, so the id carries
+/// what the row stores.
+fn me_item(
+    mint: impl FnOnce(Option<i64>) -> datalib_id::Identity,
+    date: &str,
+    body: String,
+    url: &str,
+) -> NormalizedChatItem {
     let mut text = body;
     if let Some(u) = nonempty(url) {
         if !text.is_empty() {
@@ -279,8 +298,9 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
     }
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
+    let id = mint(date_ms);
     NormalizedChatItem {
-        message_uuid: uuid5(&format!("msg:posts:{key}:{role}:{date}:{text}")),
+        message_uuid: id.uuid,
         author_id: "me".to_string(),
         author_display: ME.to_string(),
         date_ms,
@@ -291,7 +311,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         system_note: None,
         source_url: None,
         kind_label: None,
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         problems,
     }
@@ -302,8 +322,9 @@ fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedCha
         Some(u) => format!("Original post not included in the LinkedIn export — {u}"),
         None => "Original post not included in the LinkedIn export.".to_string(),
     };
+    let id = ids::post_origin(key, date_ms);
     NormalizedChatItem {
-        message_uuid: uuid5(&format!("msg:posts:{key}:origin")),
+        message_uuid: id.uuid,
         author_id: "linkedin".to_string(),
         author_display: "LinkedIn".to_string(),
         date_ms,
@@ -314,7 +335,7 @@ fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedCha
         system_note: Some(note),
         source_url: None,
         kind_label: None,
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
         problems: Vec::new(),
     }

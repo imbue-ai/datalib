@@ -8,7 +8,11 @@ use datalib_schema::providers::Provider;
 
 use super::parse::{CommentRow, CommentSection, PullRequestRow};
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids are minted through `datalib_id` under `Upstream(repo)`,
+///     every row carries its backpointer, and an id carries the
+///     record's `created_at` in its leading bits (`datalib_id`'s v8
+///     layout). Every uuid moved.
+pub const RENDER_VERSION: u32 = 2;
 
 /// Sort comments into rendered order (matches `render.rs`).
 fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {
@@ -115,6 +119,7 @@ pub fn rows_for_pr(
             .git_sha(pr.head_sha.clone())
             .upstream_id(Some(pr.pr_number.to_string()))
             .upstream_entity_kind(Some(crate::render::parse::ENTITY_PR.to_string()))
+            .upstream_scope(Some(pr.repo_full_name.clone()))
             .markdown_uuid(Some(pr.uuid.clone()))
             .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
     );
@@ -146,6 +151,7 @@ pub fn rows_for_pr(
                 // their numeric ids overlap freely, so the bare id is
                 // not a usable backpointer without this.
                 .upstream_entity_kind(Some(c.section.entity().to_string()))
+                .upstream_scope(Some(pr.repo_full_name.clone()))
                 .markdown_uuid(Some(pr.uuid.clone()))
                 .build_or_record(stanza, &pr.uuid, RENDER_VERSION, problems),
         );

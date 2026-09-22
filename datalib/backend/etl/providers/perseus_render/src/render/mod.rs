@@ -34,7 +34,7 @@ pub mod render;
 /// the bilingual-alignment edges from section-level placeholders
 /// (first-word ↔ first-word) to per-sentence anchors: each section's
 /// body now contains one `<span data-section-uuid="…">` per sentence
-/// (UUIDs derived via `paragraph_sentence_uuid`), and the edges
+/// (ids from `datalib_etl_perseus::sentence`), and the edges
 /// table carries one row per aligned (grc-sentence, eng-sentence)
 /// pair — within-section sentence alignment is computed by the
 /// `render::align` module using Ancient-Greek-BERT. v14 generalizes
@@ -45,4 +45,7 @@ pub mod render;
 /// CTS-derived edition title, and within-section sentence alignment is
 /// opt-in per edition *pair* (the `alignment_pairs` config), off by
 /// default — so most editions render with section-level anchors only.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: ids are minted through `datalib_id` under `Content`, edges
+/// through `datalib_id::edge_id`, and every row carries its
+/// backpointer. Every uuid moved.
+pub const RENDER_VERSION: u32 = 15;

@@ -10,9 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
-use once_cell::sync::Lazy;
 use serde_json::Value;
-use uuid::Uuid;
 
 use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
 use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
@@ -20,25 +18,6 @@ use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";
 pub const ENTITY_DISCUSSION: &str = "discussion";
-
-pub static GITLAB_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("c2b91d4b-2080-5e5c-ab34-8f4f3c9e0002").expect("valid gitlab ns uuid")
-});
-
-pub fn gitlab_mr_uuid(proj: &str, iid: u32) -> String {
-    Uuid::new_v5(
-        &GITLAB_UUID_NS,
-        format!("gitlab:{proj}:mr:{iid}").as_bytes(),
-    )
-    .to_string()
-}
-pub fn gitlab_note_uuid(proj: &str, id: i64) -> String {
-    Uuid::new_v5(
-        &GITLAB_UUID_NS,
-        format!("gitlab:{proj}:note:{id}").as_bytes(),
-    )
-    .to_string()
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct GitlabSelfIdentity {
@@ -210,8 +189,12 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
         }
         let p = &mr.payload;
         let diff_refs = p.get("diff_refs");
+        let created_at = p
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         out.merge_requests.push(MergeRequestRow {
-            uuid: gitlab_mr_uuid(&proj, iid),
+            uuid: super::ids::merge_request(&proj, iid, created_at.as_deref()).uuid,
             row_id: mr.id,
             project_full_path: proj,
             mr_iid: iid,
@@ -244,10 +227,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 .and_then(|a| a.get("username"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: p
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            created_at,
             updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())
@@ -322,8 +302,13 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 Some(p) if p != id => Some(p),
                 _ => None,
             };
+            let created_at: String = n
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into();
             out.notes.push(NoteRow {
-                uuid: gitlab_note_uuid(&proj, id),
+                uuid: super::ids::note(&proj, id, Some(&created_at)).uuid,
                 row_id: row_id.clone(),
                 project_full_path: proj.clone(),
                 mr_iid: iid,
@@ -346,11 +331,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                     .and_then(|v| v.as_str())
                     .map(String::from),
                 system,
-                created_at: n
-                    .get("created_at")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .into(),
+                created_at,
                 updated_at: n
                     .get("updated_at")
                     .and_then(|v| v.as_str())

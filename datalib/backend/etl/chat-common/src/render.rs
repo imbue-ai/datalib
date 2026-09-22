@@ -638,8 +638,14 @@ fn build_grid_rows(
             )
             .qmd_path(Some(md_rel.to_string()))
             .source_url(chat.source_url.clone())
-            .upstream_id(chat.external_id.clone())
-            .upstream_entity_kind(Some(profile.chat_entity_kind.to_string()))
+            .upstream_id(match &doc.source_ref {
+                Some(r) => Some(r.native_id.clone()),
+                None => chat.external_id.clone(),
+            })
+            .upstream_entity_kind(Some(match &doc.source_ref {
+                Some(r) => r.entity_kind.clone(),
+                None => profile.chat_entity_kind.to_string(),
+            }))
             .upstream_scope(chat.upstream_scope.clone())
             .markdown_uuid(Some(doc.markdown_uuid.clone()))
             .build_or_record(
@@ -881,6 +887,7 @@ mod tests {
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
+                source_ref: None,
                 orphan_reactions: Vec::new(),
                 items: vec![NormalizedChatItem {
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),

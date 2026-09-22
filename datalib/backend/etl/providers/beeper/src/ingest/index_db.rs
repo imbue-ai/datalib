@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
-use crate::ingest::schema_raw::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
+use crate::ids;
 use datalib_etl::blob_cas::CasEdgeRow as _;
 
 /// In-memory accumulator the per-thread walkers push into; flushed
@@ -261,7 +261,7 @@ fn build_room_row(
         .and_then(|v| v.as_str())
         .map(String::from);
     RoomRow {
-        id: beeper_room_uuid(SOURCE, thread_id),
+        id: ids::room(SOURCE, thread_id).uuid,
         source: SOURCE.to_string(),
         network: network.to_string(),
         native_room_id: thread_id.to_string(),
@@ -313,7 +313,7 @@ async fn ingest_participants(
             .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
         batch.users.push(UserRow {
-            id: beeper_user_uuid(SOURCE, &user_id),
+            id: ids::user(SOURCE, &user_id).uuid,
             source: SOURCE.to_string(),
             network: Some(network.to_string()),
             native_user_id: user_id,
@@ -409,9 +409,9 @@ async fn ingest_messages(
             (None, None)
         };
 
-        let event_uuid = beeper_event_uuid(SOURCE, &event_id);
-        let room_uuid = beeper_room_uuid(SOURCE, thread_id);
-        let sender_uuid = sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s));
+        let event_uuid = ids::event(SOURCE, &event_id, timestamp_ms).uuid;
+        let room_uuid = ids::room(SOURCE, thread_id).uuid;
+        let sender_uuid = sender.as_deref().map(|s| ids::user(SOURCE, s).uuid);
         let row = EventRow {
             id: event_uuid.clone(),
             source: SOURCE.to_string(),
@@ -497,11 +497,11 @@ async fn ingest_reactions(
             .map(String::from);
         let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
         batch.events.push(EventRow {
-            id: beeper_event_uuid(SOURCE, &reaction_id),
+            id: ids::event(SOURCE, &reaction_id, timestamp_ms).uuid,
             source: SOURCE.to_string(),
             network: network.to_string(),
-            room_uuid: beeper_room_uuid(SOURCE, thread_id),
-            sender_uuid: sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s)),
+            room_uuid: ids::room(SOURCE, thread_id).uuid,
+            sender_uuid: sender.as_deref().map(|s| ids::user(SOURCE, s).uuid),
             native_event_id: reaction_id,
             event_type: "REACTION".to_string(),
             timestamp_ms,

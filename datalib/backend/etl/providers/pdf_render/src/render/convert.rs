@@ -8,7 +8,10 @@ use std::path::Path;
 /// previously-rendered documents — the markdown itself, or the shape of
 /// the `grid_rows` projected from it. v4: `account` stopped carrying
 /// the source name.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: ids are minted through `datalib_id` under `Content`, and carry
+///     the document's own date in their leading bits (`datalib_id`'s
+///     v8 layout). Every uuid moved; the bucket key is now the blake3.
+pub const RENDER_VERSION: u32 = 5;
 
 /// One page of converted text.
 pub struct Page {

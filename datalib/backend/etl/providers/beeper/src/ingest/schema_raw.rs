@@ -7,7 +7,6 @@ use datalib_etl_macros::CasEdgeRow;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
-use uuid::Uuid;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -18,8 +17,8 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_att
 /// `rooms` — one row per chat / channel / DM Beeper Texts knows
 /// about.
 ///
-/// PK choice: render-side UUIDv5 `beeper_room_uuid(source,
-/// native_room_id)`. The native id (Matrix room id for index.db;
+/// PK choice: `crate::ids::room(source, native_room_id)`, the same id
+/// render puts on the chat. The native id (Matrix room id for index.db;
 /// `chat.guid` for the future Mac chat.db reader) lives alongside as
 /// its own column so cross-reference passes that arrive *after* the
 /// row was written (e.g. the megabridge enrichment pass keyed off
@@ -115,7 +114,7 @@ impl BulkUpsertable for RoomRow {
 /// `users` — one row per peer / participant Beeper Texts knows
 /// about, across every chat in a given `source` store.
 ///
-/// PK choice: render-side UUIDv5 `beeper_user_uuid(source,
+/// PK choice: `crate::ids::user(source,
 /// native_user_id)`.
 pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -185,11 +184,12 @@ impl BulkUpsertable for UserRow {
 /// `events` — one row per message / reaction / membership /
 /// edit / hidden event Beeper Texts has cached.
 ///
-/// PK choice: render-side UUIDv5 `beeper_event_uuid(source,
-/// native_event_id)`. Both index.db and the megabridge file expose a
-/// stable per-message Matrix event id (the `mxid` column), so the
-/// UUIDv5 keyed off `(source, mxid)` is upstream-stable across
-/// re-fetches.
+/// PK choice: `crate::ids::event(source, native_event_id,
+/// timestamp_ms)`, the same id render puts on the message. Both
+/// index.db and the megabridge file expose a stable per-message Matrix
+/// event id (the `mxid` column), so the id keyed off `(source, mxid)`
+/// is upstream-stable across re-fetches; the stamp in its leading bits
+/// keeps a sync's events in adjacent leaves.
 pub const EVENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -305,53 +305,6 @@ pub struct BeeperMediaAttachmentRow {
     pub event_uuid: String,
     pub ref_id: String,
     pub blake3: Option<String>,
-}
-
-// UUIDv5 identity recipes
-
-/// v5 namespace for every UUID this provider mints. Distinct from
-/// other providers so we can never accidentally collide a Beeper
-/// row with a Slack/Notion/etc. row that happened to derive its
-/// id from the same string.
-pub const BEEPER_UUID_NS: Uuid = Uuid::from_bytes([
-    0xbe, 0xe9, 0xe7, 0x00, 0x4f, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a,
-]);
-
-/// `source` is the on-disk store the row came from (e.g.
-/// `"beeper_index"`, eventually `"macos_imessage"`). Including it
-/// in the v5 hash means two extractors that happen to mint
-/// identical native ids never collide unless that's actually
-/// meaningful.
-pub fn beeper_room_uuid(source: &str, native_room_id: &str) -> String {
-    Uuid::new_v5(
-        &BEEPER_UUID_NS,
-        format!("beeper:room:{source}:{native_room_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn beeper_user_uuid(source: &str, native_user_id: &str) -> String {
-    Uuid::new_v5(
-        &BEEPER_UUID_NS,
-        format!("beeper:user:{source}:{native_user_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn beeper_event_uuid(source: &str, native_event_id: &str) -> String {
-    Uuid::new_v5(
-        &BEEPER_UUID_NS,
-        format!("beeper:event:{source}:{native_event_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn beeper_markdown_uuid(room_uuid: &str, period_key: &str) -> String {
-    Uuid::new_v5(
-        &BEEPER_UUID_NS,
-        format!("beeper:doc:{room_uuid}:{period_key}").as_bytes(),
-    )
-    .to_string()
 }
 
 // Composer

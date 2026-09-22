@@ -2,48 +2,13 @@
 source: datalib/backend/etl/providers/claude/tests/claude_render.rs
 expression: bundle
 ---
-=== claude_export/render_markdown/1c72c68f-86f5-577e-93a8-53e634460711/all.md ===
----
-title: "Tricorder Image Diagnostic (all)"
-provider: claude
-source_label: "Claude"
-chat_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
-markdown_uuid: 1c72c68f-86f5-577e-93a8-53e634460711
-period: all
-display: "Tricorder Image Diagnostic"
-account: bcrusher@enterprise.starfleet.test
-external_id: c0000004-1701-4d00-8000-00000000c004
-item_count: 2
----
-
-<h1 class="page-title" data-page-title-uuid="1c72c68f-86f5-577e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
-
-<div id="m-177b2d24-eea2-5f3b-b898-0ad84bbd7d50" data-section-uuid="177b2d24-eea2-5f3b-b898-0ad84bbd7d50" class="msg msg--claude">
-
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time>
-
-What's wrong with this medical-tricorder readout?
-
-🖼 *[tricorder-readout.png (not yet fetched)]*
-
-</div>
-
-<div id="m-0bdf2176-0b10-5cc3-b955-0a31599f6495" data-section-uuid="0bdf2176-0b10-5cc3-b955-0a31599f6495" class="msg msg--claude">
-
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-15T08:30:45+00:00" title="2369-04-15 08:30:45 UTC">Tue Apr 15th, 2369 at 08:30</time>
-
-The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
-
-</div>
-
-
-=== claude_export/render_markdown/2efdd321-ada2-5000-911f-feb635f27954/all.md ===
+=== claude_export/render_markdown/00000000-0000-8000-911f-feb635f27954/all.md ===
 ---
 title: "Claude Project · Stellar Cartography (all)"
 provider: claude
 source_label: "Claude"
-chat_uuid: 2efdd321-ada2-5000-911f-feb635f27954
-markdown_uuid: 2efdd321-ada2-5000-911f-feb635f27954
+chat_uuid: 00000000-0000-8000-911f-feb635f27954
+markdown_uuid: 00000000-0000-8000-911f-feb635f27954
 period: all
 display: "Stellar Cartography"
 account: jlpicard@enterprise.starfleet.test
@@ -52,9 +17,9 @@ external_id: 70000002-1701-4d00-8000-000000000702
 item_count: 3
 ---
 
-<h1 class="page-title" data-page-title-uuid="2efdd321-ada2-5000-911f-feb635f27954">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8000-911f-feb635f27954">Claude Project · Stellar Cartography (all) <a class="source-link" href="https://claude.ai/project/70000002-1701-4d00-8000-000000000702" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-14cc724b-89ec-5740-84e3-07f0a01a17e7" data-section-uuid="14cc724b-89ec-5740-84e3-07f0a01a17e7" class="msg msg--claude">
+<div id="m-00000000-0000-8740-84e3-07f0a01a17e7" data-section-uuid="00000000-0000-8740-84e3-07f0a01a17e7" class="msg msg--claude">
 
 ## <span class="msg-author">Description</span> <span class="msg-ts">(no timestamp)</span>
 
@@ -62,7 +27,7 @@ Scratch project for charting questions. Carries no timestamps: the export omitte
 
 </div>
 
-<div id="m-e73bd39e-6538-5117-b6c2-0bdd7fccdc14" data-section-uuid="e73bd39e-6538-5117-b6c2-0bdd7fccdc14" class="msg msg--claude">
+<div id="m-00000000-0000-8117-b6c2-0bdd7fccdc14" data-section-uuid="00000000-0000-8117-b6c2-0bdd7fccdc14" class="msg msg--claude">
 
 ## <span class="msg-author">Custom instructions</span> <span class="msg-ts">(no timestamp)</span>
 
@@ -70,7 +35,7 @@ Answer as a stellar cartographer. Give coordinates in standard galactic form and
 
 </div>
 
-<div id="m-0e22c340-4082-5e2f-8d9a-553feb522f41" data-section-uuid="0e22c340-4082-5e2f-8d9a-553feb522f41" class="msg msg--claude">
+<div id="m-00000000-0000-8e2f-8d9a-553feb522f41" data-section-uuid="00000000-0000-8e2f-8d9a-553feb522f41" class="msg msg--claude">
 
 ## <span class="msg-author">charting-conventions.md</span> <span class="msg-ts">(no timestamp)</span>
 
@@ -85,13 +50,13 @@ Bearings are given from the ship's current heading, not from galactic north.
 </div>
 
 
-=== claude_export/render_markdown/bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0/all.md ===
+=== claude_export/render_markdown/00000000-0000-80d0-8c94-28c0bcf6d5e0/all.md ===
 ---
 title: "Claude Project · Bridge Operations (all)"
 provider: claude
 source_label: "Claude"
-chat_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
-markdown_uuid: bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0
+chat_uuid: 00000000-0000-80d0-8c94-28c0bcf6d5e0
+markdown_uuid: 00000000-0000-80d0-8c94-28c0bcf6d5e0
 period: all
 display: "Bridge Operations"
 account: jlpicard@enterprise.starfleet.test
@@ -100,9 +65,9 @@ external_id: 70000001-1701-4d00-8000-000000000701
 item_count: 4
 ---
 
-<h1 class="page-title" data-page-title-uuid="bc499d58-b6e7-50d0-8c94-28c0bcf6d5e0">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-80d0-8c94-28c0bcf6d5e0">Claude Project · Bridge Operations (all) <a class="source-link" href="https://claude.ai/project/70000001-1701-4d00-8000-000000000701" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-97a4b942-55cc-5277-bb12-ffd97e43dc5c" data-section-uuid="97a4b942-55cc-5277-bb12-ffd97e43dc5c" class="msg msg--claude">
+<div id="m-0b5016d5-ce80-8277-bb12-ffd97e43dc5c" data-section-uuid="0b5016d5-ce80-8277-bb12-ffd97e43dc5c" class="msg msg--claude">
 
 ## <span class="msg-author">Description</span> <time class="msg-ts" datetime="2364-03-01T09:00:00+00:00" title="2364-03-01 09:00:00 UTC">Sun Mar 1st, 2364 at 09:00</time>
 
@@ -110,7 +75,7 @@ Standing context for bridge-watch questions: ship status conventions, who to esc
 
 </div>
 
-<div id="m-9a048a2e-8f15-5fd1-b686-aba2e9cad97e" data-section-uuid="9a048a2e-8f15-5fd1-b686-aba2e9cad97e" class="msg msg--claude">
+<div id="m-0b5016d5-ce80-8fd1-b686-aba2e9cad97e" data-section-uuid="0b5016d5-ce80-8fd1-b686-aba2e9cad97e" class="msg msg--claude">
 
 ## <span class="msg-author">Custom instructions</span> <time class="msg-ts" datetime="2364-03-01T09:00:00+00:00" title="2364-03-01 09:00:00 UTC">Sun Mar 1st, 2364 at 09:00</time>
 
@@ -118,7 +83,7 @@ Answer as a Starfleet operations officer. Cite the relevant General Order when o
 
 </div>
 
-<div id="m-92b18eb4-757f-5418-87da-f7e5e179b6b1" data-section-uuid="92b18eb4-757f-5418-87da-f7e5e179b6b1" class="msg msg--claude">
+<div id="m-0b5016da-6260-8418-87da-f7e5e179b6b1" data-section-uuid="0b5016da-6260-8418-87da-f7e5e179b6b1" class="msg msg--claude">
 
 ## <span class="msg-author">hailing-frequencies.md</span> <time class="msg-ts" datetime="2364-03-01T09:05:00+00:00" title="2364-03-01 09:05:00 UTC">Sun Mar 1st, 2364 at 09:05</time>
 
@@ -132,7 +97,7 @@ Open on subspace band 3 unless the target is cloaked.
 
 </div>
 
-<div id="m-d734b686-97ce-5e76-9ae0-02fbb6dfe60b" data-section-uuid="d734b686-97ce-5e76-9ae0-02fbb6dfe60b" class="msg msg--claude">
+<div id="m-0b501c85-7ec0-8e76-9ae0-02fbb6dfe60b" data-section-uuid="0b501c85-7ec0-8e76-9ae0-02fbb6dfe60b" class="msg msg--claude">
 
 ## <span class="msg-author">escalation-ladder.txt</span> <time class="msg-ts" datetime="2364-03-02T11:30:00+00:00" title="2364-03-02 11:30:00 UTC">Mon Mar 2nd, 2364 at 11:30</time>
 
@@ -143,13 +108,46 @@ Medical emergencies route directly to Sickbay (Crusher).
 </div>
 
 
-=== claude_export/render_markdown/ecb57e3b-24ce-546b-9201-61bf610b0783/all.md ===
+=== claude_export/render_markdown/00000000-0000-8372-b44e-148a47ada7a2/all.md ===
+---
+title: "Poisoned: a message with an unreadable stamp (all)"
+provider: claude
+source_label: "Claude"
+chat_uuid: 00000000-0000-8372-b44e-148a47ada7a2
+markdown_uuid: 00000000-0000-8372-b44e-148a47ada7a2
+period: all
+display: "Poisoned: a message with an unreadable stamp"
+account: jlpicard@enterprise.starfleet.test
+external_id: c0000006-1701-4d00-8000-00000000c006
+item_count: 2
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8372-b44e-148a47ada7a2">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-0b75c4b3-d900-8472-9181-d964975c6943" data-section-uuid="0b75c4b3-d900-8472-9181-d964975c6943" class="msg msg--claude">
+
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+
+Computer, what stardate is it?
+
+</div>
+
+<div id="m-0b75c4b3-d900-83dd-bce7-7e0b22d3af16" data-section-uuid="0b75c4b3-d900-83dd-bce7-7e0b22d3af16" class="msg msg--claude">
+
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+
+Stardate 47988.1. The chronometer is on ship's time.
+
+</div>
+
+
+=== claude_export/render_markdown/00000000-0000-846b-9201-61bf610b0783/all.md ===
 ---
 title: "Borg Encryption Signature Lookup (all)"
 provider: claude
 source_label: "Claude"
-chat_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
-markdown_uuid: ecb57e3b-24ce-546b-9201-61bf610b0783
+chat_uuid: 00000000-0000-846b-9201-61bf610b0783
+markdown_uuid: 00000000-0000-846b-9201-61bf610b0783
 period: all
 display: "Borg Encryption Signature Lookup"
 account: jlpicard@enterprise.starfleet.test
@@ -157,9 +155,9 @@ external_id: c0000005-1701-4d00-8000-00000000c005
 item_count: 6
 ---
 
-<h1 class="page-title" data-page-title-uuid="ecb57e3b-24ce-546b-9201-61bf610b0783">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-846b-9201-61bf610b0783">Borg Encryption Signature Lookup (all) <a class="source-link" href="https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" data-section-uuid="5af2bc5c-dc8f-5f8b-9ffe-3b8959ef4b6d" class="msg msg--claude">
+<div id="m-0b75bf56-8e80-8f8b-9ffe-3b8959ef4b6d" data-section-uuid="0b75bf56-8e80-8f8b-9ffe-3b8959ef4b6d" class="msg msg--claude">
 
 ## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-16T09:00:00+00:00" title="2369-04-16 09:00:00 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
@@ -170,7 +168,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 <details class="tool-group">
 <summary>🛠 2 tool steps</summary>
 
-<div id="m-9dc4d9e5-8760-5b4b-8356-513ddde8a81c" data-section-uuid="9dc4d9e5-8760-5b4b-8356-513ddde8a81c" class="msg msg--claude">
+<div id="m-0b75bf56-b590-8b4b-8356-513ddde8a81c" data-section-uuid="0b75bf56-b590-8b4b-8356-513ddde8a81c" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:10+00:00" title="2369-04-16 09:00:10 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
@@ -186,7 +184,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 </div>
 
-<div id="m-acf0598d-da86-50cb-83c0-81c168a3aaf6" data-section-uuid="acf0598d-da86-50cb-83c0-81c168a3aaf6" class="msg msg--claude">
+<div id="m-0b75bf57-03b0-80cb-83c0-81c168a3aaf6" data-section-uuid="0b75bf57-03b0-80cb-83c0-81c168a3aaf6" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:00:30+00:00" title="2369-04-16 09:00:30 UTC">Wed Apr 16th, 2369 at 09:00</time>
 
@@ -205,7 +203,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 
 </details>
 
-<div id="m-fd099005-053a-540e-a4fa-26c872b932bf" data-section-uuid="fd099005-053a-540e-a4fa-26c872b932bf" class="msg msg--claude">
+<div id="m-0b75bf57-ee10-840e-a4fa-26c872b932bf" data-section-uuid="0b75bf57-ee10-840e-a4fa-26c872b932bf" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
@@ -216,7 +214,7 @@ Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.
 <details class="tool-group">
 <summary>🛠 2 tool steps</summary>
 
-<div id="m-8e186a5a-3834-5ae1-ad1d-00a786a6f02d" data-section-uuid="8e186a5a-3834-5ae1-ad1d-00a786a6f02d" class="msg msg--claude">
+<div id="m-0b75bf57-ee10-8ae1-ad1d-00a786a6f02d" data-section-uuid="0b75bf57-ee10-8ae1-ad1d-00a786a6f02d" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
@@ -229,7 +227,7 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 
 </div>
 
-<div id="m-455f3019-2de0-5b4c-ad87-68e8f1003e6b" data-section-uuid="455f3019-2de0-5b4c-ad87-68e8f1003e6b" class="msg msg--claude">
+<div id="m-0b75bf57-ee10-8b4c-ad87-68e8f1003e6b" data-section-uuid="0b75bf57-ee10-8b4c-ad87-68e8f1003e6b" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-16T09:01:30+00:00" title="2369-04-16 09:01:30 UTC">Wed Apr 16th, 2369 at 09:01</time>
 
@@ -244,13 +242,13 @@ Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulatio
 </details>
 
 
-=== claude_export/render_markdown/f6cad624-37b7-5673-af29-80ba9aac61a5/all.md ===
+=== claude_export/render_markdown/00000000-0000-8673-af29-80ba9aac61a5/all.md ===
 ---
 title: "Klingon Diplomatic Greeting Drafting (all)"
 provider: claude
 source_label: "Claude"
-chat_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
-markdown_uuid: f6cad624-37b7-5673-af29-80ba9aac61a5
+chat_uuid: 00000000-0000-8673-af29-80ba9aac61a5
+markdown_uuid: 00000000-0000-8673-af29-80ba9aac61a5
 period: all
 display: "Klingon Diplomatic Greeting Drafting"
 account: jlpicard@enterprise.starfleet.test
@@ -259,9 +257,9 @@ external_id: c0000003-1701-4d00-8000-00000000c003
 item_count: 6
 ---
 
-<h1 class="page-title" data-page-title-uuid="f6cad624-37b7-5673-af29-80ba9aac61a5">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8673-af29-80ba9aac61a5">Klingon Diplomatic Greeting Drafting (all) <a class="source-link" href="https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" data-section-uuid="ec2d712e-ffd8-5f3e-bfb1-291c371a8a18" class="msg msg--claude">
+<div id="m-0b75b540-c500-8f3e-bfb1-291c371a8a18" data-section-uuid="0b75b540-c500-8f3e-bfb1-291c371a8a18" class="msg msg--claude">
 
 ## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:00:00+00:00" title="2369-04-14 10:00:00 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
@@ -269,7 +267,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </div>
 
-<div id="m-fba21d7b-ee94-5388-a431-83ab86883e1d" data-section-uuid="fba21d7b-ee94-5388-a431-83ab86883e1d" class="msg msg--claude">
+<div id="m-0b75b541-3a30-8388-a431-83ab86883e1d" data-section-uuid="0b75b541-3a30-8388-a431-83ab86883e1d" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:30+00:00" title="2369-04-14 10:00:30 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
@@ -284,7 +282,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 <details class="tool-group">
 <summary>🛠 1 tool step</summary>
 
-<div id="m-627106cd-9749-58b6-b3c3-081b7c5bd325" data-section-uuid="627106cd-9749-58b6-b3c3-081b7c5bd325" class="msg msg--claude">
+<div id="m-0b75b541-4200-88b6-b3c3-081b7c5bd325" data-section-uuid="0b75b541-4200-88b6-b3c3-081b7c5bd325" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:00:32+00:00" title="2369-04-14 10:00:32 UTC">Mon Apr 14th, 2369 at 10:00</time>
 
@@ -301,7 +299,7 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 
 </details>
 
-<div id="m-db076984-1c8c-5f9c-95f3-49aff0ea4480" data-section-uuid="db076984-1c8c-5f9c-95f3-49aff0ea4480" class="msg msg--claude">
+<div id="m-0b75b541-af60-8f9c-95f3-49aff0ea4480" data-section-uuid="0b75b541-af60-8f9c-95f3-49aff0ea4480" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
 
@@ -312,7 +310,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 <details class="tool-group">
 <summary>🛠 1 tool step</summary>
 
-<div id="m-1657d974-f93f-5c85-92bb-789909cf6e41" data-section-uuid="1657d974-f93f-5c85-92bb-789909cf6e41" class="msg msg--claude">
+<div id="m-0b75b541-af60-8c85-92bb-789909cf6e41" data-section-uuid="0b75b541-af60-8c85-92bb-789909cf6e41" class="msg msg--claude">
 
 ## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-14T10:01:00+00:00" title="2369-04-14 10:01:00 UTC">Mon Apr 14th, 2369 at 10:01</time>
 
@@ -337,7 +335,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 
 </details>
 
-<div id="m-66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" data-section-uuid="66adb1c8-8e2e-5b04-b2c5-5838f3b3ab9f" class="msg msg--claude">
+<div id="m-0b75b542-99c0-8b04-b2c5-5838f3b3ab9f" data-section-uuid="0b75b542-99c0-8b04-b2c5-5838f3b3ab9f" class="msg msg--claude">
 
 ## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-14T10:02:00+00:00" title="2369-04-14 10:02:00 UTC">Mon Apr 14th, 2369 at 10:02</time>
 
@@ -346,34 +344,36 @@ Perfect. Make it so.
 </div>
 
 
-=== claude_export/render_markdown/fb0232cd-d04b-5372-b44e-148a47ada7a2/all.md ===
+=== claude_export/render_markdown/00000000-0000-877e-93a8-53e634460711/all.md ===
 ---
-title: "Poisoned: a message with an unreadable stamp (all)"
+title: "Tricorder Image Diagnostic (all)"
 provider: claude
 source_label: "Claude"
-chat_uuid: fb0232cd-d04b-5372-b44e-148a47ada7a2
-markdown_uuid: fb0232cd-d04b-5372-b44e-148a47ada7a2
+chat_uuid: 00000000-0000-877e-93a8-53e634460711
+markdown_uuid: 00000000-0000-877e-93a8-53e634460711
 period: all
-display: "Poisoned: a message with an unreadable stamp"
-account: jlpicard@enterprise.starfleet.test
-external_id: c0000006-1701-4d00-8000-00000000c006
+display: "Tricorder Image Diagnostic"
+account: bcrusher@enterprise.starfleet.test
+external_id: c0000004-1701-4d00-8000-00000000c004
 item_count: 2
 ---
 
-<h1 class="page-title" data-page-title-uuid="fb0232cd-d04b-5372-b44e-148a47ada7a2">Poisoned: a message with an unreadable stamp (all) <a class="source-link" href="https://claude.ai/chat/c0000006-1701-4d00-8000-00000000c006" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<h1 class="page-title" data-page-title-uuid="00000000-0000-877e-93a8-53e634460711">Tricorder Image Diagnostic (all) <a class="source-link" href="https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004" target="_blank" rel="noopener noreferrer">↗</a></h1>
 
-<div id="m-4bfa3277-ca76-5472-9181-d964975c6943" data-section-uuid="4bfa3277-ca76-5472-9181-d964975c6943" class="msg msg--claude">
+<div id="m-0b75ba14-bb40-8f3b-b898-0ad84bbd7d50" data-section-uuid="0b75ba14-bb40-8f3b-b898-0ad84bbd7d50" class="msg msg--claude">
 
-## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+## <span class="msg-author">Human</span> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time>
 
-Computer, what stardate is it?
+What's wrong with this medical-tricorder readout?
+
+🖼 *[tricorder-readout.png (not yet fetched)]*
 
 </div>
 
-<div id="m-dcce3451-eb4f-53dd-bce7-7e0b22d3af16" data-section-uuid="dcce3451-eb4f-53dd-bce7-7e0b22d3af16" class="msg msg--claude">
+<div id="m-0b75ba15-6b08-8cc3-b955-0a31599f6495" data-section-uuid="0b75ba15-6b08-8cc3-b955-0a31599f6495" class="msg msg--claude">
 
-## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-17T10:00:00+00:00" title="2369-04-17 10:00:00 UTC">Thu Apr 17th, 2369 at 10:00</time>
+## <span class="msg-author">claude-opus-4-7</span> <time class="msg-ts" datetime="2369-04-15T08:30:45+00:00" title="2369-04-15 08:30:45 UTC">Tue Apr 15th, 2369 at 08:30</time>
 
-Stardate 47988.1. The chronometer is on ship's time.
+The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
 
 </div>

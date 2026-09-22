@@ -4,7 +4,7 @@
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::BulkUpsertable as _;
-use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
+use datalib_etl_chat_common::render::RenderProfile;
 use datalib_etl_chat_common::types::NormalizedAttachment;
 use datalib_etl_facebook::ingest::schema_raw::MediaBlobRow;
 use datalib_etl_render::inputs::Inputs;
@@ -12,19 +12,28 @@ use datalib_schema::providers::Provider;
 use serde_json::Value;
 
 /// Bump when the item shape or column mapping changes meaningfully.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids are minted through `datalib_id`, every row carries its
+///     backpointer, and an item's id carries its stamp in its leading
+///     bits (`datalib_id`'s v8 layout). Every uuid moved.
+pub const RENDER_VERSION: u32 = 2;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
-pub fn profile(chat_kind: &str, message_kind: &str) -> RenderProfile {
+/// `chat_entity_kind` is the `datalib_id` kind of the chat's own id — a
+/// post's, an album's, a feed's.
+pub fn profile(
+    chat_kind: &str,
+    message_kind: &str,
+    chat_entity_kind: &'static str,
+) -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: crate::ids::STAMP_PRECISION,
         provider: Provider::Facebook,
         source_label: SOURCE_LABEL.to_string(),
         chat_kind: chat_kind.to_string(),
         message_kind: message_kind.to_string(),
         reaction_kind: "Facebook Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind,
         render_version: RENDER_VERSION,
     }
 }

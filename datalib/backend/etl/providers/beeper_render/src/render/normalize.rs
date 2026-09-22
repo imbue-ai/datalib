@@ -7,17 +7,17 @@
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
+use datalib_etl_beeper::ids;
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction, OrphanReactions,
+    NormalizedReaction, OrphanReactions, UpstreamRef,
 };
-use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile};
+use datalib_etl_chat_common::RenderProfile;
 use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
-use super::{beeper_markdown_uuid, RENDER_VERSION};
+use super::RENDER_VERSION;
 
 /// Everything one network's chats need to render: the profile that
 /// names its grid-row taxonomy, and the chats themselves.
@@ -82,10 +82,10 @@ pub fn profile_for(network: &str) -> RenderProfile {
         chat_kind: format!("{label} Chat"),
         message_kind: format!("{label} Message"),
         reaction_kind: format!("{label} Reaction"),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_ROOM,
         // Beeper is the one source whose upstream stamps are meaningful
         // below the second, and its `created_at` has always said so.
-        stamp_precision: RecordStampPrecision::Millis,
+        stamp_precision: ids::STAMP_PRECISION,
         render_version: RENDER_VERSION,
     }
 }
@@ -134,19 +134,26 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
         author: None,
         account: room.account_id.clone(),
         project: room.external_workspace_id.clone(),
-        external_id: room.external_room_id.clone(),
-        upstream_scope: None,
+        // The room's id is minted from its native (Matrix) id under the
+        // store it came from; the bridge's own id stays on `project`'s
+        // neighbour columns.
+        external_id: Some(room.native_room_id.clone()),
+        upstream_scope: Some(room.source.clone()),
         source_url: None,
         org_uuid: None,
         org_name: None,
         // A Beeper stanza bridges several networks, so they stay apart
         // on disk: `render_markdown/<network>/<room_uuid>/<period>.md`.
         path_prefix: Some(room.network.clone()),
-        buckets: vec![NormalizedDoc {
-            period_key: doc.period_key.clone(),
-            markdown_uuid: beeper_markdown_uuid(&room.room_uuid, &doc.period_key),
-            items,
-            orphan_reactions,
+        buckets: vec![{
+            let period = ids::period(&room.source, &room.native_room_id, &doc.period_key);
+            NormalizedDoc {
+                period_key: doc.period_key.clone(),
+                markdown_uuid: period.uuid,
+                source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
+                items,
+                orphan_reactions,
+            }
         }],
     }
 }
@@ -194,7 +201,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
             system_note: Some(hidden_summary(m)),
             source_url: None,
             kind_label: Some(kind_for_message(&room.network, &m.event_type)),
-            source_ref: None,
+            source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
             problems: Vec::new(),
         };
@@ -216,7 +223,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
         system_note: None,
         source_url: None,
         kind_label: Some(kind_for_message(&room.network, &m.event_type)),
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
         problems: Vec::new(),
     }
@@ -252,7 +259,7 @@ fn to_reaction(r: &Event) -> NormalizedReaction {
         reactor_display: r.sender_label.clone().unwrap_or_else(|| "?".into()),
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),
-        source_ref: None,
+        source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, r.native_event_id.clone())),
     }
 }
 

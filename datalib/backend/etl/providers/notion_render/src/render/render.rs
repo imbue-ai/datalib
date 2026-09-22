@@ -23,7 +23,12 @@ use serde_json::Value;
 use super::grid_rows::{gather_documents, PageDocument, ThreadDocument};
 use super::parse::ParsedNotion;
 
-pub const RENDER_VERSION: u32 = 3;
+/// v4: ids are minted through `datalib_id` instead of passing Notion's
+///     through, every row carries its backpointer, and a page's or
+///     comment's id carries its `created_time` in its leading bits
+///     (`datalib_id`'s v8 layout). Every uuid moved; `notion_page_uuid`
+///     now holds the page's datalib id.
+pub const RENDER_VERSION: u32 = 4;
 pub const SLUG_MAX_LEN: usize = 60;
 
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
@@ -316,7 +321,11 @@ fn render_thread(
         out.push_str("*The commented-on content has been deleted upstream.*\n\n");
     }
     for c in members {
-        let uuid = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let uuid = super::ids::comment(
+            c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            c.get("created_time").and_then(|v| v.as_str()),
+        )
+        .uuid;
         let author = c
             .get("display_name")
             .and_then(|d| d.get("resolved_name"))
@@ -362,6 +371,7 @@ pub fn render_notion(
     for doc in &docs.pages {
         let PageDocument {
             page_uuid,
+            markdown_uuid,
             page_title,
             inputs,
             ..
@@ -394,7 +404,7 @@ pub fn render_notion(
         fs::write(&md_path, out).with_context(|| format!("write {}", md_path.display()))?;
 
         on_doc_complete(RenderedMarkdown {
-            markdown_uuid: page_uuid.clone(),
+            markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
             bucket_key: Some(page_uuid.clone()),
@@ -424,6 +434,7 @@ pub fn render_notion(
     for doc in &docs.threads {
         let ThreadDocument {
             discussion_uuid,
+            markdown_uuid,
             page_uuid,
             page_title,
             inputs,
@@ -444,7 +455,7 @@ pub fn render_notion(
             .map(String::as_str);
         let p = render_thread(discussion_uuid, page_title, members, anchor, dir)?;
         on_doc_complete(RenderedMarkdown {
-            markdown_uuid: discussion_uuid.clone(),
+            markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
             bucket_key: Some(discussion_uuid.clone()),

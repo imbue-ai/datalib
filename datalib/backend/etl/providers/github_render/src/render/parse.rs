@@ -9,50 +9,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::inputs::{changed_rows, RawRange};
-use once_cell::sync::Lazy;
 use serde_json::Value;
-use uuid::Uuid;
 
 use datalib_etl_github::ingest::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
 
+pub use super::ids::{
+    KIND_ISSUE_COMMENT as ENTITY_ISSUE_COMMENT, KIND_PR as ENTITY_PR,
+    KIND_PR_REVIEW as ENTITY_PR_REVIEW, KIND_PR_REVIEW_COMMENT as ENTITY_PR_REVIEW_COMMENT,
+};
+
 pub const ENTITY_SELF: &str = "self_identity";
-pub const ENTITY_PR: &str = "pull_request";
-pub const ENTITY_ISSUE_COMMENT: &str = "issue_comment";
-pub const ENTITY_PR_REVIEW: &str = "pr_review";
-pub const ENTITY_PR_REVIEW_COMMENT: &str = "pr_review_comment";
-
-pub static GITHUB_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
-    Uuid::parse_str("b1a90c3a-1f7f-5d4b-9a23-7e3f2b8d0001").expect("valid github ns uuid")
-});
-
-pub fn github_pr_uuid(repo: &str, number: u32) -> String {
-    Uuid::new_v5(
-        &GITHUB_UUID_NS,
-        format!("github:{repo}:pr:{number}").as_bytes(),
-    )
-    .to_string()
-}
-pub fn github_issue_comment_uuid(repo: &str, id: i64) -> String {
-    Uuid::new_v5(
-        &GITHUB_UUID_NS,
-        format!("github:{repo}:issue_comment:{id}").as_bytes(),
-    )
-    .to_string()
-}
-pub fn github_review_uuid(repo: &str, id: i64) -> String {
-    Uuid::new_v5(
-        &GITHUB_UUID_NS,
-        format!("github:{repo}:pr_review:{id}").as_bytes(),
-    )
-    .to_string()
-}
-pub fn github_review_comment_uuid(repo: &str, id: i64) -> String {
-    Uuid::new_v5(
-        &GITHUB_UUID_NS,
-        format!("github:{repo}:pr_review_comment:{id}").as_bytes(),
-    )
-    .to_string()
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct GithubSelfIdentity {
@@ -256,8 +222,12 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
             continue;
         }
         let p = &pr.payload;
+        let created_at = p
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         out.pull_requests.push(PullRequestRow {
-            uuid: github_pr_uuid(&repo, num),
+            uuid: super::ids::pull_request(&repo, num, created_at.as_deref()).uuid,
             row_id: pr.id,
             repo_full_name: repo,
             pr_number: num,
@@ -290,10 +260,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
                 .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: p
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            created_at,
             updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())
@@ -312,6 +279,10 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
     out
 }
 
+fn str_field(p: &Value, key: &str) -> String {
+    p.get(key).and_then(|v| v.as_str()).unwrap_or("").into()
+}
+
 fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     for c in rows {
         let id = c.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -319,8 +290,15 @@ fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             continue;
         }
         let p = &c.payload;
+        let created_at = str_field(p, "created_at");
         out.push(CommentRow {
-            uuid: github_issue_comment_uuid(&c.repo_full_name, id),
+            uuid: super::ids::comment(
+                &c.repo_full_name,
+                ENTITY_ISSUE_COMMENT,
+                id,
+                Some(&created_at),
+            )
+            .uuid,
             table: "issue_comments",
             row_id: c.id,
             repo_full_name: c.repo_full_name,
@@ -339,11 +317,7 @@ fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             path: None,
             line: None,
             commit_id: None,
-            created_at: p
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .into(),
+            created_at,
             updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())
@@ -360,8 +334,10 @@ fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             continue;
         }
         let p = &r.payload;
+        let created_at = str_field(p, "submitted_at");
         out.push(CommentRow {
-            uuid: github_review_uuid(&r.repo_full_name, id),
+            uuid: super::ids::comment(&r.repo_full_name, ENTITY_PR_REVIEW, id, Some(&created_at))
+                .uuid,
             table: "pr_reviews",
             row_id: r.id,
             repo_full_name: r.repo_full_name,
@@ -383,11 +359,7 @@ fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
                 .get("commit_id")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: p
-                .get("submitted_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .into(),
+            created_at,
             updated_at: None,
             state: p.get("state").and_then(|v| v.as_str()).map(String::from),
         });
@@ -411,8 +383,15 @@ fn push_review_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             .and_then(|v| v.as_str())
             .or_else(|| p.get("original_commit_id").and_then(|v| v.as_str()))
             .map(String::from);
+        let created_at = str_field(p, "created_at");
         out.push(CommentRow {
-            uuid: github_review_comment_uuid(&c.repo_full_name, id),
+            uuid: super::ids::comment(
+                &c.repo_full_name,
+                ENTITY_PR_REVIEW_COMMENT,
+                id,
+                Some(&created_at),
+            )
+            .uuid,
             table: "pr_review_comments",
             row_id: c.id,
             repo_full_name: c.repo_full_name,
@@ -431,11 +410,7 @@ fn push_review_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             path: p.get("path").and_then(|v| v.as_str()).map(String::from),
             line,
             commit_id,
-            created_at: p
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .into(),
+            created_at,
             updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())

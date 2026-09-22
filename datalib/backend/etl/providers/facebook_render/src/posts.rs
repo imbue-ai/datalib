@@ -3,8 +3,12 @@
 //! thread per post.
 
 use datalib_etl_chat_common::render::RenderProfile;
-use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
-use datalib_etl_facebook::ingest::schema_raw::{ns_id, OTHER_POSTS_TABLE, POSTS_TABLE};
+use datalib_etl_chat_common::types::{
+    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+};
+use datalib_etl_facebook::ingest::schema_raw::{OTHER_POSTS_TABLE, POSTS_TABLE};
+
+use crate::ids;
 use datalib_etl_render::inputs::Inputs;
 use serde_json::Value;
 
@@ -15,7 +19,7 @@ use crate::common::{
 use crate::processor::Owner;
 
 pub fn posts_profile() -> RenderProfile {
-    profile("Facebook Post", "Facebook Post Message")
+    profile("Facebook Post", "Facebook Post Message", ids::KIND_POST)
 }
 
 /// Rows as `(row id, record)` from the two post tables.
@@ -101,14 +105,14 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let text = body.join("\n\n");
     let date_ms = ts_ms(v, "timestamp");
     let display = display_for(title.as_deref(), &text, "Facebook post");
+    let item_id = ids::post_text(row_id, date_ms);
     one_item_chat(
-        &format!("post:{row_id}"),
+        row_id,
         inputs,
         display,
         None,
-        None,
         NormalizedChatItem {
-            message_uuid: ns_id(&format!("msg:post:{row_id}")),
+            message_uuid: item_id.uuid,
             author_id: "me".to_string(),
             author_display: owner.name.clone(),
             date_ms,
@@ -123,7 +127,7 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             system_note: None,
             source_url: None,
             kind_label: None,
-            source_ref: None,
+            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
             is_aside: false,
             problems: Vec::new(),
         },
@@ -162,18 +166,18 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     }
     let text = body.join("\n\n");
     let display = display_for(None, &text, "Facebook post on another page");
-    let fbid = str_field(v, "fbid").map(str::to_string);
+    let date_ms = ts_ms(v, "timestamp");
+    let item_id = ids::post_text(row_id, date_ms);
     one_item_chat(
-        &format!("post:{row_id}"),
+        row_id,
         inputs,
         display,
-        fbid,
         None,
         NormalizedChatItem {
-            message_uuid: ns_id(&format!("msg:post:{row_id}")),
+            message_uuid: item_id.uuid,
             author_id: "me".to_string(),
             author_display: owner.name.clone(),
-            date_ms: ts_ms(v, "timestamp"),
+            date_ms,
             text: (!text.is_empty()).then_some(text),
             kind: if attachments.is_empty() {
                 ItemKind::Text
@@ -185,7 +189,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             system_note: None,
             source_url: None,
             kind_label: None,
-            source_ref: None,
+            source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
             is_aside: false,
             problems: Vec::new(),
         },
@@ -228,10 +232,9 @@ fn display_for(title: Option<&str>, text: &str, fallback: &str) -> String {
 }
 
 fn one_item_chat(
-    id: &str,
+    row_id: &str,
     inputs: Inputs,
     display: String,
-    external_id: Option<String>,
     source_url: Option<String>,
     item: NormalizedChatItem,
     owner: &Owner,
@@ -239,17 +242,18 @@ fn one_item_chat(
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
+    let post = ids::post(row_id);
     NormalizedChat {
         inputs: inputs.declared(),
         path_prefix: None,
-        id: id.to_string(),
-        chat_uuid: ns_id(&format!("chat:{id}")),
+        id: format!("post:{row_id}"),
+        chat_uuid: post.uuid.clone(),
         display,
         title: None,
         author: Some(owner.name.clone()),
         account: owner.account.clone(),
         project: None,
-        external_id,
+        external_id: Some(post.natural_key),
         source_url,
         upstream_scope: None,
         org_uuid: None,
@@ -257,7 +261,8 @@ fn one_item_chat(
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
-            markdown_uuid: ns_id(&format!("doc:{id}:all")),
+            markdown_uuid: post.uuid,
+            source_ref: None,
             items: vec![item],
         }],
     }

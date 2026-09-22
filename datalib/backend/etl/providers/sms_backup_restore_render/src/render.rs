@@ -9,15 +9,16 @@ use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
 };
 use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
-use uuid::Uuid;
+
+use crate::ids;
 
 use datalib_etl_sms_backup_restore::ingest::schema_raw::SmsAttachmentRow;
 use datalib_etl_sms_backup_restore::ingest::{db_path_for, RawDb};
@@ -26,7 +27,11 @@ use datalib_schema::providers::Provider;
 /// v2: a row whose `date` field is missing or non-numeric gets a null
 ///     `created_at` instead of a real-looking `1970-01-01T00:00:00`. See
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
-pub const RENDER_VERSION: u32 = 2;
+/// v3: ids are minted through `datalib_id`, every row carries its
+///     backpointer, and a message's id carries its stamp in its leading
+///     bits (`datalib_id`'s v8 layout). Every uuid moved, `chat_uuid`
+///     among them.
+pub const RENDER_VERSION: u32 = 3;
 
 /// Projection for [`BlobBundle::load`] over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -36,19 +41,9 @@ const SMS_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
      FROM pinned_sms_attachments sms_attachments \
      WHERE ref_name IN ({placeholders}) AND blake3 IS NOT NULL";
 
-fn ns() -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"sms-backup-restore-chat.datalib")
-}
-
-fn uuid5(recipe: &str) -> String {
-    Uuid::new_v5(&ns(), recipe.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
-
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::SmsBackupRestore,
         // Drives the grid "Source" column (and `source:SMS` queries); keep
         // it short so it reads cleanly next to the SMS icon.
@@ -56,7 +51,7 @@ fn profile() -> RenderProfile {
         chat_kind: "SMS Conversation".to_string(),
         message_kind: "SMS Message".to_string(),
         reaction_kind: "SMS Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -136,7 +131,7 @@ pub fn render(
         .render
         .iter()
         .flatten()
-        .map(|key| uuid5(&format!("chat:{key}")))
+        .map(|key| ids::conversation(key).uuid)
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -307,8 +302,6 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
             })
             .unwrap_or(&id)
             .to_string();
-        let external_id = id.strip_prefix("sms:").unwrap_or(&id).to_string();
-
         let mut items: Vec<NormalizedChatItem> = rows.iter().map(|v| item(v)).collect();
         items.sort_by_key(|i| i.date_ms);
 
@@ -318,24 +311,29 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
         }
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
-            .map(|(period_key, items)| NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                markdown_uuid: uuid5(&format!("doc:{id}:{period_key}")),
-                period_key,
-                items,
+            .map(|(period_key, items)| {
+                let month = ids::month(&id, &period_key);
+                NormalizedDoc {
+                    orphan_reactions: Vec::new(),
+                    markdown_uuid: month.uuid,
+                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
+                    period_key,
+                    items,
+                }
             })
             .collect();
 
+        let conversation = ids::conversation(&id);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
             id: id.clone(),
-            chat_uuid: uuid5(&format!("chat:{id}")),
+            chat_uuid: conversation.uuid,
             display,
             author: None,
             account: None,
             project: Some("SMS Backup".to_string()),
-            external_id: Some(external_id),
+            external_id: Some(conversation.natural_key),
             source_url: None,
             upstream_scope: None,
             title: None,
@@ -349,14 +347,17 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
 
 fn item(v: &Value) -> NormalizedChatItem {
     let kind = v.get("kind").and_then(Value::as_str).unwrap_or("sms");
-    let message_uuid = v
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid5(&v.to_string()));
     // Missing or non-numeric `date` is "we don't know when", which is a
     // null `created_at` — not the epoch.
     let date_ms = v.get("date").and_then(Value::as_i64);
+    let row_id = v.get("id").and_then(Value::as_str).unwrap_or("");
+    let id = if kind == "call" {
+        ids::call(row_id, date_ms)
+    } else {
+        ids::message(row_id, date_ms)
+    };
+    let message_uuid = id.uuid.clone();
+    let source_ref = Some(UpstreamRef::new(id.entity_kind, id.natural_key));
 
     match kind {
         "call" => {
@@ -382,7 +383,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 system_note: Some(call_note(call_type, duration, display)),
                 source_url: None,
                 kind_label: None,
-                source_ref: None,
+                source_ref: source_ref.clone(),
                 is_aside: false,
                 problems: Vec::new(),
             }
@@ -446,7 +447,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 system_note: None,
                 source_url: None,
                 kind_label: None,
-                source_ref: None,
+                source_ref: source_ref.clone(),
                 is_aside: false,
                 problems: Vec::new(),
             }
@@ -576,7 +577,7 @@ mod tests {
             .buckets
             .iter()
             .flat_map(|b| &b.items)
-            .find(|i| i.message_uuid == "m2")
+            .find(|i| i.source_ref.as_ref().unwrap().native_id == "m2")
             .unwrap();
         assert_eq!(me.author_display, "Me");
     }
@@ -592,7 +593,7 @@ mod tests {
         let it = chats[0].buckets[0]
             .items
             .iter()
-            .find(|i| i.message_uuid == "x1")
+            .find(|i| i.source_ref.as_ref().unwrap().native_id == "x1")
             .unwrap();
         assert_eq!(it.kind, ItemKind::Attachment);
         assert_eq!(it.text.as_deref(), Some("Happy Thurs"));

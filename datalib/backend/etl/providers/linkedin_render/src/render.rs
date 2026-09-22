@@ -7,17 +7,16 @@ use std::collections::HashMap;
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, RenderProfile, ENTITY_KIND_CONVERSATION,
-};
+use datalib_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
-use datalib_etl_linkedin::ingest::schema_raw::{message_tables, ns_id as uuid5};
+use datalib_etl_linkedin::ids;
+use datalib_etl_linkedin::ingest::schema_raw::message_tables;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -26,17 +25,21 @@ use datalib_schema::providers::Provider;
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: `account` is the export owner's primary email (else profile
 /// name) on every row, in place of the source name on connections.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: ids are minted through `datalib_id`, every row carries its
+///     backpointer, and a message's id carries its stamp in its leading
+///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
+///     same id, so an existing root re-ingests; every uuid moved.
+pub const RENDER_VERSION: u32 = 4;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
         chat_kind: "LinkedIn Chat".to_string(),
         message_kind: "LinkedIn Message".to_string(),
         reaction_kind: "LinkedIn Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
     }
 }
@@ -159,12 +162,14 @@ fn build_chats(
     account_inputs: &[Input],
 ) -> Vec<NormalizedChat> {
     // BTreeMap keeps conversation order stable across runs.
-    let mut by_conv: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
+    // Rows as `(raw row id, payload)`: the id is the message's key.
+    type Conversation<'a> = (Vec<(&'a str, &'a Value)>, Inputs);
+    let mut by_conv: BTreeMap<String, Conversation<'_>> = BTreeMap::new();
     for (row_id, p) in rows {
         let conv = field(p, "CONVERSATION ID");
         let (rows, inputs) = by_conv.entry(conv.to_string()).or_default();
         inputs.read(table, row_id);
-        rows.push(p);
+        rows.push((row_id.as_str(), p));
     }
 
     let mut chats = Vec::with_capacity(by_conv.len());
@@ -174,14 +179,15 @@ fn build_chats(
         }
         let mut items: Vec<NormalizedChatItem> = rows
             .iter()
-            .map(|p| {
+            .map(|(row_id, p)| {
                 let from = field(p, "FROM");
                 let date = field(p, "DATE");
                 let content = field(p, "CONTENT");
                 let mut problems = Vec::new();
                 let date_ms = own_stamp_ms(Some(date), "DATE", parse_date_ms, &mut problems);
+                let id = ids::message(table, row_id, date_ms);
                 NormalizedChatItem {
-                    message_uuid: uuid5(&format!("msg:{table}:{conv}:{date}:{from}:{content}")),
+                    message_uuid: id.uuid,
                     author_id: nonempty(field(p, "SENDER PROFILE URL"))
                         .unwrap_or(from)
                         .to_string(),
@@ -194,7 +200,7 @@ fn build_chats(
                     system_note: None,
                     source_url: None,
                     kind_label: None,
-                    source_ref: None,
+                    source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
                     problems,
                 }
@@ -202,21 +208,23 @@ fn build_chats(
             .collect();
         items.sort_by_key(|i| i.date_ms);
 
-        let display = nonempty(field(rows[0], "CONVERSATION TITLE"))
+        let payloads: Vec<&Value> = rows.iter().map(|(_, p)| *p).collect();
+        let display = nonempty(field(payloads[0], "CONVERSATION TITLE"))
             .map(str::to_string)
-            .unwrap_or_else(|| participants(&rows));
+            .unwrap_or_else(|| participants(&payloads));
 
+        let conversation = ids::conversation(table, &conv);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),
-            chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
+            chat_uuid: conversation.uuid,
             display,
             title: None,
             author: None,
             account: account.map(str::to_string),
             project: None,
-            external_id: Some(conv.clone()),
+            external_id: Some(conversation.natural_key),
             // No public per-conversation URL in the message export.
             source_url: None,
             upstream_scope: None,
@@ -225,7 +233,8 @@ fn build_chats(
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
-                markdown_uuid: uuid5(&format!("doc:{table}:{conv}:all")),
+                markdown_uuid: ids::conversation(table, &conv).uuid,
+                source_ref: None,
                 items,
             }],
         });

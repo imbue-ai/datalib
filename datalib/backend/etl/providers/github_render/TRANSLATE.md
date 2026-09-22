@@ -37,7 +37,8 @@ Each comment block is blockquoted, with the header line spelling out
 The same `RenderedMarkdown { markdown_uuid, rows, .. }` shape every
 provider emits:
 
-- `markdown_uuid` — UUIDv5 of `github:{repo}:pr:{num}`. Re-renders
+- `markdown_uuid` — `datalib_id` over the PR number under
+  `Upstream(repo)`, stamped with the PR's `created_at`. Re-renders
   that didn't change content produce an identical row set, so the
   store's commit carries no diff for them.
 - `rows[0]` — the PR row itself (kind = "GitHub PR").

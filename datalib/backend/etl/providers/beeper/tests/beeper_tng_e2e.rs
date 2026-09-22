@@ -349,10 +349,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     );
 
     // Frontmatter carries external IDs, under the names chat-common
-    // gives them: the room is the chat's `external_id`, and the Beeper
+    // gives them: the room's native (Matrix) id — the key its uuid is
+    // minted from — is the chat's `external_id`, and the Beeper
     // workspace is its `project`.
     assert!(
-        march.contains("external_id: tng-data-conv-uuid-0001"),
+        march.contains("external_id: !tng-data:ba_TNG.local-signal.localhost"),
         "{march}"
     );
     assert!(

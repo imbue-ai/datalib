@@ -5,5 +5,6 @@ pub mod activity;
 pub mod albums;
 pub mod common;
 pub mod friends;
+pub mod ids;
 pub mod posts;
 pub mod processor;

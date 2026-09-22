@@ -339,9 +339,9 @@ async fn replace_table(
 }
 
 /// PK for a row:
-///   * the joined natural-key columns when hinted and present — as a
-///     uuidv5 of `"{table}:{joined}"` for [`schema_raw::is_uuid_keyed`]
-///     tables (`connections`, keyed by profile URL), else the raw join;
+///   * the joined natural-key columns when hinted and present — as the
+///     entity id for [`schema_raw::is_uuid_keyed`] tables
+///     (`connections`, keyed by profile URL), else the raw join;
 ///   * otherwise a uuidv5 over `table` + the row's canonical JSON.
 fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
     if let Some(cols) = id_cols {
@@ -353,7 +353,7 @@ fn row_id(table: &str, payload: &Value, id_cols: Option<&[&str]>) -> String {
         if !parts.is_empty() {
             let joined = parts.join("\u{1f}");
             return if schema_raw::is_uuid_keyed(table) {
-                schema_raw::ns_id(&format!("{table}:{joined}"))
+                schema_raw::connection_uuid(&joined)
             } else {
                 joined
             };

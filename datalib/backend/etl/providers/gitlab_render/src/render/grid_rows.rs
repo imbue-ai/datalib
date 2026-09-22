@@ -8,7 +8,11 @@ use datalib_schema::providers::Provider;
 
 use super::parse::{MergeRequestRow, NoteRow, NoteSection};
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: ids are minted through `datalib_id` under `Upstream(project)`,
+///     every row carries its backpointer, and an id carries the
+///     record's `created_at` in its leading bits (`datalib_id`'s v8
+///     layout). Every uuid moved.
+pub const RENDER_VERSION: u32 = 2;
 
 fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
     let mut general: Vec<&NoteRow> = notes
@@ -85,7 +89,8 @@ pub fn rows_for_mr(
             .source_url(mr.web_url.clone())
             .git_sha(mr.head_sha.clone())
             .upstream_id(Some(mr.mr_iid.to_string()))
-            .upstream_entity_kind(Some("merge_request".to_string()))
+            .upstream_entity_kind(Some(super::ids::KIND_MR.to_string()))
+            .upstream_scope(Some(mr.project_full_path.clone()))
             .markdown_uuid(Some(mr.uuid.clone()))
             .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
     );
@@ -112,7 +117,8 @@ pub fn rows_for_mr(
                 .source_url(n.web_url.clone())
                 .git_sha(n.commit_sha.clone())
                 .upstream_id(Some(n.external_id.to_string()))
-                .upstream_entity_kind(Some("note".to_string()))
+                .upstream_entity_kind(Some(super::ids::KIND_NOTE.to_string()))
+                .upstream_scope(Some(mr.project_full_path.clone()))
                 .markdown_uuid(Some(mr.uuid.clone()))
                 .build_or_record(stanza, &mr.uuid, RENDER_VERSION, problems),
         );

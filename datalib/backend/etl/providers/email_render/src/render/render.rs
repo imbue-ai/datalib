@@ -4,23 +4,20 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use super::ids;
+use super::parse::ParsedEmail;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
-};
+use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
-    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+    own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Lookup;
-use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
-use uuid::Uuid;
-
-use super::parse::ParsedEmail;
-use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_schema::providers::Provider;
+use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 /// v3: render via chat-common (+ quoted-text folding, label chips).
@@ -33,7 +30,11 @@ use datalib_schema::providers::Provider;
 ///     id (`u432643a7`).
 /// v7: v6 only managed that for mbox and Gmail — a JMAP account object
 ///     has no `id` field, so the lookup missed every Fastmail row.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: ids are minted through `datalib_id` under `Upstream(account_id)`,
+///     every row carries its backpointer, and an email's id carries its
+///     `received_at` in its leading bits (`datalib_id`'s v8 layout).
+///     Every uuid moved, `chat_uuid` among them.
+pub const RENDER_VERSION: u32 = 8;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -105,13 +106,13 @@ fn percent_encode(s: &str) -> String {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Email,
         source_label: "Mail".to_string(),
         chat_kind: "Email Thread".to_string(),
         message_kind: "Email".to_string(),
         reaction_kind: "Email Reaction".to_string(),
-        chat_entity_kind: ENTITY_KIND_CONVERSATION,
+        chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
     }
 }
@@ -255,7 +256,8 @@ fn build_chat(
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
-    let tuid = thread_uuid(account_id, &bucket.thread_id);
+    let thread_id = ids::thread(account_id, &bucket.thread_id);
+    let tuid = thread_id.uuid.clone();
     // The account row and each mailbox row are looked up per thread,
     // and declared as they are.
     let mailbox_name = bucket.inputs.lookup("mailboxes", mailbox_name);
@@ -423,8 +425,9 @@ fn build_chat(
             iso_to_ms,
             &mut problems,
         );
+        let email_id = ids::email(&em.account_id, &em.id, date_ms);
         items.push(NormalizedChatItem {
-            message_uuid: email_uuid(&em.account_id, &em.id),
+            message_uuid: email_id.uuid.clone(),
             author_id: em.account_id.clone(),
             author_display: if parsed_eml.from_display.is_empty() {
                 "(unknown sender)".to_string()
@@ -440,7 +443,7 @@ fn build_chat(
             // Per-email `↗` outlink into the source webmail.
             source_url: email_outlink(outlink, em, &labels),
             kind_label: None,
-            source_ref: None,
+            source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
             problems,
         });
@@ -463,15 +466,16 @@ fn build_chat(
                 .unwrap_or_else(|| account_id.clone()),
         ),
         project: None,
-        external_id: Some(bucket.thread_id.clone()),
+        external_id: Some(thread_id.natural_key),
         source_url: thread_source_url,
-        upstream_scope: None,
+        upstream_scope: Some(account_id.clone()),
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: tuid,
+            source_ref: None,
             items,
         }],
     };
@@ -788,27 +792,8 @@ fn autolink_bare_urls(s: &str) -> String {
     out
 }
 
-// UUID recipes (stable across the migration).
-
-/// Namespace UUID for everything this provider emits — frozen forever.
-pub const JMAP_NS: Uuid = Uuid::from_bytes([
-    0xa3, 0x7d, 0xb1, 0x4f, 0x52, 0x6f, 0x4c, 0xb9, 0x9d, 0x4a, 0x88, 0x3d, 0x1b, 0x42, 0xe5, 0x10,
-]);
-
 pub fn thread_uuid(account_id: &str, thread_id: &str) -> String {
-    Uuid::new_v5(
-        &JMAP_NS,
-        format!("jmap:{account_id}:thread:{thread_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn email_uuid(account_id: &str, email_id: &str) -> String {
-    Uuid::new_v5(
-        &JMAP_NS,
-        format!("jmap:{account_id}:email:{email_id}").as_bytes(),
-    )
-    .to_string()
+    ids::thread(account_id, thread_id).uuid
 }
 
 #[cfg(test)]

@@ -30,6 +30,10 @@ pub struct ContactRenderProfile {
     pub source_label: String,
     /// Discriminator for the contact's grid row (e.g. `"Contact"`).
     pub contact_kind: String,
+    /// `grid_rows.upstream_entity_kind` for every row — the
+    /// `entity_kind` component of the `datalib_id` recipe that minted
+    /// `contact_uuid`.
+    pub contact_entity_kind: &'static str,
     /// Whose mirror this is — the `account` column on every row. A
     /// LinkedIn export names its owner; a `.vcf` file names nobody.
     pub account: Option<String>,
@@ -276,6 +280,8 @@ fn build_grid_row(
         .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
         .upstream_id(contact.external_id.clone())
+        .upstream_entity_kind(Some(profile.contact_entity_kind.to_string()))
+        .upstream_scope(contact.upstream_scope.clone())
         .markdown_uuid(Some(contact.contact_uuid.clone()))
         .build_or_record(
             source_id,
@@ -338,6 +344,7 @@ mod tests {
             group_label: "LinkedIn Connections".to_string(),
             display_name: Some("Jean-Luc Picard".to_string()),
             external_id: Some("https://www.linkedin.com/in/jlp".to_string()),
+            upstream_scope: None,
             // Offset-bearing per the grid's created_at contract (the
             // builder now rejects bare dates — see GridRowBuilder).
             created_at: Some("2024-01-02T00:00:00+00:00".to_string()),
@@ -357,6 +364,7 @@ mod tests {
             provider: Provider::Linkedin,
             source_label: "LinkedIn".to_string(),
             contact_kind: "Contact".to_string(),
+            contact_entity_kind: "contact",
             account: Some("jlp@enterprise.test".to_string()),
             render_version: 1,
         }
