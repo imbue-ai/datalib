@@ -306,14 +306,14 @@ pub fn waiting_on(
 
 /// The worker splits `source_ids` on commas and passes each as its own
 /// `--sync`, or all of them as one `--reset`; empty means the whole
-/// config. A reset's `:blobs` suffix names a part of a step's tree,
-/// so the step is what it claims.
+/// config. A reset's `+blobs` suffix is a part of a step's tree, so
+/// the step is what it claims.
 pub fn job_seeds(job: &SyncJobRow) -> Vec<String> {
     job.source_ids
         .as_deref()
         .unwrap_or("")
         .split(',')
-        .map(|s| s.trim().split(':').next().unwrap_or(""))
+        .map(|s| s.trim().split('+').next().unwrap_or(""))
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()

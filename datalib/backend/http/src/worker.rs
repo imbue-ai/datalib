@@ -613,7 +613,7 @@ mod tests {
     }
 
     /// A sync names each seed on its own `--sync`; a reset hands the
-    /// list, `:blobs` suffixes and all, to one `--reset`.
+    /// list, `+blobs` suffixes and all, to one `--reset`.
     #[test]
     fn a_job_selects_steps_by_sync_or_by_reset() {
         let job = |kind: JobKind, ids: Option<&str>| SyncJobRow {
@@ -638,9 +638,9 @@ mod tests {
         assert_eq!(
             selection_args(&job(
                 JobKind::Reset,
-                Some("a/ingest:blobs,a/render_markdown")
+                Some("a/ingest+blobs,a/render_markdown")
             )),
-            ["--reset", "a/ingest:blobs,a/render_markdown"]
+            ["--reset", "a/ingest+blobs,a/render_markdown"]
         );
         assert!(selection_args(&job(JobKind::All, None)).is_empty());
     }

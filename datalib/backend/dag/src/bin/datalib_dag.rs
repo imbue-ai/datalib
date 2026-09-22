@@ -51,12 +51,13 @@ async fn main() -> Result<()> {
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
-         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[:blobs][,…]]… [--now RFC3339] \
+         [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
          [--run-id ID] [--parallelism N]\n       \
          datalib-dag --check <config.toml>\n\n\
-         --reset empties what a step wrote (its store; `:blobs` an ingest step's blob \
-         CAS), keeping its doltlite history, so the next run does its work from the \
-         start. Alone, that is all the invocation does; with --sync it runs first.";
+         --reset drops what a step wrote (its store; `+blobs` an ingest step's blob \
+         CAS with it), keeping its doltlite history, so the next run does its work \
+         from the start. Alone, that is all the invocation does; with --sync it runs \
+         first.";
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();

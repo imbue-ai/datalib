@@ -116,8 +116,8 @@ impl Runner {
     }
 }
 
-/// One `--reset` argument: a step id, optionally `:blobs` for the blob
-/// CAS beside an ingest step's store.
+/// One `--reset` argument: a step id, optionally `+blobs` to take an
+/// ingest step's blob CAS with its store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResetTarget {
     pub step: StepId,
@@ -126,7 +126,7 @@ pub struct ResetTarget {
 
 impl ResetTarget {
     pub fn parse(arg: &str) -> ResetTarget {
-        let (step, part) = arg.split_once(':').unwrap_or((arg, "store"));
+        let (step, part) = arg.split_once('+').unwrap_or((arg, "store"));
         ResetTarget {
             step: step.to_string(),
             part: part.to_string(),

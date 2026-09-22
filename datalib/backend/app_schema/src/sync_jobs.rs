@@ -21,8 +21,8 @@ pub enum JobKind {
     /// when they are given.
     All,
     /// `datalib-dag --reset` of the steps `source_ids` names (a
-    /// `:blobs` suffix names an ingest step's blob store); nothing
-    /// syncs until someone asks.
+    /// `+blobs` suffix takes an ingest step's blob store with it);
+    /// nothing syncs until someone asks.
     Reset,
     /// Historical: the fixed download/ingest/render phases, from before
     /// the DAG runner. Named here so an old row still renders.

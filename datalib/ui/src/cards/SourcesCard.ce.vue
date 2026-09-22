@@ -1264,35 +1264,37 @@ async function runRows(targets: Row[]) {
   }
 }
 
-/// The steps a reset of these rows empties: a step is itself, a group
-/// is every step under it that keeps a store; with `blobs`, only the
-/// download steps, and their blob store rather than their rows
-/// (`docs/dev/step_protocol.md` § Reset).
+/// The steps a reset of these rows drops: a step is itself, a group is
+/// every step under it that keeps a store; with `blobs`, a download
+/// step's blob store goes with it (`docs/dev/step_protocol.md` § Reset).
 function resetTargets(targets: Row[], blobs: boolean): string[] {
   const keeps = (r: Row) =>
-    r.kind === "step" &&
-    (blobs ? r.function === "ingest" : r.function !== "grid_index" && r.function !== "qmd_index");
+    r.kind === "step" && r.function !== "grid_index" && r.function !== "qmd_index";
   const steps = targets.flatMap((t) =>
     t.kind === "step" ? [t] : rows.value.filter((r) => keeps(r) && r.id.startsWith(`${t.id}/`)),
   );
-  return [...new Set(steps.filter(keeps).map((r) => (blobs ? `${r.id}:blobs` : r.id)))];
+  const ids = steps
+    .filter(keeps)
+    .map((r) => (blobs && r.function === "ingest" ? `${r.id}+blobs` : r.id));
+  return [...new Set(ids)];
 }
 
-/// Empty what these rows wrote, keeping the history: a job the worker
+/// Drop what these rows wrote, keeping the history: a job the worker
 /// turns into `datalib-dag --reset`. Nothing syncs until someone asks.
 async function resetRows(targets: Row[], blobs: boolean) {
   const ids = resetTargets(targets, blobs);
   const shown = targets.map((t) => t.name.label).join(", ");
-  if (ids.length === 0) {
+  if (ids.length === 0 || (blobs && !ids.some((id) => id.endsWith("+blobs")))) {
     say(false, `Nothing under ${shown} keeps ${blobs ? "attachments" : "a store"} to reset.`);
     return;
   }
-  const what = blobs
-    ? `Delete the attachments downloaded for ${shown}?\n\n` +
-      `The next sync fetches them again. Everything else stays.`
-    : `Reset ${shown}?\n\n` +
-      `Its stores are emptied and the next sync starts from scratch. The rows stay ` +
-      `in the doltlite history, and attachments already downloaded are kept.`;
+  const what =
+    `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
+    `Its stores are dropped and the next sync starts from scratch. The rows stay ` +
+    `in the doltlite history` +
+    (blobs
+      ? `; attachments already downloaded are deleted and fetched again.`
+      : `, and attachments already downloaded are kept.`);
   if (!window.confirm(what)) return;
   busy.value = true;
   clearBanner();

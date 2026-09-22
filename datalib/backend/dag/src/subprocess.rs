@@ -39,8 +39,8 @@ pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// Set by `datalib-dag --reset`, and then the step does no work: it
-/// empties the named part of its tree — `store`, or `blobs` for an
-/// ingest step's blob CAS — commits that, and exits. The runner has
+/// drops what the value names — `store`, or `blobs` for an ingest
+/// step's store and its blob CAS with it — commits that, and exits. The runner has
 /// already forgotten the step ever succeeded, so the next run does its
 /// work from the start.
 pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
@@ -962,7 +962,7 @@ mod tests {
         assert!(r.run(&g).await.unwrap().all_ok());
         assert!(crate::state::DagState::load(root.path()).unwrap().steps["src/raw"].succeeded);
 
-        r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw:blobs")])
+        r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw+blobs")])
             .await
             .unwrap();
         assert_eq!(

@@ -1519,32 +1519,6 @@ pub async fn problem_counts_at_path(
 /// migrate, so a store whose shape this build refuses resets all the
 /// same. A store that does not exist has nothing to reset.
 pub async fn reset_store(db_path: &Path) -> Result<()> {
-    reset_with(db_path, Reset::DropTables, "reset").await
-}
-
-/// The blob side of a reset: empty the CAS beside `entities_db`, and
-/// forget on every edge row that its bytes were stored. A nullable
-/// `blake3` column is a CAS reference (`CasEdgeRow`), and `NULL` there is
-/// what makes the next download fetch the bytes again; a `NOT NULL`
-/// `blake3` is a file's own digest and stays.
-pub async fn reset_blobs(entities_db: &Path) -> Result<()> {
-    reset_with(
-        &crate::blob_cas::cas_path_for(entities_db),
-        Reset::DropTables,
-        "reset blobs",
-    )
-    .await?;
-    reset_with(entities_db, Reset::ForgetBlobs, "reset blobs").await
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Reset {
-    DropTables,
-    /// Null `blake3` where it is nullable; leave every other table alone.
-    ForgetBlobs,
-}
-
-async fn reset_with(db_path: &Path, what: Reset, message: &str) -> Result<()> {
     if !db_path.exists() {
         return Ok(());
     }
@@ -1558,30 +1532,19 @@ async fn reset_with(db_path: &Path, what: Reset, message: &str) -> Result<()> {
     )
     .await?;
     let result = async {
-        // Decided before the transaction: the pool has one connection,
-        // and a `PRAGMA` inside the transaction would wait on it forever.
-        let mut statements = Vec::new();
-        for table in user_tables(&pool).await? {
-            if what == Reset::DropTables {
-                statements.push(format!("DROP TABLE \"{table}\""));
-            } else if table_columns(&pool, &table)
-                .await?
-                .iter()
-                .any(|c| c.name == "blake3" && !c.not_null)
-            {
-                statements.push(format!("UPDATE \"{table}\" SET blake3 = NULL"));
-            }
-        }
+        // Listed before the transaction: the pool has one connection,
+        // and a query on it inside the transaction would wait forever.
+        let tables = user_tables(&pool).await?;
         let mut tx = pool.begin().await.context("begin reset tx")?;
-        for sql in &statements {
-            // Audited: the table is a quoted name read out of `sqlite_master`.
-            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+        for table in tables {
+            // Audited: `table` is a name read out of `sqlite_master`.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE \"{table}\"")))
                 .execute(&mut *tx)
                 .await
-                .with_context(|| format!("reset: {sql}"))?;
+                .with_context(|| format!("reset: drop {table}"))?;
         }
         tx.commit().await.context("commit reset tx")?;
-        commit_run(&pool, message).await.map(|_| ())
+        commit_run(&pool, "reset").await.map(|_| ())
     }
     .await;
     pool.close().await;
@@ -2820,18 +2783,14 @@ mod tests {
 
     /// A reset drops content, cursors and the run log alike and commits,
     /// so the rows are still in history and the next open is a first
-    /// open. The blob side empties the CAS and nulls only the nullable
-    /// `blake3` columns — the CAS references — leaving a file's own
-    /// digest alone.
+    /// open.
     #[tokio::test]
-    async fn a_reset_drops_everything_and_a_blob_reset_forgets_the_bytes() {
+    async fn a_reset_drops_everything_and_keeps_it_in_history() {
         let d = tempdir().unwrap();
         let p = d.path().join("entities.doltlite_db");
         const EDGE: &str =
             "CREATE TABLE IF NOT EXISTS edges (id TEXT PRIMARY KEY, blake3 TEXT NULL)";
-        const FILES: &str =
-            "CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, blake3 TEXT NOT NULL)";
-        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
         if !has_dolt_extensions(&pool).await {
             pool.close().await;
             return;
@@ -2839,7 +2798,6 @@ mod tests {
         for sql in [
             "INSERT INTO widgets (id) VALUES ('w1')",
             "INSERT INTO edges VALUES ('e1', 'aa')",
-            "INSERT INTO files VALUES ('f1', 'bb')",
             "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES ('s', 't')",
         ] {
             sqlx::query(sql).execute(&pool).await.unwrap();
@@ -2848,47 +2806,16 @@ mod tests {
         commit_run(&pool, "setup").await.unwrap();
         let commits_before = count(&pool, "dolt_log").await;
         pool.close().await;
-        let cas = crate::blob_cas::BlobCas::open(&crate::blob_cas::cas_path_for(&p))
-            .await
-            .unwrap();
-        cas.put(b"bytes", None).await.unwrap();
-        commit_run(cas.pool(), "cas").await.unwrap();
-        cas.close().await;
-
-        reset_blobs(&p).await.unwrap();
-        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
-        assert_eq!(
-            count(&pool, "widgets").await,
-            1,
-            "a blob reset keeps the rows"
-        );
-        let hashes: Vec<Option<String>> = sqlx::query_scalar("SELECT blake3 FROM edges")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-        assert_eq!(hashes, vec![None], "the CAS reference is forgotten");
-        assert_eq!(
-            count(&pool, "files").await,
-            1,
-            "a NOT NULL blake3 is not a CAS reference"
-        );
-        pool.close().await;
-        let cas = crate::blob_cas::BlobCas::open(&crate::blob_cas::cas_path_for(&p))
-            .await
-            .unwrap();
-        assert_eq!(count(cas.pool(), "cas_objects").await, 0);
-        cas.close().await;
 
         reset_store(&p).await.unwrap();
-        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
-        for table in ["widgets", "edges", "files", "sync_scope_state"] {
+        let pool = open(&p, &[WIDGETS_DDL, EDGE]).await.unwrap();
+        for table in ["widgets", "edges", "sync_scope_state", "sync_runs"] {
             assert_eq!(count(&pool, table).await, 0, "{table} emptied");
         }
-        assert_eq!(count(&pool, "sync_runs").await, 0, "the run log goes too");
         assert_eq!(
             count(&pool, "dolt_log").await,
-            commits_before + 3,
-            "two resets and the schema the reopen wrote: the rows are still in history"
+            commits_before + 2,
+            "the reset and the schema the reopen wrote: the rows are still in history"
         );
         let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~2')")
             .fetch_one(&pool)

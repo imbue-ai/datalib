@@ -116,7 +116,8 @@ export function notResettableReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset attachments…" does not apply: only a download keeps them.
+/// Why "Reset with attachments…" does not apply: only a download keeps
+/// them.
 export function noAttachmentsReason(t: MenuTarget): string | null {
   const why = notResettableReason(t);
   if (why) return why;
@@ -236,7 +237,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   });
   entries.push({
     action: "reset_blobs",
-    name: "Reset attachments…",
+    name: "Reset with attachments…",
     disabled: firstBlocked(targets, noAttachmentsReason),
   });
   entries.push({

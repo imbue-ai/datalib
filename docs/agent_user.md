@@ -117,8 +117,9 @@ some entries were dropped.
 Useful flags: `--sync <step-id>` (repeatable; runs the named download
 steps and everything downstream of them, and nothing else — pending
 work in other sources waits for a full run), `--parallelism N`,
-`--reset <step-id>[:blobs]` (empties what that step wrote — its store,
-or an ingest step's blob CAS — keeping its doltlite history, so the
+`--reset <step-id>[+blobs]` (drops what that step wrote — its store,
+and with `+blobs` an ingest step's blob CAS too — keeping its doltlite
+history, so the
 next run does its work from the start; alone it does nothing else, with
 `--sync` it runs first), `--binary-dir DIR` (where bare `command:` names
 like `datalib-step` resolve; defaults to the directory `datalib-dag`
@@ -141,8 +142,8 @@ Syncs are incremental and idempotent — re-running is always safe.
 Via the server instead: `POST /api/sync/jobs` enqueues —
 `{"kind":"all"}` with an optional comma-separated `source_ids`, or
 `{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
-for `datalib-dag --reset` of those steps (`:blobs` on an ingest step
-names its attachments), which the Manage screen offers as "Reset…"
+for `datalib-dag --reset` of those steps (`+blobs` on an ingest step
+takes its attachments with it), which the Manage screen offers as "Reset…"
 on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
 cancels; `GET /api/sync/stream` pushes a
 frame when a job starts or ends and whenever the run store moves. The

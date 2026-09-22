@@ -359,13 +359,12 @@ the log card that reads them: [`logging.md`](logging.md).
 
 ## Reset (optional)
 
-`datalib-dag --reset <step-id>[:<part>]` empties what a step wrote so
+`datalib-dag --reset <step-id>[+<more>]` drops what a step wrote so
 the next run does its work from the start: the runner forgets the step
 ever succeeded, then invokes it once with `DATALIB_DAG_RESET` set to
-the part — `store` when none was spelled, or whatever followed the
-colon (`blobs` is the built-in ingest step's blob CAS). Empty that
-part of your tree, keep whatever history you keep, commit if you
-commit, exit 0, and do nothing else: no inputs are resolved and no
+`store`, or to whatever followed the `+` (`blobs`: the built-in ingest
+step's store *and* its blob CAS). Drop that part of your tree, keep whatever history you keep,
+commit if you commit, exit 0, and do nothing else: no inputs are resolved and no
 sync follows unless `--sync` was also given. A command that does not
 know the verb exits non-zero and nothing is changed. `datalib-step`
 drops every table of the tree's store in one commit, plus a render
