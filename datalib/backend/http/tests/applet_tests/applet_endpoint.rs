@@ -138,6 +138,14 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
+    state_bounded(root, config_toml, datalib_http::applets::START_TIMEOUT).await
+}
+
+async fn state_bounded(
+    root: &Path,
+    config_toml: &str,
+    start_timeout: std::time::Duration,
+) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
     let root = Arc::new(root.to_path_buf());
     let app = AppStore::open(root.as_path())
@@ -154,7 +162,11 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
         usage: Default::default(),
         newer_root: Vec::new(),
         api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
+        applets: Arc::new(AppletRegistry::from_data_root_bounded(
+            &root,
+            None,
+            start_timeout,
+        )),
     }
 }
 
@@ -362,6 +374,10 @@ async fn a_failing_applet_is_reported_without_hiding_the_others() {
 /// An applet that never comes up must not hang the boot: the start
 /// runs after the listener is already accepting, so an unbounded wait
 /// would leave a tab whose requests queue with nothing logged.
+///
+/// The bound is named here rather than left at the production 20s.
+/// Waiting that out would say nothing a short bound does not, and the
+/// whole test binary is as slow as its slowest wait.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_applet_that_never_binds_is_bounded() {
     let tmp = tempfile::tempdir().unwrap();
@@ -370,17 +386,19 @@ async fn an_applet_that_never_binds_is_bounded() {
         "[[applets]]\nid = \"hang\"\ncommand = \"sh {}\"\n",
         script.display()
     );
+    let bound = std::time::Duration::from_millis(250);
     let started = std::time::Instant::now();
-    let app = router(state_with(tmp.path(), &cfg).await);
+    let app = router(state_bounded(tmp.path(), &cfg, bound).await);
     let (_, view) = get_json(&app, "/api/frontend").await;
 
-    // The production bound is 20s; the point is that it is bounded at
-    // all, and that boot survives it.
+    // Boot waited for the bound — proving the wait is the timeout and
+    // not some other path returning early — and then went on.
+    let waited = started.elapsed();
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(60),
-        "boot waited {:?}",
-        started.elapsed()
+        waited >= bound,
+        "boot did not wait for the bound: {waited:?}"
     );
+    assert!(waited < bound * 20, "boot waited {waited:?}");
     let err = view["applet_errors"]["hang"].as_str().unwrap();
     assert!(err.contains("did not report a listening port"), "{err}");
 }

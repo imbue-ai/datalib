@@ -336,17 +336,24 @@ ${applets()}`;
     await settleRunner(page);
   });
 
-  test("Last synced holds still under a minute, and hover reveals the exact stamp", async ({
-    page,
-  }) => {
+  test("Last synced holds still under a minute, then crosses to 1 minute ago", async ({ page }) => {
     // What only a browser can answer about this column. The arithmetic
     // — every unit boundary, a stamp in another UTC offset, one in the
     // future — is in src/config/timeFormat.test.ts, because provoking
     // "6 days ago" from a live backend would mean forging the runner's
     // state file. What that unit test cannot show is any of the below:
     // that the column is wired to the relative form at all, that the
-    // absolute stamp survives as the hover, and that the cell does not
-    // tick while a person is looking at it.
+    // absolute stamp survives as the hover, and what the repaint loop
+    // does to a cell nobody has touched.
+    //
+    // That loop is `setInterval(tickRelative, 1000)` in TableGrid.ce.vue,
+    // and it is driven here by a fake clock rather than by waiting —
+    // which is what lets this test assert the minute crossing at all.
+    // Installed before this test's first navigation, as the clock API
+    // requires, and left ticking so the real sync below still runs
+    // against a clock that moves on its own.
+    await page.clock.install();
+
     await writeConfigAndOpenGroups(page, config());
     const countUpWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
@@ -360,26 +367,47 @@ ${applets()}`;
     expect(stamp, "the relative text must not be the only record").toBeTruthy();
     expect(stamp).toMatch(/\d{2}:\d{2}:\d{2}/);
 
-    // ...and it stays put. The repaint loop is live and sampling
-    // `Date.now()` every second throughout this window, so against the
-    // per-second countup this column used to do, these samples would
-    // have read 3, 4, 5 — this is the assertion that fails if the
-    // countup ever comes back.
-    for (let i = 0; i < 4; i++) {
-      await page.waitForTimeout(700);
-      expect((await cell.textContent())?.trim(), "Last synced ticked while nothing happened").toBe(
-        "seconds ago",
-      );
-    }
+    // Cut the API off before touching the clock. Advancing time fires
+    // every timer that comes due, including the jobs and rows pollers,
+    // and each of those calls `repaint()` on the way back — which
+    // refreshes this cell for reasons that have nothing to do with the
+    // column's own clock. With the fetches failing, `commitRows` and
+    // `commitJobs` never run, so `tickRelative` is the only thing left
+    // that can repaint. Verified: without this the test passes with
+    // `setInterval(tickRelative, …)` deleted outright.
+    await page.route("**/api/**", (route) => route.abort());
 
-    // NOT asserted here: the crossing to "1 minute ago", which is now
-    // the only self-repaint this column does. Catching it means waiting
-    // out a real minute, and this suite runs in about 40s — so the
-    // repaint loop itself is covered only by the unit test on the text
-    // it paints. If the tick regresses, a stale cell survives until the
-    // next data change repaints the grid.
+    // Freeze, so that from here the only thing moving is the clock.
+    // `pauseAt` refuses to move the clock backwards and the page's own
+    // clock runs on while this round-trips, so the target is a moment
+    // ahead of the reading rather than exactly on it. That second is
+    // part of the margin accounted for below; nothing waits for it.
+    const frozenAt = (await page.evaluate(() => Date.now())) + 1_000;
+    await page.clock.pauseAt(frozenAt);
 
-    // The stamp underneath is unchanged — the row is not re-syncing.
+    // ...and it stays put. `runFor` fires every timer due in the
+    // window, so this is four real turns of the repaint loop with
+    // nothing else happening. Against the per-second countup this
+    // column used to do, they would have read 3, 4, 5 — this is the
+    // assertion that fails if the countup ever comes back.
+    await page.clock.runFor(4000);
+    await expect(cell, "Last synced ticked while nothing happened").toHaveText("seconds ago");
+
+    // The crossing to "1 minute ago" — the only self-repaint this
+    // column does, and the reason the loop exists. It went untested
+    // while this spec waited on the wall clock, because catching it
+    // meant spending a real minute in a suite that runs in about 40s.
+    //
+    // The stamp is a real instant from the run above, so the delta at
+    // this point is 60s, plus the second skipped at the pause, plus
+    // however long the assertions took. The reading holds to 90s
+    // (`formatRelative` rounds), which is the margin.
+    await page.clock.fastForward("01:00");
+    await expect(cell).toHaveText("1 minute ago");
+
+    // The stamp underneath is unchanged — the repaint moved the
+    // relative text and left the instant alone, and the row is not
+    // re-syncing.
     expect(await lastSyncedOf(page, "pdfs/ingest")).toBe(stamp);
 
     // A row that never ran has no time to be relative to, and nothing
@@ -388,6 +416,11 @@ ${applets()}`;
     // one of them syncs would make this order-dependent.
     await expect(row(page, "unsynced/ingest").locator('[col-id="last_synced"]')).toHaveText("—");
     expect(await lastSyncedOf(page, "unsynced/ingest")).toBeNull();
+
+    // The afterEach writes the config back through this same page: it
+    // needs both the API and a clock that moves.
+    await page.unroute("**/api/**");
+    await page.clock.resume();
   });
 
   test("sorting Last synced orders by time, not by how the cell reads", async ({ page }) => {

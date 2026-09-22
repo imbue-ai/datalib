@@ -64,7 +64,7 @@ pub const APPLET_PORT_LINE: &str = "DATALIB_APPLET_PORT=";
 
 /// How long an applet gets to write its components, bind its port, and
 /// report it.
-const START_TIMEOUT: Duration = Duration::from_secs(20);
+pub const START_TIMEOUT: Duration = Duration::from_secs(20);
 
 // Discovery
 
@@ -263,7 +263,13 @@ impl AppletRegistry {
         data_root: PathBuf,
         binary_dir: Option<PathBuf>,
     ) -> Self {
-        Self::new(entries, data_root, binary_dir.clone(), binary_dir)
+        Self::new(
+            entries,
+            data_root,
+            binary_dir.clone(),
+            binary_dir,
+            START_TIMEOUT,
+        )
     }
 
     fn new(
@@ -271,8 +277,9 @@ impl AppletRegistry {
         data_root: PathBuf,
         binary_dir_override: Option<PathBuf>,
         binary_dir: Option<PathBuf>,
+        start_timeout: Duration,
     ) -> Self {
-        let supervisor = Supervisor::default();
+        let supervisor = Supervisor::bounded(start_timeout);
         let secret = mint_secret();
         // Nothing is running yet, so every entry starts and every
         // applet namespace is rebuilt.
@@ -309,8 +316,26 @@ impl AppletRegistry {
         // later reload will resolve. Handing `build` the bare override
         // instead would make boot resolve commands one way and the
         // first config edit resolve them another.
+        Self::from_data_root_bounded(data_root, binary_dir, START_TIMEOUT)
+    }
+
+    /// [`from_data_root`](Self::from_data_root) with the start bound
+    /// named. A test that drives an applet which never announces should
+    /// pass a short one: the production bound is 20s, and waiting it out
+    /// proves nothing the short one does not.
+    pub fn from_data_root_bounded(
+        data_root: &Path,
+        binary_dir: Option<PathBuf>,
+        start_timeout: Duration,
+    ) -> Self {
         let (entries, resolved) = load_entries(data_root, binary_dir.clone());
-        Self::new(entries, data_root.to_path_buf(), binary_dir, resolved)
+        Self::new(
+            entries,
+            data_root.to_path_buf(),
+            binary_dir,
+            resolved,
+            start_timeout,
+        )
     }
 
     /// Reconcile the running applets with `config.toml` as it is now.
@@ -598,12 +623,26 @@ struct Running {
 }
 
 /// The applet servers, all of them, started at boot and kept running.
-#[derive(Default)]
 pub struct Supervisor {
     running: Mutex<BTreeMap<String, Running>>,
+    /// [`START_TIMEOUT`], except where a caller narrowed it.
+    start_timeout: Duration,
+}
+
+impl Default for Supervisor {
+    fn default() -> Self {
+        Self::bounded(START_TIMEOUT)
+    }
 }
 
 impl Supervisor {
+    fn bounded(start_timeout: Duration) -> Self {
+        Self {
+            running: Mutex::new(BTreeMap::new()),
+            start_timeout,
+        }
+    }
+
     fn start(
         &self,
         entry: &AppletEntry,
@@ -719,7 +758,7 @@ impl Supervisor {
             });
         }
 
-        let port = match ready.recv_timeout(START_TIMEOUT) {
+        let port = match ready.recv_timeout(self.start_timeout) {
             Ok(Some(port)) => port,
             // `None` is EOF with nothing announced — the applet
             // exited, or closed stdout, before it was ready. Either
@@ -756,8 +795,8 @@ impl Supervisor {
                         "exited without reporting a listening port".to_string()
                     }
                     _ => format!(
-                        "did not report a listening port within {}s",
-                        START_TIMEOUT.as_secs()
+                        "did not report a listening port within {:?}",
+                        self.start_timeout
                     ),
                 };
                 return Err(format!("applet {:?}: {why}{detail}", entry.id));
