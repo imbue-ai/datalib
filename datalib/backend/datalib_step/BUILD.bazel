@@ -156,16 +156,13 @@ insta_update(
     test_args = ["ui_mirror_matches_the_declarations"],
 )
 
-# A release tarball with no `runtime/` fetches the runtime its manifest
-# names on first use, sha256-verified, and refuses one that hashes
-# wrong — through the real binary and the real resolver, against a
-# SIGINT ends a running ingest at a unit boundary with its final commit
-# and a `cancelled` outcome. Drives the real binary against a slowed
-# slack playback; reads the store back through the doltlite shell.
+# Every hermetic datalib-step test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "interrupt_test",
-    size = "medium",
-    srcs = ["tests/interrupt.rs"],
+    name = "step_tests",
+    srcs = glob(["tests/step_tests/*.rs"]),
+    crate_root = "tests/step_tests/main.rs",
     data = [
         ":datalib_step",
         "//third-party/doltlite:doltlite",
@@ -176,29 +173,15 @@ rust_test(
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
     },
     deps = [
-        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
-        "@datalib_crates//:libc",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-    ],
-)
-
-# local stand-in for the release.
-rust_test(
-    name = "runtime_fetch_test",
-    size = "medium",
-    srcs = ["tests/runtime_fetch.rs"],
-    data = [":datalib_step"],
-    edition = "2021",
-    env = {
-        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
-    },
-    deps = [
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:flate2",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
     ],
 )
+

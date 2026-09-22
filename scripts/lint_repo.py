@@ -96,9 +96,6 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "datalib/backend/etl/providers/github:github_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "datalib/backend/etl/providers/email:jmap_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
     "datalib/backend/etl/providers/email:gmail_live": (
         "manual live test, latchkey needs host keychain"
     ),

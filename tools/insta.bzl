@@ -6,23 +6,27 @@ Usage from a provider's `BUILD.bazel`:
     load("//tools:insta.bzl", "insta_update")
 
     rust_test(
-        name = "chatgpt_render",
-        srcs = ["tests/chatgpt_render.rs"],
+        name = "chatgpt_tests",
+        srcs = glob(["tests/chatgpt_tests/*.rs"]),
+        crate_root = "tests/chatgpt_tests/main.rs",
         ...
     )
 
     insta_update(
-        name = "chatgpt_render.update",
-        test = ":chatgpt_render",
+        name = "chatgpt_tests.update",
+        test = ":chatgpt_tests",
     )
 
-Then `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_render.update`
+A package's integration tests share one binary, so there is one
+`.update` per package and it refreshes every module's goldens.
+
+Then `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_tests.update`
 re-runs the test with `INSTA_UPDATE=always` and `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
 which is the standard insta-with-bazel idiom: insta resolves snapshot
 paths against the user's actual workspace, not the bazel sandbox.
 
 When the underlying `rust_test` uses additional `data` deps + `env` vars
-(e.g. //datalib/backend/etl/providers/claude:claude_render,
+(e.g. //datalib/backend/etl/providers/claude:claude_tests,
 which reaches its fixture tree through `CLAUDE_FIXTURE_DIR`), pass
 them via `extra_data` + `extra_env` so the `.update` target picks them
 up too — `rust_test`'s env doesn't propagate to a sibling sh_binary.

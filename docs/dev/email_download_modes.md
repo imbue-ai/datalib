@@ -335,10 +335,10 @@ failure is visible from a single run:
 
 ### Known gaps
 
-- **Almost no checked-in wire fixtures.** `tests/jmap_render.rs` builds
+- **Almost no checked-in wire fixtures.** `tests/email_tests/jmap_render.rs` builds
   a `LoadedRaw` in memory, and the JMAP surface has no replayed
   conversation at all — `tests/playback_roundtrip.rs` is still a
-  placeholder. The Gmail side has one: `tests/gmail_label_union.rs`
+  placeholder. The Gmail side has one: `tests/email_tests/gmail_label_union.rs`
   synthesizes a small conversation and replays it through
   `DATALIB_HTTP_PLAYBACK`, but it covers the label filter and nothing
   else. A full synth + playback pair matching the slack/notion pattern
