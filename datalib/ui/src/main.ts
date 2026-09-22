@@ -4,6 +4,7 @@ import App from "./App.vue";
 import router from "./router";
 import { fetchHealth } from "./api";
 import { installExternalLinkHandler } from "./externalLinks";
+import { installHistoryKeys } from "./historyKeys";
 import { installTelemetry } from "./telemetry";
 // The grid theme, for every grid that is not inside a card's shadow
 // root, and for the menus the grid appends to <body> from those that
@@ -30,6 +31,7 @@ setupSystemThemeSync();
 // source content) go to the OS browser rather than replacing the app.
 // Installed at boot, before any card can render one.
 installExternalLinkHandler();
+installHistoryKeys();
 
 // Warm the health snapshot at boot: the agent hand-off (handoff.ts) needs
 // the API token's path out of it and builds its text inside a synchronous

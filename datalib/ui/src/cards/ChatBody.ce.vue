@@ -21,6 +21,7 @@ import hljs from "highlight.js";
 import type { EdgeOut } from "@/api";
 import { assetUrl, isAbsoluteOrUrl, rewriteIframeSrcs } from "./asset_urls";
 import { sanitizeRenderedHtml } from "./sanitize";
+import { isBrowserClick } from "./chatLink";
 // Shared with `tools/chat_preview.mjs`, which inlines this same file so
 // the preview page behaves like the app rather than imitating it.
 import {
@@ -203,7 +204,7 @@ function onBodyEdgeClick(ev: MouseEvent) {
   // `chat_link.ts` does for inline `<a href="/chat/…">` links: let
   // the browser open the destination in a new tab/window if the user
   // explicitly asked for it.
-  if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+  if (isBrowserClick(ev)) return;
   const edgeId = el.dataset.edgeId ?? "";
   const edge = (props.outgoingEdges ?? []).find((e) => e.edge_uuid === edgeId);
   if (!edge) return;

@@ -22,6 +22,7 @@ onMounted(() => {
     bus: { publish: () => {}, subscribe: () => () => {} },
     host: {
       openCards: () => [],
+      hrefFor: () => "/",
       setSource: () => {},
       close: () => {},
       setState: () => {},

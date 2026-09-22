@@ -19,7 +19,7 @@ import {
   messageAncestor,
   type FeedbackContext,
 } from "@/feedback/context";
-import { chatHrefFromClick } from "./chatLink";
+import { chatHrefFromClick, isBrowserClick } from "./chatLink";
 import { problemLabel } from "./problems";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
@@ -49,9 +49,21 @@ function onBodyClick(ev: MouseEvent) {
   openDoc(uuid, null);
 }
 
+// Falsy anchor → "whole-doc destination", don't seed a highlight target.
+function edgeSource(edge: EdgeOut): string {
+  return docSource(edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
+}
+
 function onOpenEdge(edge: EdgeOut) {
-  // Falsy → "whole-doc destination", don't seed a highlight target.
-  openDoc(edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
+  props.ctx.host.openCards(edgeSource(edge));
+}
+
+// The doc-level edge list draws real links: a plain click opens the
+// destination beside this card, anything else is the browser's.
+function onEdgeLinkClick(ev: MouseEvent, edge: EdgeOut) {
+  if (isBrowserClick(ev)) return;
+  ev.preventDefault();
+  onOpenEdge(edge);
 }
 
 function publishHover(target: { md: string; anchor: string | null } | null) {
@@ -381,8 +393,8 @@ watch(
                title in parens as supplementary context. -->
           <a
             class="edge-source-link"
-            :href="`/#/chat/${e.dst_markdown_uuid}`"
-            @click.prevent="onOpenEdge(e)"
+            :href="ctx.host.hrefFor(edgeSource(e))"
+            @click="onEdgeLinkClick($event, e)"
             @mouseenter="onDocLevelHover(e)"
             @mouseleave="onDocLevelLeave"
             :title="e.dst_title ?? e.dst_markdown_uuid"

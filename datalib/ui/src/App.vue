@@ -10,6 +10,13 @@ import NewerRootView from "@/views/NewerRootView.vue";
 import { fetchConfig, type ConfigResponse } from "@/api";
 import { subscribeLive } from "@/live";
 import { newCard, showDataSources } from "@/surface";
+import { isDesktopApp } from "@/desktop";
+
+// The app window has no browser chrome, so it draws the two buttons a
+// tab would have; the browser keeps its own.
+const desktop = isDesktopApp();
+const goBack = () => history.back();
+const goForward = () => history.forward();
 
 // The gate in front of the whole app, for the three states where showing
 // the app would be a lie.
@@ -63,6 +70,10 @@ onUnmounted(() => stop?.());
          Manage screen is hidden, not gone — `/sources` still serves
          SourcesView.vue; a link here brings it back. -->
     <nav v-if="!gate" class="datalib-toolbar" aria-label="Cards">
+      <template v-if="desktop">
+        <button class="datalib-tool" title="back (⌘[)" @click="goBack">←</button>
+        <button class="datalib-tool" title="forward (⌘])" @click="goForward">→</button>
+      </template>
       <button class="datalib-tool" @click="showDataSources">Data sources</button>
       <button class="datalib-tool" @click="newCard">＋ New card</button>
       <div class="datalib-spacer" />

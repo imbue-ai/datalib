@@ -37,14 +37,13 @@ test.describe("new-card gallery (non-dev mode)", () => {
       'documentView("',
     );
 
-    // ← → walk the card's own source history: back to the picker,
-    // back to the gallery, forward to the picker again.
-    const newCol = page.locator(".miller-col").last();
-    await newCol.locator(".card-control--back").click();
+    // Each pick was a navigation, so the browser's history walks them:
+    // back to the picker, back to the gallery, forward to the picker.
+    await page.goBack();
     await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
-    await newCol.locator(".card-control--back").click();
+    await page.goBack();
     await expect(page.locator(".gv-row").first()).toBeVisible({ timeout: 10_000 });
-    await newCol.locator(".card-control--forward").click();
+    await page.goForward();
     await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
   });
 

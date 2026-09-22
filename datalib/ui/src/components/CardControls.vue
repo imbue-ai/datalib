@@ -1,13 +1,13 @@
 <script setup lang="ts">
 // The common controls every card carries in its chrome bar, regardless
 // of layout: the agent hand-off button (🤖, only on cards backed by a
-// user component), back / forward over the card's own source history
-// (← →), a link to open the card alone (↗), and the close button (✕).
-// All are pure functions of the card's source and its CardCtx, so the
-// layouts (miller, tiling, tree) all render this same component instead
-// of duplicating the markup and CSS. Close goes through
-// ctx.host.close() — the host command built for exactly this — so
-// nothing here knows the layout.
+// user component), the help popup (?), a link to open the card alone
+// (↗), and the close button (✕). All are pure functions of the card's
+// source and its CardCtx, so the layouts (miller, tiling, tree) all
+// render this same component instead of duplicating the markup and
+// CSS. Close goes through ctx.host.close() — the host command built
+// for exactly this — so nothing here knows the layout. There is no
+// back or forward here: a card's steps are the browser's history.
 import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { modifyComponentWithAgent } from "@/handoff";
@@ -59,34 +59,6 @@ watch(helpOpen, (open) => {
   if (open) window.addEventListener("keydown", onHelpKeydown);
   else window.removeEventListener("keydown", onHelpKeydown);
 });
-
-// ---- back / forward over the card's own source history ----
-const history = ref<string[]>([props.source]);
-const cursor = ref(0);
-
-watch(
-  () => props.source,
-  (next) => {
-    if (next === history.value[cursor.value]) return;
-    history.value = [...history.value.slice(0, cursor.value + 1), next];
-    cursor.value = history.value.length - 1;
-  },
-);
-
-const canBack = computed(() => cursor.value > 0);
-const canForward = computed(() => cursor.value < history.value.length - 1);
-
-function goBack() {
-  if (!canBack.value) return;
-  cursor.value--;
-  props.ctx.host.setSource(history.value[cursor.value]);
-}
-
-function goForward() {
-  if (!canForward.value) return;
-  cursor.value++;
-  props.ctx.host.setSource(history.value[cursor.value]);
-}
 </script>
 
 <template>
@@ -121,17 +93,6 @@ function goForward() {
       </div>
     </div>
   </Teleport>
-  <button class="card-control card-control--back" :disabled="!canBack" title="back" @click="goBack">
-    ←
-  </button>
-  <button
-    class="card-control card-control--forward"
-    :disabled="!canForward"
-    title="forward"
-    @click="goForward"
-  >
-    →
-  </button>
   <a
     v-if="source.trim() !== ''"
     class="card-control card-control--alone"
@@ -164,20 +125,6 @@ function goForward() {
 }
 .card-control:hover {
   opacity: 1;
-}
-/* Kept visible-but-dim (not hidden) when there's nowhere to go, so
-   the bar doesn't reflow as history accrues. */
-.card-control:disabled {
-  opacity: 0.2;
-  cursor: default;
-}
-/* The arrow glyphs render smaller than the other icons at the shared
-   size — bump the font, and pin the line box to the shared 1.2rem
-   (0.8rem × 1.5) so the bar height doesn't change. */
-.card-control--back,
-.card-control--forward {
-  font-size: 0.95rem;
-  line-height: 1.2rem;
 }
 </style>
 

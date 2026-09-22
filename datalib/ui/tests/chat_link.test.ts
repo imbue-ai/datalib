@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatHrefFromClick } from "../src/cards/chatLink";
+import { chatHrefFromClick, chatUuidFromHref } from "../src/cards/chatLink";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
 // the given href (or an arbitrary descendant of it). jsdom's
@@ -87,5 +87,17 @@ describe("chatHrefFromClick", () => {
 
   it("returns null for a non-Element event target", () => {
     expect(chatHrefFromClick({ target: null } as unknown as MouseEvent)).toBeNull();
+  });
+});
+
+describe("chatUuidFromHref", () => {
+  it("accepts the three shapes renderers emit", () => {
+    expect(chatUuidFromHref("/chat/abc")).toBe("abc");
+    expect(chatUuidFromHref("#/chat/abc")).toBe("abc");
+    expect(chatUuidFromHref("/#/chat/abc?x=1")).toBe("abc");
+  });
+  it("ignores a card stack and an off-site link", () => {
+    expect(chatUuidFromHref("/gridView()/documentView(%22abc%22)")).toBeNull();
+    expect(chatUuidFromHref("https://claude.ai/chat/abc")).toBeNull();
   });
 });

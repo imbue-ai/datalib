@@ -16,6 +16,7 @@ import { layoutTree, type Rect } from "./treeLayout";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { setCardHelp } from "@/cards/help";
+import { chainHref } from "@/cards/chainHref";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const bus = createBus();
@@ -396,6 +397,7 @@ function ctxFor(node: TreeNode): CardCtx {
     const cardId = node.id;
     const host: HostCommands = {
       openCards: (...sources) => openCardsFrom(cardId, sources),
+      hrefFor: (...sources) => chainHref(sources),
       setSource: (source) => setNodeSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setNodeState(cardId, state),
