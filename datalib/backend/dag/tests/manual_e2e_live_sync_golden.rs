@@ -246,6 +246,10 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
     ("sync_scope_config", &["updated_at_utc"]),
+    // The store's record of which build wrote it: the stamp is the wall
+    // clock, and the `git_hash` row (redacted below, by key) is a new
+    // commit on every bake. The versions and the schema hash stay.
+    ("_datalib_meta", &["written_at_utc"]),
     // A store's size on disk wobbles run-to-run at equal row counts
     // (page layout, chunk ordering), the same way the extract-metrics
     // `bytes_*` did; `items` carries the signal.
@@ -1608,6 +1612,15 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
                         if let Some(slot) = map.get_mut(*k) {
                             *slot = Value::String(REDACTED.into());
                         }
+                    }
+                }
+            }
+        }
+        if t == "_datalib_meta" {
+            for row in row_vals.iter_mut() {
+                if let Value::Object(map) = row {
+                    if map.get("key").and_then(Value::as_str) == Some("git_hash") {
+                        map.insert("value".into(), Value::String(REDACTED.into()));
                     }
                 }
             }
