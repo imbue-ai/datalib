@@ -49,18 +49,25 @@ rust_test(
     edition = "2021",
 )
 
-# Spec → playback fixtures → the real ingest walk → the store, read back.
+# Every hermetic Garmin test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "garmin_playback_roundtrip",
-    size = "medium",
-    srcs = ["tests/playback_roundtrip.rs"],
-    data = [":tng_fixture"],
+    name = "garmin_tests",
+    srcs = glob(["tests/garmin_tests/*.rs"]),
+    crate_root = "tests/garmin_tests/main.rs",
+    data = [
+        ":tng_fixture",
+    ],
     edition = "2021",
+    env = {
+        "RUST_TEST_THREADS": "1",
+    },
     deps = [
-        ":datalib_etl_garmin",
+        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/pin:datalib_pin",
-        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
+        ":datalib_etl_garmin",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -69,23 +76,3 @@ rust_test(
     ],
 )
 
-# The prune gate: a listing that is not an enumeration prunes nothing
-# and leaves a `problems` row; the next enumeration clears it.
-rust_test(
-    name = "garmin_prune_gate",
-    size = "medium",
-    srcs = ["tests/prune_gate.rs"],
-    data = [":tng_fixture"],
-    edition = "2021",
-    deps = [
-        ":datalib_etl_garmin",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/pin:datalib_pin",
-        "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
-        "@datalib_crates//:chrono",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)

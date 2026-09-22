@@ -71,147 +71,44 @@ rust_test(
     edition = "2021",
 )
 
-# Translator + render golden tests. Bazel stages the TNG fixture via
+# Every hermetic Slack test in one binary; `tests/slack_tests/main.rs`
+# lists the modules. Bazel stages the TNG fixture via
 # `data = [":tng_fixture"]` and points `SLACK_FIXTURE_DIR` at the
 # runfiles-relative path (the test source reads that env var with
-# CARGO_MANIFEST_DIR as the cargo fallback). The render target name
-# matches the cargo binary name so insta's snapshot file lookup
-# (`slack_render__*.snap`) resolves in both runtimes.
+# CARGO_MANIFEST_DIR as the cargo fallback). insta names a snapshot
+# file after the module path, so the render module's goldens are
+# `slack_tests__slack_render__*.snap` beside it; the target name
+# matches the directory so cargo, which also discovers
+# `tests/<dir>/main.rs`, agrees with bazel on that path.
 rust_test(
-    name = "slack_translate",
-    srcs = ["tests/slack_translate.rs"],
-    crate_root = "tests/slack_translate.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
+    name = "slack_tests",
+    srcs = glob(["tests/slack_tests/*.rs"]),
+    crate_root = "tests/slack_tests/main.rs",
+    data = glob(["tests/slack_tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
+        "RUST_TEST_THREADS": "1",
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
     },
     deps = [
+        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
         "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
         "//datalib/backend/etl/render:datalib_etl_render",
-    ],
-)
-
-rust_test(
-    name = "slack_render",
-    srcs = ["tests/slack_render.rs"],
-    crate_root = "tests/slack_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-        "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-    },
-    deps = [
-        "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/pin:datalib_pin",
+        ":datalib_etl_slack",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
-    ],
-)
-
-rust_test(
-    name = "slack_config_change_backfill",
-    srcs = ["tests/config_change_backfill.rs"],
-    crate_root = "tests/config_change_backfill.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "slack_history_prune",
-    srcs = ["tests/history_prune.rs"],
-    crate_root = "tests/history_prune.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "slack_dm_ingest",
-    srcs = ["tests/dm_ingest.rs"],
-    crate_root = "tests/dm_ingest.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "slack_interrupt",
-    srcs = ["tests/interrupt.rs"],
-    crate_root = "tests/interrupt.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/pin:datalib_pin",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "slack_probe",
-    srcs = ["tests/probe.rs"],
-    crate_root = "tests/probe.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "slack_playback_roundtrip",
-    srcs = ["tests/playback_roundtrip.rs"],
-    crate_root = "tests/playback_roundtrip.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
 
 insta_update(
-    name = "slack_render.update",
-    test = ":slack_render",
-    extra_data = [":tng_fixture"],
-    extra_env = {
-        "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-    },
-)
-
-insta_update(
-    name = "slack_translate.update",
-    test = ":slack_translate",
+    name = "slack_tests.update",
+    test = ":slack_tests",
     extra_data = [":tng_fixture"],
     extra_env = {
         "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",

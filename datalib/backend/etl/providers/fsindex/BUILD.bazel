@@ -81,26 +81,24 @@ rust_test(
     ],
 )
 
-# Hermetic smoke test: build a small tree in a tempdir, scan it, snapshot
-# `files`, edit the tree, re-scan, snapshot again. Catches drift in the
-# canonical tree-hash, the symlink shape, and the cascaded ignore filter.
-# Update goldens with `bazel run :extract_smoke_test.update`.
+# Every hermetic fsindex test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "extract_smoke_test",
-    srcs = ["tests/extract_smoke.rs"],
-    crate_name = "extract_smoke",
-    data = glob(
-        ["tests/snapshots/extract_smoke__*.snap"],
-        allow_empty = True,
-    ),
+    name = "fsindex_tests",
+    srcs = glob(["tests/fsindex_tests/*.rs"]),
+    crate_root = "tests/fsindex_tests/main.rs",
+    data = glob(["tests/fsindex_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":tng_fixture",
+    ],
     edition = "2021",
     env = {
-        # See //datalib/backend/core/BUILD.bazel for the rationale.
+        "FSINDEX_TNG_DIR": "datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng",
         "INSTA_WORKSPACE_ROOT": ".",
     },
     deps = [
-        ":datalib_etl_fsindex",
         "//datalib/backend/etl:datalib_etl",
+        ":datalib_etl_fsindex",
         "@datalib_crates//:insta",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -109,48 +107,11 @@ rust_test(
 )
 
 insta_update(
-    name = "extract_smoke_test.update",
-    test = ":extract_smoke_test",
+    name = "fsindex_tests.update",
+    test = ":fsindex_tests",
 )
 
-# End-to-end scan of the checked-in TNG-themed tree: points download at the
-# fixture, asserts the landed `files` rows (entry set + `'*.tmp'` ignore +
-# `.fsindex.yaml` exclusion). The fixture is staged via `data = [":tng_fixture"]`.
-rust_test(
-    name = "fsindex_tng_e2e",
-    srcs = ["tests/fsindex_tng_e2e.rs"],
-    crate_root = "tests/fsindex_tng_e2e.rs",
-    data = [":tng_fixture"],
-    edition = "2021",
-    env = {
-        "FSINDEX_TNG_DIR": "datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng",
-    },
-    deps = [
-        ":datalib_etl_fsindex",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
 
-# The only test that exercises `FetchOptions::target_doltlite_branch`.
-# Every other caller passes `None`, so `--branch` sat broken (MySQL
-# `CALL DOLT_CHECKOUT`, which doltlite rejects) with the suite green.
-rust_test(
-    name = "branch_scan_test",
-    size = "small",
-    srcs = ["tests/branch_scan.rs"],
-    crate_root = "tests/branch_scan.rs",
-    edition = "2021",
-    deps = [
-        ":datalib_etl_fsindex",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
 
 # Inline tests in the binary. `fsindex_unittests` covers the library
 # (`crate = ":datalib_etl_fsindex"`), whose glob excludes `src/bin/**`,
