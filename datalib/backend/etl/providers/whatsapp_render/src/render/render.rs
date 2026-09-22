@@ -22,7 +22,7 @@ use datalib_schema::providers::Provider;
 /// is msgstore mirrored table for table, and the render cursor of a
 /// store written the old way (`wa_*` tables) names a commit nothing can
 /// diff against. v7: ids are minted through `datalib_id` under
-/// `SourceInstance`, every row carries its backpointer, and a message's
+/// the configured source, every row carries its backpointer, and a message's
 /// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
 /// Every uuid moved, `chat_uuid` among them.
 pub const RENDER_VERSION: u32 = 7;

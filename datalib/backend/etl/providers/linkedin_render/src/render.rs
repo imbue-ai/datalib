@@ -28,7 +28,8 @@ use datalib_schema::providers::Provider;
 /// v4: ids are minted through `datalib_id`, every row carries its
 ///     backpointer, and a message's id carries its stamp in its leading
 ///     bits (`datalib_id`'s v8 layout). The raw `connections` key is the
-///     same id, so an existing root re-ingests; every uuid moved.
+///     profile URL now, so an existing root resets and downloads again;
+///     every uuid moved.
 pub const RENDER_VERSION: u32 = 4;
 
 fn profile() -> RenderProfile {

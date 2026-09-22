@@ -16,7 +16,7 @@ pub mod units;
 /// cursor's `params` (see [`render::cursor_params`]), so a bump
 /// invalidates the "HEAD unchanged → skip" fast path too. v3: `account`
 /// stopped carrying the source name. v4: ids are minted through
-/// `datalib_id` under `SourceInstance`, every row carries its
+/// `datalib_id` under the configured source, every row carries its
 /// backpointer, and a device's `upstream_id` is its name rather than
 /// its kind. Every uuid moved.
 pub const RENDER_VERSION: u32 = 4;

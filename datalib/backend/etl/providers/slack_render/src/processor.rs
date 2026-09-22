@@ -45,7 +45,7 @@ impl RenderProcessor for SlackRender {
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
         use datalib_etl_slack::ingest::schema_raw::split_thread_key as slack_thread_key_parts;
-        let parsed = parse(&self.raw_path, ctx.raw_range())
+        let parsed = parse(&self.raw_path, &self.name, ctx.raw_range())
             .with_context(|| format!("slack parse {}", self.raw_path.display()))?;
         // Users are read whole every run; messages only for the changed
         // threads on a narrowed run.

@@ -37,7 +37,10 @@ use datalib_schema::providers::Provider;
 /// v6: `account` is the login's email rather than the `T…` workspace
 ///     id; the workspace moves to `org_name` / `org_uuid`.
 /// v7: every id carries its row's `created_at` in its leading bits
-///     (`datalib_id`'s v8 layout).
+///     (`datalib_id`'s v8 layout) and the configured source in its
+///     recipe. The raw store keys messages and threads by
+///     `{team}#{channel}#{ts}`, so an existing root resets and downloads
+///     again.
 pub const RENDER_VERSION: u32 = 7;
 
 #[derive(Debug, Default)]

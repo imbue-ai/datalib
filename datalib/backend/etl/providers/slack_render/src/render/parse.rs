@@ -1,6 +1,6 @@
 //! Doltlite-aware parse entry point. Two-phase:
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,9 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_slack::ingest::db::db_path_for;
-use datalib_etl_slack::ingest::schema_raw::{slack_thread_key, SlackAttachmentRow};
+use datalib_etl_slack::ingest::schema_raw::{
+    slack_thread_key, split_thread_key, SlackAttachmentRow,
+};
 use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
@@ -95,10 +97,10 @@ impl ParsedSlack {
     }
 }
 
-pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
+pub fn parse(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSlack> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, range);
+        return parse_doltlite(&db_path, source_id, range);
     }
     if path.is_dir() {
         return parse_raw_json_dir(path);
@@ -112,14 +114,18 @@ pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
     Ok(ParsedSlack::default())
 }
 
-fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
+fn parse_doltlite(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSlack> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, range).await })
+            .block_on(async move { parse_doltlite_async(db_path, source_id, range).await })
     })
 }
 
-async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedSlack> {
+async fn parse_doltlite_async(
+    db_path: &Path,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedSlack> {
     // Pinned at open — at the driver's commit, else HEAD — with the views
     // installed before anything reads. No commit means nothing has been
     // committed here to render: emptiness, not a reason to read the
@@ -150,7 +156,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 
-    let scan = scan_diff(&pool, range, &pin).await?;
+    let scan = scan_diff(&pool, source_id, range, &pin).await?;
 
     // Workspace + users + channels are cheap and shared across threads.
     let mut unparsed: Vec<Unparsed> = Vec::new();
@@ -241,6 +247,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
 /// a thread through the inputs it declared, so none of them fans out.
 async fn scan_diff(
     pool: &SqlitePool,
+    source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ScanResult> {
@@ -266,11 +273,32 @@ async fn scan_diff(
         },
     )
     .await?;
+    // The driver names stale buckets by the thread's entity id; the load
+    // wants the raw thread key the id was minted from.
+    let by_uuid: HashMap<String, String> = load_thread_keys(pool)
+        .await?
+        .into_iter()
+        .filter_map(|key| {
+            let (team, channel, ts) = split_thread_key(&key)?;
+            Some((super::ids::thread(source_id, team, channel, ts).uuid, key))
+        })
+        .collect();
     Ok(ScanResult {
-        render: range.narrow(scan.render.as_ref()),
+        render: range
+            .narrow_by(scan.render.as_ref(), |key| by_uuid.get(key).cloned())
+            .render,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
+}
+
+async fn load_thread_keys(pool: &SqlitePool) -> Result<Vec<String>> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT thread_root_uuid FROM pinned_messages messages WHERE payload IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("list threads")
 }
 
 async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
@@ -814,7 +842,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.threads.is_empty());
         assert!(parsed.channels.is_empty());
         assert!(parsed.workspace.is_none());

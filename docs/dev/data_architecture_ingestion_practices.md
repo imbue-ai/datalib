@@ -166,9 +166,8 @@ to choose, put the coordinate that grows first:
   when it was sent and a sync's new rows are adjacent. Pass the stamp
   wherever the record has one of its own; what carries none, and why,
   is in [`entity_ids.md`](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
-  Three raw stores are keyed by the same ids (beeper, linkedin's
-  `connections`, slack) and get the property for free; the rest keep
-  their upstream keys.
+  Raw stores keep their upstream keys; where that key leads with a
+  time (slack's `{team}#{channel}#{ts}`) they have the property too.
 
 Two things this does *not* ask for. Don't sort rows before inserting:
 within one transaction the tree is built once, whichever order the

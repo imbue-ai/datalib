@@ -22,7 +22,7 @@ use datalib_schema::providers::Provider;
 /// shared contact-common layout (uuid-named files, generic frontmatter,
 /// richer grid-row search text); to 3 when `account` stopped carrying
 /// the source name; to 4 when ids moved onto `datalib_id` under
-/// `SourceInstance` and every row gained its backpointer — every uuid
+/// the configured source and every row gained its backpointer — every uuid
 /// moved.
 pub const RENDER_VERSION: u32 = 4;
 

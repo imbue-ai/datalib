@@ -22,10 +22,11 @@ For each thread we emit:
   * **N message rows** (`kind = "slack_message"`) — one per message,
     with `message_index` set so the thread can be reassembled in order.
 
-`document_uuid` is the thread's UUID, `datalib_etl_slack::ids::thread`
-over `(channel_id, thread_ts)` under `Upstream(team_id)`; a message's
-carries its `ts` in its leading bits (`docs/dev/entity_ids.md`). The
-same ids key the raw store's messages and threads.
+`document_uuid` is the thread's UUID, `render::ids::thread` over
+`(channel_id, thread_ts)` under the configured source and
+`Upstream(team_id)`; a message's carries its `ts` in its leading bits
+(`docs/dev/entity_ids.md`). The raw store keys messages and threads by
+`{team}#{channel}#{ts}` — the upstream's own key, never an entity id.
 
 ## Markdown rendering
 

@@ -152,9 +152,10 @@ pub struct GridRow {
     /// one-way hash, so this preserves what it was minted from and lets a
     /// row be taken back to the provider's API.
     ///
-    /// With `upstream_entity_kind`, `upstream_scope` and `created_at_utc`
-    /// this is the whole `entity_id` recipe minus the provider, so
-    /// `entity_id(provider, scope, upstream_entity_kind, upstream_id, stamp) == uuid`
+    /// With `upstream_entity_kind`, `upstream_scope`, `created_at_utc`
+    /// and the document's `markdowns.source_id` this is the whole
+    /// `entity_id` recipe minus the provider, so
+    /// `entity_id(provider, source_id, scope, upstream_entity_kind, upstream_id, stamp) == uuid`
     /// holds by construction, with `stamp` the row's `created_at_utc` or
     /// nothing — which makes the backpointer verifiable rather than
     /// decorative.
@@ -172,15 +173,11 @@ pub struct GridRow {
     #[col(sql = "VARCHAR(32)")]
     pub upstream_entity_kind: Option<String>,
     /// The upstream account / workspace / organization `upstream_id` is
-    /// unique within: the `Scope::Upstream` value fed to `entity_id`, or
-    /// the source id under `Scope::SourceInstance`. NULL means
-    /// `Scope::ProviderGlobal` or `Scope::Content`, where the natural key
-    /// needs no further scoping.
-    ///
-    /// Prefer a provider-issued value (Anthropic `org_uuid`, Slack
-    /// `team_id`, JMAP `account_id`) over our own step id: an
-    /// upstream-scoped id is a function of the data, so a fresh data root
-    /// re-ingesting the same content reproduces it.
+    /// unique within: the `Scope::Upstream` value fed to `entity_id`.
+    /// NULL means `Scope::ProviderGlobal` or `Scope::Content`, where the
+    /// natural key needs no further scoping within the source. Never
+    /// the source's own id: that is a component of every id and lives
+    /// on `markdowns.source_id`.
     ///
     /// Overlaps `account` in spirit but not contract — `account` is a
     /// display value and may be prettified; this is the exact opaque string

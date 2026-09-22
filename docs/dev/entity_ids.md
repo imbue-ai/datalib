@@ -27,7 +27,8 @@ use datalib_id::{composite_key, Identity, IdNamespace, Scope};
 
 let id = Identity::mint(
     IdNamespace::Slack,                  // provider
-    Scope::Upstream(team_id),            // what it is unique within
+    source_id,                           // the configured source's group id
+    Scope::Upstream(team_id),            // what the key is unique within, inside the source
     "message",                           // entity kind, in the upstream's vocabulary
     composite_key(&[channel_id, ts]),    // the upstream's own key
     Some(date_ms),                       // the row's `created_at`, or None
@@ -37,10 +38,23 @@ let id = Identity::mint(
 // id.entity_kind   → grid_rows.upstream_entity_kind
 ```
 
-One root namespace, one function, four recipe components joined with
+One root namespace, one function, five recipe components joined with
 `\x1f`, and one stamp. Nothing else mints an id. `Identity` carries
 what the id was minted from so the row's backpointer columns cannot
 drift from it — build the key once, use it twice.
+
+**The configured source is a component of every id.** Two sources
+therefore cannot share an id whatever they hold: each has its own name,
+and that is the whole collision story. The trade is deliberate. An id
+is a function of the configuration as well as of the data, so a fresh
+data root that names its sources differently mints different ids, and
+renaming a source's group id (already a migration) re-keys everything
+it rendered. What is bought is that two sources over overlapping data
+— two label filters on one mailbox, an mbox import beside the live
+account it came from — just work, as two sets of rows, with nothing to
+refuse and nothing to merge. Finding the same upstream thing across two
+sources is a query over the backpointer columns, not something the id
+does. Which source a row came from is `markdowns.source_id`.
 
 ### The layout: the stamp first, then the hash
 
@@ -88,18 +102,19 @@ leaf its row does; a diff row keeps the stamp of the row it is about.
 
 ### Picking a scope
 
-`Scope` is the decision that used to be implicit in each provider's
-recipe string, and it is the one that determines whether two configured
-sources can collide.
+`Scope` says what the natural key is unique within *inside one
+source*. The source is always in the id, so this only has to tell apart
+what a single source can hold more than one of.
 
 | Variant | When | Examples |
 |---|---|---|
-| `Upstream(id)` | Default. The natural key is unique within one upstream account / workspace / org, and the scope value is **always present**. | Slack `team_id`, JMAP `account_id`, Signal account identifier |
-| `ProviderGlobal` | The upstream genuinely guarantees the natural key is unique provider-wide. | GitHub `{repo}:pr:{n}`, Notion `page_id`, WhatsApp `chat_jid`, Anthropic and ChatGPT conversation/message uuids |
-| `Content` | Identity **is** the bytes, and two sources finding the same file *should* collapse to one row. | pdf `blake3`, perseus canonical work id |
+| `Upstream(id)` | The natural key is unique within one upstream account / workspace / repository, and a source can hold several of those. The scope value is **always present**. | Slack `team_id`, JMAP `account_id`, a GitHub repository |
+| `ProviderGlobal` | The natural key is unique across everything the source holds. The default. | Notion `page_id`, Anthropic conversation uuids, a Signal backup's local ids, a config-named YoLink device |
+| `Content` | Identity **is** the bytes, so two copies within a source collapse to one row. | pdf `blake3`, perseus canonical work id |
 
-"Probably unique" is `Upstream` with the account id. It costs nothing
-extra — *provided the account id is always there*.
+`Upstream` is worth its column only when one source really can hold
+two accounts — a JMAP session with two accounts, a Claude login in two
+orgs. It costs nothing extra *provided the account id is always there*.
 
 **A scope component has to be present-or-never.** This is the one way
 `Upstream` can be wrong, and it is not obvious: if the value is
@@ -120,79 +135,32 @@ So the test is not "is this key unique within the account?" but "will
 this scope value be identical on every future ingest, including the ones
 configured differently?" If it can appear later, it is not a scope.
 
-`Content` deliberately makes two overlapping sources contend for one id.
-That is the intended behaviour; `IdClaims` turns the contention into an
-error naming both sources rather than letting one silently erase the
-other (see [Guardrails](#guardrails)).
+### A raw store's keys are the upstream's own
 
-### `SourceInstance` is the last resort, not the default
-
-Six providers key on our config's source id, in whole or in part:
-signal, whatsapp, contacts, yolink, and the one page airvisual and
-garmin each compose per source.
-
-An earlier draft of this file said that was flatly unsafe, because one
-editable string served as both the display name and the identity, so a
-rename would silently re-key every row a source ever produced. **That
-was wrong, and it was wrong before #201 too.** `SourceWizard.vue` has
-carried `:disabled="isEdit"` on the name field since it shipped, with a
-comment saying renaming is a migration rather than a form field. There
-was never a rename button to press.
-
-What #201 changed is that the split is now *explicit and enforced in
-the config format* rather than a property of one Vue component:
-
-| | |
-|---|---|
-| `id` | identity. Path-safe, unique, forms the directory structure. Changing it is a migration; the wizard makes it read-only on edit. |
-| `name` | what a person types and every screen shows. Free text, meaningless to every program, freely changed. |
-
-A renderer receives the source's **id** — the first segment of the
-step's id, which is its group — so only the stable half ever reaches an
-id.
-
-So the real argument against scoping on it was never the rename hazard.
-It is that such an id is a function of *configuration* rather than of
-data: two roots ingesting the same upstream content under different step
-ids get different uuids, which costs the reproducibility the fixture
-suite and every insta golden rest on.
-
-Prefer `Upstream` wherever the provider gives you anything to key on;
-reach for `SourceInstance` when it genuinely gives you nothing, as with
-yolink's per-source timeseries page — a document datalib composes, with
-no YoLink-side object behind it.
-
-**The source *type* was never the missing piece.** It is already the
-first recipe component: `provider` is a hardcoded `&'static str` per
-provider (`IdNamespace::Slack`, `::Chatgpt`, `::Claude`), never a config
-string. What
-the type cannot supply is instance-level discrimination:
-
-- signal's `chat_id` is an autoincrement local to one backup file, so
-  two accounts both have chat `1`;
-- yolink's `device` is a user-typed label like `"fridge"`;
-- contacts' vCard `UID` is unique per addressbook, not globally.
-
-Two configured accounts of any of those types would collide on every
-row. They need either a stable **upstream** identity (`Scope::Upstream`)
-or, where no upstream object exists, `Scope::SourceInstance` — which at
-least keys on the stable `id` rather than a display name. Where each
-stands today is in [Porting status](#porting-status).
+The source id belongs in the *rendered* id and nowhere else. A raw
+store under `<name>/ingest/` keys every row by what the download gave —
+the upstream's id, a `{team}#{channel}#{ts}`, a Matrix event id, a
+profile URL, the bytes' hash — and nothing in a raw store mints an
+entity id; the render mints one from the raw key. Two roots that
+download the same account under different group ids therefore produce
+byte-identical raw stores, and the raw store stays a backup rather than
+a function of how it was asked for.
+[`data_architecture_ingestion.md`](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids)
+has the rule; a render that needs its raw key back (a bucket the
+driver named) keeps a map from id to key, as beeper's parse does.
 
 ### Rows datalib itself mints
 
-Two kinds of row are about a source's data without being it, and both
-take `IdNamespace::Datalib` with `Scope::SourceInstance(<group id>)`,
-so they can never collide with the rows they are about:
+Two kinds of row are about a source's data without being it:
 
-- a source's **storage report** (`datalib_step::introspect`);
-- a **diff group's** rows (`datalib_step::render_diff::rekeyed`): every
-  uuid a diff document carries is minted again as
-  `entity_id_str(Datalib, SourceInstance(<diff group>), "diff", <the
-  source's uuid>)`. The source's own row keeps the original, and the
-  unified index's `IdClaims` would refuse the diff's rows if they did
-  not move. `upstream_id` is left as the source's: it points at the
-  real thing.
+- a source's **storage report** (`datalib_step::introspect`) takes
+  `IdNamespace::Datalib` under the source's own group id, so it can
+  never collide with the rows it measures;
+- a **diff group's** rows are the source's own render, run under the
+  diff group's name (`datalib_step::render_diff`). The source
+  component of every id is then the diff group's, so the diff's rows
+  are distinct from the source's by construction and nothing has to be
+  re-keyed. `upstream_id` is the source's: it points at the real thing.
 
 ### Why not opaque random ids
 
@@ -202,12 +170,14 @@ function of upstream data.
 
 - Re-ingest stops being idempotent — every render needs a backpointer
   lookup to find the id it minted last time.
-- A fresh data root re-ingesting the same upstream data produces
-  *different* ids, so `//tests/fixtures:ingested_tng_test` (which
-  asserts byte-identical convergence across three runs) and every insta
-  golden would have to stop asserting on ids.
+- A fresh data root re-ingesting the same upstream data under the same
+  configuration produces *different* ids, so
+  `//tests/fixtures:ingested_tng_test` (which asserts byte-identical
+  convergence across runs) and every insta golden would have to stop
+  asserting on ids.
 
-Determinism is the property to keep. Uniqueness is the property to fix.
+Determinism is the property to keep. Uniqueness comes from the source
+component.
 
 ## The backpointer
 
@@ -218,13 +188,13 @@ from:
 |---|---|
 | `upstream_id` | The upstream's own id, within the scope |
 | `upstream_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
-| `upstream_scope` | The `Scope::Upstream` / `SourceInstance` value; NULL for `ProviderGlobal` / `Content` |
+| `upstream_scope` | The `Scope::Upstream` value; NULL for `ProviderGlobal` / `Content` |
 
-Together with `provider` (its own column) and `created_at_utc` (the
-stamp) that is the entire recipe, so `entity_id(provider, scope,
-upstream_entity_kind, upstream_id, stamp_of(uuid)) == uuid` holds by
-construction, with `stamp_of(uuid)` either zero or the row's
-`created_at_utc`.
+Together with `provider` (its own column), `markdowns.source_id` (the
+source) and `created_at_utc` (the stamp) that is the entire recipe, so
+`entity_id(provider, source_id, scope, upstream_entity_kind,
+upstream_id, stamp_of(uuid)) == uuid` holds by construction, with
+`stamp_of(uuid)` either zero or the row's `created_at_utc`.
 
 `upstream_entity_kind` is **not** `grid_rows.kind`. `kind` is a display
 label for the grid's Kind column ("LLM Thinking", "GitHub PR") and may
@@ -241,26 +211,19 @@ what the grid's "Copy upstream ID(s)" action reads.
 
 ## Guardrails
 
-Three checks stand between a bad recipe and silent data loss.
+Two checks stand between a bad recipe and silent data loss. (A third,
+`IdClaims`, refused an index run in which two sources claimed one id;
+with the source in every id that cannot happen, and it is gone. Two
+documents of *one* source minting one id still fails the load —
+`grid_index::insert_grid_row` names the document already holding it.)
 
-1. **`IdClaims`** ([`datalib_etl_render::grid_index`](../../datalib/backend/etl/render/src/grid_index.rs))
-   fails an index run when two sources claim one `markdown_uuid` or one
-   `grid_rows.uuid`, naming both. Scoped to a single run on purpose:
-   the same ids arriving under a new source id is a *rename*, which
-   is legitimate, whereas two documents claiming one id inside one walk
-   is always a misconfiguration or a recipe missing a discriminator.
-   That includes a `Content`-scoped id claimed by two sources — two
-   pdf sources scanning trees that share a file. The collapse `Content`
-   promises holds *within* a source (pdf counts the copies on one row);
-   across sources the index refuses rather than let one source's row
-   silently erase the other's. Merging the claims when the rows agree
-   is open work; no fixture has two sources sharing a file yet.
-2. **`//tests/fixtures:ingested_tng_test`** asserts `grid_rows.uuid` is
-   unique, that no `markdown_uuid` is claimed by two source ids, and
+1. **`//tests/fixtures:ingested_tng_test`** recomputes every row's uuid
+   from its backpointer, its source and its stamp and compares
+   (`_roundtrip_failures`), asserts `grid_rows.uuid` is unique, and
    that the set of providers minting non-UUID primary keys equals
    `NON_UUID_PK_PROVIDERS` exactly — in both directions, so the
    allowlist cannot rot into a permanent exemption.
-3. **`//datalib/ui:e2e_test`** (`grid-copy-ids.spec.ts`) pins that the
+2. **`//datalib/ui:e2e_test`** (`grid-copy-ids.spec.ts`) pins that the
    two copy actions land in two different id spaces.
 
 ## Known instabilities
@@ -299,16 +262,12 @@ It catches a recipe that reads the clock, an RNG, or an unfixed
 iteration order, and a renderer that reads ids back off the index
 rather than deriving them.
 
-It does not catch an id derived from `config.toml`, because the driver
-regenerates the same step ids every run. The real test is a run over
-the same fixture under *different* step ids, which the driver cannot do
-today — its source names are a hardcoded dict and three raw stores are
-seeded at paths built from them. Standing in for it:
-`SCOPE_TAG_BY_PROVIDER` forces a ported provider whose ids depend on
-configuration to declare the `src` scope and store the value in
-`upstream_scope`, or the round-trip check fails it. That makes a
-config-scoped id **declared** rather than merely detected, which is
-weaker but not nothing.
+Every id depends on the source's group id by design, and the driver
+regenerates the same group ids every run, so the check says nothing
+about a recipe that reads *more* of the config than that. The
+round-trip check stands in: a row's uuid has to come back from its
+provider, its source, its scope, its kind, its key and its stamp, so
+anything else a recipe folded in fails there.
 
 ## Porting status
 
@@ -325,42 +284,43 @@ back by render as the natural key.
 
 | Provider | Scope | Stamped rows |
 |---|---|---|
-| airvisual | `SourceInstance` for the page, `ProviderGlobal` on the serial for a device | none — a device's stamp is its latest reading |
-| apple_messages | `ProviderGlobal` — `message.guid` is a UUID Messages mints; `chat.guid` is unique per Apple ID, so two sources from two Apple IDs texting one number contend, which `IdClaims` reports | messages, tapbacks |
-| beeper | `ProviderGlobal` on Matrix ids; the raw store's keys are the same ids | events, at millisecond precision |
+| airvisual | `ProviderGlobal` — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
+| apple_messages | `ProviderGlobal` — `message.guid` is a UUID Messages mints | messages, tapbacks |
+| beeper | `ProviderGlobal` on Matrix ids | events, at millisecond precision |
 | chatgpt | `ProviderGlobal` | messages |
 | claude | `ProviderGlobal` (see `claude_render/src/render/ids.rs` § Scope for why not `org_uuid`) | messages, blocks, project documents |
 | claude_code | `ProviderGlobal` — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
-| contacts | `SourceInstance` on `addressbook#uid`, until a CardDAV principal is extracted | none — a card has no creation event |
+| contacts | `ProviderGlobal` on `addressbook#uid` | none — a card has no creation event |
 | email | `Upstream(account_id)` | emails |
 | facebook | `ProviderGlobal` on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
-| garmin | `SourceInstance` for the page, `ProviderGlobal` on Garmin's id for a device | none |
+| garmin | `ProviderGlobal` — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | `Upstream(repo)` / `Upstream(project)` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | `ProviderGlobal` — a Chat message id names its space, a Voice row id is the ingest's | messages |
-| linkedin | `ProviderGlobal` on the profile URL, the post link, the raw row id; the raw `connections` key is the same id | messages, shares, comments |
+| linkedin | `ProviderGlobal` on the profile URL, the post link, the raw row id | messages, shares, comments |
 | notion | `ProviderGlobal` — page, discussion and comment ids are Notion UUIDs, now the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
 | pdf | `Content` on the blake3 | documents and pages, when the Info dictionary dates the file |
 | perseus | `Content` on the CTS locator and edition | none — a classical text has no stamp of its own |
-| signal | `SourceInstance` on the backup's local ids | messages, on `date_sent` |
+| signal | `ProviderGlobal` on the backup's local ids | messages, on `date_sent` |
 | slack | `Upstream(team_id)` | messages, reactions — the `ts` in the key |
 | sms_backup_restore | `ProviderGlobal` on the raw row id | messages, calls |
-| whatsapp | `SourceInstance` on the chat JID | messages, reactions |
-| yolink | `SourceInstance` on the device's config name — the ids YoLink issues a device are read secrets, and a natural key is stored in the clear | none |
+| whatsapp | `ProviderGlobal` on the chat JID | messages, reactions |
+| yolink | `ProviderGlobal` on the device's config name — the ids YoLink issues a device are read secrets, and a natural key is stored in the clear | none |
 
 ### Where an upstream scope was wanted and not taken
 
-Three of the `SourceInstance` providers have an upstream identity in
-reach, and each is held back by the present-or-never rule rather than
-by plumbing. Take one only after verifying the column on a real backup:
+Three providers have an upstream account identity in reach that would
+let one source's ids tell two accounts apart, and each is held back by
+the present-or-never rule rather than by plumbing. None matters until
+a source can hold two accounts; take one only after verifying the
+column on a real backup:
 
 - **whatsapp** — `chat.account_jid_row_id` names the account, but the
   column is nullable and the fixture leaves it so. A scope that is
   sometimes there re-keys every row the day it appears.
-- **signal** — `ParsedRecipient.identifier` is the e164 or ACI, and
-  keying chats and messages on it would make two backups of one account
-  dedupe. It is `Option`, and the backup carries no identifier for the
-  account itself, so the fallback for a recipient without one would be
-  the local id — two recipes in one keyspace.
+- **signal** — `ParsedRecipient.identifier` is the e164 or ACI. It is
+  `Option`, and the backup carries no identifier for the account
+  itself, so the fallback for a recipient without one would be the
+  local id — two recipes in one keyspace.
 - **contacts** — the vCard `UID` is unique per addressbook and the
   config's `server_url` is ours; a CardDAV principal is not extracted.
 
@@ -371,8 +331,8 @@ by plumbing. Take one only after verifying the column on a real backup:
    `upstream_id` and `uuid` from drifting — build the key once and use
    it twice. Use `datalib_id::composite_key` for tuple keys, and pass
    the item's stamp (`None` for a document).
-2. Populate all three backpointer columns. For chat-common providers
-   that means `NormalizedChat::upstream_scope`,
+2. Populate the backpointer columns. For chat-common providers that
+   means `NormalizedChat::upstream_scope` (only under `Upstream`),
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss — that was a real bug), and `NormalizedDoc::source_ref`
@@ -382,6 +342,10 @@ by plumbing. Take one only after verifying the column on a real backup:
    `NormalizedContact::{external_id, upstream_scope}`.
 3. Add the provider to `SCOPE_TAG_BY_PROVIDER` in `ingested_tng_test`,
    with the tag for its scoped rows and the tag for its unscoped ones.
+   Thread `source_id` — the render's `ctx.name` — to wherever the ids
+   are minted; a bucket key the driver hands back is the raw key, so
+   a parse that narrows by it maps the id back (beeper, chatgpt,
+   claude, email, slack all do).
 4. Bump the provider's `RENDER_VERSION`. A re-key moves `chat_uuid`,
    which *names the output directory*, so the new documents land beside
    the old ones rather than over them and the index loads both. The
@@ -418,11 +382,8 @@ human to delete anything:
   raw store.
 
 Both are derived data, so the cost is a re-render plus a re-index. No
-re-download — except for the three providers whose raw store is keyed
-by the same ids (beeper's rooms, users and events; linkedin's
-`connections`; slack's messages and threads, which its attachment
-edges join on). A re-key of those leaves the old rows behind under the
-old keys, and the store has to be reset and downloaded again.
+re-download: a raw store's keys are the upstream's own and never move
+with a recipe.
 
 The round-trip check is not a formality. It caught three real bugs
 across the first three ports, each invisible to every other test: a

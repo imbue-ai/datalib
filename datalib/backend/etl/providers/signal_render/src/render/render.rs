@@ -21,7 +21,7 @@ use super::parse::ParsedSignal;
 /// Bump when Signal's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
 /// `datalib_etl_chat_common::LAYOUT_VERSION`.
-/// v6: ids are minted through `datalib_id` under `SourceInstance`,
+/// v6: ids are minted through `datalib_id` under the configured source,
 ///     every row carries its backpointer, and a message's id carries
 ///     `date_sent` in its leading bits (`datalib_id`'s v8 layout).
 ///     Every uuid moved, `chat_uuid` among them.

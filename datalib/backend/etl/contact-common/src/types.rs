@@ -24,7 +24,7 @@ pub struct NormalizedContact {
     /// `natural_key` the provider fed `datalib_id::entity_id` to mint
     /// `contact_uuid`, so the round-trip check regenerates the row.
     pub external_id: Option<String>,
-    /// The `Scope::Upstream` / `SourceInstance` value `contact_uuid`
+    /// The `Scope::Upstream` value `contact_uuid`
     /// was minted under, for `grid_rows.upstream_scope`; `None` under
     /// `ProviderGlobal`.
     pub upstream_scope: Option<String>,
