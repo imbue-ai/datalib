@@ -7,7 +7,7 @@ pub mod schema_raw;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use datalib_etl::download_run::DownloadRun;
 use serde::Serialize;
 use serde_json::json;
@@ -48,7 +48,7 @@ pub struct FetchOptions {
     /// only.
     pub media: bool,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
 
@@ -91,19 +91,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
     let dst = opts.db.clone();
-
-    if opts.control.reset_and_redownload {
-        tracing::info!(event = "beeper_reset_and_redownload");
-        dst.reset()
-            .await
-            .context("reset raw db before redownload")?;
-    }
-    if opts.control.refetch_blobs {
-        tracing::info!(event = "beeper_refetch_blobs");
-        datalib_etl::doltlite_raw::truncate_data_tables(dst.pool(), &["beeper_media_attachments"])
-            .await
-            .context("truncate beeper_media_attachments before refetch")?;
-    }
 
     let beeper_dir = opts
         .beeper_data_dir

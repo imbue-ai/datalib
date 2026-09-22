@@ -372,7 +372,7 @@ honours the stricter rule since #600 and #606, and
   it — a Lightroom catalog, a Takeout export, a phone backup, a
   directory of `.vcf` files — all local and fast to read.
   A wipe a *person* asks for is a different thing and gets its own
-  operation (§2.10); `--reset-and-redownload` retires in its favour.
+  operation (§2.10); `datalib-dag --reset` is that operation's CLI form today.
 
 `step_protocol.md`'s rules paragraph is rewritten to say this, and the
 lint that watches render reads for a pin gains a sibling that watches
@@ -484,10 +484,9 @@ scope is its readers' closure), so the emptiness propagates the way any
 change does — the render's diff sees every bucket deleted and removes
 its documents, the index drops the rows — and stops there. Refilling
 is not part of it; that is the next Sync, which finds no cursor and
-starts from the beginning. `--reset-and-redownload` becomes
-`clear` followed by `request`, and the ingest code loses its
-`reset_and_redownload` branch: a download never wipes, it only
-downloads.
+starts from the beginning. `datalib-dag --reset` is `clear`, and
+`--reset X --sync X` is `clear` followed by `request`; the ingest code
+has no reset branch: a download never wipes, it only downloads.
 
 What "clear" promises depends on the sink kind (§2.1's table), and the
 supervisor knows which it is talking to. A doltlite sink — raw or
@@ -620,8 +619,7 @@ Each slice lands green and the app works after each.
    of `steps.state`.
 5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
    request and the wave under each, the schedule field, and Clear on
-   a sink with the wording of §2.10. `--reset-and-redownload` and the
-   ingest's wipe branch go in the same slice. The help text is rewritten around rows, not runs.
+   a sink with the wording of §2.10. The help text is rewritten around rows, not runs.
 6. **A shared-sink provider**: the email import beside the live pull.
    The reason §2.1 exists, landed last because everything before it is
    needed for it to be safe.

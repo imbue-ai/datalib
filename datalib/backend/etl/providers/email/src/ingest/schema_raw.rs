@@ -17,8 +17,7 @@ use serde_json::Value;
 /// here too: the shared CAS-edge flush
 /// ([`datalib_etl::blob_cas::flush_cas_edges`]) stamps
 /// `email_blobs_bookkeeping` for error tracking, so the sidecar must
-/// exist, and `RawDb::reset` truncates the pair via
-/// [`datalib_etl::doltlite_raw::truncate_data_tables`].
+/// exist.
 pub const DATA_TABLES: &[&str] = &["accounts", "mailboxes", "threads", "emails", "email_blobs"];
 
 /// Many-to-many join tables. Not in [`DATA_TABLES`] because they're

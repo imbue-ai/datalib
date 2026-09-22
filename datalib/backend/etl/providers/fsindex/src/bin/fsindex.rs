@@ -46,11 +46,6 @@ struct Args {
     #[arg(long)]
     no_stamp: bool,
 
-    /// Truncate the data + bookkeeping tables before scanning. The
-    /// next run starts from an empty cache so every entry rehashes.
-    #[arg(long)]
-    reset: bool,
-
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -103,10 +98,7 @@ async fn main() -> Result<()> {
         cache,
         no_stamp: args.no_stamp,
         progress: progress.clone(),
-        control: DownloadControl {
-            reset_and_redownload: args.reset,
-            ..Default::default()
-        },
+        control: DownloadControl::default(),
     };
 
     let summary = ingest::fetch(opts).await?;

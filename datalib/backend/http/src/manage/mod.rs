@@ -687,7 +687,7 @@ impl RowCtx<'_> {
     fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Action, Option<String>) {
         if let Some(job) = self.claims.get(id) {
             let of = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-                Some(ids) => format!("the sync of {ids}"),
+                Some(ids) => format!("the {} of {ids}", status::job_verb(job)),
                 None => "the sync in progress".to_string(),
             };
             // Once asked to stop there is nothing more to ask: the steps

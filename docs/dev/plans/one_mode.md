@@ -14,6 +14,15 @@ built. This is the design that `render_inputs`
 turned out to be reaching for: that table is the mechanism for one of
 its rules.
 
+**Revised 2026-09-22: the reset half of item 4 landed as
+`datalib-dag --reset`** — a standalone operation that drops a step's
+store in a commit of its own, with no provider code behind it
+(`doltlite_raw::reset_store`) — and `Policy::Never` is gone: nothing
+chose it once the reset stopped, so the checkpointer takes a cadence
+and nothing else. `always_clear_before_ingest` is now that same reset,
+run by the ingest driver before the wave. The wipe-at-end for the
+every-run truncators is still to do.
+
 **Revised 2026-09-20: the rescue commit and the Ctrl-C commit are
 gone.** A writer's `open` discards a dirty working set and starts from
 HEAD, and SIGINT commits nothing; the dolt commit at a seal is the only
@@ -145,7 +154,7 @@ Every user-visible operation is the one mode with different inputs.
 | operation | what it does | what a consumer sees |
 |---|---|---|
 | **sync** | walk from the cursor; upsert; prune enumerated scopes; commit | the upstream delta |
-| **re-verify** (today's `--reset-and-redownload`, renamed to say it does not wipe) | clear the bookkeeping that lets a walk skip — cursors, `fetched_at`, scope state — then sync | the upstream delta, and nothing else: an unchanged row upserts to itself and `dolt_diff` shows no change |
+| **re-verify** (not built; the old `--reset-and-redownload`, renamed to say it does not wipe) | clear the bookkeeping that lets a walk skip — cursors, `fetched_at`, scope state — then sync | the upstream delta, and nothing else: an unchanged row upserts to itself and `dolt_diff` shows no change |
 | **start over** | in one transaction, truncate every entity and bookkeeping table; commit it as its own commit (`start over: N rows dropped`); then sync | everything removed, then everything added back as it arrives. Expensive downstream — qmd re-embeds — and honest: the user asked for the store to be empty, so the derived stores are empty until it is not |
 | **version bump / param change** (render) | every bucket goes in the re-render set; cursor kept; prune at the end | the documents that changed, and the ones the new version no longer produces |
 | **Ctrl-C** | report `cancelled`; commit nothing | the store at its last seal; the next run resumes from there |
@@ -278,9 +287,9 @@ and small.
    every processor reported a consumed commit, since one that read no
    store said nothing about what should exist. The step reports the
    store's HEAD as its output version. Closes 1.1–1.4.
-4. **Ingest: wipe at the end.** `reset_and_redownload` stops
-   truncating; it clears bookkeeping and scope state, and the run
-   prunes at the end. Mirrors move to upsert+prune per table (from 2).
+4. **Ingest: wipe at the end.** The reset is `datalib-dag --reset`
+   now (see the 2026-09-22 note above); what remains is re-verify —
+   clear bookkeeping and scope state, and prune at the end. Mirrors move to upsert+prune per table (from 2).
    pdf and fsindex prune after the walk instead of resetting before it
    (`fswalk` already has the seen-set). `checkpoint_policy` and
    `Policy::Never` are deleted; `always_clear_before_ingest` is
@@ -593,7 +602,7 @@ Whether it can be checked depends on whether U₁ → U₂ can be
   state — a listing that drops a conversation, a message whose text
   changed, a new page — rather than one static fixture tree. That is
   real work per provider, and it is the work that would also give the
-  `--reset-and-redownload` golden a second point to compare against.
+  reset-then-resync golden a second point to compare against.
 
 And the guarantee is weaker by design. Rule 2 says a
 scope the run did not fully enumerate is not pruned — slack's recent

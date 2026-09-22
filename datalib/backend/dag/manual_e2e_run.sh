@@ -13,8 +13,8 @@
 # with `git diff` in $DATALIB_MANUAL_E2E_DIR.
 #
 # That is about the snapshots only. The test's assertions — every step
-# succeeded, the data_root layout is what it should be, and a
-# --reset-and-redownload lands byte-identical content — still fail the
+# succeeded, the data_root layout is what it should be, and a reset
+# plus re-download lands byte-identical content — still fail the
 # run, and they are the reason the exit code is worth looking at.
 #
 # This script lives in the code repo (it's code). The test's *data* — the

@@ -13,7 +13,7 @@ use sqlx::Row;
 use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, DATA_TABLES};
+use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -44,23 +44,6 @@ impl RawDb {
 
     pub fn cas(&self) -> &BlobCas {
         &self.cas
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
-    }
-
-    /// Reset bytes-have-been-fetched state for `refetch_blobs`: clear
-    /// the per-provider `blake3` column on `chatgpt_attachments` so
-    /// the next walk re-decodes and re-stores. The CAS bytes
-    /// themselves stay — `put_many` is INSERT OR IGNORE, re-hashing
-    /// the same bytes lands on the same blake3.
-    pub async fn clear_blob_hashes(&self) -> Result<()> {
-        sqlx::query("UPDATE chatgpt_attachments SET blake3 = NULL")
-            .execute(&self.pool)
-            .await
-            .context("clear chatgpt_attachments.blake3")?;
-        Ok(())
     }
 
     // ── `me` ────────────────────────────────────────────────────────

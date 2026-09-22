@@ -376,6 +376,7 @@ def main() -> int:
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
     root_entries: list[str] = []
+    ingest_ids: list[str] = []
     for name, (type_str, _synth_input, extract_input) in sources.items():
         # Per-phase params, as a TOML inline table. The source name
         # isn't in either — each step takes it from its group. Ingest gets
@@ -418,6 +419,8 @@ params = {params}
         # step to name, so its render declares no inputs — which also
         # makes it a fringe step the runner always runs.
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
+        if name not in PRESEEDED_RAW:
+            ingest_ids.append(f"{name}/ingest")
         render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
         steps.append(
             group_block + ingest_block + render_block + inputs_line + render_params_line
@@ -548,11 +551,10 @@ inputs = [{rendered_list}]"""
         now,
     ]
     # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
-    # ingested_tng_test's multi-run case to exercise the
-    # --reset-and-redownload code path without changing the positional
-    # arg signature.
+    # ingested_tng_test's multi-run case: empty every raw store, then run
+    # the pipeline as usual.
     if reset:
-        pipeline_argv.append("--reset-and-redownload")
+        _run([*pipeline_argv, "--reset", ",".join(ingest_ids)], env=pipeline_env)
     _run(pipeline_argv, env=pipeline_env)
 
     _run_pipeline_twice_and_diff(
@@ -605,11 +607,10 @@ def _run_pipeline_twice_and_diff(
     before = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
     for f in carddav_v2.glob("*.vcf"):
         shutil.copy(f, carddav_work / f.name)
-    argv = [a for a in pipeline_argv if a != "--reset-and-redownload"]
     chains = ",".join(f"{s}/ingest" for s in DIFF_GROUPS)
     env_v2 = {**pipeline_env, "DATALIB_HTTP_PLAYBACK": str(playback_v2)}
     print("[run_sync_pipeline] second ingest → v2", flush=True)
-    _run([*argv, "--sync", chains], env=env_v2)
+    _run([*pipeline_argv, "--sync", chains], env=env_v2)
     after = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
     for s in DIFF_GROUPS:
         if before[s] == after[s]:
@@ -628,7 +629,7 @@ def _run_pipeline_twice_and_diff(
     # source's ingest and runs as part of that chain. The Slack ingest's
     # incremental request has no tape in either tree now, which it
     # reports and skips, and the store does not move.
-    _run([*argv, "--sync", chains], env=env_v2)
+    _run([*pipeline_argv, "--sync", chains], env=env_v2)
 
 
 def _diff_pairs_file(workspace: Path) -> Path:

@@ -6,7 +6,7 @@ step's job; this side never produces text.
 
 This document covers what's load-bearing and provider-specific. For the
 framework contracts every provider honors — schema-first, bulk-upsert
-chokepoints, commit lifecycle, `--reset-and-redownload` semantics — see
+chokepoints, commit lifecycle, what a reset does — see
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 For the row shapes and the identity argument, see
 [`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).

@@ -78,9 +78,6 @@ pub struct ScanOptions {
     pub ignore: Vec<String>,
     /// Skip files larger than this rather than hashing them.
     pub max_bytes: Option<u64>,
-    /// Ignore the cache and re-read every file. For
-    /// `--reset-and-redownload`, and for proving the cache honest.
-    pub force_rehash: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -324,11 +321,7 @@ where
             }
         }
 
-        let decision = if opts.force_rehash {
-            StampDecision::Rehash
-        } else {
-            fswalk::decide(cached.cursor(&entry.rel), &fresh)
-        };
+        let decision = fswalk::decide(cached.cursor(&entry.rel), &fresh);
         // A cursor that matches is only useful with the digest that
         // went with it; without one there is nothing to reuse.
         let reusable = matches!(decision, StampDecision::ReuseHash)
@@ -459,29 +452,6 @@ mod tests {
         assert_eq!(narrow.files.len(), 1);
         assert_eq!(narrow.stats.hashed, 0);
         assert_eq!(narrow.stats.reused, 1);
-    }
-
-    #[tokio::test]
-    async fn force_rehash_ignores_the_cache() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("tree");
-        write(&root, "a.txt", b"aaa");
-        let cache = fresh_cache(tmp.path()).await;
-        scan_all(&cache, &root).await;
-
-        let forced = scan(
-            &cache,
-            &root,
-            &ScanOptions {
-                force_rehash: true,
-                ..ScanOptions::default()
-            },
-            all,
-        )
-        .await
-        .unwrap();
-        assert_eq!(forced.stats.hashed, 1);
-        assert_eq!(forced.stats.reused, 0);
     }
 
     #[tokio::test]

@@ -227,9 +227,6 @@ impl Adjustments {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
 
     // One scan finds the `.mbox` files and says which have changed
     // since the last run, hashing only what the host cache cannot

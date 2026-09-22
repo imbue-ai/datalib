@@ -141,15 +141,14 @@ docs listing sits behind a per-project sweep marker in
 metadata changed, when no sweep has ever completed, or when the last one
 aged out — worst case one extra request per project per day.
 
-`--reset-and-redownload` truncates the data tables but not
-`sync_scope_state`, so the docs refetch after a reset is driven by the
-metadata skip-check finding an empty `projects` table, not by the TTL.
-`tests/reset_and_redownload.rs` pins that.
+A reset (`datalib-dag --reset`) empties `sync_scope_state` with the
+rest, so the next sync sweeps every project again;
+`tests/reset_and_resync.rs` pins that the rows come back identical.
 
 **Deletions are not mirrored.** A project or knowledge document removed
 upstream keeps its row (and keeps rendering) — the walk only ever
-upserts what the listing returns, same as conversations. A
-`--reset-and-redownload` is the way to drop them today. A UUID in
+upserts what the listing returns, same as conversations. A reset
+(`datalib-dag --reset`) is the way to drop them today. A UUID in
 `api.project_uuids` that matches nothing in any visible org logs
 `claude_project_uuid_not_found` rather than quietly mirroring
 nothing.
@@ -329,7 +328,7 @@ above is that it mostly won't.
 
 To force either one, make the API re-fetch: widen `api.since`, raise
 `refresh_most_recent_n_chat_count`, name the conversations in
-`api.conv_uuids`, or `--reset-and-redownload` for the whole store.
+`api.conv_uuids`, or `datalib-dag --reset` the whole store.
 
 ### The hazard: don't leave both download steps pointed at one store
 

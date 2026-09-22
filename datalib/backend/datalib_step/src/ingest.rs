@@ -38,22 +38,20 @@ pub async fn run(
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
-    // `always_clear_before_ingest` is the same wipe `--reset-and-redownload`
-    // performs, asked for by config rather than by a flag: every provider
-    // already truncates its entity tables and clears its cursors on that
-    // knob, so a source whose input is a complete snapshot gets deletions
-    // by re-writing from scratch.
-    let control = datalib_etl::control::DownloadControl {
-        reset_and_redownload: control.reset_and_redownload || planned.always_clear_before_ingest,
-        ..control.clone()
-    };
+    // The same wipe `datalib-dag --reset` does, asked for by config: a
+    // source whose input is a complete snapshot gets deletions by
+    // re-writing from scratch.
     if planned.always_clear_before_ingest {
         tracing::info!(
             source = %planned.name,
-            "download: always_clear_before_ingest — wiping this source's entity \
-             tables so anything its input has dropped falls out (the old rows \
-             stay in doltlite history)",
+            "download: always_clear_before_ingest — emptying this source's store \
+             so anything its input has dropped falls out (the old rows stay in \
+             doltlite history)",
         );
+        datalib_etl::doltlite_raw::reset_store(&datalib_etl::raw_layout::entities_db(
+            &planned.raw_path,
+        ))
+        .await?;
     }
     // Every processor in this source's wave writes the one raw store, so the
     // step can only claim what all of them can support. `all` on an empty
@@ -69,7 +67,7 @@ pub async fn run(
                 &planned.raw_path,
                 now,
                 &progress,
-                &control,
+                control,
                 metrics.clone(),
                 diagnostics.clone(),
             );

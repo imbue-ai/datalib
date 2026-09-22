@@ -5,14 +5,14 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 
 use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, DATA_TABLES, EDGE_TABLES};
+use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -80,23 +80,6 @@ impl RawDb {
     /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
         self.close_all().await;
-    }
-
-    /// `--reset-and-redownload`. Truncates every entity / edge data
-    /// table + bookkeeping sidecar and clears the per-feed file
-    /// cursors. CAS bytes (`cas_objects`) survive — same convention
-    /// as every other provider.
-    pub async fn reset(&self) -> Result<()> {
-        let all: Vec<&str> = DATA_TABLES
-            .iter()
-            .chain(EDGE_TABLES.iter())
-            .copied()
-            .collect();
-        dr::truncate_data_tables(&self.pool, &all).await?;
-        datalib_etl::file_checkpoint::clear_scope_prefix(&self.pool, CURSOR_SCOPE_PREFIX)
-            .await
-            .context("clear google_takeout file cursors on reset")?;
-        Ok(())
     }
 
     // ── loads (consumed by render / tests) ───────────────────────

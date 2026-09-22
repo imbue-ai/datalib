@@ -50,7 +50,7 @@ pub struct FetchOptions {
     pub retry_failed: bool,
     pub sleep_between: Duration,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
 
@@ -775,16 +775,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
 
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        tracing::info!(event = "notion_reset_and_redownload");
-        db.reset().await.context("reset raw db before redownload")?;
-    }
-    if opts.control.refetch_blobs {
-        tracing::info!(event = "notion_refetch_blobs");
-        datalib_etl::doltlite_raw::truncate_data_tables(db.pool(), &["notion_attachments"])
-            .await
-            .context("truncate notion_attachments before refetch")?;
-    }
     let run_config = json!({
         "subtree_pages": opts.subtree_pages,
         "max_pages": opts.max_pages,
@@ -866,7 +856,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &state,
                 SEARCH_SCOPE,
                 opts.refresh_window_days,
-                opts.full_sync || opts.control.reset_and_redownload,
+                opts.full_sync,
                 prior.as_ref(),
             );
             let (ids, newest_edited) =

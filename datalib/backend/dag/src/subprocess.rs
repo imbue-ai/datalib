@@ -38,13 +38,12 @@ pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
-/// Set to `1` when the user asked for a from-scratch re-download.
-/// A step that brings data in from outside the pipeline wipes its
-/// bookkeeping and ingests again — re-fetching from an origin, or
-/// re-reading its files in full; a step fed by other steps ignores it.
-pub const ENV_RESET_AND_REDOWNLOAD: &str = "DATALIB_DAG_RESET_AND_REDOWNLOAD";
-/// Set to `1` when the user asked for attachments/blobs to re-fetch.
-pub const ENV_REFETCH_BLOBS: &str = "DATALIB_DAG_REFETCH_BLOBS";
+/// Set by `datalib-dag --reset`, and then the step does no work: it
+/// drops what the value names — `store`, or `blobs` for an ingest
+/// step's store and its blob CAS with it — commits that, and exits. The runner has
+/// already forgotten the step ever succeeded, so the next run does its
+/// work from the start.
+pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
 /// Seconds between a step's checkpoints, at most — see
 /// `config::CheckpointCadence`.
 pub const ENV_CHECKPOINT_CADENCE: &str = "DATALIB_DAG_CHECKPOINT_CADENCE";
@@ -942,6 +941,47 @@ mod tests {
             "2026-07-21T00:00:00Z/step\n",
             "run-wide env is visible; the step's own env wins on collision"
         );
+    }
+
+    /// `--reset` invokes the step with `DATALIB_DAG_RESET` naming the
+    /// part, and forgets the step's last success, so the next run runs it
+    /// again with nothing marked as changed.
+    #[tokio::test]
+    async fn a_reset_invokes_the_step_with_the_part_and_forgets_its_success() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "src/raw",
+            sh(r#"
+                mkdir -p src/raw
+                echo "${DATALIB_DAG_RESET:-run}" >> src/raw/log.txt
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let log = root.path().join("src/raw/log.txt");
+        let r = Runner::new(root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+        assert!(crate::state::DagState::load(root.path()).unwrap().steps["src/raw"].succeeded);
+
+        r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw+blobs")])
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "run\nblobs\n",
+            "the reset invocation names the part and does nothing else"
+        );
+        assert!(
+            !crate::state::DagState::load(root.path())
+                .unwrap()
+                .steps
+                .contains_key("src/raw"),
+            "a reset step has never succeeded"
+        );
+        let err = r
+            .reset(&g, &[crate::scheduler::ResetTarget::parse("nope/raw")])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no such step"), "{err:#}");
     }
 
     /// The error message a stopped or failed step leaves behind is what

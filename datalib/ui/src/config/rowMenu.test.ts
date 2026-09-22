@@ -37,6 +37,8 @@ describe("rowMenu", () => {
       "log",
       "history",
       "reveal",
+      "reset",
+      "reset_blobs",
       "remove",
     ]);
     for (const m of menu) if (!m.separator) expect(m.disabled).toBeNull();
@@ -52,6 +54,25 @@ describe("rowMenu", () => {
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
     ).toBe("Not in the pipeline");
+  });
+
+  it("offers Reset on a source and its steps, and says why not elsewhere", () => {
+    const index = target({ id: "unified_index", type: null, statusFrom: null });
+    expect(entry(rowMenu([index], opts), "reset").disabled).toBe(
+      "Reset a source; the index follows it",
+    );
+    const busy = target({ stopJobId: "job-1" });
+    expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
+    const render = target({ kind: "step", func: "render_markdown" });
+    expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
+    expect(entry(rowMenu([render], opts), "reset_blobs").disabled).toBe(
+      "Only the download step keeps attachments",
+    );
+    const diff = target({ type: "diff" });
+    expect(entry(rowMenu([diff], opts), "reset").disabled).toBeNull();
+    expect(entry(rowMenu([diff], opts), "reset_blobs").disabled).toBe(
+      "A comparison downloads nothing",
+    );
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {

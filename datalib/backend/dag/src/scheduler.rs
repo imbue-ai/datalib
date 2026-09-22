@@ -116,6 +116,91 @@ impl Runner {
     }
 }
 
+/// One `--reset` argument: a step id, optionally `+blobs` to take an
+/// ingest step's blob CAS with its store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetTarget {
+    pub step: StepId,
+    pub part: String,
+}
+
+impl ResetTarget {
+    pub fn parse(arg: &str) -> ResetTarget {
+        let (step, part) = arg.split_once('+').unwrap_or((arg, "store"));
+        ResetTarget {
+            step: step.to_string(),
+            part: part.to_string(),
+        }
+    }
+}
+
+impl Runner {
+    /// Empty what the named steps wrote and forget that they ever ran, so
+    /// the next run does their work from the start. Each target is one
+    /// invocation of the step with `DATALIB_DAG_RESET` naming the part;
+    /// what that empties is the step's to say (`step_protocol.md` § Reset).
+    /// Nothing else runs: the caller holds the runner lock, which is what
+    /// makes emptying a store safe.
+    pub async fn reset(&self, graph: &Graph, targets: &[ResetTarget]) -> Result<()> {
+        let mut state = DagState::load(&self.data_root).context("load dag state")?;
+        for target in targets {
+            state.steps.remove(&target.step);
+        }
+        state.save(&self.data_root).context("save dag state")?;
+        for target in targets {
+            let &i = graph
+                .by_id
+                .get(&target.step)
+                .with_context(|| format!("--reset {}: no such step", target.step))?;
+            let spec = &graph.steps[i];
+            let StepRun::Subprocess { argv, env, .. } = &spec.run else {
+                anyhow::bail!("--reset {}: not a subprocess step", target.step);
+            };
+            let ctx = StepCtx {
+                step_id: spec.id.clone(),
+                group: spec.group.clone(),
+                group_type: spec.group_type.clone(),
+                function: spec.function.clone(),
+                data_root: self.data_root.clone(),
+                inputs: vec![],
+                changed_inputs: vec![],
+                progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
+                checkpoint: crate::step::CheckpointSink::disconnected(),
+            };
+            let mut child_env = (*self.child_env).clone();
+            child_env.insert(
+                crate::subprocess::ENV_RESET.to_string(),
+                target.part.clone(),
+            );
+            self.sink.emit(&Event::StepStart {
+                step: spec.id.clone(),
+                attempt: 1,
+                builtin: argv
+                    .first()
+                    .is_some_and(|prog| crate::config::is_datalib_step(prog)),
+            });
+            let result =
+                crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
+                    .await;
+            let (status, error) = match &result {
+                Ok(_) => (RunState::Succeeded, None),
+                Err(e) => (RunState::Failed, Some(format!("{:#}", e.error))),
+            };
+            self.sink.emit(&Event::StepFinish {
+                step: spec.id.clone(),
+                status,
+                error: error.clone(),
+                exit_code: None,
+                signal: None,
+            });
+            if let Some(error) = error {
+                anyhow::bail!("reset {}:{}: {error}", target.step, target.part);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Terminal state of one step in one run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepStatus {

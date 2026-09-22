@@ -1091,17 +1091,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _ = datalib_etl::latchkey::ensure_curl_router();
     let db = opts.db.clone();
 
-    if opts.control.reset_and_redownload {
-        tracing::info!(event = "slack_reset_and_redownload");
-        db.reset().await.context("reset raw db before redownload")?;
-    }
-    if opts.control.refetch_blobs {
-        tracing::info!(event = "slack_refetch_blobs");
-        db.clear_blob_hashes()
-            .await
-            .context("clear slack_attachments.blake3 before refetch")?;
-    }
-
     let since_dt =
         parse_iso_or_utc_date(&opts.since).with_context(|| format!("--since {:?}", opts.since))?;
     let since_ts = datetime_to_slack_ts(&since_dt);

@@ -613,7 +613,7 @@ export type SyncSource = {
 export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
 // The only kind enqueued today: one DAG run over the whole config
 // (`source_ids` optionally narrows it to selected sources).
-export type SyncJobKind = "all";
+export type SyncJobKind = "all" | "reset";
 
 export type SyncJob = {
   id: string;

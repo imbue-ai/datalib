@@ -52,13 +52,6 @@ const CHECKPOINT_SCOPE: &str = "carddav/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-        // Drop the resume cursor too, so every `.vcf` re-ingests
-        // rather than being skipped against a now-empty contacts table.
-        file_checkpoint::clear_scope(db.pool(), CHECKPOINT_SCOPE).await?;
-    }
-    let _ = opts.control.refetch_blobs;
 
     let account_id = opts
         .account_id_override

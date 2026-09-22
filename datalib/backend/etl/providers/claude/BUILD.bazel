@@ -71,13 +71,13 @@ rust_test(
     ],
 )
 
-# Integration test for --reset-and-redownload: synth a playback fixture,
-# fetch, reset, refetch, assert per-row data-table equality. Verifies
-# PK design is stable across re-downloads.
+# Synth a playback fixture, fetch, reset the store, fetch again, and
+# assert per-row data-table equality: the PK design is stable across
+# re-downloads.
 rust_test(
-    name = "claude_reset_and_redownload",
-    srcs = ["tests/reset_and_redownload.rs"],
-    crate_root = "tests/reset_and_redownload.rs",
+    name = "claude_reset_and_resync",
+    srcs = ["tests/reset_and_resync.rs"],
+    crate_root = "tests/reset_and_resync.rs",
     edition = "2021",
     deps = [
         ":datalib_etl_claude",

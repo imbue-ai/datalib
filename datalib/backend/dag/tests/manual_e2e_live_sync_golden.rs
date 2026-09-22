@@ -627,7 +627,7 @@ fn manual_e2e_live_sync_golden() {
     // makes run 2 re-query the trailing 30 days and whatever traffic fell
     // inside that window on the day of the bake.
 
-    // ── Third run: --reset-and-redownload content stability ───────────
+    // ── Third run: reset, then re-download; content stability ─────────
     let stability_dbs = ["tiny-slack/ingest/entities.doltlite_db"];
     // Skip (loudly) any db this config didn't produce, so a reduced config via
     // DATALIB_TEST_CONFIG doesn't crash here. On the full config a missing db
@@ -650,7 +650,7 @@ fn manual_e2e_live_sync_golden() {
         &cfg_path,
         &run_root,
         now3,
-        &["--reset-and-redownload"],
+        &["--reset", "tiny-slack/ingest", "--sync", "tiny-slack/ingest"],
     );
     assert!(
         run3.status.success(),
@@ -669,7 +669,7 @@ fn manual_e2e_live_sync_golden() {
         let drifts = json_diff_paths(before_v, &after_v, DRIFT_REPORT_LIMIT);
         assert!(
             drifts.is_empty(),
-            "{name}: content tables drifted across --reset-and-redownload.\n\
+            "{name}: content tables drifted across a reset and re-download.\n\
              Re-fetching an unchanged upstream object must land identical \
              bytes, so a drifting field is per-fetch bookkeeping leaking into \
              a content payload — declare it in that entity's \
@@ -975,7 +975,7 @@ const NON_CONTENT_TABLES: &[&str] = &[
 ];
 
 /// Dump only the entity *content* tables of a doltlite DB for the
-/// --reset-and-redownload stability assertion: drops every
+/// reset-then-resync stability assertion: drops every
 /// `*_bookkeeping` sidecar (per-fetch stamps + the `volatile_payload`
 /// split-outs) plus [`NON_CONTENT_TABLES`].
 fn content_tables(path: &Path) -> Value {

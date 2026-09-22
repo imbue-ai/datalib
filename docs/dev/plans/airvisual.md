@@ -337,7 +337,7 @@ challenge today), parse, one `bulk_upsert_in_tx`, then
 `UPDATE airvisual_devices SET last_<tier>_ts_ms = MAX(...)`. No cursor
 to resume from: every run fetches the same thing. The failure budget
 and the per-device `warn!` come over from yolink unchanged. Unlike
-yolink, a `reset_and_redownload` cannot recover anything older than the
+yolink, a reset and resync cannot recover anything older than the
 windows, so it should say so in its summary rather than look like a
 backfill.
 

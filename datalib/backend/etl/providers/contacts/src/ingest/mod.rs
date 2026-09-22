@@ -56,13 +56,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
-    // Contacts has no blob table at all (vCard PHOTO bytes ride inline
-    // in the payload column), so `refetch_blobs` is a no-op for this
-    // provider — explicitly nothing to do.
-    let _ = opts.control.refetch_blobs;
 
     let mut summary = FetchSummary::default();
     let account_id = host_for_account(&opts.server_url)?;

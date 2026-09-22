@@ -766,7 +766,7 @@ mod tests {
     // ║  readdir-skip fast path reuses the cached child list — which    ║
     // ║  never contained the previously-ignored entry. The newly-      ║
     // ║  unignored file is therefore SILENTLY NOT INDEXED until the     ║
-    // ║  directory's mtime next changes (or `--reset-and-redownload`).  ║
+    // ║  directory's mtime next changes (or the host cache is dropped). ║
     // ║                                                                ║
     // ║  This test pins the WRONG behavior so we get a failure the day  ║
     // ║  it changes. The fix (e.g. a per-directory effective-options    ║

@@ -9,7 +9,7 @@ as `(path, size, entries, blake3, optional identity uuid)` rows in
 This document covers what's load-bearing and provider-specific.
 For the framework contracts every provider honors —
 schema-first, bulk-upsert chokepoints, commit lifecycle,
-bookkeeping sidecars, `--reset-and-redownload` semantics —
+bookkeeping sidecars, what a reset does —
 see [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 For the row-level schema, see
 [`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).
@@ -107,10 +107,9 @@ The Unison-style fast-rescan cache survives the truncate by living
 reuse path still skips the `read(2)` + `blake3` on unchanged files.
 See `ingest::fetch` for the load-then-truncate ordering.
 
-The framework's `--reset-and-redownload` flag now means "ignore
-the cache too" — force a full rehash of every file even if the
-(mtime, size, inode) triple would have allowed reuse. Useful for
-verifying nothing has silently drifted.
+A reset (`datalib-dag --reset`) empties the store but not this host's
+cache, which lives outside it; to force a full rehash, drop the cache
+file.
 
 Caveat: the `<t>_bookkeeping` sidecars get truncated along with
 the entity tables, so the running `attempt_count` visible at HEAD

@@ -10,9 +10,9 @@ data root and asserts on what actually landed in the doltlite stores:
          must be IDENTICAL to run 1 (re-running must not duplicate or
          drop rows), signal's cursor must be untouched, and the
          `signal_snapshot_already_ingested` event must be emitted.
-  Run 3: `--reset-and-redownload` — the cursor row is wiped and signal
-         re-ingests, so the event must NOT be emitted; the store must
-         then converge back to exactly the same contents.
+  Run 3: `--reset` every raw store, then sync — the cursor row is wiped
+         and signal re-ingests, so the event must NOT be emitted; the
+         store must then converge back to exactly the same contents.
 
 The pytest invokes `run_sync_pipeline.py` as a subprocess (same
 contract as the prior sh_test).
@@ -1263,15 +1263,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
         )
 
-        # --- Run 3: --reset-and-redownload. The flag wipes signal's
-        # ingested_backups row before fetch, so the cursor MUST NOT
-        # short-circuit. (If --reset-and-redownload were silently
-        # dropped, this run would behave like run 2.)
+        # --- Run 3: reset, then sync. The reset empties signal's
+        # ingested_backups row, so the cursor MUST NOT short-circuit. (If
+        # the reset were silently dropped, this run would behave like
+        # run 2.)
         run3 = self._run_pipeline(reset=True)
         self.assertNotIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run3.stderr,
-            "after --reset-and-redownload wipes ingested_backups, "
+            "after the reset empties ingested_backups, "
             "signal must NOT report already_ingested on run 3",
         )
         # A reset re-downloads from scratch and must converge to the
@@ -1279,7 +1279,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_shape(),
             shape1,
-            "run 3 (--reset-and-redownload) must converge to the same index",
+            "run 3 (reset, then sync) must converge to the same index",
         )
         # The strongest form of the check: run 3 threw the raw stores
         # away and fetched again, so these ids were derived a second

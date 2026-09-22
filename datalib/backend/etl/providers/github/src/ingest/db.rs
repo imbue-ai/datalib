@@ -17,7 +17,6 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
-    DATA_TABLES,
 };
 
 #[derive(Clone, Debug, RawStoreHandle)]
@@ -90,10 +89,6 @@ impl RawDb {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
     // ── self_identity ───────────────────────────────────────────────
