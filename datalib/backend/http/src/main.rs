@@ -47,10 +47,11 @@ async fn main() -> anyhow::Result<()> {
         let _ = parent_gone_tx.send(());
         // Graceful shutdown waits for in-flight requests. One that never
         // ends must not become the very leak this watch exists to stop.
-        std::thread::sleep(std::time::Duration::from_secs(10));
-        datalib_parent_watch::report(
-            "datalib-http: parent gone and shutdown still running after 10s, exiting",
-        );
+        std::thread::sleep(PARENT_GONE_DEADLINE);
+        datalib_parent_watch::report(&format!(
+            "datalib-http: parent gone and shutdown still running after {}s, exiting",
+            PARENT_GONE_DEADLINE.as_secs()
+        ));
         std::process::exit(0);
     })
     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -146,6 +147,21 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Graceful shutdown waits for every open connection to end, and the
+/// `/api/sync/stream` SSE tail a browser tab holds never does on its own
+/// (the UI reconnects when it drops). So a shutdown that is still running
+/// this long after its cause is a hang, and the process exits instead.
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+/// Longer for a dead parent: nobody is watching, and the desktop shell's
+/// own kill is the fallback there.
+const PARENT_GONE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Resolves on the first Ctrl-C, SIGTERM or the parent pipe closing —
+/// and from then on arms the two ways out of a shutdown that will not
+/// finish: a second Ctrl-C ends the process at once, and
+/// [`SHUTDOWN_DEADLINE`] ends it regardless. Without those, the first
+/// Ctrl-C closes the listener and nothing more, and tokio's installed
+/// handler swallows every Ctrl-C after it.
 async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     let interrupt = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -176,10 +192,30 @@ async fn terminated(parent_gone: tokio::sync::oneshot::Receiver<()>) {
     };
 
     tokio::select! {
-        _ = interrupt => {}
-        _ = terminate => {}
+        _ = interrupt => {
+            tracing::info!("datalib-http: interrupted, shutting down (Ctrl-C again to exit now)");
+        }
+        _ = terminate => {
+            tracing::info!("datalib-http: terminated, shutting down");
+        }
         _ = parent_gone => {
             tracing::info!("datalib-http: parent process gone, shutting down");
         }
     }
+
+    tokio::spawn(async {
+        let _ = tokio::signal::ctrl_c().await;
+        datalib_parent_watch::report("datalib-http: interrupted again, exiting now");
+        std::process::exit(130);
+    });
+    // A plain thread, so it fires even if the runtime is what is stuck.
+    // The applets outlive nothing: their stdin pipe closes with us.
+    std::thread::spawn(|| {
+        std::thread::sleep(SHUTDOWN_DEADLINE);
+        datalib_parent_watch::report(&format!(
+            "datalib-http: shutdown still running after {}s (an open connection never ended), exiting",
+            SHUTDOWN_DEADLINE.as_secs()
+        ));
+        std::process::exit(0);
+    });
 }
