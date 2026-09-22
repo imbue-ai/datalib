@@ -27,16 +27,21 @@ import {
   isRemoteUrl,
   kindOf,
   loadingAttributes,
+  NO_CONTEXT,
   proxied,
   rewriteSrcset,
   rewriteStyleUrls,
+  type RemoteContext,
   type RemoteRef,
 } from "./remoteMedia";
 
 export type SanitizeOptions = {
-  /** Which remote references may load, through the server. Absent:
-   *  none. */
+  /** Which remote references may load, through the server — the
+   *  server's own answer, asked beforehand. Absent: none. */
   accept?: (url: string) => boolean;
+  /** What the body is, sent along with each load so the server can
+   *  judge a `document` or `source` row. */
+  context?: RemoteContext;
 };
 
 export type Sanitized = {
@@ -65,7 +70,12 @@ DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
 // DOMPurify's hooks are global and synchronous, so the options and the
 // findings of the call in progress live here for its duration.
 let accept: (url: string) => boolean = () => false;
+let context: RemoteContext = NO_CONTEXT;
 let found: RemoteRef[] = [];
+
+function toProxy(url: string): string {
+  return proxied(url, context);
+}
 
 function record(url: string, node: Node, attr: string, loaded: boolean): void {
   found.push({ url, host: hostOf(url), kind: kindOf(node.nodeName, attr), loaded });
@@ -88,19 +98,19 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
       if (remote.length === 0) continue;
       const all = remote.every(accept);
       for (const u of remote) record(u, node, attr, all);
-      if (all) el.setAttribute(attr, rewriteSrcset(value, proxied).srcset);
+      if (all) el.setAttribute(attr, rewriteSrcset(value, toProxy).srcset);
       else blockAttribute(el, attr, null);
     } else if (attr === "style") {
       const { style: stripped, remote } = rewriteStyleUrls(value, () => null);
       if (remote.length === 0) continue;
       const all = remote.every(accept);
       for (const u of remote) record(u, node, attr, all);
-      if (all) el.setAttribute(attr, rewriteStyleUrls(value, proxied).style);
+      if (all) el.setAttribute(attr, rewriteStyleUrls(value, toProxy).style);
       else blockAttribute(el, attr, stripped);
     } else if (isRemoteUrl(value)) {
       const loaded = accept(value);
       record(value, node, attr, loaded);
-      if (loaded) el.setAttribute(attr, proxied(value));
+      if (loaded) el.setAttribute(attr, toProxy(value));
       else blockAttribute(el, attr, null);
     }
   }
@@ -108,6 +118,7 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 
 export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}): Sanitized {
   accept = options.accept ?? (() => false);
+  context = options.context ?? NO_CONTEXT;
   found = [];
   const clean = DOMPurify.sanitize(html, {
     // Not in DOMPurify's default set; the plot pages are iframes.

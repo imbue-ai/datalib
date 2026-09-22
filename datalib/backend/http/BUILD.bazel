@@ -396,6 +396,7 @@ rust_test(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
+        "@datalib_crates//:url",
     ],
 )
 

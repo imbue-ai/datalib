@@ -29,11 +29,12 @@ function isRemoteHost(url: string): boolean {
   }
 }
 
-async function openMarketingEmail(page: Page) {
+/// Opens the fixture's Risa marketing email; returns its markdown uuid.
+async function openMarketingEmail(page: Page): Promise<string> {
   const resp = await page.request.get("/applet/unified_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
-    rows: { uuid: string; kind: string; conversation_name: string }[];
+    rows: { uuid: string; kind: string; conversation_name: string; markdown_uuid: string }[];
   };
   const email = rows.find(
     (r) => r.kind === "Email" && r.conversation_name === "Your shore leave awaits!",
@@ -43,6 +44,7 @@ async function openMarketingEmail(page: Page) {
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
   await selectRowByUuid(page, email!.uuid);
   await expect(page.locator(".chat-preview .chat-body")).toBeVisible();
+  return email!.markdown_uuid;
 }
 
 async function allowRows(page: Page): Promise<{ scope: string; key: string }[]> {
@@ -58,11 +60,14 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
     if (isRemoteHost(req.url())) remoteRequests.push(req.url());
   });
   const proxied: string[] = [];
+  const contexts = new Set<string>();
   await page.route("**/api/remote_media?**", async (route) => {
-    proxied.push(new URL(route.request().url()).searchParams.get("url") ?? "");
+    const params = new URL(route.request().url()).searchParams;
+    proxied.push(params.get("url") ?? "");
+    contexts.add(`${params.get("document")}|${params.get("source")}`);
     await route.fulfill({ status: 200, contentType: "image/png", body: PNG });
   });
-  await openMarketingEmail(page);
+  const md = await openMarketingEmail(page);
 
   const banner = page.locator(".chat-preview .remote-banner");
   const chips = page.locator(".chat-preview button.remote-media");
@@ -128,5 +133,8 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   await banner.getByRole("link", { name: "all rules" }).click();
   await expect(page.locator(".tg-grid").last()).toBeVisible();
 
+  // Every load said what it was for, which is what lets the server
+  // judge a `document` or `source` row.
+  expect([...contexts]).toEqual([`${md}|tng_email`]);
   expect(remoteRequests).toEqual([]);
 });

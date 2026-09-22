@@ -2,15 +2,19 @@
 // src="https://…">` in an email, a video in a chat, a CSS background —
 // and what the page does with them. Loading one tells its host who
 // opened the document and when (a tracking pixel is exactly that), so
-// unless an allow row says otherwise the sanitizer strips the
-// reference, keeps it on the element as `data-remote-<attr>`, and the
-// document view draws a placeholder naming the host. A reference an
-// allow row covers is rewritten to `/api/remote_media?url=…` instead:
-// the server fetches it once into its download CAS and serves it from
-// there, so the app's CSP can forbid the page from reaching a remote
-// host at all. The rules are pure so they are unit-testable; only
+// unless the server says an allow row covers it the sanitizer strips
+// the reference, keeps it on the element as `data-remote-<attr>`, and
+// the document view draws a placeholder naming the host. A covered
+// reference is rewritten to `/api/remote_media?url=…` instead: the
+// server checks the row again, fetches once into its download CAS and
+// serves from there, so the app's CSP can forbid the page from
+// reaching a remote host at all. Which rows cover what is decided on
+// the server only (`http/src/remote_media.rs`); nothing here reads
+// the rows. The rules are pure so they are unit-testable; only
 // `decorateRemoteMedia` touches a DOM.
-import { remoteMediaUrl, type RemoteAllow } from "@/api";
+import { remoteMediaUrl, type RemoteContext } from "@/api";
+
+export type { RemoteContext };
 
 export type RemoteKind = "image" | "media" | "style";
 
@@ -43,34 +47,10 @@ export function hostOf(value: string): string {
   }
 }
 
-export function proxied(value: string): string {
-  return remoteMediaUrl(absoluteRemote(value));
-}
+export const NO_CONTEXT: RemoteContext = { document: null, source: null };
 
-// ── The allow-list, applied ────────────────────────────────────────────
-
-/** What a document is, for the rows that name it or its source. */
-export type RemoteContext = { document: string | null; source: string | null };
-
-/** The allow row that lets a reference load, or null. Any scope will
- *  do; the widest is named first so the banner says the broadest
- *  reason. */
-export function allowedBy(
-  url: string,
-  ctx: RemoteContext,
-  allows: readonly RemoteAllow[],
-): RemoteAllow | null {
-  const abs = absoluteRemote(url);
-  const host = hostOf(url);
-  const bySource = allows.find((a) => a.scope === "source" && ctx.source && a.key === ctx.source);
-  if (bySource) return bySource;
-  const byDocument = allows.find(
-    (a) => a.scope === "document" && ctx.document && a.key === ctx.document,
-  );
-  if (byDocument) return byDocument;
-  const byHost = allows.find((a) => a.scope === "host" && host && a.key === host);
-  if (byHost) return byHost;
-  return allows.find((a) => a.scope === "url" && a.key === abs) ?? null;
+export function proxied(value: string, ctx: RemoteContext): string {
+  return remoteMediaUrl(absoluteRemote(value), ctx);
 }
 
 // ── Rewriting ──────────────────────────────────────────────────────────

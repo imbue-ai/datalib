@@ -10,9 +10,13 @@
 //! with the token the route is reachable by anything the page runs,
 //! and it must not become a way to read from the machine's own network.
 //!
-//! The allow rows are the page's memory, not a gate on this route: a
-//! caller holding the token may fetch any public URL, as it may do
-//! anything else the API offers.
+//! The allow rows are the one policy, and it is decided here: nothing
+//! is fetched or served that no row covers, and the page learns which
+//! of a document's references are covered by asking
+//! (`POST /api/remote_media/check`) rather than by reading the rows
+//! itself. What a `document` or `source` row covers is what the caller
+//! says it is loading for; the rows name the person's decisions, and
+//! the token names the person.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
@@ -67,13 +71,14 @@ impl RemotePolicy {
 }
 
 /// Why a fetch did not produce media. Each maps to one status: a
-/// malformed request is the caller's (400), a private target is refused
-/// (403), and everything upstream did or failed to do is a bad gateway
-/// (502) with the reason in the body.
+/// malformed request is the caller's (400), a private target or a URL
+/// no allow row covers is refused (403), and everything upstream did
+/// or failed to do is a bad gateway (502) with the reason in the body.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
     NotHttp(String),
     NoHost,
+    NotAllowed(String),
     PrivateAddress(IpAddr),
     Unresolvable(String),
     TooManyRedirects,
@@ -87,7 +92,7 @@ impl Refusal {
     pub fn status(&self) -> StatusCode {
         match self {
             Refusal::NotHttp(_) | Refusal::NoHost => StatusCode::BAD_REQUEST,
-            Refusal::PrivateAddress(_) => StatusCode::FORBIDDEN,
+            Refusal::PrivateAddress(_) | Refusal::NotAllowed(_) => StatusCode::FORBIDDEN,
             _ => StatusCode::BAD_GATEWAY,
         }
     }
@@ -98,6 +103,7 @@ impl std::fmt::Display for Refusal {
         match self {
             Refusal::NotHttp(u) => write!(f, "not an http(s) URL: {u}"),
             Refusal::NoHost => write!(f, "the URL names no host"),
+            Refusal::NotAllowed(u) => write!(f, "refused: no rule lets {u} load"),
             Refusal::PrivateAddress(ip) => {
                 write!(f, "refused: the host resolves to a private address ({ip})")
             }
@@ -279,21 +285,120 @@ pub async fn fetch(raw: &str, policy: &RemotePolicy) -> Result<Fetched, Refusal>
     Err(Refusal::TooManyRedirects)
 }
 
+// ── The policy: which row lets a URL load ────────────────────────────
+
+/// What the caller is loading for. A `document` row covers its
+/// `markdown_uuid`, a `source` row the source's id.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Context {
+    #[serde(default)]
+    pub document: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// The host as a `host` row names it — the same spelling the page's
+/// `URL.host` gives: the port only when it is written and not the
+/// scheme's own.
+pub fn host_key(url: &Url) -> String {
+    match (url.host_str(), url.port()) {
+        (Some(h), Some(p)) => format!("{h}:{p}"),
+        (Some(h), None) => h.to_string(),
+        (None, _) => String::new(),
+    }
+}
+
+/// The row that lets `url` load in `ctx`, widest first — so the
+/// answer names the broadest reason — or `None`.
+pub fn covered<'a>(
+    url: &Url,
+    ctx: &Context,
+    rows: &'a [RemoteMediaAllowRow],
+) -> Option<&'a RemoteMediaAllowRow> {
+    let scoped = |scope: AllowScope, key: Option<&str>| {
+        let key = key?;
+        rows.iter()
+            .find(|r| AllowScope::parse(&r.scope) == Some(scope) && r.key == key)
+    };
+    let host = host_key(url);
+    scoped(AllowScope::Source, ctx.source.as_deref())
+        .or_else(|| scoped(AllowScope::Document, ctx.document.as_deref()))
+        .or_else(|| {
+            scoped(
+                AllowScope::Host,
+                Some(host.as_str()).filter(|h| !h.is_empty()),
+            )
+        })
+        .or_else(|| scoped(AllowScope::Url, Some(url.as_str())))
+}
+
+#[derive(Deserialize)]
+pub struct CheckRequest {
+    #[serde(flatten)]
+    pub context: Context,
+    pub urls: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct Covered {
+    /// The URL as the caller wrote it.
+    pub url: String,
+    pub rule: RemoteMediaAllowRow,
+}
+
+#[derive(Serialize)]
+pub struct CheckResponse {
+    /// Every URL asked about that a row covers, with the row. A URL not
+    /// here is held.
+    pub allowed: Vec<Covered>,
+}
+
+pub async fn check(State(s): State<AppState>, Json(req): Json<CheckRequest>) -> Response<Body> {
+    let rows = match s.app.list_remote_allows().await {
+        Ok(rows) => rows,
+        Err(e) => return internal(e),
+    };
+    let allowed = req
+        .urls
+        .iter()
+        .filter_map(|raw| {
+            let url = target(raw).ok()?;
+            let rule = covered(&url, &req.context, &rows)?;
+            Some(Covered {
+                url: raw.clone(),
+                rule: rule.clone(),
+            })
+        })
+        .collect();
+    Json(CheckResponse { allowed }).into_response()
+}
+
 // ── The route: the CAS first, the host once ──────────────────────────
 
 #[derive(Deserialize)]
 pub struct MediaQuery {
     pub url: String,
+    #[serde(flatten)]
+    pub context: Context,
 }
 
 fn cas_path(root: &std::path::Path, sha256: &str) -> std::path::PathBuf {
     datalib_core::layout::remote_media_dir(root).join(sha256)
 }
 
-/// The bytes for a URL: from the CAS when it has been fetched before,
-/// else fetched, kept, and recorded.
-async fn bytes_for(s: &AppState, url: &str) -> Result<(String, Vec<u8>), Refusal> {
-    let url = target(url)?.to_string();
+/// The bytes for a URL some row lets load in `ctx`: from the CAS when
+/// it has been fetched before, else fetched, kept, and recorded.
+async fn bytes_for(s: &AppState, q: &MediaQuery) -> Result<(String, Vec<u8>), Refusal> {
+    let parsed = target(&q.url)?;
+    let rows = s
+        .app
+        .list_remote_allows()
+        .await
+        .map_err(|e| Refusal::Transport(format!("read the allow-list: {e}")))?;
+    if covered(&parsed, &q.context, &rows).is_none() {
+        return Err(Refusal::NotAllowed(parsed.to_string()));
+    }
+    let url = parsed.to_string();
     if let Ok(Some(row)) = s.app.get_remote_media(&url).await {
         if let Ok(body) = tokio::fs::read(cas_path(&s.root, &row.sha256)).await {
             return Ok((row.content_type, body));
@@ -363,7 +468,7 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
 }
 
 pub async fn get_media(State(s): State<AppState>, Query(q): Query<MediaQuery>) -> Response<Body> {
-    match bytes_for(&s, &q.url).await {
+    match bytes_for(&s, &q).await {
         Ok((content_type, body)) => response(&content_type, body),
         Err(refusal) => {
             tracing::info!(url = %q.url, "remote media: {refusal}");
@@ -568,6 +673,74 @@ mod tests {
             Refusal::NotMedia(String::new()).status(),
             StatusCode::BAD_GATEWAY
         );
+    }
+
+    fn row(scope: AllowScope, key: &str) -> RemoteMediaAllowRow {
+        RemoteMediaAllowRow {
+            allow_uuid: format!("{}:{key}", scope.as_str()),
+            scope: scope.as_str().to_string(),
+            key: key.to_string(),
+            created_at_utc: String::new(),
+            tz_offset: None,
+        }
+    }
+
+    /// The four scopes, widest first; a `document` or `source` row
+    /// only for the context the caller names.
+    #[test]
+    fn a_row_covers_by_url_host_document_or_source() {
+        let url = Url::parse("https://cdn.example/a.png").unwrap();
+        let ctx = Context {
+            document: Some("doc-1".into()),
+            source: Some("mail".into()),
+        };
+        assert!(covered(&url, &ctx, &[]).is_none());
+        let by = |rows: &[RemoteMediaAllowRow]| covered(&url, &ctx, rows).map(|r| r.scope.clone());
+        assert_eq!(
+            by(&[row(AllowScope::Url, url.as_str())]).as_deref(),
+            Some("url")
+        );
+        assert_eq!(
+            by(&[row(AllowScope::Host, "cdn.example")]).as_deref(),
+            Some("host")
+        );
+        assert_eq!(
+            by(&[row(AllowScope::Document, "doc-1")]).as_deref(),
+            Some("document")
+        );
+        assert!(by(&[row(AllowScope::Document, "doc-2")]).is_none());
+        assert_eq!(
+            by(&[row(AllowScope::Source, "mail")]).as_deref(),
+            Some("source")
+        );
+        assert!(covered(
+            &url,
+            &Context::default(),
+            &[row(AllowScope::Source, "mail")]
+        )
+        .is_none());
+        assert_eq!(
+            by(&[
+                row(AllowScope::Url, url.as_str()),
+                row(AllowScope::Host, "cdn.example"),
+                row(AllowScope::Source, "mail"),
+            ])
+            .as_deref(),
+            Some("source")
+        );
+        // A row this build cannot read covers nothing.
+        let mut unknown = row(AllowScope::Host, "cdn.example");
+        unknown.scope = "planet".into();
+        assert!(by(&[unknown]).is_none());
+    }
+
+    #[test]
+    fn a_host_key_carries_only_a_written_non_default_port() {
+        let key = |u: &str| host_key(&Url::parse(u).unwrap());
+        assert_eq!(key("https://cdn.example/a.png"), "cdn.example");
+        assert_eq!(key("https://cdn.example:443/a.png"), "cdn.example");
+        assert_eq!(key("http://cdn.example:8080/a.png"), "cdn.example:8080");
+        assert_eq!(key("https://CDN.Example/a.png"), "cdn.example");
     }
 
     #[tokio::test]
