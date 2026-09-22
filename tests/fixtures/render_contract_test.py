@@ -51,6 +51,26 @@ _BAZEL_WORKSPACE_DIR = "_main"
 # is the one outcome this test must never produce again.
 _SPAWN_TIMEOUT_SECS = 120
 
+# A store pool waits for its one connection for `datalib_pin::acquire_timeout`
+# — five minutes by default, for cold opens of multi-GB stores. Every store
+# here is a fixture, and a wait that outlives the deadline above is killed
+# before sqlx can say which store it was waiting on, which is how four CI
+# hangs came back with nothing in them. Below the deadline, so the child
+# fails by name and we get to read it.
+_POOL_ACQUIRE_SECS = 45
+
+
+def _tail(output: str | bytes | None, lines: int = 40) -> str:
+    """The last of what a spawn managed to say. `TimeoutExpired` carries
+    whatever was written before the deadline; a killed child has no other
+    record."""
+    if not output:
+        return ""
+    text = output if isinstance(output, str) else output.decode(errors="replace")
+    kept = text.splitlines()[-lines:]
+    return "".join(f"  | {ln}\n" for ln in kept) if kept else ""
+
+
 # Bookkeeping the ingest side owns and render never reads. Mutating it
 # proves nothing, and deleting `sync_runs` would only exercise the
 # framework's own skip. `_datalib_meta` is which build wrote the store.
@@ -107,6 +127,9 @@ class RenderContractTest(unittest.TestCase):
         cls.tmp = Path(
             os.environ.get("TEST_TMPDIR") or os.environ["RENDER_CONTRACT_TMP"]
         )
+        # Inherited by the driver, every step it spawns, and the doltlite
+        # shell: see `_POOL_ACQUIRE_SECS`.
+        os.environ["DATALIB_POOL_ACQUIRE_SECS"] = str(_POOL_ACQUIRE_SECS)
         cls.workspace = cls.tmp / "sync_workspace"
         cls.workspace.mkdir(parents=True, exist_ok=True)
         # Bazel fails a sharded test whose runner never touched this.
@@ -132,14 +155,23 @@ class RenderContractTest(unittest.TestCase):
             str(cls.workspace),
             *cls.fixture_paths,
         ]
-        result = subprocess.run(
-            argv,
-            check=False,
-            cwd=str(cls.cwd),
-            capture_output=True,
-            text=True,
-            timeout=_SPAWN_TIMEOUT_SECS * 5,
-        )
+        try:
+            result = subprocess.run(
+                argv,
+                check=False,
+                cwd=str(cls.cwd),
+                capture_output=True,
+                text=True,
+                timeout=_SPAWN_TIMEOUT_SECS * 5,
+            )
+        except subprocess.TimeoutExpired as hung:
+            # Whatever it managed to say before the deadline is the only
+            # evidence there will be: the process is gone, and the driver
+            # prints a line per step.
+            raise AssertionError(
+                f"the baseline pipeline hung for {_SPAWN_TIMEOUT_SECS * 5}s in "
+                f"{cls.workspace}\n{_tail(hung.stdout)}{_tail(hung.stderr)}"
+            ) from hung
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
@@ -158,9 +190,10 @@ class RenderContractTest(unittest.TestCase):
                 text=True,
                 timeout=_SPAWN_TIMEOUT_SECS,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as hung:
             self.fail(
-                f"doltlite hung for {_SPAWN_TIMEOUT_SECS}s on {db}:\n  {sql[:300]}"
+                f"doltlite hung for {_SPAWN_TIMEOUT_SECS}s on {db}:\n  {sql[:300]}\n"
+                f"{_tail(hung.stdout)}{_tail(hung.stderr)}"
             )
         if result.returncode != 0:
             if not must_succeed:
@@ -189,6 +222,7 @@ class RenderContractTest(unittest.TestCase):
         )
         env = {
             **os.environ,
+            "DATALIB_POOL_ACQUIRE_SECS": str(_POOL_ACQUIRE_SECS),
             "DATALIB_DAG_DATA_ROOT": str(data_root),
             "DATALIB_DAG_STEP": f"{group}/render_markdown",
             "DATALIB_DAG_GROUP": group,
@@ -212,10 +246,11 @@ class RenderContractTest(unittest.TestCase):
                 text=True,
                 timeout=_SPAWN_TIMEOUT_SECS,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as hung:
             self.fail(
                 f"datalib-step render_markdown for {group} hung for "
-                f"{_SPAWN_TIMEOUT_SECS}s in {data_root}"
+                f"{_SPAWN_TIMEOUT_SECS}s in {data_root}\n"
+                f"{_tail(hung.stdout)}{_tail(hung.stderr)}"
             )
         if result.returncode == 0:
             return None
