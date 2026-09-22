@@ -7,6 +7,10 @@ export type Source = { file: string; line: number | null };
 /// Where a line's file and line number point.
 export const SOURCE_REPO = "https://github.com/imbue-ai/datalib";
 
+/// The ref a link falls back to when the process that wrote the line
+/// could not say which commit it was built from.
+export const SOURCE_DEFAULT_REF = "main";
+
 /// The `filename` and `line_number` a tracing line carries, out of its
 /// `fields` JSON; nothing for a plain line. The path is the one rustc
 /// saw: repo-relative for our crates, except that a crate bazel compiles
@@ -57,9 +61,11 @@ export function sourceLabel(src: Source): string {
   return src.line == null ? src.file : `${src.file}:${src.line}`;
 }
 
-/// The line on GitHub at `commit`, or null for a file not in the repo.
-export function sourceUrl(commit: string, src: Source): string | null {
+/// The line on GitHub at `commit`, or at `main` when the commit is not
+/// known; null for a file not in the repo, where no link means anything.
+export function sourceUrl(commit: string | null | undefined, src: Source): string | null {
   if (!inRepo(src.file)) return null;
   const path = src.file.split("/").map(encodeURIComponent).join("/");
-  return `${SOURCE_REPO}/blob/${commit}/${path}${src.line == null ? "" : `#L${src.line}`}`;
+  const ref = commit || SOURCE_DEFAULT_REF;
+  return `${SOURCE_REPO}/blob/${ref}/${path}${src.line == null ? "" : `#L${src.line}`}`;
 }

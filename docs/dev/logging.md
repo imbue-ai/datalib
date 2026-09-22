@@ -63,13 +63,15 @@ release tarball and the .app carry one, and so does
 `bazelisk build //datalib/backend:bin`, so a `datalib-http` run
 straight out of `bazel-bin/datalib/backend/bin/` has it too. The
 process says which at boot (`build commit read from …`); one that has
-neither warns instead, records nothing, and the line inspector shows
-`file:line` as text instead of a link. Nothing is compiled into a
-binary — a rustc stamp would rebuild everything downstream on every
-commit; the staged file is one stamped genrule (`.bazelrc` §stamping).
-A step attempt running the built-in step program shares the runner's
-commit; a custom command has none; a page has the server's, since the
-bundle is embedded in the binary.
+neither warns instead and records nothing, and the log's source links
+point at `main` instead of a commit. The link is built when the line
+is shown, never stored: the store keeps the path rustc saw and the
+commit, and the UI (`runLogSource.ts`) makes the URL. Nothing is
+compiled into a binary — a rustc stamp would rebuild everything
+downstream on every commit; the staged file is one stamped genrule
+(`.bazelrc` §stamping). A step attempt running the built-in step
+program shares the runner's commit; a custom command has none; a page
+has the server's, since the bundle is embedded in the binary.
 
 ## Where a line comes from
 
