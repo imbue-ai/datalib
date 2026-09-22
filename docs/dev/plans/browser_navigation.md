@@ -1,10 +1,9 @@
 # Riding the browser's navigation
 
-*Proposal, 2026-09-22. What the card surface already gets from the
-browser, what it fails to get, and the short list of changes that
-would make a link, the back button, a bookmark and a new tab all mean
-what a person expects. Nothing here is built yet except the miller
-reveal fix that prompted it.*
+*Written 2026-09-22 as a proposal; its four changes are built (the
+reference is `cards.md` § "The miller layout and the browser"). Kept
+as the record of what was found and why the shape is what it is;
+§ "What this does not do" is still open.*
 
 ## The question
 
@@ -151,9 +150,19 @@ encodes as easily as the stack; the tiling split tree less so. Whether
 either earns that is a separate call; this plan makes the miller layout
 the one that rides the browser, and leaves the toggle where it is.
 
-## Order
+## What landed, and what the build taught
 
-1 and 3 are a day in `MillerView.vue` plus a reconcile function with a
-unit test and an e2e spec that presses Back. 2 touches `types.ts`,
-every layout's host commands, and three cards. 4 is the shell. Each
-lands on its own.
+All four, in one change. Two things the proposal had wrong: the entry
+being left needs no separate "replace with its final state" write,
+because a card's `setState` already writes as it happens — but those
+writes **must be queued**, since the router cancels a navigation another
+one overtakes, and a row click is a replace and a push in one tick.
+The e2e spec (`browser-history.spec.ts`) fails without the queue and
+was run that way once to prove it. And the reconcile keeps a column
+only when code *and* state match; a state-only difference remounts,
+which the grid's selection never triggers because the selection is
+written before the document is pushed.
+
+Still open from § "What this does not do": links from the grid's rows
+(a SlickGrid cell is not an anchor), the tree and tiling layouts, and
+whether the card chrome's ↗ should become the same `hrefFor` link.

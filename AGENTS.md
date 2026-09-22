@@ -55,7 +55,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md) — built: the typed table viewer and live `table_changed` frames.
 - [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field offers a native picker; read before adding a source to the wizard. Its design record — what shipped, what is still open — is [`plans/source_wizard.md`](docs/dev/plans/source_wizard.md).
 - [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's index-state columns (built) and selective re-indexing (proposal).
-- [`docs/dev/plans/browser_navigation.md`](docs/dev/plans/browser_navigation.md) — proposal: the miller stack is already a URL; push structure, replace state, make every in-app link an `<a href>`, and Back, bookmarks and new tabs come from the browser. Read before touching `syncUrl` or adding a history of any kind.
+- [`docs/dev/plans/browser_navigation.md`](docs/dev/plans/browser_navigation.md) — built: the miller stack rides the browser's history (push structure, replace state, one write queue, reconcile on Back); the reference is `cards.md` § "The miller layout and the browser". Read before adding a history of any kind.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
 
 **Dev workflow**

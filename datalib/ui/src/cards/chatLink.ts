@@ -15,6 +15,15 @@
 const CHAT_HREF_RE = /^(?:#|\/#?)?\/chat\/([^/?#]+)/;
 
 /**
+ * A click the browser should keep: a modifier or a non-primary button
+ * is how a person asks for a new tab or window, and the link's href
+ * is what that tab shows.
+ */
+export function isBrowserClick(ev: MouseEvent): boolean {
+  return ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0;
+}
+
+/**
  * Return the markdown UUID this click should navigate to, or null if
  * the click should fall through to the browser. Returns null when:
  *   - the target isn't (or isn't inside) an `<a>`,
@@ -33,9 +42,14 @@ export function chatHrefFromClick(ev: MouseEvent): string | null {
   if (!a) return null;
   // Plain-text href (NOT the resolved absolute URL) — the renderer
   // emits `/chat/<uuid>` and we want that exact form.
-  const href = a.getAttribute("href") ?? "";
+  const uuid = chatUuidFromHref(a.getAttribute("href") ?? "");
+  if (!uuid) return null;
+  if (isBrowserClick(ev)) return null;
+  return uuid;
+}
+
+/** The markdown uuid an internal `/chat/<uuid>` href names, or null. */
+export function chatUuidFromHref(href: string): string | null {
   const m = CHAT_HREF_RE.exec(href);
-  if (!m) return null;
-  if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return null;
-  return m[1];
+  return m ? m[1] : null;
 }
