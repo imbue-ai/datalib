@@ -30,7 +30,6 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/plans/supervisor.md`](docs/dev/plans/supervisor.md) — greenfield alternative to the join: one resident supervisor reconciles the graph, open requests (what someone asked for, and so what is in scope) and facts; sinks first-class with one writer at a time; the same verbs for a person at the screen and an agent at a shell.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it (runner, steps, server, pages of the app), how to add a line from each, how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 - [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — the design record behind `logging.md`: why one store, why metrics are not log lines.
-- [`docs/dev/plans/cancel_and_log_hygiene.md`](docs/dev/plans/cancel_and_log_hygiene.md) — proposal, from the first read of a live log store: a cancel orphans the step it cannot stop, and six smaller things the log showed. Read §1 before touching the cancel path or the fixture's run-store hygiene assertions.
 - [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
 
 **Data architecture**
