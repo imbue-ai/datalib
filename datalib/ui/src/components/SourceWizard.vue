@@ -1319,9 +1319,20 @@ function submit() {
   width: 7em;
 }
 /* Amount and unit read as one control: the boxes touch, and only the
-   outer corners are rounded. */
+   outer corners are rounded. The focus ring belongs to the pair for the
+   same reason — a ring around the amount alone is drawn along the seam
+   and over the unit box beside it, splitting the one control back into
+   two overlapping ones. */
 .wiz-bytes {
   display: inline-flex;
+  border-radius: 5px;
+}
+.wiz-bytes:focus-within {
+  outline: 2px solid var(--datalib-accent);
+  outline-offset: 1px;
+}
+.wiz-bytes .wiz-input:focus {
+  outline: none;
 }
 .wiz-bytes .wiz-num {
   border-radius: 5px 0 0 5px;
