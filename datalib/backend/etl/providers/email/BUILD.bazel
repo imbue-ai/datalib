@@ -1,6 +1,6 @@
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load("//tools:live.bzl", "live_run")
 
 exports_files(["Cargo.toml"])
 
@@ -87,6 +87,7 @@ rust_test(
 rust_test(
     name = "email_tests",
     srcs = glob(["tests/email_tests/*.rs"]),
+    args = ["--skip", "live::"],
     crate_root = "tests/email_tests/main.rs",
     data = glob(["tests/email_tests/snapshots/*.snap"], allow_empty = True) + [
         ":fixtures",
@@ -110,42 +111,16 @@ rust_test(
     ],
 )
 
-# Live test — talks to api.fastmail.com via latchkey. Manual.
-# Live Gmail REST API test: mirrors one label out of a real account and
-# asserts against the doltlite store it wrote. Needs a `google-gmail`
-# credential in the host's latchkey (hence no-sandbox) and talks to
-# Google (hence external).
-rust_test(
-    name = "gmail_live",
-    srcs = ["tests/gmail_live.rs"],
-    crate_root = "tests/gmail_live.rs",
-    edition = "2021",
-    tags = [
-        "external",  # talks to gmail.googleapis.com
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",  # latchkey reads the host keyring
-    ],
-    deps = [
-        ":datalib_etl_email",
-        "//datalib/backend/etl:datalib_etl",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
 insta_update(
     name = "email_tests.update",
     test = ":email_tests",
+    test_args = ["--skip", "live::"],
 )
 
-# `manual` keeps these out of `//...`, so nothing else ever builds them.
-# See scripts/lint_repo.py check 7.
-build_test(
-    name = "manual_targets_build",
-    targets = [
-        ":gmail_live",
-    ],
+# The live tests of `email_tests`'s `live` module — the ones its
+# `--skip live::` leaves out. `bazel run`, so they inherit the
+# shell's `LATCHKEY_CURL` and reach the host keyring.
+live_run(
+    name = "gmail_live",
+    test = ":email_tests",
 )

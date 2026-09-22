@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live ChatGPT single-conversation download test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use std::time::Duration;
 
@@ -14,7 +20,6 @@ use serde_json::{json, Value};
 const TARGET_ID: &str = "69b446c9-f0a0-832f-b9c2-5ccaaf3f108d";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn chatgpt_live_single_conv_snapshot() {
     let tmp = tempfile::TempDir::with_prefix("chatgpt-live-")
         .expect("create tempdir")

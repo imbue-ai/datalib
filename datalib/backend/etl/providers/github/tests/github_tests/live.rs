@@ -4,6 +4,12 @@
 #![allow(clippy::disallowed_macros)]
 
 //! Live GitHub single-PR download + render test.
+//!
+//! Not run by `bazel test`: every test here is named `live::<fn>`, and
+//! the target skips that prefix. `bazel run //datalib/backend/etl/providers/github:github_live` runs
+//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
+//! for the whole binary, and the snapshot `.update` targets already
+//! spend it.
 
 use datalib_etl_github::ingest::{self as github, parse_pr_ref, FetchOptions};
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
@@ -14,7 +20,6 @@ use serde_json::json;
 const DEFAULT_TARGET_PR: &str = "imbue-ai/mngr#1650";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn github_live_single_pr_snapshot() {
     let pr_ref = std::env::var("GITHUB_TEST_PR")
         .ok()

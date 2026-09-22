@@ -49,7 +49,10 @@ never the impersonator (`docs/dev/curl_impersonate.md`).
 A package's integration tests share one binary (below), so its
 snapshots are named for that binary and the whole package has one
 `.update`: `slack_tests.update` refreshes the goldens of every module
-in `tests/slack_tests/`.
+in `tests/slack_tests/`. Where a package also has a `live` module, its
+goldens come from the network, so the two are separate runs:
+`<p>_tests.update` carries `test_args = ["--skip", "live::"]` and
+`<p>_live.update` carries `test_args = ["live::"]`.
 
 When adding an insta-using test, declare a sibling `.update`:
 
@@ -99,6 +102,31 @@ Two things follow from sharing a process:
 A test that cannot share — a different `tags` (`no-sandbox`,
 `external`, `manual`), or a process-global it must own — is its own
 target, and its header says which of the two it is.
+
+### The `live` module
+
+A provider's live test — the one that talks to the real service through
+`latchkey` — is a module named `live` in the same binary, not a target
+of its own. Its tests are therefore named `live::<fn>`, the `rust_test`
+carries `args = ["--skip", "live::"]`, and a sibling `live_run` target
+(`tools/live.bzl`) runs exactly what that skips:
+
+```bash
+bazel run //datalib/backend/etl/providers/claude:claude_live
+```
+
+`bazel run`, because a `bazel test` of the same target would still apply
+its `--skip`, and because these tests need the invoking shell's
+environment — the host keyring, and `LATCHKEY_CURL` pointed at the
+router curl. The gain is that the live code compiles with the rest of
+the package's tests instead of in a link of its own, and still cannot
+rot.
+
+**Not `#[ignore]`.** That is one flag for the whole binary and
+`insta_update`'s `test_args = ["--ignored"]` already spends it on tests
+that are ignored for the ordinary reason
+(`//datalib/backend/dag:manual_e2e_live_sync_golden`). Two meanings in
+one binary would be indistinguishable.
 
 ## The Playwright suite runs in two engines
 
