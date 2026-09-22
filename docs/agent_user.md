@@ -116,14 +116,17 @@ some entries were dropped.
 
 Useful flags: `--sync <step-id>` (repeatable; runs the named download
 steps and everything downstream of them, and nothing else — pending
-work in other sources waits for a full run), `--parallelism N`, `--reset-and-redownload`,
-`--refetch-blobs`, `--binary-dir DIR` (where bare `command:` names like
-`datalib-step` resolve; defaults to the directory `datalib-dag` itself
-is in). A sync that fails with "has a shape this build's DDL cannot be
-reached from by adding columns" is a raw store an older build wrote in a
-shape this one cannot keep; nothing was changed, and if upstream still
-has the data, `--reset-and-redownload --sync <source>/ingest` is the way
-through.
+work in other sources waits for a full run), `--parallelism N`,
+`--reset <step-id>[:blobs]` (empties what that step wrote — its store,
+or an ingest step's blob CAS — keeping its doltlite history, so the
+next run does its work from the start; alone it does nothing else, with
+`--sync` it runs first), `--binary-dir DIR` (where bare `command:` names
+like `datalib-step` resolve; defaults to the directory `datalib-dag`
+itself is in). A sync that fails with "has a shape this build's DDL
+cannot be reached from by adding columns" is a raw store an older build
+wrote in a shape this one cannot keep; nothing was changed, and if
+upstream still has the data, `--reset <source>/ingest --sync
+<source>/ingest` is the way through.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (all step
 ids in topo order), then `step_start` / `progress_*` / `log` / `hint` /

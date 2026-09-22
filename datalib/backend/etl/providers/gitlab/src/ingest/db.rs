@@ -14,7 +14,7 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
 use super::canonicalize::canonicalize_payload;
-use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -83,10 +83,6 @@ impl RawDb {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
     // ── self_identity ───────────────────────────────────────────────

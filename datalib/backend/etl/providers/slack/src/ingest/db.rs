@@ -21,8 +21,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, slack_message_uuid, slack_thread_uuid,
-    ChannelRow, MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, DATA_TABLES,
-    USER_VOLATILE_PATHS,
+    ChannelRow, MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -79,32 +78,6 @@ impl RawDb {
 
     fn tape_ref(&self) -> Option<&EventTape> {
         self.tape.as_deref()
-    }
-
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything. Also clears the slack-scoped manifest-sweep markers
-    /// in `sync_scope_state` so a stale TTL doesn't suppress the
-    /// channel/user refetch.
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE 'slack:sweep:%'")
-            .execute(&self.pool)
-            .await
-            .context("clear slack manifest sweep markers on reset")?;
-        Ok(())
-    }
-
-    /// Reset bytes-have-been-fetched state for `refetch_blobs`: clear
-    /// the per-provider `blake3` column on the CAS-edge table so the
-    /// next walk re-decodes and re-stores. Cheaper than truncating
-    /// the edge rows themselves since the `(message_uuid, file_id)`
-    /// metadata is upstream-driven and unchanged.
-    pub async fn clear_blob_hashes(&self) -> Result<()> {
-        sqlx::query("UPDATE slack_attachments SET blake3 = NULL")
-            .execute(&self.pool)
-            .await
-            .context("clear slack_attachments.blake3")?;
-        Ok(())
     }
 
     pub async fn manifest_sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {

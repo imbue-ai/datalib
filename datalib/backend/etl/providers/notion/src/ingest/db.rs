@@ -15,7 +15,7 @@ use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, NotionAttachmentRow, DATA_TABLES};
+use super::schema_raw::{full_ddl, NotionAttachmentRow};
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
 #[derive(Clone, Debug, RawStoreHandle)]
@@ -165,10 +165,6 @@ impl RawDb {
     /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
         self.close_all().await;
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
     pub async fn page_states(&self) -> Result<std::collections::HashMap<String, PageState>> {

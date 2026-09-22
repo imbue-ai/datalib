@@ -23,10 +23,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
-use self::schema_raw::{
-    full_ddl, ns_id, sha8, SmsAttachmentRow, SmsCallRow, SmsMessageRow, CURSOR_SCOPE_PREFIX,
-    DATA_TABLES, EDGE_TABLES,
-};
+use self::schema_raw::{full_ddl, ns_id, sha8, SmsAttachmentRow, SmsCallRow, SmsMessageRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -96,23 +93,6 @@ impl RawDb {
         self.close_all().await;
     }
 
-    /// `--reset-and-redownload`. Truncates every entity / edge data
-    /// table + bookkeeping sidecar and clears the file cursors. CAS
-    /// bytes (`cas_objects`) survive — same convention as every other
-    /// provider.
-    pub async fn reset(&self) -> Result<()> {
-        let all: Vec<&str> = DATA_TABLES
-            .iter()
-            .chain(EDGE_TABLES.iter())
-            .copied()
-            .collect();
-        dr::truncate_data_tables(&self.pool, &all).await?;
-        file_checkpoint::clear_scope_prefix(&self.pool, CURSOR_SCOPE_PREFIX)
-            .await
-            .context("clear sms_backup_restore file cursors on reset")?;
-        Ok(())
-    }
-
     pub async fn load_payloads(
         &self,
         reads: datalib_etl::pin::Reads<'_>,
@@ -152,9 +132,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
 
     // One scan answers what `.xml` files are there and which have
     // changed since the last pass — walk, hash, and the decision not

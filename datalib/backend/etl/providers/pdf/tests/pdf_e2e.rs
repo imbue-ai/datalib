@@ -73,7 +73,6 @@ impl Harness {
             ignore: vec![],
             cache: cache.clone(),
             max_bytes: None,
-            force_rehash: false,
             now: NOW.to_string(),
             progress: datalib_etl::progress::Progress::noop(),
         })

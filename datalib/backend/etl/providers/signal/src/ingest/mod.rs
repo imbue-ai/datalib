@@ -77,22 +77,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
-    if opts.control.refetch_blobs {
-        // Wipe the attachment edge table and its bookkeeping so the next
-        // walk re-decrypts. `cas_objects` is never wiped — re-decrypted
-        // bytes hash to the same blake3 and the CAS insert is a no-op.
-        sqlx::query("DELETE FROM chat_item_attachments")
-            .execute(db.pool())
-            .await
-            .context("truncate chat_item_attachments")?;
-        sqlx::query("DELETE FROM chat_item_attachments_bookkeeping")
-            .execute(db.pool())
-            .await
-            .context("truncate chat_item_attachments_bookkeeping")?;
-    }
 
     let aep_env_var = opts
         .aep_env_var
@@ -134,7 +118,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             event = "signal_snapshot_already_ingested",
             snapshot = %snapshot_dir.display(),
             fingerprint = %fingerprint,
-            note = "skipping decrypt + walk; pass --reset-and-redownload to re-ingest",
+            note = "skipping decrypt + walk; `datalib-dag --reset` this step to re-ingest",
         );
         return Ok(FetchSummary {
             snapshot: snapshot_dir
@@ -191,7 +175,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Pre-load `(media_name → blake3)` for everything decrypted in a prior
     // run, so an attachment shared between two snapshots skips the AES
     // step. One query and O(N) memory, against N per-row queries during
-    // the walk. Empty after `--refetch-blobs`, so everything re-decrypts.
+    // the walk. Empty after a blobs reset, so everything re-decrypts.
     let already_decrypted: std::collections::HashMap<String, String> = {
         let rows = sqlx::query(
             "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
@@ -423,9 +407,9 @@ fn ingest_attachment(
 
     // Skip-check: if a prior run already decrypted this media_name
     // (anywhere in any chat_item), we know the blake3 without
-    // re-decrypting. The CAS already has the bytes
-    // (`cas_objects` survives `--reset-and-redownload`), so we
-    // just record the new (chat_item_id, slot) → blake3 edge.
+    // re-decrypting. The CAS already has the bytes (a store reset
+    // leaves `cas_objects` alone), so we just record the new
+    // (chat_item_id, slot) → blake3 edge.
     if let Some(blake3) = already_decrypted.get(&media_name) {
         pending.rows.push(schema_raw::ChatItemAttachmentRow {
             id: attachment_id,

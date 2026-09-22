@@ -65,9 +65,8 @@ impl DataProcessor for GitlabIngest {
             // narrows discovery via `updated_after`. The previous
             // unconditional `true` here disabled the entire
             // incremental path — every run re-discovered and
-            // re-fetched every MR in the user's scope. The
-            // `--reset-and-redownload` flag still forces a clean
-            // re-pull via `db.reset()` when actually needed.
+            // re-fetched every MR in the user's scope; a clean re-pull
+            // is `datalib-dag --reset`.
             refresh_window_days: self
                 .sync
                 .refresh_window_days

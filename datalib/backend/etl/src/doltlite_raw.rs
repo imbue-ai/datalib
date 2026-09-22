@@ -433,20 +433,8 @@ pub enum OnSchemaBreak {
     Refuse,
     /// Drop the table, recreate it empty, and forget the store's
     /// cursors so the next run refills it. Derived stores, whose rows
-    /// are a function of another store; and a raw store under
-    /// `--reset-and-redownload`, which is about to refill it anyway.
+    /// are a function of another store.
     Rebuild,
-}
-
-/// Set by `datalib-step` for a `--reset-and-redownload` run, where a
-/// raw store is about to be emptied and refilled and a refusal would
-/// only be in the way. Process-wide because the open sits under every
-/// provider's `RawDb::open`, which has no run context to read.
-static REBUILD_RAW_STORES: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub fn rebuild_raw_stores_on_schema_break() {
-    REBUILD_RAW_STORES.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// [`open`] without the shared download-bookkeeping tables. A *derived*
@@ -460,8 +448,7 @@ pub async fn open_derived(db_path: &Path, ddl: &[&str], kind: StoreKind) -> Resu
 }
 
 /// A raw store, for the process that owns it, with no migrations.
-/// [`OnSchemaBreak::Refuse`] unless this is a reset run
-/// ([`rebuild_raw_stores_on_schema_break`]).
+/// [`OnSchemaBreak::Refuse`].
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     open_migrating(db_path, extra_ddl, &[]).await
 }
@@ -475,12 +462,15 @@ pub async fn open_migrating(
     extra_ddl: &[&str],
     ladder: &[Migration],
 ) -> Result<SqlitePool> {
-    let policy = if REBUILD_RAW_STORES.load(std::sync::atomic::Ordering::Relaxed) {
-        OnSchemaBreak::Rebuild
-    } else {
-        OnSchemaBreak::Refuse
-    };
-    open_inner(db_path, extra_ddl, true, StoreKind::Raw, policy, ladder).await
+    open_inner(
+        db_path,
+        extra_ddl,
+        true,
+        StoreKind::Raw,
+        OnSchemaBreak::Refuse,
+        ladder,
+    )
+    .await
 }
 
 /// [`open`] with the policy said rather than taken from the process.
@@ -516,8 +506,9 @@ impl std::fmt::Display for SchemaBreak {
         write!(
             f,
             "Either add a rung to the provider's migration ladder (etl/README.md §\"The \
-             migration ladder\"), or — if upstream still has the data — re-download this \
-             source: `datalib-dag --reset-and-redownload --sync <source>/ingest <config>`."
+             migration ladder\"), or — if upstream still has the data — empty this \
+             source and download it again: `datalib-dag --reset <source>/ingest --sync \
+             <source>/ingest <config>`."
         )
     }
 }
@@ -868,6 +859,16 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
 }
 
 /// Empty vec if the table does not exist (no error).
+async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
+    // Audited: `table` is a quoted name parsed from our own DDL.
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) FROM \"{table}\""
+    )))
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("count {table}"))
+}
+
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
     // Audited: `table` is a quoted identifier from a `&'static str` or from
     // `parse_create_table_name` over our own DDL; never user input.
@@ -1031,6 +1032,9 @@ enum TablePlan {
     Add(Vec<String>),
     /// Present, and not reachable additively: what differs.
     Break(String),
+    /// As [`Break`](Self::Break), but empty, so nothing is lost by
+    /// dropping and recreating it under any policy.
+    Recreate(String),
 }
 
 /// Whether a column clause can go through `ALTER TABLE … ADD COLUMN`.
@@ -1058,7 +1062,14 @@ async fn plan_table_schema(pool: &SqlitePool, create_sql: &str, table: &str) -> 
             .filter(|d| !actual.iter().any(|a| a.name == d.name))
             .all(can_be_added);
     if !additive {
-        return Ok(TablePlan::Break(drift));
+        // "Its rows may be the only copy" is the whole argument for
+        // refusing, and an empty table has none: a reset store gets
+        // its new shape on the next open.
+        return Ok(if row_count(pool, table).await? == 0 {
+            TablePlan::Recreate(drift)
+        } else {
+            TablePlan::Break(drift)
+        });
     }
     let mut clauses = Vec::new();
     for col in declared
@@ -1185,6 +1196,12 @@ async fn apply_table_plan(
                  dropping and recreating the table from the DDL"
             );
         }
+        TablePlan::Recreate(what) => tracing::info!(
+            table,
+            what = %what,
+            "doltlite_raw: the stored shape cannot be reached by ADD COLUMN and the \
+             table is empty; recreating it from the DDL"
+        ),
     }
     // Audited: `table` is parsed from our own static DDL.
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
@@ -1502,28 +1519,91 @@ pub async fn problem_counts_at_path(
 
 // ── Reset ───────────────────────────────────────────────────────────
 
-/// Truncate every per-row table and its sidecar in one transaction, so the
-/// next `ingest::fetch` re-downloads from upstream. `sync_runs` and
-/// `sync_scope_state` survive — audit log and resume cursor, not content.
-///
-/// Table names are interpolated; callers pass trusted identifiers.
-pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin truncate tx")?;
-    for table in data_tables {
-        for sql in [
-            format!("DELETE FROM {table}"),
-            format!("DELETE FROM {table}_bookkeeping"),
-        ] {
-            // Audited: identifiers per this fn's documented contract; every
-            // callsite passes a `&'static str`.
+/// Tables a reset keeps: a record of what happened to the store, never
+/// of what it holds. The last is the render store's storage series,
+/// named here because this crate cannot see that schema.
+const KEPT_ON_RESET: &[&str] = &[
+    datalib_store_meta::TABLE,
+    "sync_runs",
+    "source_measurements",
+];
+
+/// Empty every table but [`KEPT_ON_RESET`] and commit, so the store reads
+/// as a source with nothing in it while its history keeps every row.
+/// Opened with no DDL, so a store whose shape this build refuses resets
+/// all the same; once its tables are empty the owner's next open
+/// recreates whatever it cannot reach additively. A store that does not
+/// exist has nothing to reset.
+pub async fn reset_store(db_path: &Path) -> Result<()> {
+    reset_with(db_path, |_| true, "reset").await
+}
+
+/// The blob side of a reset: empty the CAS beside `entities_db`, and
+/// forget on every edge row that its bytes were stored. A nullable
+/// `blake3` column is a CAS reference (`CasEdgeRow`), and `NULL` there is
+/// what makes the next download fetch the bytes again; a `NOT NULL`
+/// `blake3` is a file's own digest and stays.
+pub async fn reset_blobs(entities_db: &Path) -> Result<()> {
+    reset_with(
+        &crate::blob_cas::cas_path_for(entities_db),
+        |_| true,
+        "reset blobs",
+    )
+    .await?;
+    reset_with(entities_db, |_| false, "reset blobs").await
+}
+
+async fn reset_with(db_path: &Path, empty: impl Fn(&str) -> bool, message: &str) -> Result<()> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let pool = open_inner(
+        db_path,
+        &[],
+        false,
+        StoreKind::Raw,
+        OnSchemaBreak::Refuse,
+        &[],
+    )
+    .await?;
+    let result = async {
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .context("list tables")?;
+        // Decided before the transaction: the pool has one connection,
+        // and a `PRAGMA` inside the transaction would wait on it forever.
+        let mut statements = Vec::new();
+        for table in tables
+            .iter()
+            .filter(|t| !KEPT_ON_RESET.contains(&t.as_str()))
+        {
+            if empty(table) {
+                statements.push(format!("DELETE FROM \"{table}\""));
+            } else if table_columns(&pool, table)
+                .await?
+                .iter()
+                .any(|c| c.name == "blake3" && !c.not_null)
+            {
+                statements.push(format!("UPDATE \"{table}\" SET blake3 = NULL"));
+            }
+        }
+        let mut tx = pool.begin().await.context("begin reset tx")?;
+        for sql in &statements {
+            // Audited: the table is a quoted name read out of `sqlite_master`.
             sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .execute(&mut *tx)
                 .await
-                .with_context(|| format!("truncate {sql}"))?;
+                .with_context(|| format!("reset: {sql}"))?;
         }
+        tx.commit().await.context("commit reset tx")?;
+        commit_run(&pool, message).await.map(|_| ())
     }
-    tx.commit().await.context("commit truncate tx")?;
-    Ok(())
+    .await;
+    pool.close().await;
+    result.with_context(|| format!("reset {}", db_path.display()))
 }
 
 // ── Generic object-table ops ────────────────────────────────────────
@@ -2756,12 +2836,91 @@ mod tests {
         assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
+    /// A reset empties content and cursors alike, keeps the store's own
+    /// record of itself, and commits, so the rows are still in history.
+    /// The blob side empties the CAS and nulls only the nullable `blake3`
+    /// columns — the CAS references — leaving a file's own digest alone.
+    #[tokio::test]
+    async fn a_reset_empties_everything_but_the_record_and_a_blob_reset_forgets_the_bytes() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        const EDGE: &str =
+            "CREATE TABLE IF NOT EXISTS edges (id TEXT PRIMARY KEY, blake3 TEXT NULL)";
+        const FILES: &str =
+            "CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, blake3 TEXT NOT NULL)";
+        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
+        if !has_dolt_extensions(&pool).await {
+            pool.close().await;
+            return;
+        }
+        for sql in [
+            "INSERT INTO widgets (id) VALUES ('w1')",
+            "INSERT INTO edges VALUES ('e1', 'aa')",
+            "INSERT INTO files VALUES ('f1', 'bb')",
+            "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES ('s', 't')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        start_run(&pool, &json!({})).await.unwrap();
+        commit_run(&pool, "setup").await.unwrap();
+        let commits_before = count(&pool, "dolt_log").await;
+        pool.close().await;
+        let cas = crate::blob_cas::BlobCas::open(&crate::blob_cas::cas_path_for(&p))
+            .await
+            .unwrap();
+        cas.put(b"bytes", None).await.unwrap();
+        commit_run(cas.pool(), "cas").await.unwrap();
+        cas.close().await;
+
+        reset_blobs(&p).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
+        assert_eq!(
+            count(&pool, "widgets").await,
+            1,
+            "a blob reset keeps the rows"
+        );
+        let hashes: Vec<Option<String>> = sqlx::query_scalar("SELECT blake3 FROM edges")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hashes, vec![None], "the CAS reference is forgotten");
+        assert_eq!(
+            count(&pool, "files").await,
+            1,
+            "a NOT NULL blake3 is not a CAS reference"
+        );
+        pool.close().await;
+        let cas = crate::blob_cas::BlobCas::open(&crate::blob_cas::cas_path_for(&p))
+            .await
+            .unwrap();
+        assert_eq!(count(cas.pool(), "cas_objects").await, 0);
+        cas.close().await;
+
+        reset_store(&p).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL, EDGE, FILES]).await.unwrap();
+        for table in ["widgets", "edges", "files", "sync_scope_state"] {
+            assert_eq!(count(&pool, table).await, 0, "{table} emptied");
+        }
+        assert_eq!(count(&pool, "sync_runs").await, 1, "the run log is kept");
+        assert_eq!(
+            count(&pool, "dolt_log").await,
+            commits_before + 2,
+            "each reset is one commit, so the rows are still in history"
+        );
+        pool.close().await;
+    }
+
+    async fn count(pool: &SqlitePool, table: &str) -> i64 {
+        row_count(pool, table).await.unwrap()
+    }
+
     /// A column the DDL no longer declares cannot be reached by ADD, so a
     /// raw store refuses the open: the error names the table and the
     /// column, and the file — the column, the row — is exactly as it was.
-    /// The same store under `Rebuild` (a reset run) drops and recreates.
+    /// A reset empties the table without needing the DDL, and an empty
+    /// table is recreated by the next open rather than refused.
     #[tokio::test]
-    async fn a_removed_column_is_refused_untouched_and_rebuilt_only_on_a_reset() {
+    async fn a_removed_column_is_refused_untouched_and_recreated_once_reset() {
         let d = tempdir().unwrap();
         let p = d.path().join("recreate.doltlite_db");
         {
@@ -2791,7 +2950,7 @@ mod tests {
             "{}",
             brk.breaks[0].1
         );
-        assert!(brk.to_string().contains("--reset-and-redownload"));
+        assert!(brk.to_string().contains("--reset"));
 
         // Untouched: the column and the row are still there, and the
         // shape the DDL that wrote it declares still opens it.
@@ -2803,10 +2962,10 @@ mod tests {
         assert_eq!(v, "x");
         pool.close().await;
 
-        // A reset run rebuilds, which is what the old policy always did.
-        let pool = open_with(&p, &[WIDGETS_DDL], OnSchemaBreak::Rebuild)
+        reset_store(&p).await.unwrap();
+        let pool = open(&p, &[WIDGETS_DDL])
             .await
-            .unwrap();
+            .expect("an empty table is recreated, not refused");
         let cols = table_columns(&pool, "widgets").await.unwrap();
         assert!(
             !cols.iter().any(|c| c.name == "legacy_col"),
@@ -2900,9 +3059,9 @@ mod tests {
         );
     }
 
-    /// Every non-additive change refuses, and the message says which:
-    /// a changed type, a `NOT NULL` added, a key moved, a column that
-    /// needs a value existing rows do not have.
+    /// Every non-additive change to a table with rows refuses, and the
+    /// message says which: a changed type, a `NOT NULL` added, a key
+    /// moved, a column that needs a value existing rows do not have.
     #[tokio::test]
     async fn every_non_additive_change_is_refused_by_name() {
         let d = tempdir().unwrap();
@@ -2941,6 +3100,10 @@ mod tests {
         for (name, before, after) in cases {
             let p = d.path().join(format!("{name}.doltlite_db"));
             let pool = open(&p, &[before]).await.unwrap();
+            sqlx::query("INSERT INTO t (id) VALUES ('x')")
+                .execute(&pool)
+                .await
+                .unwrap();
             commit_run(&pool, "setup").await.unwrap();
             pool.close().await;
             match open(&p, &[after]).await {

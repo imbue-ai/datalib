@@ -14,7 +14,7 @@ use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, DATA_TABLES, JOIN_TABLES};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -54,43 +54,6 @@ impl RawDb {
     /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
         self.close_all().await;
-    }
-
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
-        let mut tx = self.pool.begin().await.context("begin reset tx")?;
-        for table in JOIN_TABLES {
-            let sql = format!("DELETE FROM {table}");
-            // Audited: `table` iterates a `&'static str` const array of our own table
-            // names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(sql))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("truncate {table}"))?;
-        }
-        // Every mode's cursor namespace, and the record of the config each
-        // cursor was taken under. A reset that cleared only one mode would
-        // leave a stale cursor pointing into a store that no longer has
-        // the rows it names; one that kept the config record would let it
-        // describe a store that no longer exists.
-        for prefix in ["jmap:%", "gmail:%", "mbox:%"] {
-            sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE ?")
-                .bind(prefix)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("clear {prefix} scope state on reset"))?;
-            sqlx::query("DELETE FROM sync_scope_config WHERE scope LIKE ?")
-                .bind(prefix)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("clear {prefix} scope config on reset"))?;
-        }
-        sqlx::query("DELETE FROM ingested_files")
-            .execute(&mut *tx)
-            .await
-            .context("clear mbox file checkpoints on reset")?;
-        tx.commit().await.context("commit reset tx")?;
-        Ok(())
     }
 
     // ── state tokens ────────────────────────────────────────────────
@@ -291,7 +254,7 @@ impl RawDb {
         Ok(())
     }
 
-    // ── blob skip-check + refetch-blobs control ────────────────────
+    // ── blob skip-check ────────────────────────────────────────────
 
     /// `(blob_id, blake3)` for every `.eml` already resolved to CAS bytes.
     /// Pre-loaded once at the top of `sync_blobs`, so the per-blob "do we have
@@ -312,19 +275,6 @@ impl RawDb {
             }
         }
         Ok(out)
-    }
-
-    /// Implements the `--refetch-blobs` control. Sets every
-    /// `email_blobs.blake3` back to NULL so the next `sync_blobs` pass
-    /// walks every `.eml` from scratch. The CAS itself is left alone —
-    /// re-downloaded bytes hash to the same blake3, the `INSERT OR
-    /// IGNORE` on the CAS side is a no-op.
-    pub async fn clear_blob_hashes(&self) -> Result<()> {
-        sqlx::query("UPDATE email_blobs SET blake3 = NULL")
-            .execute(&self.pool)
-            .await
-            .context("clear email_blobs.blake3")?;
-        Ok(())
     }
 }
 
@@ -451,7 +401,7 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
+    use crate::ingest::schema_raw::{AccountRow, EmailRow, MailboxRow};
     use datalib_etl::bulk::bulk_upsert_in_tx;
     use datalib_time::IsoOffsetTimestamp;
     use serde_json::json;
@@ -662,61 +612,5 @@ mod tests {
         // Namespaced — other type/account don't leak.
         assert!(db.load_state("A1", "Mailbox").await.unwrap().is_none());
         assert!(db.load_state("A2", "Email").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn reset_clears_data_joins_and_state_but_not_runs() {
-        let (_d, db) = tmp_db().await;
-        let acct = AccountRow::from_jmap_payload("A1", &json!({"name": "x"})).unwrap();
-        bulk(&db, &[acct]).await;
-        let mbox =
-            MailboxRow::from_jmap_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
-        bulk(&db, &[mbox]).await;
-        let email = EmailRow::from_jmap_envelope(
-            "A1",
-            &json!({
-                "id": "E1", "blobId": "B", "threadId": "T",
-                "mailboxIds": {"M1": true},
-            }),
-        )
-        .unwrap();
-        upsert_email(&db, &email).await;
-        db.save_state("A1", "Email", "tok").await.unwrap();
-        datalib_etl::scope_config::store(db.pool(), "gmail:download", &json!({"labels": ["x"]}))
-            .await
-            .unwrap();
-        let run = datalib_etl::doltlite_raw::start_run(db.pool(), &json!({"phase": "test"}))
-            .await
-            .unwrap();
-
-        db.reset().await.unwrap();
-
-        assert!(db.load_accounts().await.unwrap().is_empty());
-        assert!(db.load_mailboxes().await.unwrap().is_empty());
-        assert!(db.load_emails().await.unwrap().is_empty());
-        assert!(db.load_email_joins().await.unwrap().mailboxes.is_empty());
-        assert!(db.load_state("A1", "Email").await.unwrap().is_none());
-        // The record of the config the cursor was taken under goes with
-        // the cursor: kept, it would describe a store that no longer exists.
-        assert!(datalib_etl::scope_config::load(db.pool(), "gmail:download")
-            .await
-            .unwrap()
-            .is_none());
-        // sync_runs untouched.
-        let run_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_runs WHERE run_id = ?")
-            .bind(run)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        assert_eq!(run_count, 1);
-
-        // Suppress unused warning when the new threads loader isn't
-        // touched by the assertions above. `_` silences without
-        // editing the test set.
-        let _: Vec<Value> = db.load_threads().await.unwrap();
-
-        // Same for ThreadRow / from_payload — exercise the
-        // constructor so the import stays live across phase 1.
-        let _ = ThreadRow::from_jmap_payload("T1", "A1", &json!({"emailIds": ["E1"]})).unwrap();
     }
 }

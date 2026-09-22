@@ -208,12 +208,6 @@ fn ymd(d: NaiveDate) -> String {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
     let api = opts.api;
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
-    if opts.control.refetch_blobs {
-        db.clear_blob_hashes().await?;
-    }
     let since_str = match &api.since {
         Some(s) => s.clone(),
         None => ymd(opts.today - Duration::days(DEFAULT_SINCE_DAYS)),

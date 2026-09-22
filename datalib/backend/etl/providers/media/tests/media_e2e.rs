@@ -91,7 +91,6 @@ impl Harness {
             payload_max_bytes: None,
             playlists: true,
             skip_dataless: true,
-            force_rehash: false,
             now: NOW.to_string(),
             progress: datalib_etl::progress::Progress::noop(),
         }))
@@ -913,30 +912,6 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
     .fetch_all(db.pool())
     .await?;
     assert_eq!(rows.len(), 1, "five stale entries should be gone");
-    Ok(())
-}
-
-#[tokio::test]
-async fn force_rehash_re_reads_everything_without_changing_a_row() -> Result<()> {
-    let h = Harness::new().await?;
-    let first = h.scan().await?;
-    let db = &h.db;
-    let before = files(db).await?;
-
-    let forced = h
-        .scan_with(|o| ingest::FetchOptions {
-            force_rehash: true,
-            ..o
-        })
-        .await?;
-    assert_eq!(forced.hashed, first.entries_scanned, "every file re-read");
-    assert_eq!(forced.reused, 0);
-
-    assert_eq!(
-        files(db).await?,
-        before,
-        "re-reading unchanged bytes must produce identical rows"
-    );
     Ok(())
 }
 

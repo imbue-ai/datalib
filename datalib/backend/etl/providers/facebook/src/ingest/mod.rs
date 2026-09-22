@@ -149,10 +149,6 @@ type Tables = BTreeMap<String, BTreeMap<String, Value>>;
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    // Every run is a full snapshot of the export: the rows land by upsert
-    // and whatever the export no longer holds is pruned at the end of
-    // the same transaction, so there is nothing a reset would add.
-    let _ = opts.control.reset_and_redownload;
 
     let mut summary = FetchSummary::default();
     let mut by_table: Tables = BTreeMap::new();

@@ -249,12 +249,10 @@ Two rules follow:
 
 Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or index into qmd can be recomputed from raw without re-touching the network. `RENDER_VERSION` (in each provider's `render/render.rs`) is the explicit lever for "force a rebake of every document even when payloads are unchanged."
 
-## Verifiable via `--reset-and-redownload`
-A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to wipe the entity tables and the incremental cursors, refetch from scratch, and **let dolt's diff tell you what was missing**.
+## Verifiable via a reset
+A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-- **`--reset-and-redownload`** wipes every entity table + its `_bookkeeping` sidecar, and the per-provider CAS edge table (`<provider>_attachments`) with them — every provider lists its edge table in `DATA_TABLES`. The edge row's `blake3` is the "already have these bytes" index, so with it gone every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows.
-- **`--refetch-blobs`** clears only the `blake3` column on the edge tables, forcing the same re-download without touching the entities.
-- Pass `--reset-and-redownload` for a full reset; `--refetch-blobs` alone re-pulls the attachments of a store whose entities are fine. A reset that keeps the edge rows, so a gap check costs no blob bandwidth, would be a change to every provider's `reset()`; none makes it today.
+Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store but its own record of itself (`_datalib_meta`, `sync_runs`) and commits, so the rows stay in history; the runner forgets the step ever succeeded; the next sync finds an empty store with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. `--reset <source>/ingest:blobs` is the other half: it empties the CAS and nulls the `blake3` on every edge row (a nullable `blake3` column is a CAS reference), so the next sync re-fetches the bytes of a store whose entities are fine. `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
 
 ### A 200 can be wrong, and nothing in the store says so
 
@@ -281,7 +279,7 @@ some other reason — possibly never. The `me` row healed on the next run
 only because it is one of the few fetched unconditionally every time.
 
 There is no signal to gate on, so the only check is to fetch again and
-let the diff say what changed: **`--reset-and-redownload`, run now and
+let the diff say what changed: **a reset and a resync, run now and
 then rather than only when something looks wrong**. A field that
 "changes" across a reset on a record the upstream did not touch is the
 signature; the run-3 stability check in the manual e2e bake is the same
@@ -352,11 +350,10 @@ each ingest, then rewrites them from what the input holds now. Anything
 the input dropped is simply not written back. The old rows stay in
 history, so `dolt_diff` still says what went.
 
-Mechanically it is the config-driven form of `--reset-and-redownload`:
-[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) ORs the
-two together, and every provider already truncates on that knob. The
-blob CAS keeps its bytes — orphans there wait on a collector we have not
-built.
+Mechanically it is the config-driven form of `datalib-dag --reset`:
+[`ingest.rs`](/datalib/backend/datalib_step/src/ingest.rs) calls the
+same `reset_store` before the provider runs. The blob CAS keeps its
+bytes — orphans there wait on a collector we have not built.
 
 The condition is the whole rule: **absence in the input has to mean
 deletion.** For an input that is itself an evicting cache it means "not

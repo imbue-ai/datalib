@@ -51,8 +51,7 @@ impl DataProcessor for ChatgptIngest {
     /// gap — so a consumer reading one sees stale rows at worst, and the
     /// prune's deletions reach it through the same diff on the next pass.
     /// The one shape that would break that, a truncate before the refill,
-    /// happens only under `--reset-and-redownload`, and that run does not
-    /// checkpoint at all.
+    /// never happens inside a run: a reset is its own committed step.
     fn streams_output(&self) -> bool {
         true
     }

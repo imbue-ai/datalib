@@ -52,15 +52,6 @@ pub struct IngestSummary {
 pub async fn ingest(opts: IngestOptions) -> Result<IngestSummary> {
     let db = opts.db.clone();
 
-    // Each run replaces the snapshot wholesale anyway (upsert + prune),
-    // so a reset only changes how the intermediate diff reads. Do it
-    // when asked so `--reset-and-redownload` means the same thing here
-    // as everywhere else.
-    if opts.control.reset_and_redownload {
-        info!(event = "claude_export_reset_and_redownload");
-        db.reset().await.context("reset raw db before re-ingest")?;
-    }
-
     let run_config = serde_json::json!({ "input_path": opts.input_path });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let mut summary = IngestSummary::default();

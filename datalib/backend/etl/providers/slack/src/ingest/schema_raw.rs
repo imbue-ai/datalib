@@ -148,7 +148,7 @@ pub fn dm_display_name(
 /// the top-level `updated` millis spuriously on every fetch, so leaving
 /// it in the content payload would make `dolt_diff_channels` report a
 /// change on every re-download — defeating incremental render and the
-/// `--reset-and-redownload` "nothing changed" guarantee.
+/// reset-then-resync "nothing changed" guarantee.
 pub const CHANNEL_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"], &["num_members"]];
 
 /// `messages` — one row per Slack message (top-level or threaded
@@ -304,7 +304,7 @@ mod tests {
     ///
     /// The manual-e2e bake caught this for real on 2026-09-08: a
     /// calendar integration flipped someone to "In a meeting" between
-    /// two runs four minutes apart, and the `--reset-and-redownload`
+    /// two runs four minutes apart, and the reset-then-resync
     /// stability check failed on four `profile.status_*` paths.
     #[test]
     fn a_status_change_does_not_move_the_content_payload() {

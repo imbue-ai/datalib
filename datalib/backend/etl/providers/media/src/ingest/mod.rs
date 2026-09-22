@@ -48,9 +48,6 @@ pub struct FetchOptions {
     pub payload_max_bytes: Option<u64>,
     pub playlists: bool,
     pub skip_dataless: bool,
-    /// Ignore the rescan cache and re-read every file. Wired to the
-    /// framework's `--reset-and-redownload`.
-    pub force_rehash: bool,
     /// Run-pinned "now", per AGENTS.md — steps prefer `DATALIB_DAG_NOW`
     /// over sampling their own clock so one run's outputs agree. Every
     /// stamp this scan writes is this instant, as UTC with its offset
@@ -136,7 +133,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &fsscan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
-            force_rehash: opts.force_rehash,
         },
         kind::accept,
         |path, meta| {

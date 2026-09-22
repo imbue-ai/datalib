@@ -28,7 +28,7 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
-use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow, DATA_TABLES};
+use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -165,16 +165,6 @@ impl RawDb {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
-    pub async fn reset(&self) -> Result<()> {
-        for table in DATA_TABLES {
-            // Audited: `table` iterates a `&'static str` const array of our own
-            // table names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-                .execute(&self.pool)
-                .await?;
-        }
-        Ok(())
-    }
 }
 
 /// UPSERT one window's worth of readings through the shared
@@ -253,9 +243,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // Built before `opts.db` is moved out below.
     let scope_cfg = scope_config_blob(&opts.sync);
     let db = opts.db;
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
     let overlap_ms = opts.sync.overlap_minutes.unwrap_or(DEFAULT_OVERLAP_MINUTES) * 60_000;
     let stride_ms = opts.sync.window_days.unwrap_or(DEFAULT_WINDOW_DAYS) * 86_400_000;
     let window_ms = stride_ms.saturating_add(overlap_ms);

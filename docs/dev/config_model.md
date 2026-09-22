@@ -159,10 +159,10 @@ test in `methods.rs` fails when it drifts, and
   params the form would write reach an origin: an import has nothing
   to log in to (`SourceWizard.vue`).
 
-`DATALIB_DAG_RESET_AND_REDOWNLOAD` is *not* gated on it. Every step
-that brings data in from outside the pipeline honors the flag — a
-local method re-reads its files in full, the only "from scratch"
-button a user has — and the built-in ingest driver only logs the reach.
+`datalib-dag --reset` is *not* gated on it: it empties the step's store
+whatever the method, and the next sync reads its files or its origin in
+full — the only "from scratch" button a user has. The built-in ingest
+driver only logs the reach.
 
 ## What the loader checks
 

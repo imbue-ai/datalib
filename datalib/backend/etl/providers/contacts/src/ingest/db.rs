@@ -15,8 +15,8 @@ use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
+use super::schema_raw::full_ddl;
 pub use super::schema_raw::{addressbook_pk, contact_pk, AccountRow, AddressbookRow, ContactRow};
-use super::schema_raw::{full_ddl, DATA_TABLES};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -130,14 +130,6 @@ impl RawDb {
     /// connections to go away. Dropping only schedules that.
     pub async fn close(self) {
         self.close_all().await;
-    }
-
-    /// Wipe every per-row table so the next fetch re-downloads every
-    /// contact from the server. Also clears any persisted sync
-    /// tokens / ctags so the server gives us a full enumeration
-    /// rather than a one-row delta against a stale cursor.
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
     // ── accounts ────────────────────────────────────────────────────
@@ -431,6 +423,7 @@ impl RawDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::schema_raw::DATA_TABLES;
 
     #[tokio::test]
     async fn open_creates_data_and_bookkeeping_tables() {
@@ -514,29 +507,5 @@ mod tests {
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
         db.delete_contact("ab1", "/cards/X.vcf").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn reset_truncates_data_tables_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("contacts.doltlite_db");
-        let db = RawDb::open(&path).await.unwrap();
-        db.upsert_account("h", "https://h/", None, None)
-            .await
-            .unwrap();
-        let _ = datalib_etl::doltlite_raw::start_run(db.pool(), &serde_json::json!({"k": "v"}))
-            .await
-            .unwrap();
-        db.reset().await.unwrap();
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        assert_eq!(n, 0);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_runs")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        assert_eq!(n, 1, "sync_runs preserved on reset");
     }
 }

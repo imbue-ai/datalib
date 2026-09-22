@@ -93,7 +93,7 @@ The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
 run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
-There is no cursor, so `reset_and_redownload` has nothing to clear.
+There is no cursor for a reset to clear.
 
 After the rows are committed, every `uri` in every record is read off
 disk once and stored in the sibling `blobs.doltlite_db`, with one

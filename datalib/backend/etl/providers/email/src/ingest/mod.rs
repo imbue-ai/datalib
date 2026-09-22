@@ -163,7 +163,7 @@ pub struct FetchOptions {
     /// blob phase. `None` → [`DEFAULT_BLOB_CONCURRENCY`]; clamped to ≥ 1.
     pub blob_download_concurrency: Option<usize>,
     pub progress: datalib_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
 
@@ -232,16 +232,6 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
-    if opts.control.refetch_blobs {
-        // Per-provider clear that sets every `email_blobs.blake3` back
-        // to NULL so the next sync_blobs walk re-downloads every `.eml`
-        // from scratch.
-        db.clear_blob_hashes().await?;
-    }
 
     // Coarse per-phase progress so the bar moves even though we don't
     // have a meaningful per-item denominator before the first JMAP

@@ -91,8 +91,8 @@ cache can vouch for costs a `stat`.
 
 **A transcript that vanishes keeps its rows.** Claude Code deletes old
 sessions on its own schedule (`cleanupPeriodDays`), and outliving that
-is half the point of a mirror. `--reset-and-redownload` is the way to
-drop them.
+is half the point of a mirror. A reset (`datalib-dag --reset`) is the
+way to drop them.
 
 ## Render
 

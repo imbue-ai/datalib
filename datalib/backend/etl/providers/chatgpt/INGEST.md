@@ -105,9 +105,8 @@ signed URL, fetches the bytes through `latchkey curl`, and stores them
 in `blobs.doltlite_db` keyed by blake3, with a `chatgpt_attachments`
 row linking the conversation's `file_id` to that hash. Signed URLs
 rotate; bytes do not, so a file whose `blake3` is already on its edge
-row is not fetched again (`--refetch-blobs` clears the column and
-re-pulls; the CAS is never truncated, and re-fetched bytes land on the
-same hash). A failed blob bumps its `attempt_count` and `last_error`
+row is not fetched again (`datalib-dag --reset <source>/ingest:blobs`
+empties the CAS and clears the column, and the next sync re-pulls). A failed blob bumps its `attempt_count` and `last_error`
 and does not fail the sync. The name and MIME type render needs stay
 in the conversation payload; the edge table holds only the mapping.
 
@@ -122,8 +121,8 @@ chokepoint; when that gives up, `api::ChatGPTClient::get` maps the
 `HttpError::GaveUp` to `ChatGPTError::RateLimited` and the run stops
 cleanly, to resume from the same store next time.
 
-`--reset-and-redownload` truncates all three tables and their
-bookkeeping before the run, so the next doltlite commit's diff is
+A reset (`datalib-dag --reset`) empties all three tables and their
+bookkeeping, so the next sync's diff against the pre-reset commit is
 exactly what upstream changed. The CAS bytes survive, but with the
 edge rows gone every attachment is fetched over the wire again and
 lands on the hash it already had.

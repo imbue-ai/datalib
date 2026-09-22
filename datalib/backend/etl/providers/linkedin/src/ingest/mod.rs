@@ -148,9 +148,6 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-    // Every run is a full snapshot replace, so `--reset-and-redownload`
-    // is implicit: we DELETE+reinsert each present table below.
-    let _ = opts.control.reset_and_redownload;
 
     let mut summary = FetchSummary::default();
     let mut tx = db.pool().begin().await.context("begin linkedin tx")?;

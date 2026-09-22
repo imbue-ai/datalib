@@ -12,7 +12,7 @@ use datalib_etl::doltlite_raw::{self as dr};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 
-use super::schema_raw::{full_ddl, DATA_TABLES};
+use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -43,31 +43,6 @@ impl RawDb {
 
     pub fn cas(&self) -> &BlobCas {
         &self.cas
-    }
-
-    /// Every data table, and the walk cursors with them: a reset that
-    /// kept the cursors would refill the store from a week before today
-    /// and call the rest of the history done.
-    pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE 'garmin:%'")
-            .execute(&self.pool)
-            .await
-            .context("clear garmin cursors")?;
-        Ok(())
-    }
-
-    pub async fn clear_blob_hashes(&self) -> Result<()> {
-        for table in ["garmin_activity_files", "garmin_wellness_files"] {
-            // Audited: `table` is one of two literals.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "UPDATE {table} SET blake3 = NULL"
-            )))
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("clear {table}.blake3"))?;
-        }
-        Ok(())
     }
 
     /// `(id → payload text)` for every id listed, from one table. Ids
