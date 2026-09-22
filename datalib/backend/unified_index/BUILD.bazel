@@ -49,46 +49,15 @@ rust_test(
     ],
 )
 
-# The qmd index-state reader, against the REAL qmd index the fixture
-# builds. Guards the one claim the grid's Indexed / Embedded columns
-# rest on: `documents.hash` is the SHA-256 of the rendered file's
-# bytes, so a grid row can be joined to a qmd document without
-# reimplementing qmd's `handelize` path mangling. Both fixtures are
-# already inputs to //datalib/ui:e2e_test, so this adds no new work to
-# `bazel test //...`.
+# Every hermetic unified-index test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "qmd_index_state_test",
-    srcs = ["tests/qmd_index_state.rs"],
-    data = [
+    name = "unified_index_tests",
+    srcs = glob(["tests/unified_index_tests/*.rs"]),
+    crate_root = "tests/unified_index_tests/main.rs",
+    data = glob(["tests/unified_index_tests/snapshots/*.snap"], allow_empty = True) + [
         "//tests/fixtures:ingested/backend_index.doltlite_db",
-        "//tests/fixtures:ingested/qmd.tar",
-        "//tests/fixtures:ingested/qmd-index.tar",
-    ],
-    edition = "2021",
-    deps = [
-        ":datalib_unified_index",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:runfiles",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# The daemon's collection scoping, against a real `qmd mcp` subprocess
-# and the real fixture index. The only test in the tree that drives the
-# daemon at all: everything else stops at the JSON it would have sent, so
-# "scoped search returns that source's hits" was previously a claim no
-# test could falsify.
-#
-# Needs a Node to run qmd and the embedding model to answer the `vec`
-# half of a hybrid search. Both are bazel inputs, named through
-# `$(rlocationpath)` rather than written into the test, because their
-# repository names carry the host platform.
-rust_test(
-    name = "qmd_daemon_scope_test",
-    size = "large",
-    srcs = ["tests/qmd_daemon_scope.rs"],
-    data = [
         "//tests/fixtures:ingested/qmd.tar",
         "//tests/fixtures:ingested/qmd-index.tar",
         "@nodejs_host//:node_bin",
@@ -98,106 +67,37 @@ rust_test(
     ],
     edition = "2021",
     env = {
-        "QMD_DAEMON_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-        # Anchored on the generated package dir, not the source
-        # package.json: in the runfiles tree the latter symlinks back
-        # into the source directory, where `node_modules/` does not
-        # exist. See the same note in //datalib/ui:BUILD.bazel.
-        "QMD_DAEMON_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "INSTA_WORKSPACE_ROOT": ".",
         "QMD_DAEMON_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "QMD_DAEMON_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        "QMD_DAEMON_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "RUST_TEST_THREADS": "1",
     },
     deps = [
-        ":datalib_unified_index",
-        "//datalib/backend/runtime:datalib_runtime",
-        "@datalib_crates//:runfiles",
-        "@datalib_crates//:tempfile",
-    ],
-)
-
-# End-to-end test of the production DoltRepo path against a doltlite
-# file in a throwaway temp dir. No subprocess, no port — runs anywhere.
-rust_test(
-    name = "dolt_backend_integration_test",
-    srcs = ["tests/dolt_backend_integration.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_unified_index",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# (The documented example configs are validated by
-# //datalib/backend/datalib_step:datalib_step_unittests, which plans
-# them through the real dispatcher.)
-
-# Insta snapshot of the TNG fixture's `backend_index.doltlite_db` contents. Catches
-# silent data drift in the load pipeline — most recently the
-# WAL-not-checkpointed bug where the genrule shipped an empty .db.
-# Update by running `cargo insta review` from datalib/backend.
-rust_test(
-    name = "fixture_db_snapshot_test",
-    srcs = ["tests/fixture_db_snapshot.rs"],
-    # Force the crate name so insta's `.snap` lookup ("<crate>__<test>.snap")
-    # agrees with what cargo would generate. Without this, bazel uses the
-    # rule name (`fixture_db_snapshot_test`) while cargo uses the source
-    # filename (`fixture_db_snapshot`), and the two would write/read
-    # different files.
-    crate_name = "fixture_db_snapshot",
-    data = [
-        "//tests/fixtures:ingested/backend_index.doltlite_db",
-    ] + glob(
-        ["tests/snapshots/fixture_db_snapshot__*.snap"],
-        allow_empty = True,
-    ),
-    edition = "2021",
-    env = {
-        # insta defaults to writing .new files next to the source file,
-        # which it locates via CARGO_MANIFEST_DIR. Bazel doesn't surface
-        # the source tree to the test, so point insta at the workspace
-        # root explicitly. Same trick the per-provider snapshot tests use.
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    deps = [
-        # For `Provider::Datalib`: the storage rows are treated
-        # differently here, and the tag they carry should come from the
-        # enum that owns its spelling rather than a literal.
-        "//datalib/backend/schema:datalib_schema",
+        ":datalib_unified_index",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
 )
 
+
+
+# (The documented example configs are validated by
+# //datalib/backend/datalib_step:datalib_step_unittests, which plans
+# them through the real dispatcher.)
+
+
 insta_update(
-    name = "fixture_db_snapshot_test.update",
-    test = ":fixture_db_snapshot_test",
+    name = "unified_index_tests.update",
+    test = ":unified_index_tests",
 )
 
-# The qmd hit↔row mapping invariants, exercised without the live `qmd`
-# CLI or an ingested fixture.
-#
-# This file sat in `datalib/backend/etl/tests/` with no BUILD target for
-# its whole life — never compiled, never run by `bazelisk test //...`.
-# It exercises `unified_index::qmd`, so it lives here now, and it has a
-# target.
-rust_test(
-    name = "qmd_mapping_test",
-    srcs = ["tests/qmd_mapping.rs"],
-    crate_name = "qmd_mapping",
-    edition = "2021",
-    deps = [
-        ":datalib_unified_index",
-        "//datalib/backend/schema:datalib_schema",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-    ],
-)

@@ -89,33 +89,13 @@ rust_binary(
     ],
 )
 
-# The runner refuses a root a newer datalib wrote, on --check and on a
-# run, before anything is written.
+# Every hermetic runner test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "newer_root_test",
-    size = "small",
-    srcs = ["tests/newer_root.rs"],
-    data = [":datalib_dag_bin"],
-    edition = "2021",
-    env = {
-        "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
-    },
-    deps = [
-        "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/store_meta:datalib_store_meta",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-# The runner exits with the process that started it, and takes its
-# steps along. Runs the real binary under the parent-watch probe, which
-# is the parent the test can SIGKILL.
-rust_test(
-    name = "parent_gone_test",
-    size = "medium",
-    srcs = ["tests/parent_gone.rs"],
+    name = "dag_tests",
+    srcs = glob(["tests/dag_tests/*.rs"]),
+    crate_root = "tests/dag_tests/main.rs",
     data = [
         ":datalib_dag_bin",
         "//datalib/backend/parent_watch:parent_watch_probe",
@@ -126,9 +106,14 @@ rust_test(
         "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
     },
     deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )
+
 
 # Live end-to-end golden: drives the real pipeline (this runner +
 # //datalib/backend/datalib_step) against real provider APIs, and snapshots the
