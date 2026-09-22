@@ -1,10 +1,12 @@
 // The sanitizer's treatment of remote references (issue #648): every
 // way a body can make the browser fetch from another host is held
-// back, and the placeholders say what was held.
+// back unless the allow-list lets it through — then it goes through
+// the server — and the placeholders say what was held.
 
 import { describe, expect, it } from "vitest";
 
-import { decorateRemoteMedia } from "./remoteMedia";
+import type { RemoteAllow } from "@/api";
+import { allowedBy, decorateRemoteMedia } from "./remoteMedia";
 import { sanitizeRenderedHtml } from "./sanitize";
 
 function dom(html: string): HTMLElement {
@@ -27,7 +29,18 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(imgs[0].classList.contains("remote-blocked")).toBe(true);
     expect(imgs[1].getAttribute("src")).toBe("blobs/own.png");
     expect(imgs[1].classList.contains("remote-blocked")).toBe(false);
-    expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image" }]);
+    expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image", loaded: false }]);
+  });
+
+  it("lets an accepted reference through, proxied", () => {
+    const { html, remote } = sanitizeRenderedHtml(`<img src="${HERO}"><img src="${PIXEL}">`, {
+      accept: (u) => u === HERO,
+    });
+    const imgs = dom(html).querySelectorAll("img");
+    expect(imgs[0].getAttribute("src")).toBe(`/api/remote_media?url=${encodeURIComponent(HERO)}`);
+    expect(imgs[0].classList.contains("remote-blocked")).toBe(false);
+    expect(imgs[1].getAttribute("src")).toBeNull();
+    expect(remote.map((r) => r.loaded)).toEqual([true, false]);
   });
 
   it("covers every attribute a browser fetches from", () => {
@@ -63,6 +76,28 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(remote.find((r) => r.url === "https://v.example/a.mp4")!.kind).toBe("media");
     expect(remote.find((r) => r.url === "https://c.example/bg.png")!.kind).toBe("style");
     expect(remote.find((r) => r.url === "//a.example/x.mp3")!.host).toBe("a.example");
+
+    // And every one of them comes back proxied when accepted.
+    const loaded = sanitizeRenderedHtml(body, { accept: () => true }).html;
+    expect(loaded).not.toMatch(/(?<![\w-])(src|poster|background|href|srcset)="(https?:|\/\/)/);
+    expect(loaded).toContain(
+      `srcset="/api/remote_media?url=${encodeURIComponent("https://s.example/a.jpg")} 1x, blobs/b.jpg 2x"`,
+    );
+    expect(loaded).toContain(
+      `background-image: url(&quot;/api/remote_media?url=${encodeURIComponent("https://c.example/bg.png")}&quot;)`,
+    );
+    expect(loaded).toContain(
+      `src="/api/remote_media?url=${encodeURIComponent("https://a.example/x.mp3")}"`,
+    );
+  });
+
+  it("holds a srcset or a style whole unless every URL in it is accepted", () => {
+    const body = `<img srcset="https://s.example/a.jpg 1x, https://t.example/b.jpg 2x"><p style="background: url(https://s.example/x.png), url(https://t.example/y.png)">z</p>`;
+    const { html, remote } = sanitizeRenderedHtml(body, {
+      accept: (u) => u.startsWith("https://s.example/"),
+    });
+    expect(html).not.toContain("/api/remote_media");
+    expect(remote.every((r) => !r.loaded)).toBe(true);
   });
 
   it("does not show a reference the source itself claimed to have held", () => {
@@ -80,6 +115,31 @@ describe("sanitizeRenderedHtml and remote references", () => {
   });
 });
 
+describe("allowedBy", () => {
+  const row = (scope: RemoteAllow["scope"], key: string): RemoteAllow => ({
+    allow_uuid: `${scope}:${key}`,
+    scope,
+    key,
+    created_at_utc: "2026-09-22T00:00:00.000000Z",
+    tz_offset: null,
+  });
+  const ctx = { document: "doc-1", source: "mail" };
+
+  it("matches by url, host, document or source, widest first", () => {
+    expect(allowedBy(HERO, ctx, [])).toBeNull();
+    expect(allowedBy(HERO, ctx, [row("url", HERO)])?.allow_uuid).toBe(`url:${HERO}`);
+    expect(allowedBy("//cdn.example/x.png", ctx, [row("host", "cdn.example")])?.scope).toBe("host");
+    expect(allowedBy(HERO, ctx, [row("document", "doc-1")])?.scope).toBe("document");
+    expect(allowedBy(HERO, ctx, [row("document", "doc-2")])).toBeNull();
+    expect(allowedBy(HERO, ctx, [row("source", "mail")])?.scope).toBe("source");
+    expect(allowedBy(HERO, { document: null, source: null }, [row("source", "mail")])).toBeNull();
+    expect(
+      allowedBy(HERO, ctx, [row("url", HERO), row("host", "cdn.example"), row("source", "mail")])
+        ?.scope,
+    ).toBe("source");
+  });
+});
+
 describe("the placeholders", () => {
   it("name the host, keep the URL on hover, and call a 1×1 a tracking pixel", () => {
     const { html } = sanitizeRenderedHtml(
@@ -88,10 +148,11 @@ describe("the placeholders", () => {
     const root = dom(html);
     decorateRemoteMedia(root);
     decorateRemoteMedia(root);
-    const chips = root.querySelectorAll(".remote-media");
+    const chips = root.querySelectorAll("button.remote-media");
     expect(chips).toHaveLength(2);
     expect(chips[0].textContent).toBe("🖼cdn.exampleHero");
-    expect(chips[0].getAttribute("title")).toBe(HERO);
+    expect(chips[0].getAttribute("title")).toContain(HERO);
+    expect((chips[0] as HTMLElement).dataset.remoteUrl).toBe(HERO);
     expect(chips[1].textContent).toBe("🖼pixel.exampletracking pixel");
     expect(chips[1].classList.contains("remote-media--pixel")).toBe(true);
   });

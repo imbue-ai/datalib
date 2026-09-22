@@ -7,6 +7,9 @@ use async_trait::async_trait;
 
 use app_schema::disk_usage::DiskUsageRow;
 use app_schema::feedback::FeedbackRow;
+use app_schema::remote_media::allow::RemoteMediaAllowRow;
+use app_schema::remote_media::media::RemoteMediaRow;
+use app_schema::remote_media::AllowScope;
 use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +113,41 @@ pub trait AppRepo: Send + Sync {
     }
 
     async fn recent_disk_usage(&self, _limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    // --- Remote media: the allow-list and the download CAS's index ----
+
+    async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Record a decision to load; the row already there for the same
+    /// `(scope, key)` comes back rather than a second one.
+    async fn allow_remote(
+        &self,
+        _scope: AllowScope,
+        _key: &str,
+    ) -> Result<RemoteMediaAllowRow, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Whether a row was there to delete.
+    async fn delete_remote_allow(&self, _allow_uuid: &str) -> Result<bool, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    async fn get_remote_media(&self, _url: &str) -> Result<Option<RemoteMediaRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    async fn list_remote_media(&self) -> Result<Vec<RemoteMediaRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Record a URL fetched into the CAS; a second fetch of the same
+    /// URL replaces the row.
+    async fn record_remote_media(&self, _row: RemoteMediaRow) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 }

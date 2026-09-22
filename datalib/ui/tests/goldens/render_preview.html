@@ -303,7 +303,7 @@ code.hljs {
 }
 /* The remote-images banner: above the body with the problems, since
    what the document would fetch from elsewhere is something to know
-   before reading it. */
+   before reading it. Muted once everything is loaded. */
 .remote-banner {
   display: flex;
   flex-wrap: wrap;
@@ -312,30 +312,97 @@ code.hljs {
   margin: 0 0 0.5rem;
   padding: 0.4rem 0;
   font-size: 0.8rem;
+  color: var(--datalib-muted);
   border-top: 1px solid var(--datalib-border);
   border-bottom: 1px solid var(--datalib-border);
 }
-.remote-banner-text {
+.remote-banner--pending {
+  color: inherit;
+}
+.remote-banner-text,
+.remote-banner-rules,
+.remote-banner-error {
   flex: 1 1 100%;
 }
-.remote-banner-hosts {
+.remote-banner-hosts,
+.remote-banner-actions,
+.remote-banner-rules {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 0.3rem;
   align-items: center;
 }
-.remote-host {
-  font-family: ui-monospace, Menlo, monospace;
+.remote-banner-actions,
+.remote-banner-links {
+  margin-left: auto;
+}
+.remote-banner-links {
+  font-size: 0.75rem;
+  color: var(--datalib-muted);
+}
+.remote-banner-links a {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+.remote-host,
+.remote-action,
+.remote-rule {
+  font: inherit;
   font-size: 0.75rem;
   line-height: 1.3;
   padding: 0.1rem 0.5rem;
+  color: inherit;
   background: var(--datalib-input-bg, #fff);
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-radius: 999px;
 }
+.remote-host,
+.remote-action {
+  cursor: pointer;
+}
+.remote-host:hover,
+.remote-action:hover {
+  background: var(--datalib-hover, #f0f0f0);
+}
+.remote-host:disabled,
+.remote-action:disabled,
+.remote-rule-forget:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.remote-host {
+  font-family: ui-monospace, Menlo, monospace;
+}
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
+}
+.remote-load-all {
+  border-color: var(--datalib-accent, #6366f1);
+}
+.remote-rules-label {
+  font-size: 0.75rem;
+}
+.remote-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.remote-rule-forget {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.remote-rule-forget:hover {
+  color: #e35d6a;
+}
+.remote-banner-error {
+  color: #e35d6a;
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body
@@ -737,21 +804,27 @@ code.hljs {
 .chat-body .remote-blocked {
   display: none;
 }
-.chat-body .remote-media {
+.chat-body button.remote-media {
   display: inline-flex;
   align-items: baseline;
   gap: 0.35rem;
   max-width: 100%;
   margin: 0.15rem 0;
   padding: 0.2rem 0.6rem;
+  font: inherit;
   font-size: 0.8rem;
   line-height: 1.3;
   color: var(--datalib-muted, #94a3b8);
   background: var(--datalib-card-bg, #fafafa);
   border: 1px dashed var(--datalib-border, #d8d8d8);
   border-radius: 6px;
-  /* The full URL is in `title`; say so with the cursor. */
-  cursor: help;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-body button.remote-media:hover {
+  color: inherit;
+  border-style: solid;
+  background: var(--datalib-hover, #f0f0f0);
 }
 .chat-body .remote-media .remote-media-icon {
   filter: grayscale(1);

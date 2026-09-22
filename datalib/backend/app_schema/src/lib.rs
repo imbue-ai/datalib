@@ -13,6 +13,8 @@ pub mod disk_usage {
     include!("disk_usage.rs");
 }
 
+pub mod remote_media;
+
 pub mod runs;
 
 #[cfg(test)]

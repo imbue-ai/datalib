@@ -63,13 +63,21 @@ const props = defineProps<{
    * through unchanged.
    */
   markdownUuid?: string | null;
+  /**
+   * Which of the body's remote references may load, through the
+   * server: the allow-list applied (`remoteMedia.ts`). Absent: none.
+   * A new function re-renders the body under the new answer.
+   */
+  remoteAccept?: (url: string) => boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
   /** Every remote reference the body carries, after each render;
-   *  held back by the sanitizer, shown as placeholders here. */
+   *  those held back are shown as placeholders here. */
   (e: "remote-media", refs: RemoteRef[]): void;
+  /** A placeholder was clicked: the person wants this one loaded. */
+  (e: "remote-load", url: string): void;
   /**
    * Fired when the cursor enters or leaves an `.edge-source` span.
    * Payload is the edge's destination — `{ md, anchor }` — or null
@@ -139,11 +147,32 @@ for (const rule of ["html_block", "html_inline"] as const) {
 // Sanitized last, after every rewrite: the body is whatever the source
 // sent, and `html: true` above lets it through as HTML.
 const sanitized = computed(() =>
-  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null })),
+  sanitizeRenderedHtml(md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }), {
+    accept: props.remoteAccept,
+  }),
 );
 const html = computed(() => sanitized.value.html);
 watch(sanitized, (s) => emit("remote-media", s.remote), { immediate: true });
 const root = ref<HTMLElement | null>(null);
+
+// A re-render that only let an image through must not scroll the
+// reader back to the selected section; only a new body earns that.
+let bodyChanged = true;
+watch(
+  () => props.body,
+  () => {
+    bodyChanged = true;
+  },
+);
+
+function onRemoteChipClick(ev: MouseEvent) {
+  const chip = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.remote-media");
+  if (!chip) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const url = chip.dataset.remoteUrl;
+  if (url) emit("remote-load", url);
+}
 
 async function onCopyClick(ev: MouseEvent) {
   const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>("button.copy-uuid");
@@ -263,7 +292,7 @@ function applyHoverDst() {
   if (target) target.classList.add("hover-dst");
 }
 
-function applySelection() {
+function applySelection(scroll = true) {
   if (!root.value) return;
   for (const el of root.value.querySelectorAll(".msg.selected")) {
     el.classList.remove("selected");
@@ -283,7 +312,7 @@ function applySelection() {
   // A clamped message shows only its first screenful, so a selection
   // deeper than that would be highlighted where nobody can see it.
   target.closest(".msg--clamped")?.classList.remove("msg--clamped");
-  scrollSectionToTop(target);
+  if (scroll) scrollSectionToTop(target);
 }
 
 watch(html, async () => {
@@ -294,7 +323,8 @@ watch(html, async () => {
     decorateLongMessages(root.value);
   }
   decorateEdgeSources();
-  applySelection();
+  applySelection(bodyChanged);
+  bodyChanged = false;
   applyHoverDst();
 });
 watch(
@@ -342,6 +372,7 @@ onMounted(() => {
       (ev) => {
         onBodyEdgeClick(ev);
         onCopyClick(ev);
+        onRemoteChipClick(ev);
       }
     "
     @mouseover="onBodyMouseOver"
@@ -616,21 +647,27 @@ onMounted(() => {
 .chat-body .remote-blocked {
   display: none;
 }
-.chat-body .remote-media {
+.chat-body button.remote-media {
   display: inline-flex;
   align-items: baseline;
   gap: 0.35rem;
   max-width: 100%;
   margin: 0.15rem 0;
   padding: 0.2rem 0.6rem;
+  font: inherit;
   font-size: 0.8rem;
   line-height: 1.3;
   color: var(--datalib-muted, #94a3b8);
   background: var(--datalib-card-bg, #fafafa);
   border: 1px dashed var(--datalib-border, #d8d8d8);
   border-radius: 6px;
-  /* The full URL is in `title`; say so with the cursor. */
-  cursor: help;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-body button.remote-media:hover {
+  color: inherit;
+  border-style: solid;
+  background: var(--datalib-hover, #f0f0f0);
 }
 .chat-body .remote-media .remote-media-icon {
   filter: grayscale(1);

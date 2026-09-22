@@ -21,6 +21,9 @@ pub fn datalib_source_id() -> &'static str {
 /// no QMD parsing.
 #[derive(Debug, Default, Clone)]
 pub struct ChatMeta {
+    /// The configured source's id (`grid_rows.source_id`); what the
+    /// document view keys its per-source settings on.
+    pub source_id: Option<String>,
     pub name: Option<String>,
     pub account: Option<String>,
     pub project: Option<String>,

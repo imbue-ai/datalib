@@ -1,4 +1,5 @@
-// The specs that rewrite the data root's `config.toml`.
+// The specs that rewrite the data root's `config.toml` — or any other
+// store under it that every spec would otherwise share.
 export const CONFIG_MUTATING = [
   "config-error",
   "data-sources-browse",
@@ -8,6 +9,8 @@ export const CONFIG_MUTATING = [
   "data-sources-name",
   "data-sources-menu",
   "grid-source-id",
+  // Writes the remote-media allow-list, not the config.
+  "remote-images-load",
   "sources-view",
   "wizard-select",
   "wizard-email",

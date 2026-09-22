@@ -181,6 +181,9 @@ export type ChatResponse = {
   created_at: string | null;
   source_label: string | null;
   source_url: string | null;
+  /// The configured source this document came from, as the grid's
+  /// Source column shows it; null when no grid row points at the doc.
+  source_ref: Identity | null;
   body: string;
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
@@ -199,6 +202,56 @@ export type DocEntry = {
   provider: string;
   created_at: string | null;
 };
+// --- Remote media (issue #648) --------------------------------------------
+// A document's images on remote hosts are held back until a person lets
+// them load. A decision is an allow row in `system/remote_media`; the
+// bytes of a URL let through are fetched once by the server into its
+// download CAS and served from there. Mirrors `app_schema::remote_media`.
+
+export type AllowScope = "url" | "document" | "host" | "source";
+
+export type RemoteAllow = {
+  allow_uuid: string;
+  scope: AllowScope;
+  /// The URL, the document's markdown uuid, the host, or the source's id.
+  key: string;
+  created_at_utc: string;
+  tz_offset: string | null;
+};
+
+/// The two tables as typed tables, for `tableView({ url })`.
+export const REMOTE_ALLOW_TABLE = "/api/remote_media/allow";
+export const REMOTE_FETCHED_TABLE = "/api/remote_media/fetched";
+
+/// A remote image or media file, fetched by the server on the page's
+/// behalf: the app's CSP lets the page reach no remote host itself
+/// (`cards/remoteMedia.ts`).
+export function remoteMediaUrl(url: string): string {
+  return `/api/remote_media?url=${encodeURIComponent(url)}`;
+}
+
+export async function fetchRemoteAllows(signal?: AbortSignal): Promise<RemoteAllow[]> {
+  const table = await getJson<{ rows: RemoteAllow[] }>(REMOTE_ALLOW_TABLE, signal);
+  return table.rows;
+}
+
+export async function allowRemote(scope: AllowScope, key: string): Promise<RemoteAllow> {
+  const r = await fetch(REMOTE_ALLOW_TABLE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, key }),
+  });
+  if (!r.ok) throw new Error(`POST ${REMOTE_ALLOW_TABLE} → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as RemoteAllow;
+}
+
+export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
+  const r = await fetch(`${REMOTE_ALLOW_TABLE}/${encodeURIComponent(allowUuid)}`, {
+    method: "DELETE",
+  });
+  if (!r.ok && r.status !== 404) throw new Error(`DELETE allow → ${r.status}: ${await r.text()}`);
+}
+
 // --- The unified_index applet --------------------------------------------
 export const UNIFIED_INDEX = "/applet/unified_index";
 
