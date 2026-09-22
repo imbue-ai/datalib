@@ -140,16 +140,16 @@ published from a local machine — the tag is the trigger.
    gh pr create --base main --head release-vX.Y.Z \
      --title "chore(release): bump version X.Y.Z → X.Y'.Z'"
    gh pr checks <n> --watch --fail-fast
-   gh pr merge <n> --merge
+   gh pr merge <n> --squash
    ```
 
-   The merge is a merge commit (that is how every PR here lands), so
-   the commit on `main` is not the bump commit itself.
-9. Tag the merge commit on main and push the tag:
+   The PR lands squashed (that is how every PR here lands), so the
+   commit on `main` is a new hash, not the bump commit you pushed.
+9. Tag the squashed commit on main and push the tag:
    `git fetch origin && git tag vX.Y.Z origin/main && git push origin vX.Y.Z`.
-   Check first that `origin/main` is that merge and nothing landed on
-   top of it (`git log --oneline -3 origin/main`); tag the merge by
-   sha if something did.
+   Check first that `origin/main` is that commit and nothing landed on
+   top of it (`git log --oneline -3 origin/main`); tag it by sha if
+   something did.
 10. Watch the workflow to completion:
     `gh run list --workflow=release.yml --limit 1`, then
     `gh run watch <run-id> --exit-status`. It's slow (multi-platform
