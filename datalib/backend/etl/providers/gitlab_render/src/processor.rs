@@ -38,7 +38,7 @@ impl RenderProcessor for GitlabRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_gitlab};
-        let parsed = parse_api_dir(&self.raw_path, ctx.raw_range())
+        let parsed = parse_api_dir(&self.raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
         // Every MR this run renders is declared first with nothing, so
         // one whose row is gone loses its document; the render below

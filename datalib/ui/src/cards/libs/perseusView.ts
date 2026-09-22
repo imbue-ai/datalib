@@ -182,7 +182,9 @@ export function perseusView(): CardRender {
         return c;
       };
       for (const r of rows) {
-        const parts = r.upstream_id.split(".");
+        // The CTS URN's locator: what follows the last `:`.
+        const locator = r.upstream_id.slice(r.upstream_id.lastIndexOf(":") + 1);
+        const parts = locator.split(".");
         // Skip TEI front/back matter (non-numeric locators like
         // "front"/"back") that some editions carry — they render as a
         // phantom "Book 0" with no content in most editions. Real

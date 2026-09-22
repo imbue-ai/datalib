@@ -92,7 +92,7 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // that first would move HEAD and hide a missing seal. gitlab had no
     // test crossing this seam at all, which is how `gitlab_live` came to
     // read an unsealed store and assert on zero rows.
-    let parsed = parse_api_dir(&out_db, RawRange::cold()).expect("parse_api_dir");
+    let parsed = parse_api_dir(&out_db, "gitlab", RawRange::cold()).expect("parse_api_dir");
     assert_eq!(
         parsed.merge_requests.len(),
         1,

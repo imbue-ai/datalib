@@ -36,11 +36,13 @@ use datalib_schema::providers::Provider;
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 /// v8: `account` is the login's email rather than OpenAI's opaque
 ///     `user-…` id.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
@@ -78,7 +80,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let mut chat = build_chat(&shredded, parsed);
+        let mut chat = build_chat(&shredded, parsed, source_id);
         chat.inputs = c.inputs.declared();
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
@@ -100,7 +102,11 @@ pub fn render_all(
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the
 /// `current_node → root` parent walk (falling back to a `create_time`
 /// sort), one [`NormalizedChatItem`] each.
-fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> NormalizedChat {
+fn build_chat(
+    shredded: &ShreddedConversation,
+    parsed: &ParsedChatGPTApi,
+    source_id: &str,
+) -> NormalizedChat {
     let conv = &shredded.conv;
     let conv_id = conv.conversation_id.clone();
 
@@ -159,7 +165,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
             ItemKind::Attachment
         };
 
-        let msg_id = ids::message(&m.message_id);
+        let msg_id = ids::message(source_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
@@ -186,7 +192,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
-    let chat_uuid = ids::conversation(&conv_id).uuid;
+    let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
         inputs: Vec::new(),
         path_prefix: None,
@@ -204,13 +210,14 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         // to chatgpt.com now that `uuid` is a minted v5.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
+            source_ref: None,
             items,
         }],
     }

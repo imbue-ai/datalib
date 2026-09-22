@@ -11,8 +11,9 @@ use std::path::PathBuf;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
+use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
-use datalib_etl_email_render::render::render::{render_all, thread_uuid, OutlinkFormat};
+use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use serde_json::json;
 
@@ -167,7 +168,7 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
         .collect();
     assert_eq!(blobs.len(), 1, "expected exactly one materialized blob");
 
-    let tuid = thread_uuid("A1", "T1");
+    let tuid = ids::thread("fastmail", "A1", "T1").uuid;
     let md = std::fs::read_to_string(&md_path).unwrap();
     assert!(
         md.contains("display: \"Hello\""),

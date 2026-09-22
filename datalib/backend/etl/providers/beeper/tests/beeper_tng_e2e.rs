@@ -213,6 +213,7 @@ async fn tng_fixture_translate_per_month_with_cross_month_reaction() -> Result<(
 
     let parsed = render::parse::parse(
         &out_db,
+        "tng",
         Period::Month,
         datalib_etl_render::inputs::RawRange::cold(),
     )?;
@@ -286,6 +287,7 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
 
     let parsed = render::parse::parse(
         &out_db,
+        "tng",
         Period::Month,
         datalib_etl_render::inputs::RawRange::cold(),
     )?;
@@ -310,19 +312,15 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
 
     // March markdown contains BOTH reactions inline under the
     // image. April markdown contains neither.
-    let march = std::fs::read_to_string(
-        rendered
-            .iter()
-            .find(|d| d.md_path.to_string_lossy().contains("/signal/"))
-            .and_then(|d| {
-                if d.md_path.to_string_lossy().ends_with("2024-03.md") {
-                    Some(d.md_path.clone())
-                } else {
-                    None
-                }
-            })
-            .expect("signal 2024-03 doc"),
-    )?;
+    let march_path = rendered
+        .iter()
+        .map(|d| d.md_path.clone())
+        .find(|p| {
+            let p = p.to_string_lossy();
+            p.contains("/signal/") && p.ends_with("2024-03.md")
+        })
+        .expect("signal 2024-03 doc");
+    let march = std::fs::read_to_string(&march_path)?;
     assert!(
         march.contains("❤️ Mr. Data"),
         "march md should show ❤️ Mr. Data reaction"
@@ -349,10 +347,11 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     );
 
     // Frontmatter carries external IDs, under the names chat-common
-    // gives them: the room is the chat's `external_id`, and the Beeper
+    // gives them: the room's native (Matrix) id — the key its uuid is
+    // minted from — is the chat's `external_id`, and the Beeper
     // workspace is its `project`.
     assert!(
-        march.contains("external_id: tng-data-conv-uuid-0001"),
+        march.contains("external_id: !tng-data:ba_TNG.local-signal.localhost"),
         "{march}"
     );
     assert!(
@@ -360,15 +359,9 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
         "{march}"
     );
 
-    // Blob file actually got materialized into the page dir.
-    let blob_dir = rendered
-        .iter()
-        .find(|d| {
-            d.md_path.to_string_lossy().ends_with("signal/")
-                || d.md_path.to_string_lossy().contains("/signal/")
-        })
-        .map(|d| d.md_path.parent().unwrap().join("blobs"))
-        .expect("signal blob dir");
+    // Blob file actually got materialized into the page dir of the
+    // chat that holds the image.
+    let blob_dir = march_path.parent().unwrap().join("blobs");
     let entries: Vec<_> = std::fs::read_dir(&blob_dir)
         .with_context(|| format!("read_dir {}", blob_dir.display()))?
         .filter_map(|e| e.ok())

@@ -44,7 +44,7 @@ impl RenderProcessor for ChatgptRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, ctx.raw_range())
+        let parsed = parse(&self.raw_path, &self.name, ctx.raw_range())
             .with_context(|| format!("chatgpt parse {}", self.raw_path.display()))?;
         ctx.report_unparsed(
             &ReadScope::Whole(vec!["conversations"]),
@@ -58,7 +58,10 @@ impl RenderProcessor for ChatgptRender {
         // declared with nothing, so its page goes; the rendered ones
         // follow and replace that.
         for conv_id in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::conversation(conv_id).uuid, &[])?;
+            ctx.declare_bucket(
+                &crate::render::ids::conversation(&self.name, conv_id).uuid,
+                &[],
+            )?;
         }
         for bucket in &parsed.scan.gone {
             ctx.declare_bucket(bucket, &[])?;

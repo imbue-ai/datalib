@@ -405,7 +405,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .git_sha(Some("abc123".to_string()))
         .upstream_id(Some("row-1".to_string()))
         .upstream_entity_kind(Some("conversation".to_string()))
-        .upstream_scope(Some("org-1701".to_string()))
+        .upstream_account(Some("org-1701".to_string()))
         .notion_page_uuid(Some("page-1".to_string()))
         .notion_block_uuid(Some("block-1".to_string()))
         .markdown_uuid(Some("row-1".to_string()))

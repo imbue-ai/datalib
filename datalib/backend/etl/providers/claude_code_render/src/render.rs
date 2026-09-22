@@ -24,11 +24,13 @@ use datalib_schema::providers::Provider;
 
 use crate::ids;
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::ClaudeCode,
         source_label: "Claude Code".to_string(),
         chat_kind: "Claude Code Session".to_string(),
@@ -86,7 +88,7 @@ pub fn render(
     // No early return on an empty store: a run that deleted every
     // transcript still has to declare their buckets empty so the
     // documents go.
-    let all_chats = build_chats(&transcripts, &records, max_tool_result_bytes);
+    let all_chats = build_chats(source_id, &transcripts, &records, max_tool_result_bytes);
 
     let mut outcome = RenderOutcome {
         new_head: scan.new_head.clone(),
@@ -107,7 +109,7 @@ pub fn render(
         .render
         .iter()
         .flatten()
-        .map(|tid| chat_uuid_of(tid))
+        .map(|tid| chat_uuid_of(source_id, tid))
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -180,15 +182,16 @@ async fn scan_diff(
 }
 
 /// The document id for a raw transcript id, with no row in hand.
-fn chat_uuid_of(tid: &str) -> String {
+fn chat_uuid_of(source_id: &str, tid: &str) -> String {
     let (session_id, agent_id) = match tid.split_once('#') {
         Some((s, a)) => (s, Some(a)),
         None => (tid, None),
     };
-    ids::transcript(session_id, agent_id).uuid
+    ids::transcript(source_id, session_id, agent_id).uuid
 }
 
 fn build_chats(
+    source_id: &str,
     transcripts: &[(String, Value)],
     records: &[(String, Value)],
     max_tool_result_bytes: usize,
@@ -215,6 +218,7 @@ fn build_chats(
             .and_then(|_| str_of(meta, "session_id"))
             .and_then(|s| titles.get(s).copied());
         chats.push(build_chat(
+            source_id,
             tid,
             meta,
             &rows,
@@ -226,6 +230,7 @@ fn build_chats(
 }
 
 fn build_chat(
+    source_id: &str,
     tid: &str,
     meta: &Value,
     rows: &[(&str, &Value)],
@@ -262,10 +267,20 @@ fn build_chat(
             .or_else(|| last_ms.map(|p| p + 1));
         last_ms = ms.or(last_ms);
         match str_of(v, "type") {
-            Some("user") => user_items(uuid, v, ms, &tool_names, max_tool_result_bytes, &mut items),
-            Some("assistant") => assistant_items(uuid, v, ms, max_tool_result_bytes, &mut items),
+            Some("user") => user_items(
+                source_id,
+                uuid,
+                v,
+                ms,
+                &tool_names,
+                max_tool_result_bytes,
+                &mut items,
+            ),
+            Some("assistant") => {
+                assistant_items(source_id, uuid, v, ms, max_tool_result_bytes, &mut items)
+            }
             Some("system") => {
-                if let Some(it) = system_item(uuid, v, ms) {
+                if let Some(it) = system_item(source_id, uuid, v, ms) {
                     items.push(it);
                 }
             }
@@ -280,8 +295,8 @@ fn build_chat(
         (Some(_), None) => format!("{own_title} — subagent"),
         (None, _) => own_title.clone(),
     };
-    let id = ids::transcript(session_id, agent_id);
-    debug_assert_eq!(id.uuid, chat_uuid_of(tid));
+    let id = ids::transcript(source_id, session_id, agent_id);
+    debug_assert_eq!(id.uuid, chat_uuid_of(source_id, tid));
     NormalizedChat {
         path_prefix: None,
         id: tid.to_string(),
@@ -293,13 +308,16 @@ fn build_chat(
         project: str_of(meta, "cwd").map(project_of),
         external_id: Some(id.natural_key.clone()),
         source_url: str_of(meta, "cloud_session_id").map(|c| format!("https://claude.ai/code/{c}")),
-        upstream_scope: None,
+        upstream_account: None,
         org_uuid: str_of(meta, "org_uuid").map(str::to_string),
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: id.uuid,
+            // A subagent's transcript is its own kind of document; the
+            // profile's `chat_entity_kind` names the session's.
+            source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
             items,
         }],
         inputs: inputs.declared(),
@@ -307,6 +325,7 @@ fn build_chat(
 }
 
 fn user_items(
+    source_id: &str,
     uuid: &str,
     v: &Value,
     ms: Option<i64>,
@@ -323,7 +342,7 @@ fn user_items(
         }
         let tool_use_id = str_of(b, "tool_use_id").unwrap_or("");
         let name = tool_names.get(tool_use_id).copied().unwrap_or("tool");
-        let id = ids::tool_result(uuid, tool_use_id);
+        let id = ids::tool_result(source_id, uuid, tool_use_id, ms.map(|m| m + n as i64));
         let is_err = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
         let summary = if is_err {
             format!("Tool result: {name} (error)")
@@ -368,7 +387,7 @@ fn user_items(
         ("User Input", "User", false)
     };
     out.push(item(
-        ids::record(uuid),
+        ids::record(source_id, uuid, ms.map(|m| m + n as i64)),
         "user",
         author.to_string(),
         ms.map(|m| m + n as i64),
@@ -379,6 +398,7 @@ fn user_items(
 }
 
 fn assistant_items(
+    source_id: &str,
     uuid: &str,
     v: &Value,
     ms: Option<i64>,
@@ -407,7 +427,7 @@ fn assistant_items(
                 };
                 let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 out.push(item(
-                    ids::thinking_block(uuid, i),
+                    ids::thinking_block(source_id, uuid, i, block_ms),
                     "thinking",
                     model.clone(),
                     block_ms,
@@ -419,8 +439,8 @@ fn assistant_items(
             Some("tool_use") => {
                 let name = str_of(b, "name").unwrap_or("tool");
                 let id = match str_of(b, "id") {
-                    Some(tu) => ids::tool_use(uuid, tu),
-                    None => ids::block_fallback(uuid, i),
+                    Some(tu) => ids::tool_use(source_id, uuid, tu, block_ms),
+                    None => ids::block_fallback(source_id, uuid, i, block_ms),
                 };
                 let body = match b.get("input") {
                     Some(input) if !json_is_empty(input) => {
@@ -447,11 +467,12 @@ fn assistant_items(
     if text.trim().is_empty() {
         return;
     }
+    let ms = ms.map(|m| m + blocks_of(v).len() as i64);
     out.push(item(
-        ids::record(uuid),
+        ids::record(source_id, uuid, ms),
         "assistant",
         model,
-        ms.map(|m| m + blocks_of(v).len() as i64),
+        ms,
         text,
         "LLM Response",
         false,
@@ -460,7 +481,12 @@ fn assistant_items(
 
 /// Hook output and stop reasons. Only the ones that say something:
 /// most `system` records are a stop-hook summary with nothing in it.
-fn system_item(uuid: &str, v: &Value, ms: Option<i64>) -> Option<NormalizedChatItem> {
+fn system_item(
+    source_id: &str,
+    uuid: &str,
+    v: &Value,
+    ms: Option<i64>,
+) -> Option<NormalizedChatItem> {
     let subtype = str_of(v, "subtype").unwrap_or("system");
     let content = str_of(v, "content").filter(|s| !s.trim().is_empty());
     let errors: Vec<String> = v
@@ -481,7 +507,7 @@ fn system_item(uuid: &str, v: &Value, ms: Option<i64>) -> Option<NormalizedChatI
         note.push_str(&errors.join(", "));
     }
     let mut it = item(
-        ids::record(uuid),
+        ids::record(source_id, uuid, ms),
         "system",
         "Claude Code".to_string(),
         ms,
@@ -496,7 +522,7 @@ fn system_item(uuid: &str, v: &Value, ms: Option<i64>) -> Option<NormalizedChatI
 }
 
 fn item(
-    id: ids::Identity,
+    id: datalib_id::Identity,
     author_id: &str,
     author_display: String,
     date_ms: Option<i64>,
@@ -697,7 +723,7 @@ mod tests {
                 ]}}),
             ),
         ];
-        let chats = build_chats(&transcripts, &records, 1024);
+        let chats = build_chats("cc", &transcripts, &records, 1024);
         assert_eq!(chats.len(), 1);
         let c = &chats[0];
         assert_eq!(c.display, "Deflector realignment");
@@ -758,7 +784,7 @@ mod tests {
                 (id, v)
             },
         ];
-        let chats = build_chats(&transcripts, &records, 1024);
+        let chats = build_chats("cc", &transcripts, &records, 1024);
         assert_eq!(chats.len(), 2);
         let agent = chats.iter().find(|c| c.id == "s1#a9").unwrap();
         assert_eq!(
@@ -792,7 +818,7 @@ mod tests {
                 ]}}),
             ),
         ];
-        let chats = build_chats(&transcripts, &records, 1024);
+        let chats = build_chats("cc", &transcripts, &records, 1024);
         let labels: Vec<&str> = chats[0].buckets[0]
             .items
             .iter()
@@ -813,7 +839,7 @@ mod tests {
             "2364-04-11T10:00:00.000Z",
             json!({"type": "user", "isMeta": true, "message": {"content": "Caveat: …"}}),
         )];
-        let it = &build_chats(&transcripts, &records, 1024)[0].buckets[0].items[0];
+        let it = &build_chats("cc", &transcripts, &records, 1024)[0].buckets[0].items[0];
         assert_eq!(it.kind_label.as_deref(), Some("Harness Message"));
         assert!(it.is_aside);
     }
@@ -843,9 +869,9 @@ mod tests {
     #[test]
     fn a_transcripts_document_id_needs_no_row() {
         let transcripts = vec![meta("s1", "t", None), meta("s1#a9", "u", Some("a9"))];
-        let chats = build_chats(&transcripts, &[], 1024);
+        let chats = build_chats("cc", &transcripts, &[], 1024);
         for c in &chats {
-            assert_eq!(c.chat_uuid, chat_uuid_of(&c.id), "{}", c.id);
+            assert_eq!(c.chat_uuid, chat_uuid_of("cc", &c.id), "{}", c.id);
         }
     }
 

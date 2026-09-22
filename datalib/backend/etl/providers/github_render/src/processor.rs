@@ -38,7 +38,7 @@ impl RenderProcessor for GithubRender {
 
     async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse_api_dir, render_github};
-        let parsed = parse_api_dir(&self.raw_path, ctx.raw_range())
+        let parsed = parse_api_dir(&self.raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("github parse {}", self.raw_path.display()))?;
         // Every PR this run renders is declared first with nothing, so
         // one whose row is gone loses its document; the render below

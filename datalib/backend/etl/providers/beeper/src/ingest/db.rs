@@ -101,9 +101,7 @@ impl RawDb {
     }
 
     /// Bulk-upsert rooms in a single transaction via the shared
-    /// [`bulk_upsert_in_tx`] helper. Rows must arrive with their
-    /// UUIDv5 `id` already minted; see
-    /// [`crate::ingest::schema_raw::beeper_room_uuid`].
+    /// [`bulk_upsert_in_tx`] helper. A row's `id` is its native room id.
     pub async fn bulk_upsert_rooms(&self, rows: &[RoomRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());

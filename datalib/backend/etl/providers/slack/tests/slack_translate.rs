@@ -43,7 +43,7 @@ fn unparseable_ts_yields_none_not_the_epoch() {
 
 #[test]
 fn translate_tng_fixture_produces_expected_lookups() {
-    let t = parse(&fixture_root(), RawRange::cold()).expect("parse");
+    let t = parse(&fixture_root(), "slack_api", RawRange::cold()).expect("parse");
     let ws = t.workspace.as_ref().expect("workspace");
     assert_eq!(ws.team_id, "T_NCC1701D");
     assert_eq!(ws.self_user_id.as_deref(), Some("U_PICARD"));

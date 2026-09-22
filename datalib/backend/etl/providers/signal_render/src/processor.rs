@@ -65,7 +65,7 @@ impl RenderProcessor for SignalRender {
         // nothing, its documents go. The rendered ones follow and
         // replace that.
         for chat_id in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::signal_chat_uuid(&self.name, chat_id), &[])?;
+            ctx.declare_bucket(&crate::render::ids::chat(&self.name, chat_id).uuid, &[])?;
         }
         for bucket in &parsed.scan.gone {
             ctx.declare_bucket(bucket, &[])?;
