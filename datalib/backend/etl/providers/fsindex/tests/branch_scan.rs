@@ -159,6 +159,46 @@ async fn rescanning_an_existing_branch_reuses_it() {
     );
 }
 
+/// Scanning an unchanged tree again changes no content row. The scan
+/// stamps from the wall clock, so two scans are already two nows; a
+/// table named here carries a stamp the store mints, which every
+/// consumer that diffs the store reads as a change on every run.
+#[tokio::test]
+async fn rescanning_an_unchanged_tree_moves_no_content_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("scans.doltlite_db");
+    let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite"))
+        .await
+        .unwrap();
+    let root = tmp.path().join("tree");
+    write(&root, "a.txt", "one\n");
+    write(&root, "sub/b.txt", "two\n");
+
+    scan_and_commit(&db_path, &root, "s", None, &cache).await;
+    let db = RawDb::open(&db_path).await.unwrap();
+    let first = datalib_etl::doltlite_raw::head_commit(db.pool())
+        .await
+        .unwrap()
+        .expect("the first scan committed");
+    db.close().await;
+
+    scan_and_commit(&db_path, &root, "s", None, &cache).await;
+    let db = RawDb::open(&db_path).await.unwrap();
+    let second = datalib_etl::doltlite_raw::head_commit(db.pool())
+        .await
+        .unwrap()
+        .expect("the second scan committed");
+    let changed = datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &first, &second)
+        .await
+        .unwrap();
+    db.close().await;
+    assert_eq!(
+        changed,
+        Vec::<String>::new(),
+        "a content table moved between two scans of the same tree"
+    );
+}
+
 /// `checkout_branch` must fail loudly rather than leaving the caller on
 /// whatever branch it happened to be on. A silent no-op here is the
 /// dangerous shape: the scan would succeed and write to the wrong

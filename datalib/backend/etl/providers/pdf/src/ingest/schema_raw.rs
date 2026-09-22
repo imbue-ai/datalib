@@ -60,9 +60,7 @@ pub const PDF_PATHS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_paths (
 /// Where the scan actually ran.
 pub const PDF_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_scan_meta (
     id             TEXT PRIMARY KEY,
-    abs_root       TEXT NOT NULL,
-    scanned_at_utc TEXT NOT NULL,
-    tz_offset      TEXT NULL
+    abs_root       TEXT NOT NULL
 )";
 
 pub const PDF_PATHS_INDEXES: &[&str] = &[
@@ -77,7 +75,7 @@ pub const PDF_PATHS_INDEXES: &[&str] = &[
 /// For the content-keyed `pdf_documents` that stamp is when the
 /// document was first identified, because a document is only written
 /// when its hash is new.
-pub const STAMPED_TABLES: &[&str] = &["pdf_documents", "pdf_paths"];
+pub const STAMPED_TABLES: &[&str] = &["pdf_documents", "pdf_paths", "pdf_scan_meta"];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out = vec![
@@ -248,13 +246,11 @@ pub struct PdfScanMetaRow {
     /// The source name from config (`tng_pdfs`), not the path.
     pub id: String,
     pub abs_root: String,
-    pub scanned_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for PdfScanMetaRow {
     const TABLE: &'static str = "pdf_scan_meta";
-    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at_utc", "tz_offset"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -265,10 +261,7 @@ impl BulkUpsertable for PdfScanMetaRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.abs_root)
-            .bind(&self.scanned_at_utc)
-            .bind(self.tz_offset.as_deref())
+        q.bind(&self.id).bind(&self.abs_root)
     }
 }
 

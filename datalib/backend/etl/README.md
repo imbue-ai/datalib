@@ -50,7 +50,16 @@ was in — the pair every stamp we mint is stored as (AGENTS.md,
 
 The split keeps `dolt diff` over the data tables reflecting upstream change
 only, not re-fetch churn — which is what makes the reset-then-resync
-"did anything actually change?" assertion mean anything.
+"did anything actually change?" assertion mean anything, and what
+keeps a render from re-doing every document on every run: render
+diffs the tables a document declared as inputs, and a `last_seen_at_utc`
+on one of them is a change every time. That includes a scan's
+`*_scan_meta` row, which every document of a file-backed source reads
+its root from. A provider that opts out of the sidecar for scale
+(`bulk_upsert_entity_in_tx`, fsindex's entry tables) keeps no stamp
+at all on those rows. `content_tables_changed` is the check: ingest
+the same input twice under two nows and it must name no table — each
+file-backed provider's tests do exactly that.
 
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.

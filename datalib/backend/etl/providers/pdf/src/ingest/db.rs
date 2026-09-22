@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
+use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;
 use datalib_time::IsoOffsetTimestamp;
 
@@ -169,9 +169,13 @@ impl RawDb {
 
     /// Record where this scan ran, so the render step does not have to
     /// be told again. See [`super::schema_raw::PDF_SCAN_META_DDL`].
-    pub async fn write_scan_meta(&self, row: &PdfScanMetaRow) -> Result<()> {
+    pub async fn write_scan_meta(
+        &self,
+        row: &PdfScanMetaRow,
+        now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row))
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert pdf_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;

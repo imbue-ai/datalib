@@ -62,6 +62,10 @@ impl Harness {
     }
 
     async fn scan(&self) -> Result<ingest::FetchSummary> {
+        self.scan_at(NOW).await
+    }
+
+    async fn scan_at(&self, now: &str) -> Result<ingest::FetchSummary> {
         let db = RawDb::open(&ingest::db_path_for(&self.raw_dir)).await?;
         // A temp cache per harness: tests must never read or write this
         // host's real one.
@@ -73,7 +77,7 @@ impl Harness {
             ignore: vec![],
             cache: cache.clone(),
             max_bytes: None,
-            now: NOW.to_string(),
+            now: now.to_string(),
             progress: datalib_etl::progress::Progress::noop(),
         })
         .await;
@@ -116,6 +120,38 @@ impl Harness {
             .await
             .unwrap()
     }
+}
+
+/// Scanning an unchanged tree again, five minutes later, changes no
+/// content row. Under one `now` this holds trivially — the same stamp
+/// is written twice — so the second scan gets a later one. A table
+/// named here carries a stamp the store mints, and the render step,
+/// which diffs these tables to decide what to re-convert, converted
+/// every document on every run for as long as `pdf_scan_meta` did.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
+    let h = Harness::new();
+    h.scan().await?;
+    let db = h.db().await;
+    let first = datalib_etl::doltlite_raw::head_commit(db.pool())
+        .await?
+        .expect("the first scan committed");
+    db.close().await;
+
+    h.scan_at("2364-04-13T08:50:00-07:00").await?;
+    let db = h.db().await;
+    let second = datalib_etl::doltlite_raw::head_commit(db.pool())
+        .await?
+        .expect("the second scan committed");
+    let changed =
+        datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &first, &second).await?;
+    db.close().await;
+    assert_eq!(
+        changed,
+        Vec::<String>::new(),
+        "a content table moved between two scans of the same tree"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]

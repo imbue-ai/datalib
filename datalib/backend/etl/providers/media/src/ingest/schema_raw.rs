@@ -149,9 +149,7 @@ pub const MEDIA_PLAYLIST_ENTRIES_INDEXES: &[&str] = &[
 /// Where the scan actually ran.
 pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_meta (
     id           TEXT PRIMARY KEY,
-    abs_root     TEXT NOT NULL,
-    scanned_at_utc   TEXT NOT NULL,
-    tz_offset    TEXT NULL
+    abs_root     TEXT NOT NULL
 )";
 
 /// The tables written through the paired sidecar: when a row was last
@@ -161,7 +159,12 @@ pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_met
 /// first identified, because an item is only written when its hash is
 /// new. The audio/visual rows and the playlist entries go with their
 /// item or playlist and carry no stamp of their own.
-pub const STAMPED_TABLES: &[&str] = &["media_items", "media_files", "media_playlists"];
+pub const STAMPED_TABLES: &[&str] = &[
+    "media_items",
+    "media_files",
+    "media_playlists",
+    "media_scan_meta",
+];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out = vec![
@@ -525,13 +528,11 @@ pub struct MediaScanMetaRow {
     /// The source name from config (`tng_media`), not the path.
     pub id: String,
     pub abs_root: String,
-    pub scanned_at_utc: String,
-    pub tz_offset: Option<String>,
 }
 
 impl BulkUpsertable for MediaScanMetaRow {
     const TABLE: &'static str = "media_scan_meta";
-    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root", "scanned_at_utc", "tz_offset"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["abs_root"];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -542,10 +543,7 @@ impl BulkUpsertable for MediaScanMetaRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments> {
-        q.bind(&self.id)
-            .bind(&self.abs_root)
-            .bind(&self.scanned_at_utc)
-            .bind(self.tz_offset.as_deref())
+        q.bind(&self.id).bind(&self.abs_root)
     }
 }
 

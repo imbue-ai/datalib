@@ -161,6 +161,39 @@ async fn assert_metadata_only_variant(db: &RawDb, a: &str, b: &str, scheme: &str
     Ok(())
 }
 
+/// Scanning an unchanged tree again, five minutes later, changes no
+/// content row. Under one `now` this holds trivially — the same stamp
+/// is written twice — so the second scan gets a later one. A table
+/// named here carries a stamp the store mints, which every consumer
+/// that diffs the store reads as a change on every run.
+#[tokio::test]
+async fn a_second_scan_of_an_unchanged_tree_moves_no_content_row() -> Result<()> {
+    let h = Harness::new().await?;
+    h.scan().await?;
+    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: first scan").await?;
+    let first = datalib_etl::doltlite_raw::head_commit(h.db.pool())
+        .await?
+        .expect("the first scan committed");
+
+    h.scan_with(|o| ingest::FetchOptions {
+        now: "2364-04-13T08:50:00-07:00".to_string(),
+        ..o
+    })
+    .await?;
+    datalib_etl::doltlite_raw::commit_run(h.db.pool(), "test: second scan").await?;
+    let second = datalib_etl::doltlite_raw::head_commit(h.db.pool())
+        .await?
+        .expect("the second scan committed");
+    let changed =
+        datalib_etl::doltlite_raw::content_tables_changed(h.db.pool(), &first, &second).await?;
+    assert_eq!(
+        changed,
+        Vec::<String>::new(),
+        "a content table moved between two scans of the same tree"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn scan_records_every_class_and_ignores_non_media() -> Result<()> {
     let h = Harness::new().await?;

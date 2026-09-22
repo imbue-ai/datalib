@@ -73,16 +73,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Written before the walk, so an interrupted scan still leaves the
     // render step able to find the tree.
-    let stamp = datalib_time::split_stamp(&opts.now);
     let now = datalib_time::parse_strict(&opts.now)
         .with_context(|| format!("parse the run's now {:?}", opts.now))?;
     opts.db
-        .write_scan_meta(&PdfScanMetaRow {
-            id: opts.source_id.clone(),
-            abs_root: opts.root.to_string_lossy().to_string(),
-            scanned_at_utc: stamp.utc.clone(),
-            tz_offset: stamp.tz_offset.clone(),
-        })
+        .write_scan_meta(
+            &PdfScanMetaRow {
+                id: opts.source_id.clone(),
+                abs_root: opts.root.to_string_lossy().to_string(),
+            },
+            &now,
+        )
         .await
         .context("record scan root")?;
 

@@ -186,9 +186,13 @@ impl RawDb {
         Ok(removed)
     }
 
-    pub async fn write_scan_meta(&self, row: &MediaScanMetaRow) -> Result<()> {
+    pub async fn write_scan_meta(
+        &self,
+        row: &MediaScanMetaRow,
+        now: &IsoOffsetTimestamp,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(row))
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert media_scan_meta")?;
         tx.commit().await.context("commit scan_meta tx")?;

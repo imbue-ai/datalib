@@ -432,9 +432,15 @@ scan_meta
     case_sensitive
     inode_stable
     options_fingerprint
-    last_scan_at_utc
-    tz_offset
     scanner_version
+scan_meta_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
 
 == github/raw ==
 issue_comments
@@ -853,7 +859,13 @@ media_playlists_bookkeeping
 media_scan_meta
     id
     abs_root
-    scanned_at_utc
+media_scan_meta_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 media_visual
     blake3
@@ -1006,7 +1018,13 @@ pdf_paths_bookkeeping
 pdf_scan_meta
     id
     abs_root
-    scanned_at_utc
+pdf_scan_meta_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
     tz_offset
 
 == signal/raw ==
