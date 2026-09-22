@@ -15,7 +15,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-pub use datalib_log_filter::DEFAULT_LOG_FILTER;
+pub use datalib_log_filter::default_filter;
 
 pub mod diagnostics;
 
@@ -32,7 +32,7 @@ pub enum LogFormat {
 
 /// Observability flags. Flatten this into your `clap::Parser` with
 /// `#[command(flatten)]`.
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Debug, Clone, Default, clap::Args)]
 pub struct ObsArgs {
     /// Renderer for the local stderr stream. `auto` picks pretty on a
     /// TTY, JSON otherwise.
@@ -40,25 +40,17 @@ pub struct ObsArgs {
     pub log_format: LogFormat,
 
     /// `tracing-subscriber` env filter directive. Same grammar as
-    /// `$RUST_LOG`, which is also honored if this flag isn't set.
-    #[arg(long, env = "RUST_LOG", default_value = DEFAULT_LOG_FILTER)]
-    pub log_level: String,
+    /// `$RUST_LOG`, which is also honored if this flag isn't set — and
+    /// which the runner sets for a step to the level its config names.
+    /// Neither: `datalib_log_filter::default_filter()`.
+    #[arg(long, env = "RUST_LOG")]
+    pub log_level: Option<String>,
 
     /// OTLP/gRPC endpoint (e.g. `http://localhost:4317`). When set,
     /// spans are exported to the collector in addition to the stderr
     /// renderer. Leave empty to keep observability local.
     #[arg(long, env = "OTLP_ENDPOINT")]
     pub otlp_endpoint: Option<String>,
-}
-
-impl Default for ObsArgs {
-    fn default() -> Self {
-        Self {
-            log_format: LogFormat::default(),
-            log_level: DEFAULT_LOG_FILTER.into(),
-            otlp_endpoint: None,
-        }
-    }
 }
 
 /// Returned from [`init`]. Drop on shutdown so the OTLP batch exporter
@@ -92,8 +84,9 @@ impl Drop for TracingGuard {
 }
 
 pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> {
-    let filter = EnvFilter::try_new(&args.log_level)
-        .with_context(|| format!("parse log-level filter {:?}", args.log_level))?;
+    let directives = args.log_level.clone().unwrap_or_else(default_filter);
+    let filter = EnvFilter::try_new(&directives)
+        .with_context(|| format!("parse log-level filter {directives:?}"))?;
 
     let use_json = match args.log_format {
         LogFormat::Json => true,
