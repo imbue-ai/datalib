@@ -1,4 +1,6 @@
-//! Perseus entity ids: content-scoped over the CTS locator and edition.
+//! Perseus entity ids, keyed by the passage's CTS URN — the id Perseus
+//! itself resolves (`urn:cts:greekLit:tlg0003.tlg001.perseus-grc2:1.2.3`);
+//! a book index, which no edition owns, takes the work-level form.
 //! No stamp anywhere: a classical text has no `created_at` of its own,
 //! and the synthetic one the grid sorts by is not the record's.
 
@@ -23,9 +25,15 @@ fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> 
     )
 }
 
-/// `1` — the book number under [`WORK_URN`].
+pub fn passage_urn(edition: Option<&str>, locator: &str) -> String {
+    match edition {
+        Some(edition) => format!("{WORK_URN}.{edition}:{locator}"),
+        None => format!("{WORK_URN}:{locator}"),
+    }
+}
+
 pub fn book(source_id: &str, book_n: &str) -> Identity {
-    identity(source_id, KIND_BOOK, composite_key(&[WORK_URN, book_n]))
+    identity(source_id, KIND_BOOK, passage_urn(None, book_n))
 }
 
 /// One (book, chapter, edition) — each edition variant gets its own
@@ -36,7 +44,7 @@ pub fn chapter(source_id: &str, book_n: &str, ch_n: &str, version: &str) -> Iden
     identity(
         source_id,
         KIND_CHAPTER,
-        composite_key(&[WORK_URN, &format!("{book_n}.{ch_n}"), version]),
+        passage_urn(Some(version), &format!("{book_n}.{ch_n}")),
     )
 }
 
@@ -49,7 +57,7 @@ pub fn section(source_id: &str, book_n: &str, ch_n: &str, sec_n: &str, version: 
     identity(
         source_id,
         KIND_SECTION,
-        composite_key(&[WORK_URN, &format!("{book_n}.{ch_n}.{sec_n}"), version]),
+        passage_urn(Some(version), &format!("{book_n}.{ch_n}.{sec_n}")),
     )
 }
 
@@ -70,9 +78,7 @@ pub fn sentence(
         source_id,
         KIND_SENTENCE,
         composite_key(&[
-            WORK_URN,
-            &format!("{book_n}.{ch_n}.{sec_n}"),
-            version,
+            &passage_urn(Some(version), &format!("{book_n}.{ch_n}.{sec_n}")),
             &sent_idx.to_string(),
         ]),
     )
@@ -102,6 +108,20 @@ mod tests {
                 ),
             );
         }
+    }
+
+    /// The grid's `upstream_id` is this key, and `perseusView.ts` reads
+    /// the locator as what follows the last `:`.
+    #[test]
+    fn the_key_is_the_cts_passage_urn() {
+        assert_eq!(
+            book("perseus", "1").natural_key,
+            "urn:cts:greekLit:tlg0003.tlg001:1"
+        );
+        assert_eq!(
+            section("perseus", "1", "2", "3", "perseus-grc2").natural_key,
+            "urn:cts:greekLit:tlg0003.tlg001.perseus-grc2:1.2.3"
+        );
     }
 
     /// Each edition gets a distinct chapter id: the edition id is part
