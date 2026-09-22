@@ -11,6 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { fetchChat, type ChatResponse, type DocProblem, type EdgeOut } from "@/api";
 import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
+import type { RemoteRef } from "./remoteMedia";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
@@ -148,6 +149,44 @@ function onProblemJump(p: DocProblem) {
     jumpTo.value = p.item_uuid;
   });
 }
+
+// ── Remote images. The body's references to other hosts are held back
+// by the sanitizer (`remoteMedia.ts`); the banner above the body says
+// how many and from where, so what the document would have fetched is
+// known before it is read. Loading them is issue #648's second half.
+const remoteRefs = ref<RemoteRef[]>([]);
+
+/// One entry per distinct URL.
+const remoteUnique = computed<RemoteRef[]>(() => {
+  const seen = new Set<string>();
+  return remoteRefs.value.filter((r) => {
+    if (seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  });
+});
+
+/// The hosts referenced, most-referenced first.
+const remoteHosts = computed<{ host: string; count: number }[]>(() => {
+  const counts = new Map<string, number>();
+  for (const r of remoteUnique.value) {
+    const host = r.host || r.url;
+    counts.set(host, (counts.get(host) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([host, count]) => ({ host, count }))
+    .sort((a, b) => b.count - a.count || a.host.localeCompare(b.host));
+});
+
+/// "remote images", or "remote images and media" when a video or audio
+/// element is among them; singular for one.
+const remoteNoun = computed(() => {
+  const n = remoteUnique.value.length;
+  if (remoteRefs.value.some((r) => r.kind === "media")) {
+    return n === 1 ? "remote image or media file" : "remote images and media";
+  }
+  return n === 1 ? "remote image" : "remote images";
+});
 
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
@@ -312,6 +351,7 @@ watch(
     }
     loading.value = true;
     error.value = null;
+    remoteRefs.value = [];
     try {
       chat.value = await fetchChat(uuid);
     } catch (e) {
@@ -380,6 +420,17 @@ watch(
           </span>
         </li>
       </ul>
+      <div v-if="remoteUnique.length" class="remote-banner">
+        <span class="remote-banner-text">
+          <strong>{{ remoteUnique.length }}</strong> {{ remoteNoun }} not loaded — loading one would
+          tell its host you opened this.
+        </span>
+        <span class="remote-banner-hosts">
+          <span v-for="h in remoteHosts" :key="h.host" class="remote-host">
+            {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
+          </span>
+        </span>
+      </div>
       <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
           <span class="edge-arrow" aria-hidden="true">→</span>
@@ -414,6 +465,7 @@ watch(
           :hover-anchor-uuid="hoverAnchor"
           @open-edge="onOpenEdge"
           @hover-edge="onHoverEdge"
+          @remote-media="remoteRefs = $event"
         />
       </div>
     </template>
@@ -529,6 +581,42 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+/* The remote-images banner: above the body with the problems, since
+   what the document would fetch from elsewhere is something to know
+   before reading it. */
+.remote-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0;
+  font-size: 0.8rem;
+  border-top: 1px solid var(--datalib-border);
+  border-bottom: 1px solid var(--datalib-border);
+}
+.remote-banner-text {
+  flex: 1 1 100%;
+}
+.remote-banner-hosts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.remote-host {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  padding: 0.1rem 0.5rem;
+  background: var(--datalib-input-bg, #fff);
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+}
+.remote-host-count {
+  margin-left: 0.3rem;
+  color: var(--datalib-muted);
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body

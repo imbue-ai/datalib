@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeRenderedHtml } from "../src/cards/sanitize";
+import { sanitizeRenderedHtml as sanitize } from "../src/cards/sanitize";
+
+const sanitizeRenderedHtml = (html: string) => sanitize(html).html;
 
 /// The page holds the API session, so a message body that runs script is
 /// a message that owns the user's data. These are the shapes that must
