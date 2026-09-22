@@ -7,7 +7,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::{Arc, OnceLock, Weak};
 
-use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer, DEFAULT_LOG_FILTER};
+use datalib_runs::{Process, ProcessLogWriter, Retention, StoreLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -37,11 +37,13 @@ pub fn writer() -> Option<Arc<ProcessLogWriter>> {
 /// the store could not be opened, in which case stderr still gets
 /// every line.
 pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
+    let commit = datalib_runs::git_hash_and_origin();
+    let (retention, log_filter) = boot_config(root);
     let writer = ProcessLogWriter::start(
         root,
         Process::Http,
-        datalib_runs::git_hash(),
-        retention_of(root),
+        commit.as_ref().map(|(hash, _)| hash.clone()),
+        retention,
     )
     .map(Arc::new);
     if let Some(w) = &writer {
@@ -49,8 +51,9 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
         let _ = WRITER.set(Arc::downgrade(w));
     }
     let store = writer.as_ref().map(|w| StoreLayer::new(Arc::downgrade(w)));
+    // `RUST_LOG` is a person's choice and wins; else the config's level.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_filter));
     let stderr = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
@@ -63,16 +66,25 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
         .with(stderr)
         .with(store)
         .try_init();
+    datalib_runs::log_build_commit(commit.as_ref());
+    tracing::info!(filter = %log_filter, "log filter");
     writer
 }
 
-/// The config's `run_history`, read once at boot; the default when
-/// there is no config yet or it does not say.
-fn retention_of(root: &Path) -> Retention {
+/// The config's `run_history` and the filter its `log_level` asks
+/// for, read once at boot; the defaults when there is no config yet
+/// or it does not say. A change to either takes a restart.
+fn boot_config(root: &Path) -> (Retention, String) {
     let path = datalib_dag::config::root_config_path(root);
-    datalib_dag::config::load_graded(&path)
-        .ok()
-        .and_then(|(checked, _)| checked.cfg.run_history)
-        .map(|h| h.retention())
-        .unwrap_or_default()
+    match datalib_dag::config::load_graded(&path).ok() {
+        Some((checked, _)) => (
+            checked
+                .cfg
+                .run_history
+                .map(|h| h.retention())
+                .unwrap_or_default(),
+            checked.cfg.log_filter(),
+        ),
+        None => (Retention::default(), datalib_runs::default_filter()),
+    }
 }

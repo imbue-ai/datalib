@@ -25,14 +25,46 @@ pub const GIT_HASH_ENV: &str = "DATALIB_GIT_HASH";
 pub const GIT_HASH_FILE: &str = "git-hash";
 
 pub fn git_hash() -> Option<String> {
-    std::env::var(GIT_HASH_ENV)
-        .ok()
-        .and_then(|s| usable(&s))
-        .or_else(|| exe_dir().and_then(|d| from_file(&d.join(GIT_HASH_FILE))))
+    git_hash_and_origin().map(|(hash, _)| hash)
 }
 
-fn from_file(path: &Path) -> Option<String> {
-    usable(&std::fs::read_to_string(path).ok()?)
+/// Which of the two places the commit was read from, for the boot line
+/// that says so — a dev binary run by hand gets it from the file
+/// `//datalib/backend:bin` stages, a launcher's from the environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitHashOrigin {
+    Env,
+    FileBesideBinary,
+}
+
+impl GitHashOrigin {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Env => "the DATALIB_GIT_HASH environment variable",
+            Self::FileBesideBinary => "the git-hash file beside the binary",
+        }
+    }
+}
+
+/// What a process should say when it has neither.
+pub const NO_GIT_HASH_ADVICE: &str = "no commit known for this build: set DATALIB_GIT_HASH, \
+     or build //datalib/backend:bin and run the binary from there; \
+     the log's source links will be plain text";
+
+pub fn git_hash_and_origin() -> Option<(String, GitHashOrigin)> {
+    let env = std::env::var(GIT_HASH_ENV).ok();
+    let file = exe_dir().and_then(|d| std::fs::read_to_string(d.join(GIT_HASH_FILE)).ok());
+    resolve(env.as_deref(), file.as_deref())
+}
+
+/// The environment wins when it names a commit; a value that is not
+/// one ("unknown", empty) is the same as none, whichever place it is in.
+fn resolve(env: Option<&str>, file: Option<&str>) -> Option<(String, GitHashOrigin)> {
+    if let Some(hash) = env.and_then(usable) {
+        return Some((hash, GitHashOrigin::Env));
+    }
+    file.and_then(usable)
+        .map(|hash| (hash, GitHashOrigin::FileBesideBinary))
 }
 
 fn exe_dir() -> Option<PathBuf> {
@@ -50,7 +82,7 @@ fn usable(s: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{from_file, usable};
+    use super::{resolve, usable, GitHashOrigin};
 
     #[test]
     fn only_a_sha_is_usable() {
@@ -62,15 +94,24 @@ mod tests {
         assert_eq!(usable("v0.35.0"), None, "a tag is not a commit");
     }
 
+    /// The launcher's variable beats the staged file, and a file whose
+    /// content is not a commit — what the workspace status writes
+    /// outside a checkout — counts as absent.
     #[test]
-    fn the_file_beside_the_binary_is_one_line() {
-        let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("git-hash");
-        assert_eq!(from_file(&path), None, "absent is absent, not an error");
-        std::fs::write(&path, "ae2d52f0ae2d52f0ae2d52f0ae2d52f0ae2d52f0\n").unwrap();
+    fn the_environment_wins_and_unknown_is_absent() {
+        let file = "ae2d52f0ae2d52f0ae2d52f0ae2d52f0ae2d52f0\n";
         assert_eq!(
-            from_file(&path).as_deref(),
-            Some("ae2d52f0ae2d52f0ae2d52f0ae2d52f0ae2d52f0")
+            resolve(None, Some(file)),
+            Some((
+                "ae2d52f0ae2d52f0ae2d52f0ae2d52f0ae2d52f0".into(),
+                GitHashOrigin::FileBesideBinary
+            ))
         );
+        assert_eq!(
+            resolve(Some("0fc29cb0fc29cb"), Some(file)),
+            Some(("0fc29cb0fc29cb".into(), GitHashOrigin::Env))
+        );
+        assert_eq!(resolve(Some("unknown"), Some("unknown\n")), None);
+        assert_eq!(resolve(None, None), None);
     }
 }

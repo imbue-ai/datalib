@@ -58,13 +58,18 @@ The commit belongs to the process, not the store, because lines from
 different builds sit in one file — the server restarts between
 versions. It comes from `datalib_runtime::build_id::git_hash`: the
 `DATALIB_GIT_HASH` environment variable (the dev launchers set it from
-the checkout), else a `git-hash` file beside the binaries (the release
-tarball and the .app carry one); a binary that can say neither records
-nothing, and the log's source links point at `main` instead of a
-commit. The link is built when the line is shown, never stored: the
-store keeps the path rustc saw and the commit, and the UI
-(`runLogSource.ts`) makes the URL. Nothing is compiled in — a build
-stamp would rebuild everything downstream on every commit. A step attempt running the built-in step
+the checkout), else a `git-hash` file beside the binaries — the
+release tarball and the .app carry one, and so does
+`bazelisk build //datalib/backend:bin`, so a `datalib-http` run
+straight out of `bazel-bin/datalib/backend/bin/` has it too. The
+process says which at boot (`build commit read from …`); one that has
+neither warns instead and records nothing, and the log's source links
+point at `main` instead of a commit. The link is built when the line
+is shown, never stored: the store keeps the path rustc saw and the
+commit, and the UI (`runLogSource.ts`) makes the URL. Nothing is
+compiled into a binary — a rustc stamp would rebuild everything
+downstream on every commit; the staged file is one stamped genrule
+(`.bazelrc` §stamping). A step attempt running the built-in step
 program shares the runner's commit; a custom command has none; a page
 has the server's, since the bundle is embedded in the binary.
 
@@ -82,12 +87,23 @@ Adding a UI event is one word in the `PageEventName` union and the
 call; the server files any word. Uncaught exceptions and route changes
 are already tracked — see the union for what is.
 
-Levels are `trace` … `error`. A process starts from
-`datalib_log_filter::DEFAULT_LOG_FILTER` (our crates at `debug`, the
-noisy libraries at `warn`) unless `RUST_LOG` says otherwise, and the
-store keeps every level it is handed — `debug` is where a doltlite
-commit or a batch of rows goes. The log card opens at
-`min_level:info`, so `debug` is there when asked for and not otherwise.
+Levels are `trace` … `error`. The level a root logs at is
+`log_level` at the top of its `config.toml` — `trace` when it does
+not say, while the pipeline is being debugged — and it applies to
+datalib's own crates in every process of that root: the server reads
+it at launch (a change takes a restart), the runner per run, and each
+step gets the resulting filter as `RUST_LOG`. Third-party crates
+follow it down to `debug` and no further, and the noisy ones stay at
+`warn` (`datalib_log_filter`). A `RUST_LOG` set where a process was
+started wins over all of that. The store keeps every level it is
+handed — `debug` is where a doltlite commit or a batch of rows goes —
+and the log card opens at `min_level:info`, so the lower levels are
+there when asked for and not otherwise. Little emits `trace` today:
+the few `trace!` lines in the tree are a step's progress ticks
+(`etl/src/progress.rs`), so a log with none is the normal case, not a
+sign the level is lost. The server itself writes no `debug` lines in
+ordinary service either — its `debug` sites are in the providers —
+so a store with only a server launch in it is all `info` and `warn`.
 
 ## What is not a log line
 

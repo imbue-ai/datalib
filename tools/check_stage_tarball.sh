@@ -25,8 +25,16 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 script="$(rlocation _main/scripts/release/stage_tarball.sh)"
 [[ -f "$script" ]] || { echo "ERROR: stage_tarball.sh not in runfiles at $script" >&2; exit 1; }
 fake_cargo_about="$(rlocation _main/tools/fake_cargo_about.sh)"
-# The runfiles tree lays the Bazel outputs out exactly as bazel-bin does.
-tree="${script%/scripts/release/stage_tarball.sh}"
+# The runfiles tree lays the Bazel outputs out as bazel-bin does, except
+# that the binaries come as `:bin_unstamped` (so a commit does not re-run
+# this test); the script wants them at `datalib/backend/bin`, so build
+# that tree out of links.
+runfiles="${script%/scripts/release/stage_tarball.sh}"
+tree="$TEST_TMPDIR/bazel-bin"
+mkdir -p "$tree/datalib/backend"
+ln -s "$runfiles/datalib/backend/bin_unstamped" "$tree/datalib/backend/bin"
+ln -s "$runfiles/datalib/ui" "$tree/datalib/ui"
+ln -s "$runfiles/third-party" "$tree/third-party"
 
 shell="${RELEASE_SHELL:-bash}"
 echo ">>> running under $("$shell" -c 'echo "$BASH_VERSION"')"

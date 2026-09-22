@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The shipped binaries must write doltlite stores, not plain SQLite.
 #
-# Runs the staged `datalib-*` binaries (`//datalib/backend:bin`, in
-# whatever configuration this test is built with) over the two-vCard
+# Runs the staged `datalib-*` binaries (`//datalib/backend:bin_unstamped`
+# — `:bin` minus the per-commit `git-hash`, so this test stays cached
+# across commits — in whatever configuration it is built with) over the two-vCard
 # fixture — ingest, render, grid_index — and reads the commit log of
 # both stores back through the doltlite shell. A binary linked against
 # stock SQLite writes files the shell refuses (`dolt version-control
@@ -34,8 +35,8 @@ else
       || source "$0.runfiles/$f" 2>/dev/null \
       || source "$0.runfiles/_main/$f" 2>/dev/null \
       || { echo >&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
-    dag="$(rlocation _main/datalib/backend/bin/datalib-dag)"
-    shell="$(rlocation _main/datalib/backend/bin/datalib-doltlite)"
+    dag="$(rlocation _main/datalib/backend/bin_unstamped/datalib-dag)"
+    shell="$(rlocation _main/datalib/backend/bin_unstamped/datalib-doltlite)"
     vcf="$(rlocation _main/datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng/Bridge.vcf)"
 fi
 for p in "$dag" "$shell" "$vcf"; do

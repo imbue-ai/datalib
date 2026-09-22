@@ -35,7 +35,23 @@ export function formatTimeOfDay(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const p2 = (n: number) => String(n).padStart(2, "0");
+  return timeOfDay(d);
+}
+
+/// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
+/// viewer's own zone for the reason above. Digits and separators only,
+/// so it sorts as text and a column can clip it from the left down to
+/// the time of day.
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${timeOfDay(d)}`;
+}
+
+const p2 = (n: number) => String(n).padStart(2, "0");
+
+function timeOfDay(d: Date): string {
   return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(
     d.getMilliseconds(),
   ).padStart(3, "0")}`;

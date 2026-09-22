@@ -51,6 +51,13 @@
 # explicitly for a real run.
 data_root = "~/tmp/dr-dag"
 
+# The lowest level of datalib's own log lines every process of this
+# root keeps — the server, the runner, each step: `trace`, `debug`,
+# `info`, `warn` or `error`. Omitted means `trace` (the log card still
+# opens at `info`); third-party crates never go below `debug`; a
+# `RUST_LOG` in a process's environment wins over this.
+log_level = "trace"
+
 # How much of the run store (`system/runs/runs.sqlite`: every run's step
 # states, log lines and metrics) to keep. Both limits apply; omit the
 # table for the defaults, which are these.
