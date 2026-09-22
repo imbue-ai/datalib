@@ -91,6 +91,9 @@ Args (positional):
     27: claude_code_tng  A `~/.claude/projects` tree: two sessions and a
                       subagent transcript. File-backed; the ingest
                       step walks it directly.
+    28: codex_tng     A `~/.codex` home: two threads and a sub-agent
+                      thread. File-backed; the ingest step walks its
+                      `sessions/` and `archived_sessions/` directly.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -176,6 +179,7 @@ def main() -> int:
     airvisual_fx = Path(sys.argv[25]).resolve()
     facebook_fx = Path(sys.argv[26]).resolve()
     claude_code_fx = Path(sys.argv[27]).resolve()
+    codex_fx = Path(sys.argv[28]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -312,6 +316,8 @@ def main() -> int:
         "facebook": ("facebook", facebook_fx, facebook_fx),
         # The transcripts root, as Claude Code lays it out.
         "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
+        # The Codex home, as Codex lays it out.
+        "codex": ("codex", codex_fx, codex_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -789,7 +795,7 @@ def _source_config(
         # ingest step is never run. `api = {}` would fail validation
         # outright anyway (yolink requires at least one `api.devices`).
         pass
-    elif type_str == "claude_code":
+    elif type_str in ("claude_code", "codex"):
         source["sessions"] = {"path": str(input_path)}
     elif type_str == "airvisual":
         # One device per folder; serial and name come from each folder's

@@ -2,7 +2,9 @@
 
 *Investigation (2026-09-16); the `claude_code` source's local method is
 built (same day — `datalib/backend/etl/providers/claude_code/INGEST.md`
-is the reference), the rest is not.* What it would take to
+is the reference) and the `codex` source's local method is built
+(2026-09-22 — `datalib/backend/etl/providers/codex/INGEST.md`); the
+rest is not.* What it would take to
 mirror the transcripts of the coding and desktop agents — Claude Code
 (local and cloud), Claude Cowork, OpenAI's Codex (local and cloud), the
 ChatGPT bulk export the `chatgpt` source still lacks, and Google's
@@ -21,7 +23,7 @@ unverified.
 | Cowork (web/mobile) | `cloud` | origin | unknown — `cse_` ids, same id space as Claude Code cloud | claude.ai session or OAuth | **open question**, needs a browser probe |
 | Any of the above, Enterprise only | — | origin | Compliance API `/v1/compliance/apps/sessions/{local,remote}` | Compliance Access Key | documented and stable, but Enterprise plans only |
 | ChatGPT | `export` | files | `conversations.json` from the data-export zip | none | shape already parsed by the `api` method's renderer |
-| Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | *measured*: 20 sessions here |
+| Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | **built** (rollouts, both format generations; the SQLite is not read yet) |
 | Codex cloud | `cloud` | origin | `chatgpt.com/backend-api/wham/tasks/list`, `…/wham/tasks/{id}` | the ChatGPT bearer the `chatgpt` source already holds | *from source* (`openai/codex`); undocumented |
 | Gemini web | takeout | files | `My Activity/Gemini Apps/MyActivity.html` | none | **already built** (`google_takeout`) |
 | Gemini CLI | `local` | files | `~/.gemini/tmp/<project-hash>/chats/session-*.json` | none | *measured*: 22 sessions here |
@@ -71,11 +73,15 @@ verbatim, and the source needs a sentence in its INGEST.md saying so.
 Read `docs/dev/plans/data_lib_as_a_library/data_handling_practices.md`
 before designing the row.
 
-**Identity is easy.** Every one of these tools mints a UUID per
+**Identity is mostly easy.** Every one of these tools mints a UUID per
 session (Claude Code and Cowork a v4, Codex a v7, Gemini CLI a v4 plus
-a per-project hash) and a UUID per record, so `grid_rows.uuid` follows
-the `docs/dev/entity_ids.md` rule with `Scope::ProviderGlobal` and no
-hashing of our own.
+a per-project hash), so `grid_rows.uuid` follows the
+`docs/dev/entity_ids.md` rule, with no account — none of these tools
+names one on a record — and no hashing of our own. Per record, only Claude Code mints a UUID; a Codex
+rollout line carries `timestamp`, `type` and `payload` and nothing
+else (measured, 0.104–0.115; a newer Codex adds an `ordinal`), so its
+key is the line's number within the thread, which the append-only
+file keeps stable.
 
 **Sessions have parents.** Claude Code writes a subagent's transcript
 to `<session>/subagents/agent-<id>.jsonl` (72 of them here), and a
@@ -263,6 +269,11 @@ Record `type` is one of `session_meta` (id, timestamp, cwd,
 `turn_context`, `response_item` (`payload.type` = `message`,
 `function_call`, `function_call_output`, `reasoning`, …) and
 `event_msg` (`user_message`, `task_started`, `task_complete`, …).
+**That last list is the 0.115 vocabulary.** By 0.155 the
+`user_message` event is gone — `item_completed` replaced it — and a
+message instead tags its own parts (`content_item_kinds`), which is
+the better signal and the one the provider prefers; see the provider's
+INGEST.md § "Two generations".
 Plain SQLite, so titles come from `state_5.sqlite` via the ordinary
 `sqlx` pool, not the mirror engine. Same append-only file, same
 byte-offset cursor as Claude Code.
@@ -323,7 +334,7 @@ published schema. Skip.
 ## Decided (2026-09-16): three types over one engine
 
 Local ingestion for all three is being built, Claude Code first
-(**built**; Codex and Gemini CLI next). The
+(**built**), Codex second (**built**, 2026-09-22), Gemini CLI next. The
 type question was settled against the `email` precedent
 (`docs/dev/email_download_modes.md` §1–2): transports share a type only
 when the same thing ingested two ways **dedupes** — `email_id` is the
@@ -345,10 +356,12 @@ machinery, on the `sqlite_mirror` / `timeseries_render` precedent:
   ingest turned out to be `fsscan` + `file_checkpoint` + a parser
   (`ingest/mod.rs` is ~200 lines, and a changed file is simply
   re-read whole — doltlite's content addressing makes the unchanged
-  rows free, so the byte-offset cursor was not needed), which is too
-  little to extract from one user. Pull the engine out when Codex
-  lands and the shape repeats; Gemini CLI — whole-file JSON — uses
-  the same hash cursor either way.
+  rows free, so the byte-offset cursor was not needed). Codex's is the
+  same ~200 lines with a different parser and two scan roots; the
+  shape has now repeated and the engine is there to pull out, though
+  what it would save is the `RawDb` boilerplate and the scan loop,
+  not the parsers. Gemini CLI — whole-file JSON — uses the same hash
+  cursor either way.
 - one shared render crate over a normalized turn model: `tool_use` /
   `tool_result` runs folded into chat-common's `<details>`, one `h2`
   per human turn, subagent transcripts as separate documents joined by

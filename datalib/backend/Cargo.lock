@@ -1332,6 +1332,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalib-etl-codex"
+version = "0.35.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datalib-etl",
+ "datalib-etl-macros",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "datalib-etl-codex-render"
+version = "0.35.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "datalib-etl",
+ "datalib-etl-chat-common",
+ "datalib-etl-codex",
+ "datalib-etl-render",
+ "datalib-id",
+ "datalib-schema",
+ "datalib-time",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "datalib-etl-contact-common"
 version = "0.35.2"
 dependencies = [

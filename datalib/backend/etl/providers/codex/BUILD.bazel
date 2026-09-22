@@ -1,0 +1,65 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed Codex rollouts in the layout `~/.codex` has: two threads
+# under `sessions/<YYYY>/<MM>/<DD>/`, one of them the parent of a spawned
+# sub-agent thread. Used by :codex_tests and the central fixture
+# pipeline at //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/codex_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_codex",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_codex",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/codex_config:datalib_etl_codex_config",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "codex_unittests",
+    size = "small",
+    crate = ":datalib_etl_codex",
+    edition = "2021",
+)
+
+# Every hermetic Codex test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
+rust_test(
+    name = "codex_tests",
+    srcs = glob(["tests/codex_tests/*.rs"]),
+    crate_root = "tests/codex_tests/main.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "CODEX_FIXTURE_DIR": "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
+    },
+    deps = [
+        ":datalib_etl_codex",
+        "//datalib/backend/etl/providers/codex_render:datalib_etl_codex_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

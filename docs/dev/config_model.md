@@ -117,7 +117,7 @@ its own `path`. There is no global vocabulary — each provider's
 | linkedin | `export`, plus `export.fetch_photos` |
 | signal, sms_backup_restore, whatsapp | `backup` |
 | fsindex, media, pdf | `fswalk` |
-| beeper `texts` · apple_messages `database` · apple_photos `library` · lightroom `catalog` · claude_code `sessions` · perseus `github` | |
+| beeper `texts` · apple_messages `database` · apple_photos `library` · lightroom `catalog` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to
 read the list from.

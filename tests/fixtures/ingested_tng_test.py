@@ -204,6 +204,8 @@ EXPECTED_PROVIDERS = frozenset(
         "claude",
         # File-backed: the fixture is a `~/.claude/projects` tree.
         "claude_code",
+        # File-backed: the fixture is a `~/.codex` home.
+        "codex",
         "beeper",
         "contacts",
         # Not a source: the per-source storage report every render wave

@@ -724,6 +724,34 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "codex",
+    // With nothing filled in the form still writes `sessions = {}`, which
+    // is the standard home: Codex keeps its rollouts under ~/.codex.
+    method: "sessions",
+    label: "Codex",
+    blurb: "Mirror your Codex CLI sessions from their store on this machine.",
+    keywords: ["codex", "openai", "agent", "sessions", "rollouts", "transcripts", "coding"],
+    kind: "local",
+    icon: "codex",
+    defaultName: "codex",
+    nameHint: "Codex on this Mac",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the Codex home folder",
+        required: false,
+        target: "sessions.path",
+        label: "Codex home",
+        help:
+          "Leave empty for the standard home, ~/.codex. Point it elsewhere for a copy of " +
+          "that folder from another machine. A thread Codex later deletes stays in the " +
+          "mirror.",
+      },
+    ],
+  },
+  {
     type: "google_takeout",
     label: "Google Takeout",
     blurb: "Google Chat, Voice, Maps and YouTube from an export.",
