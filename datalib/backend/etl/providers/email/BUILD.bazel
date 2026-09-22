@@ -110,11 +110,6 @@ rust_test(
     ],
 )
 
-
-
-
-
-
 # Live test — talks to api.fastmail.com via latchkey. Manual.
 # Live Gmail REST API test: mirrors one label out of a real account and
 # asserts against the doltlite store it wrote. Needs a `google-gmail`
@@ -141,34 +136,9 @@ rust_test(
     ],
 )
 
-rust_test(
-    name = "jmap_live",
-    srcs = ["tests/jmap_live.rs"],
-    crate_root = "tests/jmap_live.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",
-        "manual",
-        "no-remote-exec",
-        "no-sandbox",
-    ],
-    deps = [
-    ],
-)
-
 insta_update(
     name = "email_tests.update",
     test = ":email_tests",
-)
-
-insta_update(
-    name = "jmap_live.update",
-    test = ":jmap_live",
-    test_args = ["--ignored"],
 )
 
 # `manual` keeps these out of `//...`, so nothing else ever builds them.
@@ -177,6 +147,5 @@ build_test(
     name = "manual_targets_build",
     targets = [
         ":gmail_live",
-        ":jmap_live",
     ],
 )

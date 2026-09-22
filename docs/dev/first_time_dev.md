@@ -271,11 +271,12 @@ Design notes:
 Several provider crates ship a `*_live` snapshot test that hits the real
 service API through `latchkey`:
 `//datalib/backend/etl/providers/claude:claude_live`, plus the
-sibling `chatgpt_live`, `github_live`, `gitlab_live`, `notion_live`, and
-`email:jmap_live` targets. Each downloads a small known fixture (e.g. one
-conversation), then asserts a curated stable view against committed
-[insta](https://insta.rs) snapshots. All are tagged `manual` + `external`
-+ `no-sandbox`, so they are excluded from `bazel test //...`; they need
+sibling `chatgpt_live`, `github_live`, `gitlab_live` and `notion_live`
+targets. Each downloads a small known fixture (e.g. one conversation),
+then asserts a curated stable view against committed
+[insta](https://insta.rs) snapshots. `email:gmail_live` is the one that
+does not: it downloads and checks the store it wrote, with no golden.
+All are tagged `manual` + `external` + `no-sandbox`, so they are excluded from `bazel test //...`; they need
 `latchkey` creds for the service and `LATCHKEY_CURL` pointing at the
 router curl (which hands Cloudflare-fronted hosts to the bundled
 `curl-impersonate` next to it — see `docs/dev/curl_impersonate.md`):

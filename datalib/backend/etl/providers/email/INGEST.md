@@ -161,11 +161,14 @@ model the loop on `chatgpt/src/ingest/api.rs`.
 
 ## Sample data
 
-No checked-in fixture tree yet — `tests/jmap_render.rs` builds a small
-`LoadedRaw` in memory to exercise the renderer. A synth + playback
-fixture pair (matching the slack/notion pattern) is a planned
-follow-up; until then, the live test (`tests/jmap_live.rs`, currently
-a stub) is the only path that exercises the real wire format.
+No checked-in fixture tree yet — `tests/email_tests/jmap_render.rs`
+builds a small `LoadedRaw` in memory to exercise the renderer. A synth
++ playback fixture pair (matching the slack/notion pattern) is a
+planned follow-up, and until one exists **nothing exercises the real
+JMAP wire format**: there is no live JMAP test. (There was a
+`jmap_live.rs`, but it was an empty `#[ignore]`d stub carrying a
+snapshot glob and an `.update` target for goldens it never wrote, so
+it was deleted rather than kept as a promise.)
 
 ## The raw store's shape
 
