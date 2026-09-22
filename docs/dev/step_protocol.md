@@ -368,10 +368,9 @@ part of your tree, keep whatever history you keep, commit if you
 commit, exit 0, and do nothing else: no inputs are resolved and no
 sync follows unless `--sync` was also given. A command that does not
 know the verb exits non-zero and nothing is changed. `datalib-step`
-empties every table of the tree's store but the store's own record of
-itself (`_datalib_meta`, `sync_runs`, `source_measurements`) in one
-commit,
-plus a render tree's documents.
+empties every table of the tree's store but `_datalib_meta` — its
+shape, not its content — in one commit, plus a render tree's
+documents; the run log and the rest are still in the history.
 
 ## Signals: graceful cancellation (optional)
 

@@ -1519,17 +1519,11 @@ pub async fn problem_counts_at_path(
 
 // ── Reset ───────────────────────────────────────────────────────────
 
-/// Tables a reset keeps: a record of what happened to the store, never
-/// of what it holds. The last is the render store's storage series,
-/// named here because this crate cannot see that schema.
-const KEPT_ON_RESET: &[&str] = &[
-    datalib_store_meta::TABLE,
-    "sync_runs",
-    "source_measurements",
-];
-
-/// Empty every table but [`KEPT_ON_RESET`] and commit, so the store reads
-/// as a source with nothing in it while its history keeps every row.
+/// Empty every table but `_datalib_meta` and commit, so the store reads
+/// as a source with nothing in it while its history keeps every row —
+/// the run log and the storage series included, which is where to look
+/// for them. `_datalib_meta` is not a record but the file's shape: the
+/// ladder's `schema_version`, and the guard against an older build.
 /// Opened with no DDL, so a store whose shape this build refuses resets
 /// all the same; once its tables are empty the owner's next open
 /// recreates whatever it cannot reach additively. A store that does not
@@ -1576,10 +1570,7 @@ async fn reset_with(db_path: &Path, empty: impl Fn(&str) -> bool, message: &str)
         // Decided before the transaction: the pool has one connection,
         // and a `PRAGMA` inside the transaction would wait on it forever.
         let mut statements = Vec::new();
-        for table in tables
-            .iter()
-            .filter(|t| !KEPT_ON_RESET.contains(&t.as_str()))
-        {
+        for table in tables.iter().filter(|t| t != &datalib_store_meta::TABLE) {
             if empty(table) {
                 statements.push(format!("DELETE FROM \"{table}\""));
             } else if table_columns(&pool, table)
@@ -2836,8 +2827,8 @@ mod tests {
         assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
-    /// A reset empties content and cursors alike, keeps the store's own
-    /// record of itself, and commits, so the rows are still in history.
+    /// A reset empties content, cursors and the run log alike, keeps only
+    /// the store's own shape, and commits, so the rows are still in history.
     /// The blob side empties the CAS and nulls only the nullable `blake3`
     /// columns — the CAS references — leaving a file's own digest alone.
     #[tokio::test]
@@ -2901,12 +2892,17 @@ mod tests {
         for table in ["widgets", "edges", "files", "sync_scope_state"] {
             assert_eq!(count(&pool, table).await, 0, "{table} emptied");
         }
-        assert_eq!(count(&pool, "sync_runs").await, 1, "the run log is kept");
+        assert_eq!(count(&pool, "sync_runs").await, 0, "the run log goes too");
         assert_eq!(
             count(&pool, "dolt_log").await,
             commits_before + 2,
             "each reset is one commit, so the rows are still in history"
         );
+        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~1')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(logged, 1, "and readable there");
         pool.close().await;
     }
 
