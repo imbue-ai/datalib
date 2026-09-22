@@ -8,7 +8,6 @@ export const CONFIG_MUTATING = [
   "data-sources-name",
   "data-sources-menu",
   "grid-source-id",
-  "remote-images-source",
   "sources-view",
   "wizard-select",
   "wizard-email",

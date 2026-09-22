@@ -31,8 +31,8 @@ struct UiAssets;
 ///   sanitizer (`ui/src/cards/sanitize.ts`) strips remote references
 ///   before they reach the DOM and offers to load them; this line is
 ///   the guarantee behind it, for anything the sanitizer misses. A
-///   reference the person chooses to load goes through
-///   [`crate::remote_media`], which is `'self'`.
+///   reference the person chooses to load has to come from this
+///   origin, then — a server-side fetch into a store (issue #648).
 /// - `connect-src ipc: http://ipc.localhost`: Tauri's IPC. The desktop
 ///   shell loads this page from the server as a remote URL, so Tauri
 ///   does not rewrite the policy the way it would for a page it serves

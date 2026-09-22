@@ -1,10 +1,10 @@
 // The sanitizer's treatment of remote references (issue #648): every
 // way a body can make the browser fetch from another host is held
-// back by default and put back through the proxy on request.
+// back, and the placeholders say what was held.
 
 import { describe, expect, it } from "vitest";
 
-import { decorateRemoteMedia, loadRemoteMedia } from "./remoteMedia";
+import { decorateRemoteMedia } from "./remoteMedia";
 import { sanitizeRenderedHtml } from "./sanitize";
 
 function dom(html: string): HTMLElement {
@@ -27,15 +27,7 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(imgs[0].classList.contains("remote-blocked")).toBe(true);
     expect(imgs[1].getAttribute("src")).toBe("blobs/own.png");
     expect(imgs[1].classList.contains("remote-blocked")).toBe(false);
-    expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image", loaded: false }]);
-  });
-
-  it("proxies instead when told the source is trusted", () => {
-    const { html, remote } = sanitizeRenderedHtml(`<img src="${HERO}">`, { loadRemote: true });
-    expect(dom(html).querySelector("img")!.getAttribute("src")).toBe(
-      `/api/remote?url=${encodeURIComponent(HERO)}`,
-    );
-    expect(remote[0].loaded).toBe(true);
+    expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image" }]);
   });
 
   it("covers every attribute a browser fetches from", () => {
@@ -70,19 +62,10 @@ describe("sanitizeRenderedHtml and remote references", () => {
     );
     expect(remote.find((r) => r.url === "https://v.example/a.mp4")!.kind).toBe("media");
     expect(remote.find((r) => r.url === "https://c.example/bg.png")!.kind).toBe("style");
-
-    // And every one of them comes back proxied under the trusted policy.
-    const loaded = sanitizeRenderedHtml(body, { loadRemote: true }).html;
-    expect(loaded).not.toMatch(/(?<![\w-])(src|poster|background|href|srcset)="(https?:|\/\/)/);
-    expect(loaded).toContain(
-      `srcset="/api/remote?url=${encodeURIComponent("https://s.example/a.jpg")} 1x, blobs/b.jpg 2x"`,
-    );
-    expect(loaded).toContain(
-      `background-image: url(&quot;/api/remote?url=${encodeURIComponent("https://c.example/bg.png")}&quot;)`,
-    );
+    expect(remote.find((r) => r.url === "//a.example/x.mp3")!.host).toBe("a.example");
   });
 
-  it("does not offer a reference the source itself claimed to have held", () => {
+  it("does not show a reference the source itself claimed to have held", () => {
     const { html, remote } = sanitizeRenderedHtml(`<img data-remote-src="${HERO}" alt="x">`);
     expect(dom(html).querySelector("img")!.getAttribute("data-remote-src")).toBeNull();
     expect(remote).toEqual([]);
@@ -98,29 +81,18 @@ describe("sanitizeRenderedHtml and remote references", () => {
 });
 
 describe("the placeholders", () => {
-  it("name the host, call a 1×1 a tracking pixel, and load on request", () => {
+  it("name the host, keep the URL on hover, and call a 1×1 a tracking pixel", () => {
     const { html } = sanitizeRenderedHtml(
       `<p><img src="${HERO}" alt="Hero"></p><img src="${PIXEL}" width="1" height="1" alt="">`,
     );
     const root = dom(html);
     decorateRemoteMedia(root);
     decorateRemoteMedia(root);
-    const chips = root.querySelectorAll("button.remote-media");
+    const chips = root.querySelectorAll(".remote-media");
     expect(chips).toHaveLength(2);
     expect(chips[0].textContent).toBe("🖼cdn.exampleHero");
-    expect(chips[0].getAttribute("title")).toContain(HERO);
+    expect(chips[0].getAttribute("title")).toBe(HERO);
     expect(chips[1].textContent).toBe("🖼pixel.exampletracking pixel");
     expect(chips[1].classList.contains("remote-media--pixel")).toBe(true);
-
-    expect(loadRemoteMedia(root, (u) => u === PIXEL)).toEqual([PIXEL]);
-    expect(root.querySelectorAll("button.remote-media")).toHaveLength(1);
-    const pixel = root.querySelectorAll("img")[1];
-    expect(pixel.getAttribute("src")).toBe(`/api/remote?url=${encodeURIComponent(PIXEL)}`);
-    expect(pixel.classList.contains("remote-blocked")).toBe(false);
-    expect(root.querySelectorAll("img")[0].getAttribute("src")).toBeNull();
-
-    expect(loadRemoteMedia(root, () => true)).toEqual([HERO]);
-    expect(root.querySelectorAll("button.remote-media")).toHaveLength(0);
-    expect(root.querySelectorAll(".remote-blocked")).toHaveLength(0);
   });
 });

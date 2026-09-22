@@ -298,8 +298,8 @@ impl IndexRepo for DoltRepo {
             return Ok(None);
         };
         let sql = format!(
-            "SELECT provider, qmd_path, conversation_name, account, project, channel, \
-                    created_at, source_label, source_url \
+            "SELECT conversation_name, account, project, channel, created_at, source_label, \
+                    source_url \
              FROM {} \
              WHERE markdown_uuid = ? \
              ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
@@ -322,14 +322,7 @@ impl IndexRepo for DoltRepo {
         // bare `String` the sqlite driver hands back `""` for NULL and the
         // header would show an empty project rather than none (#13).
         let text = |col: &str| r.try_get::<Option<String>, _>(col).ok().flatten();
-        // Filed as the grid files it (`source_id_for`): the path's first
-        // segment, except a storage row, which is datalib's.
-        let source_id = source_id_for(
-            text("provider").as_deref(),
-            &text("qmd_path").unwrap_or_default(),
-        );
         Ok(Some(ChatMeta {
-            source_id: Some(source_id).filter(|s| !s.is_empty()),
             name: text("conversation_name"),
             account: text("account"),
             project: text("project"),

@@ -86,7 +86,6 @@ pub struct Sources {
 struct Group {
     name: Option<String>,
     r#type: Option<String>,
-    load_remote_images: bool,
     ingest_params: serde_json::Value,
 }
 
@@ -118,10 +117,6 @@ impl Sources {
                     Group {
                         name,
                         r#type: s(v, "type"),
-                        load_remote_images: v
-                            .get("load_remote_images")
-                            .and_then(|x| x.as_bool())
-                            .unwrap_or(false),
                         ingest_params: serde_json::Value::Null,
                     },
                 ))
@@ -163,14 +158,6 @@ impl Sources {
             detail: None,
         });
         row.source_ref = Some(self.identity(&row.source_id));
-    }
-
-    /// Whether the config says to load this source's remote images
-    /// without asking (`GroupEntry::load_remote_images`).
-    pub fn load_remote_images(&self, source_id: &str) -> bool {
-        self.groups
-            .get(source_id)
-            .is_some_and(|g| g.load_remote_images)
     }
 
     /// The source as the grid shows it: the name the config gives the

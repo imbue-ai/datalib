@@ -2269,7 +2269,6 @@ dependencies = [
  "libc",
  "mime_guess",
  "notify",
- "reqwest",
  "rust-embed",
  "serde",
  "serde_json",
@@ -2282,7 +2281,6 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
- "url",
  "uuid",
  "webbrowser",
 ]

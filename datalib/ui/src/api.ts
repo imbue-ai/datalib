@@ -181,13 +181,6 @@ export type ChatResponse = {
   created_at: string | null;
   source_label: string | null;
   source_url: string | null;
-  /// The configured source this document came from, as the grid's
-  /// Source column shows it; null when no grid row points at the doc.
-  source_ref: Identity | null;
-  /// Whether the source's config says to load the document's remote
-  /// images without asking (`load_remote_images` on its `[[groups]]`
-  /// entry). Off by default.
-  load_remote_images: boolean;
   body: string;
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
@@ -208,13 +201,6 @@ export type DocEntry = {
 };
 // --- The unified_index applet --------------------------------------------
 export const UNIFIED_INDEX = "/applet/unified_index";
-
-// A remote image or media file the person chose to load, fetched by
-// the server on the page's behalf: the app's CSP lets the page reach
-// no remote host itself (`cards/remoteMedia.ts`).
-export function remoteMediaUrl(url: string): string {
-  return `/api/remote?url=${encodeURIComponent(url)}`;
-}
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {

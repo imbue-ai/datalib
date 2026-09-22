@@ -27,10 +27,7 @@ restarted and minted a new one.
 
 The sync pipeline is driven by `<root>/config.toml`, which holds three
 kinds of entry. `[[groups]]` is what a person sees as one thing: an
-`id` (one directory name), a `name`, for a source a `type`, and
-optionally `load_remote_images = true`, which lets the document view
-load a document's images from remote hosts without asking (off by
-default: loading one tells its host who opened the document and when).
+`id` (one directory name), a `name`, and for a source a `type`.
 `[[steps]]` is the pipeline: each step names its `group` and the
 `function` it performs there and the `inputs` it reads; its id is
 composed as `<group>/<function>` — the one tree it writes — and is

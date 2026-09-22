@@ -8,18 +8,10 @@
 //   (`edge.hover`); every doc card subscribes and puts a transient
 //   highlight on the target span when the destination is its own doc.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import {
-  fetchChat,
-  fetchConfig,
-  saveConfig,
-  type ChatResponse,
-  type DocProblem,
-  type EdgeOut,
-} from "@/api";
+import { fetchChat, type ChatResponse, type DocProblem, type EdgeOut } from "@/api";
 import { copyToClipboard } from "@/clipboard";
-import { setGroupLoadRemoteImages } from "@/config/sourceSteps";
 import ChatBody from "./ChatBody.ce.vue";
-import { hostOf, type RemoteRef } from "./remoteMedia";
+import type { RemoteRef } from "./remoteMedia";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
@@ -30,12 +22,7 @@ import {
 } from "@/feedback/context";
 import { chatHrefFromClick, isBrowserClick } from "./chatLink";
 import { problemLabel } from "./problems";
-import {
-  TOPIC_CONFIG_WRITTEN,
-  TOPIC_EDGE_HOVER,
-  type CardCtx,
-  type EdgeHoverPayload,
-} from "./types";
+import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -164,42 +151,25 @@ function onProblemJump(p: DocProblem) {
 }
 
 // ── Remote images. The body's references to other hosts are held back
-// unless the source's config says otherwise (`remoteMedia.ts`); the
-// banner above the body says how many, from where, and offers to load
-// them by host or all at once, and to make the source trusted. What has
-// been loaded is tracked by URL, whether the person clicked one
-// placeholder or a whole host's worth.
-const body = ref<InstanceType<typeof ChatBody> | null>(null);
+// by the sanitizer (`remoteMedia.ts`); the banner above the body says
+// how many and from where, so what the document would have fetched is
+// known before it is read. Loading them is issue #648's second half.
 const remoteRefs = ref<RemoteRef[]>([]);
-const remoteLoaded = ref<Set<string>>(new Set());
-const remoteBusy = ref(false);
-const remoteError = ref<string | null>(null);
 
-function onRemoteMedia(refs: RemoteRef[]) {
-  remoteRefs.value = refs;
-  remoteLoaded.value = new Set(refs.filter((r) => r.loaded).map((r) => r.url));
-}
-
-function onRemoteLoaded(urls: string[]) {
-  const next = new Set(remoteLoaded.value);
-  for (const u of urls) next.add(u);
-  remoteLoaded.value = next;
-}
-
-/// One entry per URL the body references and has not loaded.
-const remotePending = computed<RemoteRef[]>(() => {
+/// One entry per distinct URL.
+const remoteUnique = computed<RemoteRef[]>(() => {
   const seen = new Set<string>();
   return remoteRefs.value.filter((r) => {
-    if (remoteLoaded.value.has(r.url) || seen.has(r.url)) return false;
+    if (seen.has(r.url)) return false;
     seen.add(r.url);
     return true;
   });
 });
 
-/// The hosts still to load, most-referenced first.
+/// The hosts referenced, most-referenced first.
 const remoteHosts = computed<{ host: string; count: number }[]>(() => {
   const counts = new Map<string, number>();
-  for (const r of remotePending.value) {
+  for (const r of remoteUnique.value) {
     const host = r.host || r.url;
     counts.set(host, (counts.get(host) ?? 0) + 1);
   }
@@ -208,48 +178,15 @@ const remoteHosts = computed<{ host: string; count: number }[]>(() => {
     .sort((a, b) => b.count - a.count || a.host.localeCompare(b.host));
 });
 
-const remoteHasMedia = computed(() => remoteRefs.value.some((r) => r.kind === "media"));
 /// "remote images", or "remote images and media" when a video or audio
 /// element is among them; singular for one.
-function remoteNoun(count: number): string {
-  if (remoteHasMedia.value)
-    return count === 1 ? "remote image or media file" : "remote images and media";
-  return count === 1 ? "remote image" : "remote images";
-}
-
-function loadRemoteHost(host: string) {
-  body.value?.loadRemote((u) => (hostOf(u) || u) === host);
-}
-
-function loadRemoteAll() {
-  body.value?.loadRemote(() => true);
-}
-
-/// Write the source's `load_remote_images` switch into config.toml,
-/// through the same text edit the Sources card makes, and tell the
-/// other cards the config moved.
-async function setSourceLoadsRemote(on: boolean) {
-  const id = chat.value?.source_ref?.id;
-  if (!id || remoteBusy.value) return;
-  remoteBusy.value = true;
-  remoteError.value = null;
-  try {
-    const cfg = await fetchConfig();
-    const next = setGroupLoadRemoteImages(cfg.text, id, on);
-    if (next === cfg.text && on) {
-      throw new Error(`config.toml has no [[groups]] entry with id "${id}"`);
-    }
-    const res = await saveConfig(next);
-    if (!res.ok) throw new Error(res.error ?? "The config was rejected.");
-    if (chat.value) chat.value.load_remote_images = on;
-    props.ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
-    if (on) loadRemoteAll();
-  } catch (e) {
-    remoteError.value = (e as Error).message;
-  } finally {
-    remoteBusy.value = false;
+const remoteNoun = computed(() => {
+  const n = remoteUnique.value.length;
+  if (remoteRefs.value.some((r) => r.kind === "media")) {
+    return n === 1 ? "remote image or media file" : "remote images and media";
   }
-}
+  return n === 1 ? "remote image" : "remote images";
+});
 
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
@@ -415,8 +352,6 @@ watch(
     loading.value = true;
     error.value = null;
     remoteRefs.value = [];
-    remoteLoaded.value = new Set();
-    remoteError.value = null;
     try {
       chat.value = await fetchChat(uuid);
     } catch (e) {
@@ -485,73 +420,16 @@ watch(
           </span>
         </li>
       </ul>
-      <div
-        v-if="remoteRefs.length"
-        class="remote-banner"
-        :class="{ 'remote-banner--pending': remotePending.length }"
-      >
-        <template v-if="remotePending.length">
-          <span class="remote-banner-text">
-            <strong>{{ remotePending.length }}</strong>
-            {{ remoteNoun(remotePending.length) }} not loaded — loading one tells its host you
-            opened this.
+      <div v-if="remoteUnique.length" class="remote-banner">
+        <span class="remote-banner-text">
+          <strong>{{ remoteUnique.length }}</strong> {{ remoteNoun }} not loaded — loading one would
+          tell its host you opened this.
+        </span>
+        <span class="remote-banner-hosts">
+          <span v-for="h in remoteHosts" :key="h.host" class="remote-host">
+            {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
           </span>
-          <span class="remote-banner-hosts">
-            <button
-              v-for="h in remoteHosts"
-              :key="h.host"
-              type="button"
-              class="remote-host"
-              :title="`Load the ${h.count} from ${h.host}`"
-              @click="loadRemoteHost(h.host)"
-            >
-              {{ h.host }}<span v-if="h.count > 1" class="remote-host-count">×{{ h.count }}</span>
-            </button>
-          </span>
-          <span class="remote-banner-actions">
-            <button type="button" class="remote-action remote-load-all" @click="loadRemoteAll">
-              Load all
-            </button>
-            <button
-              v-if="chat.source_ref && !chat.load_remote_images"
-              type="button"
-              class="remote-action remote-always"
-              :disabled="remoteBusy"
-              :title="`Load remote images in every document from ${chat.source_ref.label} without asking`"
-              @click="setSourceLoadsRemote(true)"
-            >
-              Always load for {{ chat.source_ref.label }}
-            </button>
-          </span>
-        </template>
-        <template v-else>
-          <span class="remote-banner-text">
-            {{ remoteHasMedia ? "Remote images and media" : "Remote images" }} loaded<template
-              v-if="chat.load_remote_images && chat.source_ref"
-            >
-              automatically for {{ chat.source_ref.label }}.
-              <button
-                type="button"
-                class="remote-action remote-stop"
-                :disabled="remoteBusy"
-                @click="setSourceLoadsRemote(false)"
-              >
-                Stop
-              </button></template
-            ><template v-else>.</template>
-          </span>
-          <span v-if="chat.source_ref && !chat.load_remote_images" class="remote-banner-actions">
-            <button
-              type="button"
-              class="remote-action remote-always"
-              :disabled="remoteBusy"
-              @click="setSourceLoadsRemote(true)"
-            >
-              Always load for {{ chat.source_ref.label }}
-            </button>
-          </span>
-        </template>
-        <span v-if="remoteError" class="remote-banner-error">{{ remoteError }}</span>
+        </span>
       </div>
       <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
         <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
@@ -580,17 +458,14 @@ watch(
       </ul>
       <div @click="onBodyClick">
         <ChatBody
-          ref="body"
           :body="chat.body"
           :markdown-uuid="chat.markdown_uuid"
           :selected-section-uuid="jumpTo ?? sectionUuid"
           :outgoing-edges="chat.outgoing_edges"
           :hover-anchor-uuid="hoverAnchor"
-          :load-remote="chat.load_remote_images"
           @open-edge="onOpenEdge"
           @hover-edge="onHoverEdge"
-          @remote-media="onRemoteMedia"
-          @remote-loaded="onRemoteLoaded"
+          @remote-media="remoteRefs = $event"
         />
       </div>
     </template>
@@ -709,7 +584,7 @@ watch(
 }
 /* The remote-images banner: above the body with the problems, since
    what the document would fetch from elsewhere is something to know
-   before reading it. Muted once everything is loaded. */
+   before reading it. */
 .remote-banner {
   display: flex;
   flex-wrap: wrap;
@@ -718,59 +593,30 @@ watch(
   margin: 0 0 0.5rem;
   padding: 0.4rem 0;
   font-size: 0.8rem;
-  color: var(--datalib-muted);
   border-top: 1px solid var(--datalib-border);
   border-bottom: 1px solid var(--datalib-border);
-}
-.remote-banner--pending {
-  color: inherit;
 }
 .remote-banner-text {
   flex: 1 1 100%;
 }
-.remote-banner-hosts,
-.remote-banner-actions {
+.remote-banner-hosts {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 0.3rem;
   align-items: center;
 }
-.remote-banner-actions {
-  margin-left: auto;
-}
-.remote-host,
-.remote-action {
-  font: inherit;
+.remote-host {
+  font-family: ui-monospace, Menlo, monospace;
   font-size: 0.75rem;
   line-height: 1.3;
   padding: 0.1rem 0.5rem;
-  color: inherit;
   background: var(--datalib-input-bg, #fff);
   border: 1px solid var(--datalib-border, #d8d8d8);
   border-radius: 999px;
-  cursor: pointer;
-}
-.remote-host:hover,
-.remote-action:hover {
-  background: var(--datalib-hover, #f0f0f0);
-}
-.remote-action:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.remote-host {
-  font-family: ui-monospace, Menlo, monospace;
 }
 .remote-host-count {
   margin-left: 0.3rem;
   color: var(--datalib-muted);
-}
-.remote-load-all {
-  border-color: var(--datalib-accent, #6366f1);
-}
-.remote-banner-error {
-  flex: 1 1 100%;
-  color: #e35d6a;
 }
 .outgoing-edges {
   /* The doc-level outgoing edges list sits above the rendered body

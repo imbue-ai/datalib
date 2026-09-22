@@ -36,7 +36,6 @@ pub mod history;
 pub mod lock;
 pub mod logging;
 pub mod manage;
-pub mod remote_media;
 pub mod request_log;
 pub mod ui_events;
 pub mod usage;
@@ -194,9 +193,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ui/events", post(ui_events::post_events))
         .route("/api/sync/stream", get(sync_stream))
         .route("/api/frontend", get(get_frontend))
-        // A remote image or media file the person chose to load; the
-        // page itself may not reach a remote host (embed::APP_CSP).
-        .route("/api/remote", get(remote_media::get))
         // Component code, addressed by content. Flat across every
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.

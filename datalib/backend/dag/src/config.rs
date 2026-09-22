@@ -169,14 +169,6 @@ pub struct GroupEntry {
     /// is the plan for making search use it.
     #[serde(default)]
     pub description: Option<String>,
-    /// Whether the document view loads the images a rendered document
-    /// references on a remote host — off unless said, because loading
-    /// one tells its host who opened the document and when. A person
-    /// turns it on for a source whose senders they trust. Read by the
-    /// `unified_index` applet and the UI only: like `name`, never
-    /// forwarded to a step and never fingerprinted.
-    #[serde(default)]
-    pub load_remote_images: bool,
     /// For a group of type [`DIFF_GROUP_TYPE`] only: the source group whose
     /// raw store its render step compares at two commits. The loader
     /// checks it names a source that renders; the source's type reaches
@@ -1867,40 +1859,6 @@ mod tests {
                 described[i].fingerprint_material()
             );
         }
-    }
-
-    /// The remote-images switch is read by the document view, not by a
-    /// step, so flipping it re-runs nothing.
-    #[test]
-    fn a_groups_remote_images_switch_moves_no_fingerprint() {
-        let with = |line: &str| {
-            let cfg: DagConfig = toml::from_str(&format!(
-                r#"
-                [[groups]]
-                id = "mail"
-                type = "email"
-                {line}
-
-                [[steps]]
-                group = "mail"
-                function = "ingest"
-                command = "my-fetcher"
-                "#
-            ))
-            .expect("parse");
-            (
-                cfg.groups[0].load_remote_images,
-                to_specs(&cfg).expect("to_specs"),
-            )
-        };
-        let (off, bare) = with("");
-        let (on, switched) = with("load_remote_images = true");
-        assert!(!off);
-        assert!(on);
-        assert_eq!(
-            bare[0].fingerprint_material(),
-            switched[0].fingerprint_material()
-        );
     }
 
     #[test]
