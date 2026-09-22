@@ -17,3 +17,6 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 datalib-obs = { path = "../obs" }
 datalib-runtime = { path = "../runtime" }
+
+[dev-dependencies]
+tempfile = "3"

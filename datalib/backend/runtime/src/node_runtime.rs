@@ -497,9 +497,8 @@ mod tests {
     /// through `$DATALIB_RUNTIME_DIR`.
     #[test]
     fn bundled_command_resolves_staged_tree() {
-        let base =
-            std::env::temp_dir().join(format!("datalib-runtime-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
         let node = base.join(NODE_REL);
         std::fs::create_dir_all(node.parent().unwrap()).unwrap();
         std::fs::write(&node, b"#!/bin/sh\n").unwrap();
@@ -547,7 +546,6 @@ mod tests {
 
         // SAFETY: single-threaded test, no concurrent env access.
         unsafe { std::env::remove_var(RUNTIME_DIR_ENV) };
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -627,9 +625,8 @@ mod tests {
     /// node) falls back to PATH resolution.
     #[test]
     fn node_beside_prefers_the_npx_sibling() {
-        let base = std::env::temp_dir().join(format!("datalib-nodebeside-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
         std::fs::write(base.join("node"), b"#!/bin/sh\n").unwrap();
         std::fs::write(base.join("npx"), b"#!/bin/sh\n").unwrap();
 
@@ -644,7 +641,5 @@ mod tests {
             node_beside(base.join("sub/npx").as_os_str()),
             OsString::from("node")
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

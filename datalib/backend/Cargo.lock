@@ -1373,6 +1373,7 @@ dependencies = [
  "datalib-etl",
  "datalib-etl-render",
  "datalib-schema",
+ "tempfile",
 ]
 
 [[package]]
@@ -2352,6 +2353,7 @@ dependencies = [
  "anyhow",
  "datalib-obs",
  "datalib-runtime",
+ "tempfile",
 ]
 
 [[package]]

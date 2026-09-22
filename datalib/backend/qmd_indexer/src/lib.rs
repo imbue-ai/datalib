@@ -7,6 +7,7 @@
 //! reads progress back as NDJSON. See [`EmbedEvent`].
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -502,11 +503,24 @@ impl EmbedScript {
     fn write() -> Result<Self> {
         // `.mjs` so node reads it as a module from the extension alone,
         // with no flag that a forked grandchild could inherit.
-        let path =
-            std::env::temp_dir().join(format!("datalib-qmd-embed-{}.mjs", std::process::id()));
+        //
+        // The counter is what separates two wrappers, not the pid: two
+        // embeds in one process share a pid, and the first of them to
+        // drop deletes the file the other is still running. The pid
+        // separates processes, which the counter cannot.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "datalib-qmd-embed-{}-{}.mjs",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&path, EMBED_NDJSON_MJS)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -541,7 +555,7 @@ fn run_embed(
     let mut cmd = std::process::Command::new(&node);
     // No node flags before the script. Anything here is inherited by
     // every process forked below us — see the script's header.
-    cmd.arg(&script.0).arg(&pkg_dir).arg(index_path);
+    cmd.arg(script.path()).arg(&pkg_dir).arg(index_path);
     // qmd writes this beside the index during `update`; it is where the
     // embedding model is pinned. Passing it keeps the SDK resolving the
     // same model the CLI would rather than falling back to qmd's default
@@ -797,16 +811,32 @@ mod tests {
     fn nothing_we_pass_node_can_be_inherited_by_a_forked_grandchild() {
         let script = EmbedScript::write().unwrap();
         let mut cmd = std::process::Command::new("node");
-        cmd.arg(&script.0).arg("pkg").arg("db");
+        cmd.arg(script.path()).arg("pkg").arg("db");
         let first = cmd.get_args().next().unwrap();
         assert_eq!(
             first,
-            script.0.as_os_str(),
+            script.path().as_os_str(),
             "the script must be node's first argument, with no flags in front of it"
         );
         assert!(
-            script.0.extension().is_some_and(|e| e == "mjs"),
+            script.path().extension().is_some_and(|e| e == "mjs"),
             "the file is read as a module by its extension, not by a flag"
+        );
+    }
+
+    /// Two wrappers alive at once are two different files. The name used
+    /// to be the pid alone, and a test binary runs its tests as threads
+    /// of one process: whichever wrapper dropped first deleted the file
+    /// the other was still using.
+    #[test]
+    fn two_wrappers_alive_at_once_do_not_share_a_file() {
+        let first = EmbedScript::write().unwrap();
+        let second = EmbedScript::write().unwrap();
+        assert_ne!(first.path(), second.path());
+        drop(second);
+        assert!(
+            first.path().is_file(),
+            "dropping one wrapper must not remove the other's file"
         );
     }
 
@@ -817,9 +847,9 @@ mod tests {
     fn the_script_is_cleaned_up_and_lives_outside_any_data_root() {
         let path = {
             let script = EmbedScript::write().unwrap();
-            assert!(script.0.is_file());
-            assert!(script.0.starts_with(std::env::temp_dir()));
-            script.0.clone()
+            assert!(script.path().is_file());
+            assert!(script.path().starts_with(std::env::temp_dir()));
+            script.path().to_path_buf()
         };
         assert!(!path.exists(), "the script should be gone once dropped");
     }
@@ -918,25 +948,22 @@ mod tests {
 
     #[test]
     fn models_present_requires_every_named_model_nonempty() {
-        let base = std::env::temp_dir().join(format!("qmd-models-present-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
         let names = embed_model_names();
         assert_eq!(names, ["hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"]);
 
         // Nothing there yet → absent.
-        assert!(!models_present(&base, &names));
+        assert!(!models_present(base, &names));
 
         // Every named model present + non-empty → present.
         for name in &names {
             std::fs::write(base.join(name), b"gguf").unwrap();
         }
-        assert!(models_present(&base, &names));
+        assert!(models_present(base, &names));
 
         // A zero-byte (partial/truncated) model doesn't count.
         std::fs::write(base.join(&names[0]), b"").unwrap();
-        assert!(!models_present(&base, &names));
-
-        let _ = std::fs::remove_dir_all(&base);
+        assert!(!models_present(base, &names));
     }
 }
