@@ -14,6 +14,15 @@ built. This is the design that `render_inputs`
 turned out to be reaching for: that table is the mechanism for one of
 its rules.
 
+**Revised 2026-09-22: the reset half of item 4 landed as
+`datalib-dag --reset`** — a standalone operation that drops a step's
+store in a commit of its own, with no provider code behind it
+(`doltlite_raw::reset_store`) — and `Policy::Never` is gone: nothing
+chose it once the reset stopped, so the checkpointer takes a cadence
+and nothing else. `always_clear_before_ingest` is now that same reset,
+run by the ingest driver before the wave. The wipe-at-end for the
+every-run truncators is still to do.
+
 **Revised 2026-09-20: the rescue commit and the Ctrl-C commit are
 gone.** A writer's `open` discards a dirty working set and starts from
 HEAD, and SIGINT commits nothing; the dolt commit at a seal is the only
