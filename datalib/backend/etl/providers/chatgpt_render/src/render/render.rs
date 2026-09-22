@@ -36,11 +36,13 @@ use datalib_schema::providers::Provider;
 ///     `docs/dev/data_architecture_parse_and_render.md` §6.
 /// v8: `account` is the login's email rather than OpenAI's opaque
 ///     `user-…` id.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 9;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Chatgpt,
         source_label: "ChatGPT".to_string(),
         chat_kind: "Chat".to_string(),
@@ -159,7 +161,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
             ItemKind::Attachment
         };
 
-        let msg_id = ids::message(&m.message_id);
+        let msg_id = ids::message(&m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
@@ -211,6 +213,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
+            source_ref: None,
             items,
         }],
     }

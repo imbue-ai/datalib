@@ -27,21 +27,25 @@ const SOURCE_LABEL: &str = "AirVisual";
 /// The page's `markdown_uuid`. There is exactly one page per source and
 /// no AirVisual-side object behind it, so the scope is the source id —
 /// the `SourceInstance` case `entity_ids.md` reserves for exactly this.
+/// No stamp: the page's `created_at` is its earliest sample, which is
+/// not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
         Scope::SourceInstance(source_id),
         "timeseries",
         source_id,
+        None,
     )
 }
 
 /// A device's row, keyed on its serial: IQAir issues those per unit, so
 /// the same Pro configured in two sources is one device — and
 /// `IdClaims` will say so rather than let one source's row erase the
-/// other's.
+/// other's. No stamp: the row's `created_at` is its latest sample,
+/// which moves every sync.
 pub fn device_uuid(serial: &str) -> String {
-    entity_id_str(ID_NAMESPACE, Scope::ProviderGlobal, "device", serial)
+    entity_id_str(ID_NAMESPACE, Scope::ProviderGlobal, "device", serial, None)
 }
 
 #[derive(Debug, Default, Clone)]

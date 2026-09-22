@@ -24,11 +24,13 @@ use datalib_schema::providers::Provider;
 
 use crate::ids;
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 2;
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::ClaudeCode,
         source_label: "Claude Code".to_string(),
         chat_kind: "Claude Code Session".to_string(),
@@ -300,6 +302,9 @@ fn build_chat(
             orphan_reactions: Vec::new(),
             period_key: "all".to_string(),
             markdown_uuid: id.uuid,
+            // A subagent's transcript is its own kind of document; the
+            // profile's `chat_entity_kind` names the session's.
+            source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
             items,
         }],
         inputs: inputs.declared(),
@@ -323,7 +328,7 @@ fn user_items(
         }
         let tool_use_id = str_of(b, "tool_use_id").unwrap_or("");
         let name = tool_names.get(tool_use_id).copied().unwrap_or("tool");
-        let id = ids::tool_result(uuid, tool_use_id);
+        let id = ids::tool_result(uuid, tool_use_id, ms.map(|m| m + n as i64));
         let is_err = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
         let summary = if is_err {
             format!("Tool result: {name} (error)")
@@ -368,7 +373,7 @@ fn user_items(
         ("User Input", "User", false)
     };
     out.push(item(
-        ids::record(uuid),
+        ids::record(uuid, ms.map(|m| m + n as i64)),
         "user",
         author.to_string(),
         ms.map(|m| m + n as i64),
@@ -407,7 +412,7 @@ fn assistant_items(
                 };
                 let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 out.push(item(
-                    ids::thinking_block(uuid, i),
+                    ids::thinking_block(uuid, i, block_ms),
                     "thinking",
                     model.clone(),
                     block_ms,
@@ -419,8 +424,8 @@ fn assistant_items(
             Some("tool_use") => {
                 let name = str_of(b, "name").unwrap_or("tool");
                 let id = match str_of(b, "id") {
-                    Some(tu) => ids::tool_use(uuid, tu),
-                    None => ids::block_fallback(uuid, i),
+                    Some(tu) => ids::tool_use(uuid, tu, block_ms),
+                    None => ids::block_fallback(uuid, i, block_ms),
                 };
                 let body = match b.get("input") {
                     Some(input) if !json_is_empty(input) => {
@@ -447,11 +452,12 @@ fn assistant_items(
     if text.trim().is_empty() {
         return;
     }
+    let ms = ms.map(|m| m + blocks_of(v).len() as i64);
     out.push(item(
-        ids::record(uuid),
+        ids::record(uuid, ms),
         "assistant",
         model,
-        ms.map(|m| m + blocks_of(v).len() as i64),
+        ms,
         text,
         "LLM Response",
         false,
@@ -481,7 +487,7 @@ fn system_item(uuid: &str, v: &Value, ms: Option<i64>) -> Option<NormalizedChatI
         note.push_str(&errors.join(", "));
     }
     let mut it = item(
-        ids::record(uuid),
+        ids::record(uuid, ms),
         "system",
         "Claude Code".to_string(),
         ms,
@@ -496,7 +502,7 @@ fn system_item(uuid: &str, v: &Value, ms: Option<i64>) -> Option<NormalizedChatI
 }
 
 fn item(
-    id: ids::Identity,
+    id: datalib_id::Identity,
     author_id: &str,
     author_display: String,
     date_ms: Option<i64>,

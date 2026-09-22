@@ -26,14 +26,23 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_id::{composite_key, entity_id_str, IdNamespace, Scope};
 use datalib_schema::providers::Provider;
+use datalib_time::RecordStampPrecision;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::typedstream::attributed_body_text;
 
-pub const RENDER_VERSION: u32 = 1;
+/// v2: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 2;
+
+pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_MESSAGE: &str = "message";
+/// A tapback: a message row in `chat.db`, keyed on its own guid.
+pub const KIND_REACTION: &str = "reaction";
+/// One period of a chat: keyed on `(chat_guid, period_key)`.
+pub const KIND_DOCUMENT: &str = "document";
 
 /// The tables whose diff names a changed chat: the chat itself, a
 /// message, or a join that puts a message in a chat or a file on a
@@ -49,26 +58,30 @@ const FORWARD_TABLES: &[&str] = &[
 /// Milliseconds between the unix epoch and Apple's (2001-01-01).
 const APPLE_EPOCH_MS: i64 = 978_307_200_000;
 
-fn uuid(entity_kind: &str, natural_key: &str) -> String {
+/// `date_ms` is the item's `date_ms`, so the stamp in the id is the
+/// row's; a chat's and a document's ids carry none, their rows' stamps
+/// being derived from their items.
+fn uuid(entity_kind: &str, natural_key: &str, date_ms: Option<i64>) -> String {
     entity_id_str(
         IdNamespace::AppleMessages,
         Scope::ProviderGlobal,
         entity_kind,
         natural_key,
+        STAMP_PRECISION.stored_ms(date_ms),
     )
 }
 
 pub fn chat_uuid(chat_guid: &str) -> String {
-    uuid(ENTITY_KIND_CONVERSATION, chat_guid)
+    uuid(ENTITY_KIND_CONVERSATION, chat_guid, None)
 }
 
-pub fn message_uuid(message_guid: &str) -> String {
-    uuid(KIND_MESSAGE, message_guid)
+pub fn message_uuid(message_guid: &str, date_ms: Option<i64>) -> String {
+    uuid(KIND_MESSAGE, message_guid, date_ms)
 }
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: STAMP_PRECISION,
         provider: Provider::AppleMessages,
         source_label: "Messages".to_string(),
         chat_kind: "Messages Chat".to_string(),
@@ -322,11 +335,11 @@ async fn load(
                     .unwrap_or_default(),
                 removal: tapback >= 3000,
                 reaction: NormalizedReaction {
-                    reaction_uuid: uuid("reaction", &guid),
+                    reaction_uuid: uuid(KIND_REACTION, &guid, date_ms),
                     reactor_display: author_display,
                     emoji: tapback_emoji(tapback % 1000, r.get("associated_message_emoji")),
                     date_ms,
-                    source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
+                    source_ref: Some(UpstreamRef::new(KIND_REACTION, guid)),
                 },
             });
             continue;
@@ -341,7 +354,7 @@ async fn load(
             (None, true) => ItemKind::Text,
         };
         chat.items.push(NormalizedChatItem {
-            message_uuid: message_uuid(&guid),
+            message_uuid: message_uuid(&guid, date_ms),
             author_id,
             author_display,
             date_ms,
@@ -444,11 +457,15 @@ impl ChatBuild {
         keys.sort();
         let buckets = keys
             .into_iter()
-            .map(|period_key| NormalizedDoc {
-                markdown_uuid: uuid("document", &composite_key(&[&self.guid, &period_key])),
-                items: by_period.remove(&period_key).unwrap_or_default(),
-                period_key,
-                orphan_reactions: Vec::new(),
+            .map(|period_key| {
+                let key = composite_key(&[&self.guid, &period_key]);
+                NormalizedDoc {
+                    markdown_uuid: uuid(KIND_DOCUMENT, &key, None),
+                    source_ref: Some(UpstreamRef::new(KIND_DOCUMENT, key)),
+                    items: by_period.remove(&period_key).unwrap_or_default(),
+                    period_key,
+                    orphan_reactions: Vec::new(),
+                }
             })
             .collect();
         let display = self

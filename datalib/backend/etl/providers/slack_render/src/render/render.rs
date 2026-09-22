@@ -36,7 +36,9 @@ use datalib_schema::providers::Provider;
 ///     holding such a row renders differently, so stale docs must go.
 /// v6: `account` is the login's email rather than the `T…` workspace
 ///     id; the workspace moves to `org_name` / `org_uuid`.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+pub const RENDER_VERSION: u32 = 7;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -50,7 +52,7 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_chat_common::RecordStampPrecision::Seconds,
+        stamp_precision: datalib_etl_slack::ids::STAMP_PRECISION,
         provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
@@ -203,6 +205,7 @@ fn build_chats(
                 orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
                 markdown_uuid: thread_uuid.clone(),
+                source_ref: None,
                 items,
             }],
             inputs: bucket.inputs.declared(),
