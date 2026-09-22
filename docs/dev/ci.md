@@ -266,6 +266,7 @@ job, from that job's log. Each row's PR has the run ids.
 | 2026-09-17 | the image its own, with the pre-fetched output base (#500, #503) | 75.9 s; `Analyzed` at +72 s | 45 s; `Analyzed` at +16 s |
 | 2026-09-18 | e2e runfiles carry the embedding model alone (#550) | runs that execute the e2e suite: 349–463 s, with a 1.8 GB download of two models the suite never loads on the serial tail (~20 s quiet, ~60 s under load) | 376 s; no model download. A transfer cut inside the noise on a quiet day — the runs where the tail was 60 s were the ones where BuildBuddy was busy |
 | | test job wall clock, warm | ~250 s | ~144 s |
+| 2026-09-22 | `datalib/backend/http`'s 14 integration-test targets become 2 (#664) | for those targets: 447 s of `Compiling Rust bin`, 254 s of `Clippy`, 290 s of `Testing` | 39 s, 5 s, 24 s. The before run's box was saturated (713 sandbox actions) and the after run's was idle, so read it as "~10x, direction certain, factor approximate". The merged 13-file binary compiles in 23 s where each 1-file binary took 20–50 s: the per-file content is nearly free, the per-binary link is the whole cost |
 
 The container pull (`Initialize containers`) is 55–75 s and is the
 largest fixed cost left. Dropping the archives from the image brought
