@@ -192,6 +192,23 @@ bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_schema))'
 ```
 
+**Every `rust_test` is a whole test binary, and the binary is where the
+cost is.** A Rust test crate is not a `cc_test` linking prebuilt
+objects: rustc compiles the leaf crate, generates code for every
+generic it instantiates from tokio, sqlx, serde and axum, and links
+the whole stack — doltlite's C included — statically, in opt mode
+(the tests run in `-c opt` so the cache they warm is the release's).
+The rlibs underneath are cache hits; that last step is not, and a
+shared-crate edit repeats it once per test target. So one binary per
+`tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
+it 17 times for one crate before #660 made `tests/http_tests/` (one
+`main.rs` of `mod` lines, the files unchanged) and `tests/applet_tests/`.
+Split a crate's integration tests into binaries only along a line the
+process forces — a test that installs the global tracing subscriber
+(`server_log.rs`, `request_log.rs`, `ui_events.rs`, one each), or
+tags the others cannot share (`no-sandbox`). Inside one binary libtest
+already runs the functions in parallel.
+
 **A `[for tool]` suffix on a `Compiling Rust …` line is a second
 copy** — the crate built in the exec configuration as well as the
 target one, nothing shared. A `genrule` puts its `tools` there, so a
