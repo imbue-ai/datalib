@@ -14,7 +14,9 @@ use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
 use super::canonicalize::canonicalize_payload;
-use super::schema_raw::{full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow};
+use super::schema_raw::{
+    full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, SELF_IDENTITY_VOLATILE_PATHS,
+};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -89,12 +91,23 @@ impl RawDb {
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let payload = &canonicalize_payload(payload);
-        let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit self_identity tx")?;
-        Ok(())
+        // The clock reading goes to the sidecar, or this row differs on
+        // every sync (see `SELF_IDENTITY_VOLATILE_PATHS`).
+        let (base, volatile) = dr::split_volatile(payload, SELF_IDENTITY_VOLATILE_PATHS);
+        let row = SelfIdentityRow::from_payload(&base)?;
+        let id = row.id_and_payload.id.clone();
+        let volatile_pairs: Vec<(&str, &Value)> =
+            volatile.iter().map(|v| (id.as_str(), v)).collect();
+        // No event tape on this store; the split is what this call is
+        // for.
+        dr::bulk_upsert_with_tape_split(
+            &self.pool,
+            None,
+            &[row],
+            &[(id.as_str(), payload)],
+            &volatile_pairs,
+        )
+        .await
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {

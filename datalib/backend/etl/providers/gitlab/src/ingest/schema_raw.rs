@@ -8,6 +8,16 @@ use serde_json::Value;
 /// for full-table operations (truncate, full-DDL composition, etc.).
 pub const DATA_TABLES: &[&str] = &["self_identity", "merge_requests", "discussions"];
 
+/// Per-fetch volatile fields split out of the `self_identity` content
+/// payload into its sidecar (see
+/// [`datalib_etl::doltlite_raw::split_volatile`]). `GET /user` answers
+/// with `local_time` — the clock in the user's timezone at the instant
+/// of the request — so leaving it in the content payload makes the one
+/// row in this table differ on every single sync, forever. The
+/// timezone it is rendered in *is* information and stays; the reading
+/// of the clock is not.
+pub const SELF_IDENTITY_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["local_time"]];
+
 /// `self_identity` — exactly one row carrying the authenticated
 /// GitLab user (the result of `GET /user`).
 #[derive(Debug, Clone, WirePayloadRow)]
@@ -201,4 +211,44 @@ pub fn full_ddl() -> Vec<String> {
         out.push(dr::bookkeeping_ddl_for(table));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn self_identity(local_time: &str) -> serde_json::Value {
+        json!({
+            "id": 20370006,
+            "username": "thadd3us",
+            "web_url": "https://gitlab.com/thadd3us",
+            "local_time": local_time,
+        })
+    }
+
+    /// `GET /user` answers with the clock in the user's timezone, so
+    /// two syncs five minutes apart differ — and this table has exactly
+    /// one row, which would then be modified on every sync forever.
+    ///
+    /// The manual-e2e bake caught it on 2026-09-22: the
+    /// reset-then-resync stability check failed on
+    /// `self_identity.local_time`, `'5:13 AM' -> '5:18 AM'`.
+    #[test]
+    fn the_clock_does_not_move_the_content_payload() {
+        let (early, early_volatile) =
+            dr::split_volatile(&self_identity("5:13 AM"), SELF_IDENTITY_VOLATILE_PATHS);
+        let (late, late_volatile) =
+            dr::split_volatile(&self_identity("5:18 AM"), SELF_IDENTITY_VOLATILE_PATHS);
+
+        assert_eq!(early, late, "local_time reached the content payload");
+        assert_ne!(
+            early_volatile, late_volatile,
+            "the clock went nowhere — it belongs in the sidecar, not dropped"
+        );
+        assert_eq!(
+            late["username"], "thadd3us",
+            "the split took more than the clock"
+        );
+    }
 }
