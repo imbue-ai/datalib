@@ -72,8 +72,9 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
 
-**Audits**
+**Audits and history**
 
+- [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you (the two placeholder git identities and who they were). Add a paragraph when you learn one.
 - [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
 - [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
 - [`docs/dev/audit_2026-09-21_fcis.md`](docs/dev/audit_2026-09-21_fcis.md) — the tree read against `style.md`'s functional-core rule: where the split exists, where it doesn't, and the todo list. A record, not reference.
@@ -364,7 +365,8 @@ dependency:
 
 `git pull` (default merge), not `git pull --rebase`. Rebasing rewrites
 local hashes and loses what actually happened; force-push is off the
-table on shared branches.
+table on shared branches. This is about how a branch takes in `main`,
+not how a PR lands — a PR lands **squashed** (next section).
 
 **`MODULE.bazel.lock` is never resolved by hand.** It is generated, and
 two branches that both moved it conflict textually even though the
@@ -391,6 +393,15 @@ read the failure; if the failed target looks like a flake (the
 doltlite-timing ones, or anything `scripts/flaky_tests.py` lists),
 re-run the failed jobs once before digging in. Before pushing a
 follow-up, confirm the PR is still open — a merged PR does not reopen.
+
+**A PR lands as one squashed commit**: `gh pr merge <n> --squash`, or
+"Squash and merge" on GitHub. `main`'s first-parent history is then
+one commit per PR, titled after the PR with its number, and `git
+bisect` and `git log main` read at the PR level. A merge commit
+(`--merge`) keeps every "fix typo" and "address review" commit on
+`main` for good; a rebase merge re-hashes the branch. The commit
+message is the PR title plus the branch's messages, so write the PR
+title as the commit subject you want to keep.
 
 ## Python deps: pyproject.toml → requirements.txt → Bazel
 
