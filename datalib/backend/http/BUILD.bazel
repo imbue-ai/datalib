@@ -322,6 +322,22 @@ rust_test(
     ],
 )
 
+# Ctrl-C against the real binary while a client holds the SSE stream
+# open: the graceful wait that would otherwise never end.
+rust_test(
+    name = "shutdown_test",
+    size = "small",
+    srcs = ["tests/shutdown.rs"],
+    data = [":datalib_http_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_HTTP_BIN": "$(rootpath :datalib_http_bin)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
 # Regression guard for issue #138: the token gate that fronts every
 # route (`src/auth.rs`).
 rust_test(
