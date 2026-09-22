@@ -134,15 +134,41 @@ async fn an_svg_is_served_sandboxed() {
     assert_eq!(resp.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
 }
 
-/// Through the route: the first request fetches and keeps the bytes
-/// under `system/remote_media/<sha256>` with a row saying so; the
-/// second is answered from there, and the host is not asked again.
+/// Through the route: nothing without a row; with one, the first
+/// request fetches and keeps the bytes under
+/// `system/remote_media/<sha256>` with a row saying so, the second is
+/// answered from there, and the host is not asked again.
 #[tokio::test]
 async fn the_route_fetches_once_and_serves_from_the_cas_after() {
     let (base, hits) = stand_in_remote().await;
     let (root, app) = app().await;
     let url = format!("{base}/pic.png");
     let path = format!("/api/remote_media?url={url}");
+
+    let (status, _, body) = call(&app, get_req(&path)).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(String::from_utf8_lossy(&body).contains("no rule"));
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "refused before any fetch");
+
+    let host = url::Url::parse(&url).unwrap();
+    let (status, _, _) = call(
+        &app,
+        post_json(
+            "/api/remote_media/allow",
+            &format!(
+                r#"{{"scope":"host","key":"{}:{}"}}"#,
+                host.host_str().unwrap(),
+                host.port().unwrap()
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 
     let (status, headers, body) = call(&app, get_req(&path)).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -171,12 +197,89 @@ async fn the_route_fetches_once_and_serves_from_the_cas_after() {
     assert!(!table["columns"].as_array().unwrap().is_empty());
 }
 
+/// A `document` row covers only a request made for that document, and
+/// the check answers per URL what the route would do.
+#[tokio::test]
+async fn a_document_row_covers_requests_made_for_that_document() {
+    let (base, hits) = stand_in_remote().await;
+    let (_root, app) = app().await;
+    let url = format!("{base}/pic.png");
+    let (status, _, _) = call(
+        &app,
+        post_json(
+            "/api/remote_media/allow",
+            r#"{"scope":"document","key":"doc-1"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _, _) = call(&app, get_req(&format!("/api/remote_media?url={url}"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = call(
+        &app,
+        get_req(&format!("/api/remote_media?url={url}&document=doc-2")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    let (status, _, _) = call(
+        &app,
+        get_req(&format!("/api/remote_media?url={url}&document=doc-1")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let (status, _, body) = call(
+        &app,
+        post_json(
+            "/api/remote_media/check",
+            &format!(
+                r#"{{"document":"doc-1","source":"mail","urls":["{url}","//other.example/x.png","not a url"]}}"#
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let answer: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let allowed = answer["allowed"].as_array().unwrap();
+    // Everything asked for under doc-1 is covered by its row; what is
+    // not an absolute http(s) URL (the page makes `//host` absolute
+    // before asking) is not.
+    assert_eq!(allowed.len(), 1, "{answer}");
+    assert_eq!(allowed[0]["url"], url);
+    assert_eq!(allowed[0]["rule"]["scope"], "document");
+    let (_, _, body) = call(
+        &app,
+        post_json(
+            "/api/remote_media/check",
+            &format!(r#"{{"document":"doc-2","urls":["{url}"]}}"#),
+        ),
+    )
+    .await;
+    let answer: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(answer["allowed"].as_array().unwrap().len(), 0);
+}
+
 /// A refusal comes back with its status and reason, and nothing is
 /// recorded for it.
 #[tokio::test]
 async fn the_route_refuses_what_the_fetch_refuses() {
     let (base, _) = stand_in_remote().await;
     let (_root, app) = app().await;
+    let (status, _, _) = call(
+        &app,
+        post_json(
+            "/api/remote_media/allow",
+            &format!(
+                r#"{{"scope":"host","key":"{}"}}"#,
+                base.trim_start_matches("http://")
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
     let (status, _, body) = call(
         &app,
         get_req(&format!("/api/remote_media?url={base}/page.html")),
@@ -255,6 +358,13 @@ async fn allows_are_posted_listed_and_deleted() {
 
 fn get_req(path: &str) -> Request<Body> {
     Request::get(path).body(Body::empty()).unwrap()
+}
+
+fn post_json(path: &str, body: &str) -> Request<Body> {
+    Request::post(path)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
 }
 
 async fn app() -> (PathBuf, axum::Router) {

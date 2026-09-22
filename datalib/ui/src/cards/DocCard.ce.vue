@@ -10,8 +10,8 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   allowRemote,
+  checkRemote,
   fetchChat,
-  fetchRemoteAllows,
   forgetRemoteAllow,
   REMOTE_ALLOW_TABLE,
   REMOTE_FETCHED_TABLE,
@@ -20,10 +20,12 @@ import {
   type DocProblem,
   type EdgeOut,
   type RemoteAllow,
+  type RemoteContext,
 } from "@/api";
 import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
-import { allowedBy, type RemoteContext, type RemoteRef } from "./remoteMedia";
+import { absoluteRemote, type RemoteRef } from "./remoteMedia";
+import { renderDocument } from "./renderDocument";
 import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
@@ -163,29 +165,43 @@ function onProblemJump(p: DocProblem) {
 }
 
 // ── Remote images. The body's references to other hosts are held back
-// by the sanitizer unless an allow row lets them through
-// (`remoteMedia.ts`); the banner above the body says how many are
-// held and from where, offers to let them load — one, a host's worth,
-// this document's, this source's — and names the rows that let the
-// rest load, each deletable. A decision is a row in the server's
-// store; the body re-renders under the new list, so nothing here
+// by the sanitizer unless the server says an allow row lets them
+// through (`remoteMedia.ts`): the card renders the body once without
+// mounting it to learn the references, asks `/api/remote_media/check`,
+// and only then shows the document, so the first paint is already the
+// server's answer. The banner says how many are held and from where,
+// offers to let them load — one, a host's worth, this document's,
+// this source's — and names the rows that let the rest load, each
+// deletable. A decision is a row in the server's store; after each
+// write the card asks again and the body re-renders, so nothing here
 // touches the DOM.
 const remoteRefs = ref<RemoteRef[]>([]);
-const remoteAllows = ref<RemoteAllow[]>([]);
+/// The server's answer: the row covering each reference it lets load,
+/// keyed by the URL as the body wrote it.
+const remoteCovered = ref<Map<string, RemoteAllow>>(new Map());
 const remoteBusy = ref(false);
 const remoteError = ref<string | null>(null);
 
-const remoteContext = computed<RemoteContext>(() => ({
-  document: chat.value?.markdown_uuid ?? null,
-  source: chat.value?.source_ref?.id ?? null,
-}));
+function contextOf(doc: ChatResponse): RemoteContext {
+  return { document: doc.markdown_uuid, source: doc.source_ref?.id ?? null };
+}
+const remoteContext = computed<RemoteContext>(() =>
+  chat.value ? contextOf(chat.value) : { document: null, source: null },
+);
 
-/// A new function per change of the list, which is what makes the
-/// body re-render under it.
+/// Every remote URL a body references, as written, each once.
+function remoteUrlsOf(doc: ChatResponse): string[] {
+  const seen = new Set<string>();
+  return renderDocument(doc.body, doc.markdown_uuid)
+    .remote.map((r) => r.url)
+    .filter((u) => !seen.has(u) && (seen.add(u), true));
+}
+
+/// A new function per answer, which is what makes the body re-render
+/// under it.
 const remoteAccept = computed(() => {
-  const ctx = remoteContext.value;
-  const allows = remoteAllows.value;
-  return (url: string) => allowedBy(url, ctx, allows) !== null;
+  const covered = remoteCovered.value;
+  return (url: string) => covered.has(url);
 });
 
 /// One entry per distinct URL.
@@ -215,9 +231,8 @@ const remoteHosts = computed<{ host: string; count: number }[]>(() => {
 const remoteRules = computed<RemoteAllow[]>(() => {
   const seen = new Set<string>();
   const rules: RemoteAllow[] = [];
-  for (const r of remoteUnique.value) {
-    const rule = allowedBy(r.url, remoteContext.value, remoteAllows.value);
-    if (rule && !seen.has(rule.allow_uuid)) {
+  for (const rule of remoteCovered.value.values()) {
+    if (!seen.has(rule.allow_uuid)) {
       seen.add(rule.allow_uuid);
       rules.push(rule);
     }
@@ -248,12 +263,13 @@ function ruleLabel(rule: RemoteAllow): string {
 }
 
 async function remoteWrite(what: () => Promise<unknown>) {
-  if (remoteBusy.value) return;
+  const doc = chat.value;
+  if (!doc || remoteBusy.value) return;
   remoteBusy.value = true;
   remoteError.value = null;
   try {
     await what();
-    remoteAllows.value = await fetchRemoteAllows();
+    remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
   } catch (e) {
     remoteError.value = (e as Error).message;
   } finally {
@@ -263,7 +279,9 @@ async function remoteWrite(what: () => Promise<unknown>) {
 
 function allow(scope: AllowScope, key: string | null) {
   if (!key) return;
-  void remoteWrite(() => allowRemote(scope, key));
+  // A `url` row names the URL as the server will see it.
+  const named = scope === "url" ? absoluteRemote(key) : key;
+  void remoteWrite(() => allowRemote(scope, named));
 }
 
 function forget(rule: RemoteAllow) {
@@ -440,11 +458,12 @@ watch(
     remoteRefs.value = [];
     remoteError.value = null;
     try {
-      // The allow-list beside the document, so the first render is
-      // already under it: a placeholder that then vanished would read
-      // as a flicker, and a held image that then loaded as a leak.
-      const [doc, allows] = await Promise.all([fetchChat(uuid), fetchRemoteAllows()]);
-      remoteAllows.value = allows;
+      // The server's answer before the document shows, so the first
+      // render is already under it: a placeholder that then vanished
+      // would read as a flicker, and a held image that then loaded as
+      // a leak.
+      const doc = await fetchChat(uuid);
+      remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
       chat.value = doc;
     } catch (e) {
       error.value = (e as Error).message;
@@ -621,6 +640,7 @@ watch(
           @open-edge="onOpenEdge"
           @hover-edge="onHoverEdge"
           :remote-accept="remoteAccept"
+          :remote-context="remoteContext"
           @remote-media="remoteRefs = $event"
           @remote-load="allow('url', $event)"
         />

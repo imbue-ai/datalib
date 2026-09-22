@@ -1,12 +1,12 @@
 // The sanitizer's treatment of remote references (issue #648): every
 // way a body can make the browser fetch from another host is held
-// back unless the allow-list lets it through — then it goes through
-// the server — and the placeholders say what was held.
+// back unless the caller says the server let it through — then it
+// goes through the server, carrying what the body is — and the
+// placeholders say what was held.
 
 import { describe, expect, it } from "vitest";
 
-import type { RemoteAllow } from "@/api";
-import { allowedBy, decorateRemoteMedia } from "./remoteMedia";
+import { decorateRemoteMedia } from "./remoteMedia";
 import { sanitizeRenderedHtml } from "./sanitize";
 
 function dom(html: string): HTMLElement {
@@ -32,12 +32,15 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(remote).toEqual([{ url: HERO, host: "cdn.example", kind: "image", loaded: false }]);
   });
 
-  it("lets an accepted reference through, proxied", () => {
+  it("lets an accepted reference through, proxied with what the body is", () => {
     const { html, remote } = sanitizeRenderedHtml(`<img src="${HERO}"><img src="${PIXEL}">`, {
       accept: (u) => u === HERO,
+      context: { document: "doc-1", source: "mail" },
     });
     const imgs = dom(html).querySelectorAll("img");
-    expect(imgs[0].getAttribute("src")).toBe(`/api/remote_media?url=${encodeURIComponent(HERO)}`);
+    expect(imgs[0].getAttribute("src")).toBe(
+      `/api/remote_media?url=${encodeURIComponent(HERO)}&document=doc-1&source=mail`,
+    );
     expect(imgs[0].classList.contains("remote-blocked")).toBe(false);
     expect(imgs[1].getAttribute("src")).toBeNull();
     expect(remote.map((r) => r.loaded)).toEqual([true, false]);
@@ -112,31 +115,6 @@ describe("sanitizeRenderedHtml and remote references", () => {
     expect(remote).toEqual([]);
     expect(html).toContain('href="https://x.example/"');
     expect(html).toContain('src="data:image/png;base64,AAAA"');
-  });
-});
-
-describe("allowedBy", () => {
-  const row = (scope: RemoteAllow["scope"], key: string): RemoteAllow => ({
-    allow_uuid: `${scope}:${key}`,
-    scope,
-    key,
-    created_at_utc: "2026-09-22T00:00:00.000000Z",
-    tz_offset: null,
-  });
-  const ctx = { document: "doc-1", source: "mail" };
-
-  it("matches by url, host, document or source, widest first", () => {
-    expect(allowedBy(HERO, ctx, [])).toBeNull();
-    expect(allowedBy(HERO, ctx, [row("url", HERO)])?.allow_uuid).toBe(`url:${HERO}`);
-    expect(allowedBy("//cdn.example/x.png", ctx, [row("host", "cdn.example")])?.scope).toBe("host");
-    expect(allowedBy(HERO, ctx, [row("document", "doc-1")])?.scope).toBe("document");
-    expect(allowedBy(HERO, ctx, [row("document", "doc-2")])).toBeNull();
-    expect(allowedBy(HERO, ctx, [row("source", "mail")])?.scope).toBe("source");
-    expect(allowedBy(HERO, { document: null, source: null }, [row("source", "mail")])).toBeNull();
-    expect(
-      allowedBy(HERO, ctx, [row("url", HERO), row("host", "cdn.example"), row("source", "mail")])
-        ?.scope,
-    ).toBe("source");
   });
 });
 

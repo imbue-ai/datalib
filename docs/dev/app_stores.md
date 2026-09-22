@@ -84,20 +84,23 @@ value forward rather than assuming a fixed interval.
 hosts are held back by the UI until a person lets them load, because
 loading one tells its host who opened the document and when. A
 decision is a row in `remote_media_allow` — its `scope` is `url`,
-`document`, `host` or `source` and its `key` the thing named — and
-the UI applies the list at render time (`ui/src/cards/remoteMedia.ts`).
-A URL let through is fetched once by `GET /api/remote_media?url=…`
-(`http/src/remote_media.rs`: no cookie or referrer, media types only,
-a size cap, redirects re-judged per hop, private and loopback targets
+`document`, `host` or `source` and its `key` the thing named. The
+server is the one judge of what a row covers
+(`http/src/remote_media.rs`): the document view asks it which of a
+document's references may load (`POST /api/remote_media/check`, with
+the document's `markdown_uuid` and source id, since a `document` or
+`source` row covers only what is loaded for it) and renders under the
+answer; and `GET /api/remote_media?url=…&document=…&source=…` refuses
+a URL no row covers before it fetches or serves anything. A covered
+URL is fetched once (no cookie or referrer, media types only, a size
+cap, redirects re-judged per hop, private and loopback targets
 refused), its bytes kept at `system/remote_media/<sha256>` and a
 `remote_media` row saying so; every later request is answered from
 there, so the host hears of it once. Both tables are committed per
 write like feedback, are served as typed tables at
 `/api/remote_media/allow` and `/api/remote_media/fetched`, and an allow
 row is deleted through `DELETE /api/remote_media/allow/{uuid}` — the
-document banner offers that for the rows in effect. The rows are the
-UI's memory, not a gate on the route: a caller holding the token may
-fetch any public URL, as it may do anything else the API offers.
+document banner offers that for the rows in effect.
 
 ## Inspecting a store
 
