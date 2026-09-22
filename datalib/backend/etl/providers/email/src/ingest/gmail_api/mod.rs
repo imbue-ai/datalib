@@ -22,6 +22,7 @@ use tracing::{info, warn};
 use datalib_etl_email_config::EmailGmailApi;
 
 use super::db::RawDb;
+use super::run_bar::RunBar;
 use super::schema_raw::{EmlBlobRow, GmailMessageRow, ThreadRow};
 use super::K_ONLY_EXTRACT_LABELS;
 use api::{Client, QuotaThrottle};
@@ -329,6 +330,10 @@ async fn run_sync(
         known_blobs,
         known_gmail_ids,
         threads: BTreeSet::new(),
+        // Nothing fixed to seed it with: unlike the JMAP path, this one
+        // has no coarse phase ticks, so the bar stays at 0/0 until the
+        // history replay or the first `messages.list` page names a size.
+        bar: RunBar::new(&opts.progress, "gmail", 0),
         pending: Pending::default(),
     };
 
@@ -356,6 +361,9 @@ async fn run_sync(
             deleted = changes.deleted.len(),
             "replaying history since the stored cursor",
         );
+        // The id list is materialized, so this stretch has an exact size.
+        state.bar.expect(ids.len() as u64);
+        state.bar.doing("replaying history");
         fetch_ids(&mut state, &mut throttle, &ids, opts, &mut summary).await?;
     } else {
         summary.full_sync = true;
@@ -402,6 +410,7 @@ async fn run_sync(
 
     flush(&mut state, &mut summary).await?;
     flush_threads(&mut state, &mut summary).await?;
+    state.bar.finish();
 
     // Only advance the cursor when the run drained its work, and a run
     // has two ways not to: it stopped at `message_budget`, or a
@@ -610,6 +619,10 @@ struct RunState<'a> {
     /// Thread ids touched this run; membership is rebuilt from the
     /// `emails` table at the end, not from what this run happened to see.
     threads: BTreeSet<String>,
+    /// The run's one progress bar. Announcing a total is what turns the
+    /// Manage screen's activity cell from a bare count into "N queued"
+    /// ticking down; each phase adds what it has learned it will do.
+    bar: RunBar,
     pending: Pending,
 }
 
@@ -640,6 +653,11 @@ async fn full_sync(
         let mut token: Option<String> = None;
         let mut pages = 0usize;
         let mut listed = 0usize;
+        state.bar.doing(&label);
+        // Everything the run committed to before this walk. Gmail's
+        // estimate is of this walk alone, and there is one walk per
+        // configured label, so each walk's size adds to the run's.
+        let before = state.bar.announced();
         loop {
             throttle.acquire(api::UNITS_MESSAGES_LIST).await;
             let page = api::list_messages(
@@ -652,6 +670,12 @@ async fn full_sync(
             .await?;
             pages += 1;
             listed += page.ids.len();
+            // `resultSizeEstimate` is an estimate, and one that can come
+            // in under what the walk actually lists. Never let the total
+            // sit below what has already been listed, or the bar reads 0
+            // remaining while pages are still arriving.
+            let want = page.result_size_estimate.unwrap_or(0).max(listed as u64);
+            state.bar.expect_at_least(before + want);
             // A message under two configured labels is listed by both
             // walks; `seen` is what keeps the second listing free.
             let fresh: Vec<String> = page
@@ -717,6 +741,12 @@ async fn fetch_ids(
         // through a large mailbox instead of re-fetching the same prefix.
         if state.known_gmail_ids.contains(id) {
             summary.messages_already_had += 1;
+            // Counted against the bar even though nothing was fetched:
+            // the total it counts down from is how many ids the walk
+            // *listed*, and a re-walk of a mirrored mailbox lists
+            // almost only these. Skipping the tick would leave the bar
+            // pinned near its total for the whole run.
+            state.bar.did(1);
             continue;
         }
         // Asked to stop: the same partial result a spent budget gives —
@@ -747,6 +777,7 @@ async fn fetch_ids(
                 // Deleted between the list and the get: normal on a busy
                 // mailbox, and nothing to come back for.
                 info!(event = "gmail_message_deleted_before_fetch", id = %id, "a listed message was gone before it could be fetched");
+                state.bar.did(1);
                 continue;
             }
             // The retry loop backed off for as long as the run's give-up
@@ -762,11 +793,12 @@ async fn fetch_ids(
                 // still want it. Counted, and the count holds the cursor.
                 warn!(event = "gmail_message_failed", id = %id, error = %e, "a message could not be fetched");
                 summary.messages_failed += 1;
+                state.bar.did(1);
                 continue;
             }
         };
         state.fetched += 1;
-        opts.progress.inc(1);
+        state.bar.did(1);
 
         let ingested = match ingest::ingest(state.account_id, state.index, &msg) {
             Ok(i) => i,

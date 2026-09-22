@@ -7,6 +7,7 @@ pub mod envelope;
 pub mod gmail_api;
 pub mod labels;
 pub mod mbox;
+pub(crate) mod run_bar;
 pub mod schema_raw;
 pub mod session;
 
@@ -18,6 +19,7 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
+use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -28,6 +30,7 @@ pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
 use db::refresh_email_joins;
+use run_bar::RunBar;
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
 
 async fn upsert_account(
@@ -162,7 +165,7 @@ pub struct FetchOptions {
     /// How many `.eml` downloads to keep in flight at once during the
     /// blob phase. `None` → [`DEFAULT_BLOB_CONCURRENCY`]; clamped to ≥ 1.
     pub blob_download_concurrency: Option<usize>,
-    pub progress: datalib_etl::progress::Progress,
+    pub progress: Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
 }
@@ -181,7 +184,7 @@ impl FetchOptions {
             only_mailbox_labels: Vec::new(),
             blob_size_limit_bytes: None,
             blob_download_concurrency: None,
-            progress: datalib_etl::progress::Progress::noop(),
+            progress: Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
     }
@@ -230,6 +233,10 @@ fn scope_config_blob(opts: &FetchOptions) -> Value {
     json!({ K_ONLY_EXTRACT_LABELS: labels })
 }
 
+/// Session, mailboxes, emails, threads, blobs: the five ticks the outer
+/// bar makes whatever the run turns out to hold.
+const PHASES: u64 = 5;
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
@@ -237,13 +244,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // have a meaningful per-item denominator before the first JMAP
     // response. Without this, fastmail looks stuck at 0/0 in the
     // dashboard whether it's running or wedged on Session::discover.
-    opts.progress.set_length(Some(5));
-    opts.progress.set_message("email: session");
+    // Each phase below adds its own real total to this as it learns it.
+    let mut bar = RunBar::new(&opts.progress, "email", PHASES);
+    bar.doing("session");
 
     let session = Session::discover(&opts.hostname, &opts.latchkey)
         .await
         .with_context(|| format!("discover JMAP session at {}", opts.hostname))?;
-    opts.progress.inc(1);
+    bar.did(1);
     let account_id = session.pick_account(opts.account_id.as_deref())?;
     info!(
         event = "jmap_session",
@@ -277,7 +285,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &opts.only_mailbox_labels,
     );
 
-    let result = run_sync(&db, &session, &account_id, &opts, &label_change).await;
+    let result = run_sync(&db, &session, &account_id, &opts, &label_change, &mut bar).await;
+    bar.finish();
     // Record the config only once the run satisfied it, so a failure —
     // or a run that stopped when asked, with mailboxes still unwalked —
     // leaves the previous label set in place and the next run re-plans
@@ -308,6 +317,7 @@ async fn run_sync(
     // newly-admitted mailboxes — nothing in them *changed* — so a
     // widening needs its own enumeration.
     label_change: &datalib_etl::scope_config::FilterChange,
+    bar: &mut RunBar,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -332,9 +342,9 @@ async fn run_sync(
     upsert_account(db, &now, account_id, &account_payload).await?;
 
     // ── mailboxes ───────────────────────────────────────────────────
-    opts.progress.set_message("email: mailboxes");
+    bar.doing("mailboxes");
     sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
-    opts.progress.inc(1);
+    bar.did(1);
 
     // Parse the mailbox tree once: both the extraction filter and the
     // widened-label backfill resolve label paths against it.
@@ -416,7 +426,7 @@ async fn run_sync(
     };
 
     // ── emails (+ collect threadIds) ────────────────────────────────
-    opts.progress.set_message("email: emails");
+    bar.doing("emails");
     let touched_threads = sync_emails(
         db,
         opts.sealer.as_ref(),
@@ -426,13 +436,14 @@ async fn run_sync(
         opts,
         mailbox_filter.as_ref(),
         backfill.as_ref(),
+        bar,
         &mut summary,
     )
     .await?;
-    opts.progress.inc(1);
+    bar.did(1);
 
     // ── threads ─────────────────────────────────────────────────────
-    opts.progress.set_message("email: threads");
+    bar.doing("threads");
     sync_threads(
         db,
         &now,
@@ -442,12 +453,12 @@ async fn run_sync(
         &mut summary,
     )
     .await?;
-    opts.progress.inc(1);
+    bar.did(1);
 
     // ── blobs ───────────────────────────────────────────────────────
-    opts.progress.set_message("email: blobs");
-    sync_blobs(db, session, account_id, opts, &mut summary).await?;
-    opts.progress.inc(1);
+    bar.doing("blobs");
+    sync_blobs(db, session, account_id, opts, bar, &mut summary).await?;
+    bar.did(1);
 
     info!(
         event = "jmap_download_complete",
@@ -582,6 +593,7 @@ async fn sync_emails(
     opts: &FetchOptions,
     mailbox_filter: Option<&HashSet<String>>,
     #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
+    bar: &mut RunBar,
     summary: &mut FetchSummary,
 ) -> Result<HashSet<String>> {
     let stored = if opts.full_resync {
@@ -600,6 +612,7 @@ async fn sync_emails(
             account_id,
             &since,
             mailbox_filter,
+            bar,
             summary,
             &mut touched_threads,
         )
@@ -617,6 +630,7 @@ async fn sync_emails(
                         session,
                         account_id,
                         scope.as_ref(),
+                        bar,
                         summary,
                         &mut touched_threads,
                     )
@@ -639,6 +653,7 @@ async fn sync_emails(
         session,
         account_id,
         mailbox_filter,
+        bar,
         summary,
         &mut touched_threads,
     )
@@ -655,9 +670,11 @@ async fn incremental_emails(
     account_id: &str,
     since: &str,
     mailbox_filter: Option<&HashSet<String>>,
+    bar: &mut RunBar,
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
+    bar.doing("replaying changes");
     let mut cursor = since.to_string();
     loop {
         let changes = call(
@@ -672,6 +689,9 @@ async fn incremental_emails(
 
         // Detail-fetch created + updated in batches.
         let to_fetch: Vec<String> = created.into_iter().chain(updated).collect();
+        // One `Email/changes` page at a time: the protocol says whether
+        // more are coming, never how many ids they hold in total.
+        bar.expect(to_fetch.len() as u64);
         for batch in to_fetch.chunks(EMAIL_GET_BATCH) {
             // Asked to stop: the batch that just landed sealed, and the
             // state for this page is saved only below, so the next run
@@ -700,6 +720,7 @@ async fn incremental_emails(
                 touched_threads,
             )
             .await?;
+            bar.did(batch.len() as u64);
             // A batch of `Email/get` results has landed in full -- rows and
             // the blobs they name together -- so the store is consistent
             // here. Deletions are applied separately, after the walk.
@@ -739,9 +760,16 @@ async fn full_enumerate_emails(
     session: &Session,
     account_id: &str,
     mailbox_filter: Option<&HashSet<String>>,
+    bar: &mut RunBar,
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
+    bar.doing("enumerating");
+    // Everything the run had already committed to before this walk.
+    // `total` below is this walk's own size, so the run total is the
+    // two added — not `total` alone, which would undercount whatever a
+    // preceding incremental pass or the phase ticks already announced.
+    let before = bar.announced();
     // Decide filter: if a label filter resolved to mailbox ids, push it
     // server-side as an OR over inMailbox.
     let filter = match mailbox_filter {
@@ -813,6 +841,14 @@ async fn full_enumerate_emails(
         if ids.is_empty() {
             break;
         }
+        // `Email/query` was asked for `calculateTotal`, so the size of the
+        // whole filtered result set — not of this page — arrives with
+        // every page. Nothing read it before; it is the one exact
+        // denominator this provider gets. Raised rather than added,
+        // because each page repeats the same number.
+        if let Some(total) = resp.get("total").and_then(|v| v.as_i64()) {
+            bar.expect_at_least(before + total.max(0) as u64);
+        }
         position += ids.len() as i64;
 
         for batch in ids.chunks(EMAIL_GET_BATCH) {
@@ -842,6 +878,7 @@ async fn full_enumerate_emails(
                 touched_threads,
             )
             .await?;
+            bar.did(batch.len() as u64);
             // A batch has landed in full, so the store is consistent here.
             if let Some(sealer) = sealer {
                 sealer.wrote(1).await;
@@ -971,6 +1008,7 @@ async fn sync_blobs(
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
+    bar: &mut RunBar,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let have_bytes = db.loaded_blob_ids().await?;
@@ -1051,13 +1089,10 @@ async fn sync_blobs(
         "fetching the pending blobs"
     );
 
-    // Inner per-`.eml` bar nested under the outer phase bar (which only
-    // ticks once for the whole blob phase). The worklist is fully
-    // materialized, so we know the exact total up front and can render
-    // real N/total progress as downloads complete.
-    let inner = opts.progress.child("email: blobs");
-    inner.set_length(Some(jobs.len() as u64));
-    inner.set_message("fetching .eml");
+    // The worklist is fully materialized, so this phase knows its exact
+    // size and can add it to the run's total instead of ticking once.
+    bar.expect(jobs.len() as u64);
+    bar.doing("fetching .eml");
 
     // Build a download task from an owned (blob_id, owning_id). The
     // `downloadUrl` is substituted here (borrowing `session`) so the
@@ -1101,13 +1136,12 @@ async fn sync_blobs(
                 acc.add_failed(&owning_id, &blob_id, e.to_string());
             }
         }
-        inner.inc(1);
+        bar.did(1);
         // Backfill the freed slot so `concurrency` GETs stay in flight.
         if let Some((blob_id, owning_id)) = pending.next() {
             spawn_one(&mut set, blob_id, owning_id);
         }
     }
-    inner.finish_and_clear();
 
     acc.flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
         EmlBlobRow {
