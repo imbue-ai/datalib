@@ -136,7 +136,7 @@ rust_test(
 # the process's tracing subscriber stays its own target below.
 # `remote_media` reaches a stand-in host on loopback (issue #648), hence
 # the env that lifts the private-address guard; `worker_failure_tail`
-# runs the real runner, hence the data.
+# and `worker_cancel` run the real runner, hence the data.
 rust_test(
     name = "http_tests",
     srcs = glob(["tests/http_tests/*.rs"]),
@@ -157,6 +157,7 @@ rust_test(
         "//datalib/backend/runs:datalib_runs",
         "@datalib_crates//:axum",
         "@datalib_crates//:futures",
+        "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
