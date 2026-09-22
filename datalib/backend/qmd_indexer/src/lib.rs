@@ -482,13 +482,39 @@ fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result
     );
 }
 
-/// Our SDK driver, handed to node on the command line rather than
-/// written to disk. Nowhere to put it would be right: the step's own
-/// tree is swept into the test fixture's overlay tar
-/// (`tests/fixtures/build_qmd_index.py`), and a file anywhere else is
-/// one more thing that can be stale relative to the binary that wrote
-/// it.
+/// Our SDK driver. Written to a temp file per run and deleted after,
+/// so what runs is always the copy this build carries.
+///
+/// It has to be a *file*: see the script's own header for why `node -e`
+/// is not an option, and [`embed_script`] for why the file is not in the
+/// data root.
 const EMBED_NDJSON_MJS: &str = include_str!("js/embed_ndjson.mjs");
+
+/// The wrapper on disk, removed when this is dropped.
+///
+/// Outside the data root deliberately. The step's tree is swept whole
+/// into the test fixture's overlay tar
+/// (`tests/fixtures/build_qmd_index.py`), so a scratch file written
+/// beside the index would be baked into the fixture.
+struct EmbedScript(PathBuf);
+
+impl EmbedScript {
+    fn write() -> Result<Self> {
+        // `.mjs` so node reads it as a module from the extension alone,
+        // with no flag that a forked grandchild could inherit.
+        let path =
+            std::env::temp_dir().join(format!("datalib-qmd-embed-{}.mjs", std::process::id()));
+        std::fs::write(&path, EMBED_NDJSON_MJS)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for EmbedScript {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 /// The embedding pass.
 ///
@@ -511,12 +537,11 @@ fn run_embed(
         return run_qmd(cache_home, &opts.qmd_version, &["embed"]);
     };
 
+    let script = EmbedScript::write()?;
     let mut cmd = std::process::Command::new(&node);
-    cmd.arg("--input-type=module")
-        .arg("-e")
-        .arg(EMBED_NDJSON_MJS)
-        .arg(&pkg_dir)
-        .arg(index_path);
+    // No node flags before the script. Anything here is inherited by
+    // every process forked below us — see the script's header.
+    cmd.arg(&script.0).arg(&pkg_dir).arg(index_path);
     // qmd writes this beside the index during `update`; it is where the
     // embedding model is pinned. Passing it keeps the SDK resolving the
     // same model the CLI would rather than falling back to qmd's default
@@ -529,11 +554,9 @@ fn run_embed(
     cmd.env("XDG_CONFIG_HOME", cache_home);
     cmd.env("NO_COLOR", "1");
     cmd.stdout(std::process::Stdio::piped());
-    // Not `display_command`: the script is an argument, and printing it
-    // would bury the line it belongs to under 40 lines of JavaScript.
     status_line!(
-        "[qmd-indexer] embedding through the qmd SDK at {}",
-        pkg_dir.display()
+        "[qmd-indexer] $ {}",
+        datalib_runtime::node_runtime::display_command(&cmd)
     );
 
     // No `shared_multi().suspend(…)` here, unlike `run_qmd`. That
@@ -754,16 +777,51 @@ mod tests {
         );
     }
 
-    /// The wrapper is `include_str!`'d and handed to `node -e`, so it
-    /// has to read its arguments from argv[1] — with `-e` there is no
-    /// script path in front of them. Getting this wrong embeds nothing
-    /// and reports success, which is the failure this guards.
+    /// The wrapper runs as a file, so its arguments start at argv[2] —
+    /// argv[1] is the script itself.
     #[test]
-    fn the_wrapper_reads_argv_the_way_node_dash_e_passes_it() {
+    fn the_wrapper_reads_argv_the_way_a_script_file_gets_it() {
         assert!(
-            EMBED_NDJSON_MJS.contains("process.argv.slice(1)"),
-            "the wrapper must slice(1): `node -e` puts argv[0] = node, then our args"
+            EMBED_NDJSON_MJS.contains("process.argv.slice(2)"),
+            "a script file's own path is argv[1], so its arguments start at 2"
         );
+    }
+
+    /// **No node flags before the script path.** node passes its own
+    /// flags down to anything forked beneath it, dropping `-e` but
+    /// keeping `--input-type`; node-llama-cpp probes its prebuilt by
+    /// forking such a child, and on linux-x64 that child then fails to
+    /// start. The whole embed comes back `NoBinaryFoundError` — green
+    /// on a mac, red on CI, which is how this was found.
+    #[test]
+    fn nothing_we_pass_node_can_be_inherited_by_a_forked_grandchild() {
+        let script = EmbedScript::write().unwrap();
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg(&script.0).arg("pkg").arg("db");
+        let first = cmd.get_args().next().unwrap();
+        assert_eq!(
+            first,
+            script.0.as_os_str(),
+            "the script must be node's first argument, with no flags in front of it"
+        );
+        assert!(
+            script.0.extension().is_some_and(|e| e == "mjs"),
+            "the file is read as a module by its extension, not by a flag"
+        );
+    }
+
+    /// The script is a scratch file, and it does not belong in the data
+    /// root: the step's tree is swept whole into the fixture's overlay
+    /// tar, so one written there would be baked into the fixture.
+    #[test]
+    fn the_script_is_cleaned_up_and_lives_outside_any_data_root() {
+        let path = {
+            let script = EmbedScript::write().unwrap();
+            assert!(script.0.is_file());
+            assert!(script.0.starts_with(std::env::temp_dir()));
+            script.0.clone()
+        };
+        assert!(!path.exists(), "the script should be gone once dropped");
     }
 
     /// A stand-in for the wrapper: `sh` printing canned lines, then

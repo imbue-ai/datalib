@@ -7,14 +7,18 @@
 // `store.embed({ onProgress })` is the same numbers before they reach
 // that gate.
 //
-// Run by `node --input-type=module -e <this>`, so the arguments start
-// at argv[1] — there is no script path in front of them.
+// Run as a file — `node <this.mjs> …` — and not via `node -e`. `-e`
+// needs `--input-type=module`, and node hands that flag down to every
+// process anything below us forks (it drops the `-e` but keeps the
+// `--input-type`). node-llama-cpp probes its prebuilt binary by forking
+// exactly such a child, and on linux-x64 that child then fails to
+// start, which surfaces as NoBinaryFoundError and no embeddings at all.
 //
 // argv: <package-dir> <index.sqlite> [index.yml]
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [pkgDir, dbPath, configPath] = process.argv.slice(1);
+const [pkgDir, dbPath, configPath] = process.argv.slice(2);
 // Imported by absolute path rather than by package name: the staged
 // runtime is not an npm tree this script is inside of. `pathToFileURL`
 // is what makes a path containing spaces work.
