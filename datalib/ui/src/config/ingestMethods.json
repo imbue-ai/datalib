@@ -45,6 +45,12 @@
       "reach": "local"
     }
   ],
+  "codex": [
+    {
+      "path": "sessions",
+      "reach": "local"
+    }
+  ],
   "contacts": [
     {
       "path": "carddav",

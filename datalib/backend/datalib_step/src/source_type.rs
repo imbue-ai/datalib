@@ -57,6 +57,10 @@ pub enum SourceType {
     /// this machine. Not a method of `claude`: a session and a
     /// claude.ai chat never overlap, so they share no store to dedupe in.
     ClaudeCode,
+    /// Codex CLI sessions, read off the store Codex keeps on this
+    /// machine. Its own type for the reason `claude_code` is: a Codex
+    /// thread and a ChatGPT chat never overlap.
+    Codex,
     /// Contacts over CardDAV, or from `.vcf` files. Served by the
     /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,

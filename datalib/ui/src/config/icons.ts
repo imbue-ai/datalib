@@ -19,6 +19,9 @@ import claudeIconUrl from "@/assets/claude.svg";
 // A terminal glyph in Claude's colour, so a list that shows both the
 // claude and claude_code sources tells them apart.
 import claudeCodeIconUrl from "@/assets/claude_code.svg";
+// The same terminal glyph in OpenAI's colour, for the same reason next
+// to chatgpt.
+import codexIconUrl from "@/assets/codex.svg";
 import contactsIconUrl from "@/assets/contacts.svg";
 // Not a service's mark: a diff group is datalib's own, and its icon is
 // the three fates a diff sorts rows into.
@@ -56,6 +59,7 @@ const ICONS: Record<string, string> = {
   chatgpt: chatgptIconUrl,
   claude: claudeIconUrl,
   claude_code: claudeCodeIconUrl,
+  codex: codexIconUrl,
   contacts: contactsIconUrl,
   diff: diffIconUrl,
   email: emailIconUrl,

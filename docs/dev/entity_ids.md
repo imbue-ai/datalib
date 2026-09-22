@@ -288,6 +288,7 @@ back by render as the natural key.
 | chatgpt | none — keys are OpenAI's conversation and message ids | messages |
 | claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
 | claude_code | none — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
+| codex | none — a thread id is Codex's own UUIDv7; a line is keyed by its number within the thread | records — each rollout line's own `timestamp` |
 | contacts | none — keyed on `addressbook#uid` | none — a card has no creation event |
 | email | `account_id` — the JMAP account, the Gmail address, or the mbox's configured id | emails |
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
