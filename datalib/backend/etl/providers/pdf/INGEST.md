@@ -217,8 +217,9 @@ the real one — that hash (`row_set_hash`) is gone since.
 `pdf_paths` is truncated and rebuilt every scan, so a deleted file
 disappears on its own. `pdf_documents` is **not** truncated — it is
 keyed on content, which has no notion of "no longer present," and
-dropping it would lose `first_seen_at_utc` and force a re-convert of every
-document whose path merely moved.
+dropping it would lose when the document was first seen
+(`pdf_documents_bookkeeping.fetched_at_utc`) and force a re-convert of
+every document whose path merely moved.
 
 The consequence is that deleting the last copy of a document leaves an
 unreferenced `pdf_documents` row. That is deliberate for now: the row is

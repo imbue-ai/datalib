@@ -15,7 +15,6 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::fswalk;
 use datalib_etl::progress::Progress;
-use datalib_time::StoredStamp;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
@@ -74,14 +73,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     // Written before the walk, so an interrupted scan still leaves the
     // render step able to find the tree.
-    let stamp = datalib_time::split_stamp(&opts.now);
+    let now = datalib_time::parse_strict(&opts.now)
+        .with_context(|| format!("parse the run's now {:?}", opts.now))?;
     opts.db
-        .write_scan_meta(&PdfScanMetaRow {
-            id: opts.source_id.clone(),
-            abs_root: opts.root.to_string_lossy().to_string(),
-            scanned_at_utc: stamp.utc.clone(),
-            tz_offset: stamp.tz_offset.clone(),
-        })
+        .write_scan_meta(
+            &PdfScanMetaRow {
+                id: opts.source_id.clone(),
+                abs_root: opts.root.to_string_lossy().to_string(),
+            },
+            &now,
+        )
         .await
         .context("record scan root")?;
 
@@ -120,7 +121,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
         // ── Classify the document, once per distinct content ─────────
         if !prev.known_docs.contains(&hash_hex) && !seen_docs.contains_key(&hash_hex) {
-            match identify(&f.path, f.size, &stamp) {
+            match identify(&f.path, f.size) {
                 Ok(row) => {
                     let needs_ocr = row.needs_ocr;
                     seen_docs.insert(hash_hex.clone(), needs_ocr);
@@ -144,19 +145,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         path_batch.push(PdfPathRow {
             id: f.rel.clone(),
             blake3: hash_hex,
-            last_seen_at_utc: stamp.utc.clone(),
-            tz_offset: stamp.tz_offset.clone(),
         });
 
         if path_batch.len() >= BATCH_SIZE {
-            opts.db.write_batch(&doc_batch, &path_batch).await?;
+            opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
             doc_batch.clear();
             path_batch.clear();
         }
     }
 
     if !doc_batch.is_empty() || !path_batch.is_empty() {
-        opts.db.write_batch(&doc_batch, &path_batch).await?;
+        opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
     Ok(summary)
 }
@@ -169,7 +168,7 @@ fn is_pdf(p: &Path) -> bool {
 
 /// Classify one PDF and read its metadata. Returns a row with an empty
 /// `blake3` — the caller fills that in, since it already has the digest.
-fn identify(path: &Path, size: i64, stamp: &StoredStamp) -> Result<PdfDocumentRow> {
+fn identify(path: &Path, size: i64) -> Result<PdfDocumentRow> {
     // Detect-only: we want the classification and page census here, not
     // the markdown. Conversion is the render step's job and happens
     // against a different cache key.
@@ -227,8 +226,6 @@ fn identify(path: &Path, size: i64, stamp: &StoredStamp) -> Result<PdfDocumentRo
         xmp_document_id: ident.xmp_document_id,
         xmp_instance_id: ident.xmp_instance_id,
         xmp_original_document_id: ident.xmp_original_document_id,
-        first_seen_at_utc: stamp.utc.clone(),
-        tz_offset: stamp.tz_offset.clone(),
     })
 }
 

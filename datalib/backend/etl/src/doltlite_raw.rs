@@ -1440,6 +1440,40 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
         .context("read dolt_log head")
 }
 
+/// The content tables whose rows differ between two commits: every
+/// table but the `*_bookkeeping` sidecars, [`SHARED_TABLES`] and
+/// `ingested_files`. The question a provider's test asks after
+/// ingesting the same input twice under two different nows — the
+/// answer must be empty, or a stamp the store mints is sitting in a
+/// content row, and every consumer that diffs the store will find
+/// that row changed on every run.
+pub async fn content_tables_changed(
+    pool: &SqlitePool,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT coalesce(to_table_name, from_table_name) FROM dolt_diff_summary \
+         WHERE from_ref = ? AND to_ref = ? AND data_change = 1",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("dolt_diff_summary")?;
+    let mut changed: Vec<String> = rows
+        .into_iter()
+        .filter(|t| {
+            !t.ends_with("_bookkeeping")
+                && !SHARED_TABLES.contains(&t.as_str())
+                && t != crate::file_checkpoint::INGESTED_FILES_TABLE
+        })
+        .collect();
+    changed.sort();
+    changed.dedup();
+    Ok(changed)
+}
+
 /// [`head_commit`] against a store on disk; `Ok(None)` if nobody has
 /// downloaded it yet.
 ///

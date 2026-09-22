@@ -62,6 +62,21 @@ fn detail_answers(playback: &std::path::Path, status: u16) {
     fs::write(&path, serde_json::to_vec_pretty(&resp).unwrap()).unwrap();
 }
 
+/// The store's `problems` rows as `(scope_key, severity, reason)`.
+async fn stored_problems(raw: &std::path::Path) -> Vec<(String, String, String)> {
+    use sqlx::Row;
+    let db = RawDb::open(&db_path_for(raw)).await.unwrap();
+    let rows = sqlx::query("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+    db.close().await;
+    rows
+}
+
 async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let o = FetchOptions {
@@ -73,6 +88,11 @@ async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
         ..FetchOptions::new(db.clone())
     };
     let s = fetch(o).await;
+    // Sealed the way the processor's `RawStoreSession::finish` seals a
+    // run: a writer's next open discards what was never committed.
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: conv_uuids fetch")
+        .await
+        .unwrap();
     db.close().await;
     s.unwrap()
 }
@@ -113,6 +133,24 @@ async fn a_persistent_403_is_reported_as_forbidden_not_missing() {
         s.problems[0]
     );
     assert_eq!(s.problems[0].setting, "conv_uuids");
+    // And the org itself, once: the row a Manage screen shows for
+    // "why is a whole org missing", where a log line reaches nobody.
+    // A warning, since the fix is access, not a retry.
+    assert_eq!(
+        stored_problems(&raw).await,
+        vec![
+            (
+                "config:conv_uuids:c1".to_string(),
+                "warning".to_string(),
+                "forbidden".to_string()
+            ),
+            (
+                format!("listing:org:{ORG}"),
+                "warning".to_string(),
+                "forbidden".to_string()
+            ),
+        ]
+    );
 }
 
 /// The other half, and the reason the distinction is not free: a 404

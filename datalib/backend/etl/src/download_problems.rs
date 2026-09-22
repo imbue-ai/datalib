@@ -229,6 +229,11 @@ pub struct RunProblem {
     pub name: String,
     /// What went wrong, in the words of the error.
     pub detail: String,
+    /// Whether the credential was refused: a listing the service
+    /// would not give this token is a warning the reader can act on
+    /// (ask for access), where one that failed is an error.
+    #[serde(default)]
+    pub forbidden: bool,
 }
 
 impl RunProblem {
@@ -237,6 +242,7 @@ impl RunProblem {
             kind: RunProblemKind::Listing,
             name: name.to_string(),
             detail: detail.into(),
+            forbidden: false,
         }
     }
 
@@ -245,6 +251,18 @@ impl RunProblem {
             kind: RunProblemKind::Phase,
             name: name.to_string(),
             detail: detail.into(),
+            forbidden: false,
+        }
+    }
+
+    /// A listing the service refused this credential: an org, a
+    /// workspace, a scope the token does not reach.
+    pub fn forbidden(name: &str, detail: impl Into<String>) -> Self {
+        Self {
+            kind: RunProblemKind::Listing,
+            name: name.to_string(),
+            detail: detail.into(),
+            forbidden: true,
         }
     }
 
@@ -276,11 +294,12 @@ pub async fn report_run(pool: &sqlx::SqlitePool, problems: &[RunProblem]) {
         .iter()
         .filter(|p| seen.insert(p.key()))
         .map(|p| {
-            (
-                p.key(),
-                Outcome::Dropped,
-                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error),
-            )
+            let problem = if p.forbidden {
+                Problem::record(Reason::Forbidden, &p.detail).severity(Severity::Warning)
+            } else {
+                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error)
+            };
+            (p.key(), Outcome::Dropped, problem)
         })
         .collect();
     let prefixes: Vec<String> = RunProblemKind::VARIANTS

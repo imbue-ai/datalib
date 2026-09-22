@@ -262,6 +262,12 @@ def _argv():
     return sys.argv[1:]
 
 
+# Run 2's `--now`: the pinned fixture stamp (argv[6], `2369-04-15T00:00:00+00:00`)
+# plus five minutes, same day, so anything the driver keys on the date
+# (garmin's window) agrees between the runs.
+FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
+
+
 class IngestedTngPipelineTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -757,7 +763,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """
         return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
 
-    def _run_pipeline(self, *, reset: bool) -> subprocess.CompletedProcess:
+    def _run_pipeline(
+        self, *, reset: bool, now: str | None = None
+    ) -> subprocess.CompletedProcess:
+        now = now or self.now
         env = {**os.environ}
         if reset:
             env["INGESTED_TNG_RESET"] = "1"
@@ -770,7 +779,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.step_bin,
             self.signal_bin,
             self.whatsapp_bin,
-            self.now,
+            now,
             str(self.workspace),
             *self.fixture_paths,
         ]
@@ -1174,10 +1183,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             len(cursor1), 1, f"expected one ingested_backups row, got {cursor1}"
         )
 
-        # --- Run 2: same data root, no flags. Signal's
+        # --- Run 2: same data root, no flags, five minutes on. Signal's
         # ingested_backups cursor MUST short-circuit the second
-        # download.
-        run2 = self._run_pipeline(reset=False)
+        # download. A later `now` than run 1's, deliberately: a run
+        # under the same stamp cannot tell a stamp that is content from
+        # one that is bookkeeping, since it writes the same value either
+        # way, and that is how a scan stamp on an input row re-rendered
+        # every pdf on every real run while this test stayed green.
+        run2 = self._run_pipeline(reset=False, now=FIVE_MINUTES_ON)
         self.assertIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run2.stderr,
@@ -1263,6 +1276,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertEqual(
             self._signal_cursor(), cursor1, "run 2 must not disturb signal's cursor"
+        )
+        # The stronger claim, one level up from the index: nothing was
+        # re-rendered either. The index reading nothing only says the
+        # render stores did not move, and a document re-rendered to the
+        # same bytes does not move them — which is how pdf re-converted
+        # every document on every run for months while this passed: a
+        # scan stamp on a row the documents declared as an input.
+        self.assertEqual(
+            self._documents_rendered_in_newest_run(),
+            {},
+            "a steady-state run must render no document in any source",
         )
 
         # --- Run 3: reset, then sync. The reset empties signal's
@@ -1542,6 +1566,28 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._assert_run_store_hygiene()
 
     # ── the run store ───────────────────────────────────────────────
+
+    def _documents_rendered_in_newest_run(self) -> dict[str, int]:
+        """`step → documents (re)rendered` for the newest run, only the
+        steps that rendered any."""
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            rows = con.execute(
+                "SELECT step, fields FROM log "
+                # The runs share a pinned `--now` (run 2 is five minutes on),
+                # so insertion order, not the stamp, says which is newest.
+                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1) "
+                "AND msg = 'docs (re)rendered'"
+            ).fetchall()
+        finally:
+            con.close()
+        rendered = {}
+        for step, fields in rows:
+            docs = json.loads(fields).get("docs", 0)
+            if docs:
+                rendered[step] = rendered.get(step, 0) + docs
+        return rendered
 
     # How often one message may repeat within one step attempt at `info`
     # or above before it counts as spam. The number is a policy, not a

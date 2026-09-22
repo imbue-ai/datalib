@@ -106,12 +106,19 @@ impl NotionOfficialClient {
         let body_text = resp.body_str().into_owned();
         let status = resp.status;
         if status == 200 {
-            let value: Value = serde_json::from_str(&body_text).map_err(|e| {
+            let mut value: Value = serde_json::from_str(&body_text).map_err(|e| {
                 let preview: String = body_text.chars().take(200).collect();
                 NotionOfficialError::Permanent(format!(
                     "{method} {path}: HTTP 200 but non-JSON: {e}; body[:200]={preview:?}"
                 ))
             })?;
+            // Notion stamps every response with the id of the request
+            // that produced it. It describes the fetch, not the object,
+            // and stored whole it makes an unchanged page read as
+            // modified on every re-fetch.
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("request_id");
+            }
             events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
             tracing::Span::current().record("total_ms", req_start.elapsed().as_millis() as u64);
             return Ok(value);

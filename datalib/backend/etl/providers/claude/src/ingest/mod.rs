@@ -7,7 +7,7 @@ pub mod export;
 pub mod normalize;
 pub mod schema_raw;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
-use datalib_etl::download_problems::{self, DownloadProblem};
+use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
 use datalib_time::IsoOffsetTimestamp;
@@ -295,7 +295,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // answered 403 past the transient retries it is not asked again
         // this run. The listing walk learns this from `list_conversations`;
         // the one-by-one path below has no listing, so it learns it here.
-        let mut forbidden_orgs: HashSet<String> = HashSet::new();
+        let mut forbidden_orgs: BTreeMap<String, String> = BTreeMap::new();
         if opts.projects {
             let only: HashSet<String> = opts
                 .project_uuids
@@ -344,17 +344,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             ),
                         ));
                     }
-                    SingleOutcome::ForbiddenInSomeOrg => {
+                    SingleOutcome::ForbiddenInSomeOrg { refused, not_found } => {
                         summary.problems.push(DownloadProblem::forbidden(
                             "conv_uuids",
                             raw,
-                            "an org refused this conversation after retries; it may exist \
-                             but this credential cannot read it",
+                            format!(
+                                "refused by {} after retries, and not in the {not_found} \
+                                 org(s) this credential can read; it may exist where the \
+                                 credential cannot look",
+                                refused.join(", ")
+                            ),
                         ));
                     }
                 }
             }
             download_problems::report(db.pool(), &summary.problems).await;
+            report_forbidden_orgs(db.pool(), &forbidden_orgs).await;
             return Ok::<(), anyhow::Error>(());
         }
 
@@ -389,6 +394,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         "this org refuses conversation listings; skipping it"
                     );
                     summary.forbidden_orgs += 1;
+                    forbidden_orgs.insert(org_uuid.to_string(), org_name.clone());
                     continue;
                 }
                 Err(e) => return Err(anyhow::anyhow!("list conversations for {org_name}: {e}")),
@@ -574,6 +580,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             inner.finish_and_clear();
         }
+        report_forbidden_orgs(db.pool(), &forbidden_orgs).await;
         Ok(())
     };
 
@@ -595,7 +602,7 @@ async fn sync_projects(
     summary: &mut FetchSummary,
     progress: &datalib_etl::progress::Progress,
     now: &IsoOffsetTimestamp,
-    forbidden_orgs: &mut HashSet<String>,
+    forbidden_orgs: &mut BTreeMap<String, String>,
 ) {
     // Track which requested UUIDs we actually saw, so a typo doesn't
     // silently mirror nothing.
@@ -618,7 +625,7 @@ async fn sync_projects(
                     "this org refuses project listings; its conversations are not \
                      asked for one by one either"
                 );
-                forbidden_orgs.insert(org_uuid.to_string());
+                forbidden_orgs.insert(org_uuid.to_string(), org_name.clone());
                 continue;
             }
             Err(e) => {
@@ -904,7 +911,7 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
 /// A separate outcome rather than an `Err`: a uuid no org will serve is
 /// a config problem the caller reports and steps over, while a real
 /// fetch failure still has to stop the run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SingleOutcome {
     Fetched,
     /// Every org answered 404. The id is wrong, or the conversation is
@@ -913,8 +920,29 @@ pub enum SingleOutcome {
     /// At least one org kept answering 403 after the transient-403
     /// retries. The conversation may well exist — this credential
     /// cannot read it — so it must not be reported as missing, which
-    /// would send the reader hunting for a deleted chat.
-    ForbiddenInSomeOrg,
+    /// would send the reader hunting for a deleted chat. `refused`
+    /// names those orgs; `not_found` counts the ones that said 404.
+    ForbiddenInSomeOrg {
+        refused: Vec<String>,
+        not_found: usize,
+    },
+}
+
+/// One `problems` row per org this credential cannot read, keyed
+/// `listing:org:<name>`, so the Manage row says why a whole org is
+/// missing rather than the log alone. Replaced every run.
+async fn report_forbidden_orgs(pool: &sqlx::SqlitePool, orgs: &BTreeMap<String, String>) {
+    let problems: Vec<RunProblem> = orgs
+        .values()
+        .map(|name| {
+            RunProblem::forbidden(
+                &format!("org:{name}"),
+                "this org refuses the credential's requests (conversations and projects); \
+                 nothing from it is mirrored",
+            )
+        })
+        .collect();
+    download_problems::report_run(pool, &problems).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -926,15 +954,16 @@ async fn fetch_single(
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     now: &IsoOffsetTimestamp,
-    forbidden_orgs: &mut HashSet<String>,
+    forbidden_orgs: &mut BTreeMap<String, String>,
 ) -> Result<SingleOutcome> {
-    let mut forbidden_somewhere = false;
+    let mut refused: Vec<String> = Vec::new();
+    let mut not_found = 0usize;
     for org in orgs {
         let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
         };
-        if forbidden_orgs.contains(org_uuid) {
-            forbidden_somewhere = true;
+        if forbidden_orgs.contains_key(org_uuid) {
+            refused.push(org_name);
             continue;
         }
         // Same retry the listing walk uses. Without it a transient 403
@@ -964,8 +993,8 @@ async fn fetch_single(
                     org = %org_name,
                     "still 403 after the transient retries; not asking this org again",
                 );
-                forbidden_orgs.insert(org_uuid.to_string());
-                forbidden_somewhere = true;
+                forbidden_orgs.insert(org_uuid.to_string(), org_name.clone());
+                refused.push(org_name);
                 continue;
             }
             Err(ClaudeError::Permanent(msg)) if msg.contains("HTTP 404") => {
@@ -975,6 +1004,7 @@ async fn fetch_single(
                     org = %org_name,
                     "this org has no conversation with that id"
                 );
+                not_found += 1;
                 continue;
             }
             Err(e) => {
@@ -987,10 +1017,10 @@ async fn fetch_single(
             }
         }
     }
-    Ok(if forbidden_somewhere {
-        SingleOutcome::ForbiddenInSomeOrg
-    } else {
+    Ok(if refused.is_empty() {
         SingleOutcome::NotFoundInAnyOrg
+    } else {
+        SingleOutcome::ForbiddenInSomeOrg { refused, not_found }
     })
 }
 
