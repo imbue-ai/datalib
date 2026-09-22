@@ -39,6 +39,9 @@ pub const JOBS_DB: &str = "jobs.doltlite_db";
 /// swept into whichever commit came next. Nothing commits this one at
 /// all — the rows are the history.
 pub const USAGE_DB: &str = "usage.doltlite_db";
+pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";
+/// The download CAS: one file per fetched URL, named by its sha256.
+pub const REMOTE_MEDIA_DIR: &str = "remote_media";
 /// The run store's own directory, relative to `system/`: the store and
 /// the WAL SQLite keeps beside it are then one tree to whatever
 /// measures disk, and one watch to whatever watches it.
@@ -103,6 +106,14 @@ pub fn jobs_db(data_root: &Path) -> PathBuf {
 
 pub fn usage_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(USAGE_DB)
+}
+
+pub fn remote_media_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(REMOTE_MEDIA_DB)
+}
+
+pub fn remote_media_dir(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(REMOTE_MEDIA_DIR)
 }
 
 pub fn lock_file(data_root: &Path) -> PathBuf {

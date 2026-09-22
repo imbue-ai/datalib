@@ -2,13 +2,15 @@
 // src="https://…">` in an email, a video in a chat, a CSS background —
 // and what the page does with them. Loading one tells its host who
 // opened the document and when (a tracking pixel is exactly that), so
-// the sanitizer strips the reference and keeps it on the element as
-// `data-remote-<attr>`, and the document view draws a placeholder in
-// its place naming the host. Nothing here loads anything: the app's
-// CSP forbids the page from fetching from a remote host at all, and a
-// load the person asks for will be a server-side fetch into a store
-// (issue #648). The rules are pure so they are unit-testable; only
+// unless an allow row says otherwise the sanitizer strips the
+// reference, keeps it on the element as `data-remote-<attr>`, and the
+// document view draws a placeholder naming the host. A reference an
+// allow row covers is rewritten to `/api/remote_media?url=…` instead:
+// the server fetches it once into its download CAS and serves it from
+// there, so the app's CSP can forbid the page from reaching a remote
+// host at all. The rules are pure so they are unit-testable; only
 // `decorateRemoteMedia` touches a DOM.
+import { remoteMediaUrl, type RemoteAllow } from "@/api";
 
 export type RemoteKind = "image" | "media" | "style";
 
@@ -16,6 +18,8 @@ export type RemoteRef = {
   url: string;
   host: string;
   kind: RemoteKind;
+  /** Whether it was let through (proxied) rather than held. */
+  loaded: boolean;
 };
 
 /** A URL on a host other than this page: `http:`, `https:`, or
@@ -25,35 +29,92 @@ export function isRemoteUrl(value: string): boolean {
   return /^(https?:|\/\/)/i.test(value.trim());
 }
 
-export function hostOf(value: string): string {
+/** The URL as the server needs it: absolute, with a scheme. */
+export function absoluteRemote(value: string): string {
   const v = value.trim();
+  return v.startsWith("//") ? `https:${v}` : v;
+}
+
+export function hostOf(value: string): string {
   try {
-    return new URL(v.startsWith("//") ? `https:${v}` : v).host;
+    return new URL(absoluteRemote(value)).host;
   } catch {
     return "";
   }
 }
 
-/** The remote URLs among a `srcset`'s candidates. */
-export function remoteInSrcset(srcset: string): string[] {
-  return srcset
-    .split(",")
-    .map((candidate) => candidate.trim().split(/\s+/)[0] ?? "")
-    .filter((url) => url !== "" && isRemoteUrl(url));
+export function proxied(value: string): string {
+  return remoteMediaUrl(absoluteRemote(value));
+}
+
+// ── The allow-list, applied ────────────────────────────────────────────
+
+/** What a document is, for the rows that name it or its source. */
+export type RemoteContext = { document: string | null; source: string | null };
+
+/** The allow row that lets a reference load, or null. Any scope will
+ *  do; the widest is named first so the banner says the broadest
+ *  reason. */
+export function allowedBy(
+  url: string,
+  ctx: RemoteContext,
+  allows: readonly RemoteAllow[],
+): RemoteAllow | null {
+  const abs = absoluteRemote(url);
+  const host = hostOf(url);
+  const bySource = allows.find((a) => a.scope === "source" && ctx.source && a.key === ctx.source);
+  if (bySource) return bySource;
+  const byDocument = allows.find(
+    (a) => a.scope === "document" && ctx.document && a.key === ctx.document,
+  );
+  if (byDocument) return byDocument;
+  const byHost = allows.find((a) => a.scope === "host" && host && a.key === host);
+  if (byHost) return byHost;
+  return allows.find((a) => a.scope === "url" && a.key === abs) ?? null;
+}
+
+// ── Rewriting ──────────────────────────────────────────────────────────
+
+/** Every remote URL in a `srcset`, and the srcset with each mapped —
+ *  `null` from `map` drops that candidate. */
+export function rewriteSrcset(
+  srcset: string,
+  map: (url: string) => string | null,
+): { srcset: string; remote: string[] } {
+  const remote: string[] = [];
+  const kept: string[] = [];
+  for (const candidate of srcset.split(",")) {
+    const parts = candidate.trim().split(/\s+/);
+    const url = parts[0] ?? "";
+    if (!url) continue;
+    if (!isRemoteUrl(url)) {
+      kept.push(candidate.trim());
+      continue;
+    }
+    remote.push(url);
+    const mapped = map(url);
+    if (mapped !== null) kept.push([mapped, ...parts.slice(1)].join(" "));
+  }
+  return { srcset: kept.join(", "), remote };
 }
 
 const CSS_URL = /url\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
 
 /** Every remote `url(…)` in an inline style, and the style with each
- *  replaced by `none` — a valid value wherever an image was. */
-export function stripStyleUrls(style: string): { style: string; remote: string[] } {
+ *  mapped — `null` from `map` replaces the whole `url(…)` with `none`,
+ *  which is a valid value wherever an image was. */
+export function rewriteStyleUrls(
+  style: string,
+  map: (url: string) => string | null,
+): { style: string; remote: string[] } {
   const remote: string[] = [];
-  const stripped = style.replace(CSS_URL, (whole: string, _quote: string, url: string) => {
+  const rewritten = style.replace(CSS_URL, (whole: string, _quote: string, url: string) => {
     if (!isRemoteUrl(url)) return whole;
     remote.push(url);
-    return "none";
+    const mapped = map(url);
+    return mapped === null ? "none" : `url("${mapped}")`;
   });
-  return { style: stripped, remote };
+  return { style: rewritten, remote };
 }
 
 /** The attributes a browser fetches from, by element. `href` fetches
@@ -94,9 +155,9 @@ export function primaryUrl(el: Element): string | null {
     if (v) return v;
   }
   const srcset = el.getAttribute(`${BLOCKED_PREFIX}srcset`);
-  if (srcset) return remoteInSrcset(srcset)[0] ?? null;
+  if (srcset) return rewriteSrcset(srcset, (u) => u).remote[0] ?? null;
   const style = el.getAttribute(`${BLOCKED_PREFIX}style`);
-  if (style) return stripStyleUrls(style).remote[0] ?? null;
+  if (style) return rewriteStyleUrls(style, (u) => u).remote[0] ?? null;
   return null;
 }
 
@@ -113,8 +174,9 @@ export function isTrackingPixel(el: Element): boolean {
 }
 
 /** A placeholder before every blocked image or media element: what it
- *  is and where it would load from, the full URL on hover. Idempotent:
- *  an element that already has its placeholder gets no second one. */
+ *  is and where it would load from, the full URL on hover, and a
+ *  click to let it load. Idempotent: an element that already has its
+ *  placeholder gets no second one. */
 export function decorateRemoteMedia(root: ParentNode): void {
   for (const el of Array.from(
     root.querySelectorAll<Element>(
@@ -125,12 +187,13 @@ export function decorateRemoteMedia(root: ParentNode): void {
     const url = primaryUrl(el);
     if (!url) continue;
     const doc = el.ownerDocument;
-    const chip = doc.createElement("span");
+    const chip = doc.createElement("button");
+    chip.type = "button";
     chip.className = CHIP_CLASS;
     const pixel = isTrackingPixel(el);
     if (pixel) chip.classList.add(`${CHIP_CLASS}--pixel`);
     chip.dataset.remoteUrl = url;
-    chip.title = url;
+    chip.title = `${absoluteRemote(url)}\nClick to load it from ${hostOf(url) || "its host"}.`;
     const icon = doc.createElement("span");
     icon.className = `${CHIP_CLASS}-icon`;
     icon.setAttribute("aria-hidden", "true");

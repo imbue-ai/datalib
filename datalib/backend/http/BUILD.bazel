@@ -39,6 +39,7 @@ rust_library(
         "src/manage/mod.rs",
         "src/manage/problems.rs",
         "src/manage/status.rs",
+        "src/remote_media.rs",
         "src/request_log.rs",
         "src/ui_events.rs",
         "src/usage.rs",
@@ -96,6 +97,7 @@ rust_library(
         "@datalib_crates//:libc",
         "@datalib_crates//:mime_guess",
         "@datalib_crates//:notify",
+        "@datalib_crates//:reqwest",
         "@datalib_crates//:rust-embed",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
@@ -106,6 +108,7 @@ rust_library(
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-subscriber",
+        "@datalib_crates//:url",
         "@datalib_crates//:uuid",
     ],
 )
@@ -366,6 +369,30 @@ rust_test(
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
         "@datalib_crates//:axum",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tower",
+    ],
+)
+
+# `GET /api/remote_media` and the allow-list, against a stand-in remote
+# host on loopback (issue #648) — hence the env, which lifts the
+# private-address guard for this process. Binds a port, as
+# shutdown_test does.
+rust_test(
+    name = "remote_media_test",
+    size = "small",
+    srcs = ["tests/remote_media.rs"],
+    edition = "2021",
+    env = {
+        "DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE": "1",
+    },
+    deps = [
+        ":datalib_http",
+        "//datalib/backend/core:datalib_core",
+        "@datalib_crates//:axum",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",

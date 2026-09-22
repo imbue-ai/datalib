@@ -163,6 +163,8 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .expect("chat meta present");
     assert_eq!(meta.name.as_deref(), Some("Test conv"));
     assert_eq!(meta.source_label.as_deref(), Some("Claude"));
+    // Filed as the grid files the row: by the path's first segment.
+    assert_eq!(meta.source_id.as_deref(), Some("chats"));
     assert_eq!(
         meta.source_url.as_deref(),
         Some("https://claude.ai/chat/c-1")
