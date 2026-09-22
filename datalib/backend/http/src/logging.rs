@@ -37,10 +37,11 @@ pub fn writer() -> Option<Arc<ProcessLogWriter>> {
 /// the store could not be opened, in which case stderr still gets
 /// every line.
 pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
+    let commit = datalib_runs::git_hash_and_origin();
     let writer = ProcessLogWriter::start(
         root,
         Process::Http,
-        datalib_runs::git_hash(),
+        commit.as_ref().map(|(hash, _)| hash.clone()),
         retention_of(root),
     )
     .map(Arc::new);
@@ -63,6 +64,7 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
         .with(stderr)
         .with(store)
         .try_init();
+    datalib_runs::log_build_commit(commit.as_ref());
     writer
 }
 

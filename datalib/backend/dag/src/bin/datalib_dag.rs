@@ -275,11 +275,12 @@ async fn main() -> Result<()> {
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
         let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
+        let commit = datalib_runs::git_hash_and_origin();
         match RunStoreSink::start(
             &data_root,
             &run_id,
             &now,
-            datalib_runs::git_hash(),
+            commit.as_ref().map(|(hash, _)| hash.clone()),
             retention,
         ) {
             Some(store) => {
@@ -295,6 +296,7 @@ async fn main() -> Result<()> {
                     .with(filter)
                     .with(datalib_runs::StoreLayer::new(store.log_sink()))
                     .try_init();
+                datalib_runs::log_build_commit(commit.as_ref());
                 sinks.push(Arc::new(store));
             }
             None => {

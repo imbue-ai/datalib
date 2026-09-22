@@ -63,8 +63,13 @@ async fn what_the_server_logs_is_served_as_its_own_process() {
 
     let lines = get(td.path(), "/api/log?q=process:http%20level:warn").await;
     let lines = lines.as_array().unwrap();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    let l = &lines[0];
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    // The first thing a server with no commit says — a bazel test has
+    // neither the launcher's variable nor the staged `git-hash` — is
+    // that it has none, so the empty Commit column explains itself.
+    assert_eq!(lines[0]["msg"], datalib_runs::NO_GIT_HASH_ADVICE);
+    assert!(lines[0]["git_hash"].is_null());
+    let l = &lines[1];
     assert_eq!(l["msg"], "worker: claim failed: no such table");
     assert_eq!(l["process"], "http");
     assert_eq!(l["level"], "warn");
@@ -76,5 +81,5 @@ async fn what_the_server_logs_is_served_as_its_own_process() {
 
     // And the same store answers for every line, server or run, at once.
     let all = get(td.path(), "/api/log").await;
-    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all.as_array().unwrap().len(), 3);
 }

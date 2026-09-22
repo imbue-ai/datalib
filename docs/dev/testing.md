@@ -353,6 +353,10 @@ root the app can serve as it stands:
 bazel-bin/datalib/backend/bin/datalib-http "$TMPDIR/datalib-e2e-runs/run-<millis>/data"
 ```
 
+Run it from there, not from a copy: `:bin` stages a `git-hash` beside
+the binaries, which is what gives the log card's source links their
+commit (`logging.md` § "Every line has an author").
+
 The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
 Semantic search is empty there: the golden config carries no `qmd_index`
 step, by design.

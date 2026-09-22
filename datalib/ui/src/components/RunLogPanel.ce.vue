@@ -44,7 +44,7 @@ import {
 import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
-import { compareStamps, formatRelative, formatStamp, formatTimeOfDay } from "@/config/timeFormat";
+import { compareStamps, formatDateTime, formatRelative } from "@/config/timeFormat";
 
 const props = defineProps<{
   /// The run the panel opens on, or `*` for every run.
@@ -421,10 +421,20 @@ const commitShort: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
   addClasses: levelClass(line),
 });
 
-const timeOfDay: Formatter<RunLogLine> = (_r, _c, value) => ({
-  text: formatTimeOfDay(value ? String(value) : null),
-  toolTip: value ? formatStamp(String(value)) : "",
-});
+/// What a `rl-clip-left` cell holds: an isolated left-to-right run, so
+/// the cell's right-to-left direction clips the text's start and does
+/// not reorder it (see the class's CSS).
+function clippedFromLeft(text: string): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "rl-ltr";
+  el.textContent = text;
+  return el;
+}
+
+const dateTime: Formatter<RunLogLine> = (_r, _c, value) => {
+  const text = formatDateTime(value ? String(value) : null);
+  return { html: clippedFromLeft(text), toolTip: text };
+};
 
 const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
   text: shortRunId(String(value ?? "")),
@@ -441,9 +451,11 @@ const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
   const shown = sourceLabel(src);
   const commit = line?.git_hash ?? null;
   const href = commit && sourceUrl(commit, src);
-  if (!commit || !href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
+  if (!commit || !href) {
+    return { html: clippedFromLeft(shown), toolTip: shown, addClasses: levelClass(line) };
+  }
   const a = document.createElement("a");
-  a.className = "rl-source";
+  a.className = "rl-source rl-ltr";
   a.textContent = shown;
   a.href = href;
   a.target = "_blank";
@@ -506,14 +518,14 @@ function columnSet(): Column<RunLogLine>[] {
       id: "ts_utc",
       name: "Time",
       field: "ts_utc",
-      ...fixed(110),
-      // The time of day to the millisecond, in the viewer's zone (a
-      // step's own lines are stamped in UTC, the runner's in local time);
-      // the date is in the tooltip, since every line of one run shares it.
-      // Clipped from the left: the seconds and milliseconds are what tell
-      // one line from the next, the hour is the same for all.
+      ...fixed(120),
+      // The whole stamp to the millisecond, in the viewer's zone (a
+      // step's own lines are stamped in UTC, the runner's in local time).
+      // Clipped from the left, and 120px shows the time of day: the
+      // seconds and milliseconds are what tell one line from the next,
+      // the date is the same for most; widen the column for it.
       cssClass: "rl-clip-left",
-      formatter: timeOfDay,
+      formatter: dateTime,
       sortable: true,
       sortComparer: (a, b, dir) => compareStamps(a, b) * (dir ?? 1),
     },
@@ -978,12 +990,18 @@ onUnmounted(() => {
 <style>
 /* Cell classes are set by the grid, so they can't be scoped. */
 /* Overflow hides the start of the text rather than its end: the cell
-   runs right-to-left, so the ellipsis lands on the left. A time of day
-   is digits and separators only, which the bidi algorithm keeps as one
-   left-to-right run, so the text itself is unchanged. */
+   runs right-to-left, so the ellipsis lands on the left. The text
+   itself sits in an isolated left-to-right run (`.rl-ltr`, what the
+   cell's formatter emits): without the isolate the bidi algorithm
+   reads "2026-09-22 14:07:47.190" as two numbers in a right-to-left
+   line and draws the time before the date. */
 .rl-grid .slick-cell.rl-clip-left {
   direction: rtl;
   text-align: left;
+}
+.rl-grid .rl-ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 .rl-grid .slick-cell.rl-warn {
   color: var(--datalib-log-warn);

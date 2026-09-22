@@ -13,7 +13,9 @@ pub use app_schema::runs::{
     LogLevel, LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow,
     StorePart, Stream,
 };
-pub use datalib_runtime::build_id::{git_hash, GIT_HASH_ENV};
+pub use datalib_runtime::build_id::{
+    git_hash, git_hash_and_origin, GitHashOrigin, GIT_HASH_ENV, NO_GIT_HASH_ADVICE,
+};
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
     canonical_labels, latest_metric, log_after, log_line, new_process_id, open_or_create, process,
@@ -23,6 +25,20 @@ pub use store::{
 pub use tracing_layer::{StoreLayer, DEFAULT_LOG_FILTER};
 
 use std::path::{Path, PathBuf};
+
+/// One line, once the subscriber is up, saying which commit this
+/// process records on its rows and where it read it — or, when it has
+/// none, what that costs and how to give it one. A dev binary run
+/// straight out of bazel-bin has the file `//datalib/backend:bin`
+/// stages; a launcher sets the variable; a release carries the file.
+pub fn log_build_commit(found: Option<&(String, GitHashOrigin)>) {
+    match found {
+        Some((hash, origin)) => {
+            tracing::info!(commit = %hash, "build commit read from {}", origin.describe())
+        }
+        None => tracing::warn!("{NO_GIT_HASH_ADVICE}"),
+    }
+}
 
 /// Where the store lives under a data root: `system/runs/runs.sqlite`,
 /// as `datalib_runtime::layout` places it.

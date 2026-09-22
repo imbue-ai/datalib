@@ -258,6 +258,7 @@ rust_test(
     deps = [
         ":datalib_http",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/runs:datalib_runs",
         "@datalib_crates//:axum",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

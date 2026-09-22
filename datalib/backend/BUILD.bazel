@@ -134,30 +134,70 @@ filegroup(
 # The one list of shipped binaries under their public names: what
 # `bazelisk build //datalib/backend:bin` stages for a local run, and
 # what scripts/release/stage_tarball.sh copies into the release tarball.
+#
+# Two trees with one layout. `:bin` also carries `git-hash`, the commit
+# the checkout was at, which `datalib_runtime::build_id` reads from
+# beside the binary so a log line written by a hand-launched
+# `bazel-bin/datalib/backend/bin/datalib-http` links to its source. That
+# file is stamped, so `:bin` is rebuilt (a hardlink pass) on every
+# commit — and so would be every test that took it as `data`. The
+# hermetic tests take `:bin_unstamped`, the same layout without the file,
+# and stay cached across commits.
+_BIN_RENAMES = {
+    "dag/datalib_dag_bin": "datalib-dag",
+    # Reached under the second `root_paths` entry below, which is
+    # what makes this key `doltlite/doltlite` and not
+    # `third-party/doltlite/doltlite`.
+    "doltlite/doltlite": "datalib-doltlite",
+    "dirtree_diff/dirtree_diff": "datalib-dirtree-diff",
+    "etl/providers/fsindex/fsindex": "datalib-fsindex",
+    "datalib_step/datalib_step": "datalib-step",
+    "applets/datalib_applet": "datalib-applet",
+    "http/datalib_http_bin": "datalib-http",
+    "migrate_config/datalib_migrate_config_bin": "datalib-migrate-config",
+    "latchkey-curl-shims/latchkey-curl-router": "latchkey-curl-router",
+    "latchkey-curl-shims/curl-impersonate": "curl-impersonate",
+}
+
+# Two roots because three shipped binaries are not Rust ones built
+# here: the doltlite shell and the two curl shims live under
+# `third-party/`.
+_BIN_ROOTS = [
+    "datalib/backend",
+    "third-party",
+]
+
+copy_to_directory(
+    name = "bin_unstamped",
+    srcs = [":dist"],
+    replace_prefixes = _BIN_RENAMES,
+    root_paths = _BIN_ROOTS,
+    visibility = ["//visibility:public"],
+)
+
+# `STABLE_GIT_HASH` from tools/workspace_status.sh, as one line. `stamp
+# = 1` reads it whether or not the build is `--stamp`ed (.bazelrc
+# §stamping): the only action that re-runs on a commit is this one, and
+# its output is a few dozen bytes. "unknown" outside a checkout, which
+# the reader rejects the same as no file.
+genrule(
+    name = "git_hash",
+    outs = ["git-hash"],
+    cmd = "sed -n 's/^STABLE_GIT_HASH //p' bazel-out/stable-status.txt > $@",
+    stamp = 1,
+)
+
 copy_to_directory(
     name = "bin",
-    srcs = [":dist"],
-    replace_prefixes = {
-        "dag/datalib_dag_bin": "datalib-dag",
-        # Reached under the second `root_paths` entry below, which is
-        # what makes this key `doltlite/doltlite` and not
-        # `third-party/doltlite/doltlite`.
-        "doltlite/doltlite": "datalib-doltlite",
-        "dirtree_diff/dirtree_diff": "datalib-dirtree-diff",
-        "etl/providers/fsindex/fsindex": "datalib-fsindex",
-        "datalib_step/datalib_step": "datalib-step",
-        "applets/datalib_applet": "datalib-applet",
-        "http/datalib_http_bin": "datalib-http",
-        "migrate_config/datalib_migrate_config_bin": "datalib-migrate-config",
-        "latchkey-curl-shims/latchkey-curl-router": "latchkey-curl-router",
-        "latchkey-curl-shims/curl-impersonate": "curl-impersonate",
-    },
-    # Two roots because three shipped binaries are not Rust ones built
-    # here: the doltlite shell and the two curl shims live under
-    # `third-party/`.
+    srcs = [
+        ":bin_unstamped",
+        ":git_hash",
+    ],
+    # The longest matching root wins, so the staged binaries land at the
+    # top of the tree next to `git-hash`.
     root_paths = [
+        "datalib/backend/bin_unstamped",
         "datalib/backend",
-        "third-party",
     ],
     visibility = ["//visibility:public"],
 )
@@ -172,7 +212,7 @@ sh_test(
     size = "small",
     srcs = ["doltlite_link_test.sh"],
     data = [
-        ":bin",
+        ":bin_unstamped",
         "//datalib/backend/etl/providers/contacts:tng_fixture",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
