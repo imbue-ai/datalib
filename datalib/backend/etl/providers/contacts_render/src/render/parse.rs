@@ -321,6 +321,39 @@ mod tests {
         }
     }
 
+    /// A vcf file's cards after the first get an href that is a bare
+    /// fragment (`#10`), so a card with no `UID` is keyed
+    /// `contacts:#10:0` — the `#` is the only thing saying *which*
+    /// card, since every card in the file has the same file stem.
+    ///
+    /// That key then goes to `composite_key`, which used to refuse a
+    /// part containing `#`: the live contacts source brought the whole
+    /// render step down with it. Dropping or flattening the `#`
+    /// instead would be worse than the panic — every nameless card in
+    /// the file would collapse onto one id and all but one would
+    /// vanish from the grid.
+    #[test]
+    fn nameless_cards_keyed_by_an_href_fragment_stay_distinct() {
+        let row = |href: &str| LoadedRawContact {
+            id: format!("contacts:{href}"),
+            addressbook_id: Some("contacts".into()),
+            uid: String::new(),
+            href: href.into(),
+            addressbook_label: "contacts".into(),
+            vcard: "BEGIN:VCARD\nEMAIL:someone@x.test\nEND:VCARD".into(),
+        };
+        let parsed = parse_loaded(vec![row("#10"), row("#11")]);
+        let uids: Vec<&str> = parsed.contacts.iter().map(|c| c.uid.as_str()).collect();
+        assert_eq!(uids, vec!["contacts:#10:0", "contacts:#11:0"]);
+
+        let ids: Vec<String> = parsed
+            .contacts
+            .iter()
+            .map(|c| crate::render::ids::contact("tng_contacts", &c.addressbook, &c.uid).uuid)
+            .collect();
+        assert_ne!(ids[0], ids[1], "two nameless cards collapsed onto one id");
+    }
+
     /// A card with no `FN` used to be titled by its synthesized uid
     /// (`contacts:#93:0`), which is how a real address book's
     /// email-only cards rendered.
