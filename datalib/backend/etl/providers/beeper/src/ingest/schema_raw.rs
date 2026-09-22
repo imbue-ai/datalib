@@ -17,12 +17,12 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_att
 /// `rooms` — one row per chat / channel / DM Beeper Texts knows
 /// about.
 ///
-/// PK choice: `crate::ids::room(native_room_id)`, the same id render
-/// puts on the chat. The native id (Matrix room id for index.db;
-/// `chat.guid` for the future Mac chat.db reader) lives alongside as
-/// its own column so cross-reference passes that arrive *after* the
+/// PK: the native id itself (the Matrix room id for index.db;
+/// `chat.guid` for the future Mac chat.db reader), which also lives in
+/// `native_room_id` so cross-reference passes that arrive *after* the
 /// row was written (e.g. the megabridge enrichment pass keyed off
-/// `mxid`) can resolve back to the PK without recomputing the UUID.
+/// `mxid`) join by name. The `*_uuid` column names are older than the
+/// choice; they hold Matrix ids.
 pub const ROOMS_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -114,8 +114,7 @@ impl BulkUpsertable for RoomRow {
 /// `users` — one row per peer / participant Beeper Texts knows
 /// about, across every chat in a given `source` store.
 ///
-/// PK choice: `crate::ids::user(
-/// native_user_id)`.
+/// PK: the native user id itself.
 pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -184,11 +183,9 @@ impl BulkUpsertable for UserRow {
 /// `events` — one row per message / reaction / membership /
 /// edit / hidden event Beeper Texts has cached.
 ///
-/// PK choice: `crate::ids::event(native_event_id, timestamp_ms)`, the same id render puts on the message. Both
-/// index.db and the megabridge file expose a stable per-message Matrix
-/// event id (the `mxid` column), so the id keyed off `(source, mxid)`
-/// is upstream-stable across re-fetches; the stamp in its leading bits
-/// keeps a sync's events in adjacent leaves.
+/// PK: the native event id itself. Both index.db and the megabridge
+/// file expose a stable per-message Matrix event id (the `mxid`
+/// column), so the key is upstream-stable across re-fetches.
 pub const EVENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,

@@ -74,7 +74,12 @@ impl RenderProcessor for EmailRender {
         }
 
         // Two-phase parse driven by the render cursor's commit.
-        let parsed = parse(&db, ctx.raw_range(), !self.only_render_labels.is_empty())?;
+        let parsed = parse(
+            &db,
+            ctx.name,
+            ctx.raw_range(),
+            !self.only_render_labels.is_empty(),
+        )?;
         ctx.report_unparsed(
             &ReadScope::Whole(vec!["accounts", "mailboxes", "threads"]),
             &parsed.unparsed,
@@ -96,7 +101,7 @@ impl RenderProcessor for EmailRender {
         // replace that.
         for (account_id, thread_id) in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(
-                &crate::render::render::thread_uuid(account_id, thread_id),
+                &crate::render::ids::thread(ctx.name, account_id, thread_id).uuid,
                 &[],
             )?;
         }

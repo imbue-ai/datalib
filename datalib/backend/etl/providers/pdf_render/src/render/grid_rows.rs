@@ -22,15 +22,21 @@ pub const ENTITY_KIND_PAGE: &str = "page";
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Pdf;
 
-/// Content-scoped: identity is the bytes, so the same PDF found under
-/// two scanned trees is deliberately one row. `when` is the stamp the
-/// row stores — the PDF's own creation or modification date, read from
-/// its Info dictionary, so a function of the same bytes — and the id
+/// Content-scoped: identity is the bytes, so the same PDF found twice
+/// under a source's trees is one row. `when` is the stamp the row
+/// stores — the PDF's own creation or modification date, read from its
+/// Info dictionary, so a function of the same bytes — and the id
 /// carries it. Nothing here may depend on scan order, the file's path
 /// or the clock.
-fn identity(entity_kind: &'static str, natural_key: String, when: Option<&str>) -> Identity {
+fn identity(
+    source_id: &str,
+    entity_kind: &'static str,
+    natural_key: String,
+    when: Option<&str>,
+) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::Content,
         entity_kind,
         natural_key,
@@ -38,12 +44,13 @@ fn identity(entity_kind: &'static str, natural_key: String, when: Option<&str>) 
     )
 }
 
-pub fn document(blake3: &str, when: Option<&str>) -> Identity {
-    identity(ENTITY_KIND_DOCUMENT, blake3.to_string(), when)
+pub fn document(source_id: &str, blake3: &str, when: Option<&str>) -> Identity {
+    identity(source_id, ENTITY_KIND_DOCUMENT, blake3.to_string(), when)
 }
 
-pub fn page(blake3: &str, number: u32, when: Option<&str>) -> Identity {
+pub fn page(source_id: &str, blake3: &str, number: u32, when: Option<&str>) -> Identity {
     identity(
+        source_id,
         ENTITY_KIND_PAGE,
         composite_key(&[blake3, &number.to_string()]),
         when,
@@ -121,9 +128,13 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
 
 /// Build the row set for one document: the document row followed by one
 /// row per page, in page order.
-pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Vec<GridRow> {
+pub fn rows_for_document(
+    source_id: &str,
+    meta: &DocumentMeta<'_>,
+    pages: &[(u32, String)],
+) -> Vec<GridRow> {
     let when = document_stamp(meta.created_at, meta.modified_at);
-    let doc = document(meta.blake3, when);
+    let doc = document(source_id, meta.blake3, when);
     let doc_uuid = doc.uuid.clone();
     let title = display_title(meta.title, meta.rel_path);
     let author = display_author(meta.author);
@@ -178,7 +189,7 @@ pub fn rows_for_document(meta: &DocumentMeta<'_>, pages: &[(u32, String)]) -> Ve
     });
 
     for (number, text) in pages {
-        let page = page(meta.blake3, *number, when);
+        let page = page(source_id, meta.blake3, *number, when);
         rows.push(GridRow {
             uuid: page.uuid,
             provider: PROVIDER.as_str().into(),
@@ -244,10 +255,10 @@ mod tests {
         // Same bytes at a different path must yield the same uuid, or
         // feedback and search history detach on every `mv`.
         let at = "2024-01-15T10:30:00-08:00";
-        let a = document("deadbeef", Some(at));
-        let b = document("deadbeef", Some(at));
+        let a = document("pdf", "deadbeef", Some(at));
+        let b = document("pdf", "deadbeef", Some(at));
         assert_eq!(a.uuid, b.uuid);
-        assert_ne!(a.uuid, document("cafebabe", Some(at)).uuid);
+        assert_ne!(a.uuid, document("pdf", "cafebabe", Some(at)).uuid);
         assert_eq!(
             datalib_id::stamp_of(&a.uuid),
             datalib_time::record_stamp_ms(at)
@@ -256,22 +267,29 @@ mod tests {
 
     #[test]
     fn page_ids_differ_per_page_and_per_document() {
-        assert_ne!(page("abc", 1, None).uuid, page("abc", 2, None).uuid);
-        assert_ne!(page("abc", 1, None).uuid, page("xyz", 1, None).uuid);
-        assert_eq!(page("abc", 1, None).natural_key, "abc#1");
+        assert_ne!(
+            page("pdf", "abc", 1, None).uuid,
+            page("pdf", "abc", 2, None).uuid
+        );
+        assert_ne!(
+            page("pdf", "abc", 1, None).uuid,
+            page("pdf", "xyz", 1, None).uuid
+        );
+        assert_eq!(page("pdf", "abc", 1, None).natural_key, "abc#1");
     }
 
     /// The backpointer regenerates the id, for both kinds.
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [
-            document("abc", Some("2024-01-15T10:30:00-08:00")),
-            page("abc", 3, None),
+            document("pdf", "abc", Some("2024-01-15T10:30:00-08:00")),
+            page("pdf", "abc", 3, None),
         ] {
             assert_eq!(
                 got.uuid,
                 datalib_id::entity_id_str(
                     ID_NAMESPACE,
+                    "pdf",
                     Scope::Content,
                     got.entity_kind,
                     &got.natural_key,
@@ -284,7 +302,7 @@ mod tests {
     #[test]
     fn document_row_comes_first_then_pages_in_order() {
         let pages = vec![(1, "one".to_string()), (2, "two".to_string())];
-        let rows = rows_for_document(&meta(Some("Paper"), "a/b.pdf"), &pages);
+        let rows = rows_for_document("pdf", &meta(Some("Paper"), "a/b.pdf"), &pages);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].kind, KIND_DOCUMENT);
         assert_eq!(rows[1].kind, KIND_PAGE);
@@ -295,7 +313,7 @@ mod tests {
     #[test]
     fn every_page_row_shares_the_document_conversation_uuid() {
         let pages = vec![(1, "one".into()), (2, "two".into())];
-        let rows = rows_for_document(&meta(None, "a/b.pdf"), &pages);
+        let rows = rows_for_document("pdf", &meta(None, "a/b.pdf"), &pages);
         let doc = rows[0].uuid.clone();
         assert!(rows.iter().all(|r| r.conversation_uuid == doc));
     }
@@ -314,7 +332,7 @@ mod tests {
         // Every other provider puts an absolute URL here and the UI
         // calls window.open on it; a relative path navigates the app to
         // nowhere.
-        let rows = rows_for_document(&meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
         assert_eq!(
             rows[0].source_url.as_deref(),
             Some("file:///corpus/a/b.pdf")
@@ -398,7 +416,7 @@ mod tests {
 
     #[test]
     fn author_lands_on_both_document_and_page_rows() {
-        let rows = rows_for_document(&meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
         assert!(rows
             .iter()
             .all(|r| r.author.as_deref() == Some("Jean-Luc Picard")));
@@ -411,7 +429,7 @@ mod tests {
         // and most PDFs never set /Author at all.
         let mut m = meta(None, "a/b.pdf");
         m.author = None;
-        let rows = rows_for_document(&m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
         assert!(rows.iter().all(|r| r.author.is_none()));
     }
 
@@ -420,7 +438,7 @@ mod tests {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = None;
-        let rows = rows_for_document(&m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
         assert!(rows.iter().all(|r| r.created_at.is_none()));
     }
 
@@ -429,7 +447,7 @@ mod tests {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = Some("2020-02-02T02:02:02+00:00");
-        let rows = rows_for_document(&m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
         assert_eq!(
             rows[0].created_at.as_deref(),
             Some("2020-02-02T02:02:02+00:00")
@@ -440,7 +458,7 @@ mod tests {
     fn duplicate_copies_are_surfaced_in_the_document_row_text() {
         let mut m = meta(Some("Paper"), "a/b.pdf");
         m.copy_count = 3;
-        let rows = rows_for_document(&m, &[]);
+        let rows = rows_for_document("pdf", &m, &[]);
         assert_eq!(rows[0].text, "Paper (3 copies)");
     }
 
@@ -448,7 +466,7 @@ mod tests {
     fn document_row_does_not_duplicate_page_text() {
         // Otherwise every query matches the doc row as well as the page.
         let pages = vec![(1, "distinctive body text".to_string())];
-        let rows = rows_for_document(&meta(Some("T"), "a/b.pdf"), &pages);
+        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &pages);
         assert!(!rows[0].text.contains("distinctive body text"));
     }
 }

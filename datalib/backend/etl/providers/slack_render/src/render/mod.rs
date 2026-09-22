@@ -1,5 +1,6 @@
 //! Slack render stage: raw → typed buckets ready for render.
 
+pub mod ids;
 pub mod mrkdwn;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
@@ -13,14 +14,10 @@ pub mod render;
 
 use serde_json::Value;
 
-// UUIDv5 recipes for Slack message and thread ids live in
-// `ingest::schema_raw`. Re-export here so existing
-// `crate::render::slack_message_uuid` callers outside this crate
-// keep resolving.
-pub use datalib_etl_slack::ingest::schema_raw::{slack_message_uuid, slack_thread_uuid};
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};
 
-pub use datalib_etl_slack::ids::{parse_slack_ts, ts_to_iso, ts_to_ms};
+pub use datalib_etl_slack::ingest::schema_raw::{slack_message_key, slack_thread_key};
+pub use ids::{parse_slack_ts, ts_to_iso, ts_to_ms};
 
 #[derive(Debug, Clone)]
 pub struct User {
@@ -118,11 +115,13 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn uuid(&self) -> String {
-        slack_message_uuid(&self.team_id, &self.channel_id, &self.ts)
+    /// The raw store's key for this message.
+    pub fn key(&self) -> String {
+        slack_message_key(&self.team_id, &self.channel_id, &self.ts)
     }
-    pub fn thread_uuid(&self) -> String {
-        slack_thread_uuid(&self.team_id, &self.channel_id, &self.effective_thread_ts)
+    /// The raw store's key for this message's thread: the bucket key.
+    pub fn thread_key(&self) -> String {
+        slack_thread_key(&self.team_id, &self.channel_id, &self.effective_thread_ts)
     }
 }
 

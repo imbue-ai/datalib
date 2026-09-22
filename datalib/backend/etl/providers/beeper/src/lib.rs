@@ -2,7 +2,6 @@
 //! API capture from `matrix.beeper.com`. Rendering lives in
 //! [`datalib_etl_beeper_render`].
 
-pub mod ids;
 pub mod ingest;
 pub mod processor;
 pub mod synthesize;

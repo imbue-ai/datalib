@@ -44,7 +44,7 @@ async fn github_live_single_pr_snapshot() {
     r.expect("github fetch failed");
     sealed.expect("seal the raw store");
 
-    let parsed = parse_api_dir(&tmp, RawRange::cold()).expect("parse_api_dir");
+    let parsed = parse_api_dir(&tmp, "github", RawRange::cold()).expect("parse_api_dir");
     assert_eq!(parsed.pull_requests.len(), 1, "expected exactly one PR");
     let pr = &parsed.pull_requests[0];
 

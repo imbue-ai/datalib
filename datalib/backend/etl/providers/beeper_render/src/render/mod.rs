@@ -8,6 +8,7 @@ pub mod parse;
 // `parse.rs`. Renaming it would break the symmetry in all twelve
 // providers. Allowed here rather than repo-wide so an unintentional
 // inception elsewhere still fails the build.
+pub mod ids;
 #[allow(clippy::module_inception)]
 pub mod render;
 

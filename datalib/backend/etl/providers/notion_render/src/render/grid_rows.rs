@@ -127,7 +127,7 @@ fn page_row(
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let id = ids::page(&pid, created_at.as_deref());
+    let id = ids::page(stanza, &pid, created_at.as_deref());
     GridRow::builder()
         .uuid(id.uuid.clone())
         .provider(Provider::Notion)
@@ -166,8 +166,8 @@ fn thread_rows(
     }
     let thread_qmd = thread_qmd_path_rel(stanza, page_id, disc_id);
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
-    let thread = ids::discussion(disc_id);
-    let page_uuid = ids::page(page_id, None).uuid;
+    let thread = ids::discussion(stanza, disc_id);
+    let page_uuid = ids::page(stanza, page_id, None).uuid;
     let mut rows: Vec<GridRow> = Vec::new();
     let first = &members_sorted[0];
     let mut aggregated_text: String = members_sorted
@@ -225,6 +225,7 @@ fn thread_rows(
     for (idx, c) in members_sorted.iter().enumerate() {
         let created_time = c.get("created_time").and_then(|v| v.as_str());
         let id = ids::comment(
+            stanza,
             c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
             created_time,
         );
@@ -349,7 +350,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         }
         let created_time = page.get("created_time").and_then(|v| v.as_str());
         pages.push(PageDocument {
-            markdown_uuid: ids::page(&pid, created_time).uuid,
+            markdown_uuid: ids::page(stanza, &pid, created_time).uuid,
             page_uuid: pid,
             page_title: title,
             inputs,
@@ -406,7 +407,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             &mut problems,
         );
         threads.push(ThreadDocument {
-            markdown_uuid: ids::discussion(disc_id).uuid,
+            markdown_uuid: ids::discussion(stanza, disc_id).uuid,
             discussion_uuid: disc_id.clone(),
             page_uuid: page_id,
             page_title: title,

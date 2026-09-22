@@ -13,9 +13,15 @@ pub const KIND_MONTH: &str = "conversation_month";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_CALL: &str = "call";
 
-fn identity(entity_kind: &'static str, natural_key: String, date_ms: Option<i64>) -> Identity {
+fn identity(
+    source_id: &str,
+    entity_kind: &'static str,
+    natural_key: String,
+    date_ms: Option<i64>,
+) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::ProviderGlobal,
         entity_kind,
         natural_key,
@@ -24,20 +30,25 @@ fn identity(entity_kind: &'static str, natural_key: String, date_ms: Option<i64>
 }
 
 /// `key` carries its `sms:` prefix, as the bucket does.
-pub fn conversation(key: &str) -> Identity {
-    identity(KIND_CONVERSATION, key.to_string(), None)
+pub fn conversation(source_id: &str, key: &str) -> Identity {
+    identity(source_id, KIND_CONVERSATION, key.to_string(), None)
 }
 
-pub fn month(key: &str, period_key: &str) -> Identity {
-    identity(KIND_MONTH, composite_key(&[key, period_key]), None)
+pub fn month(source_id: &str, key: &str, period_key: &str) -> Identity {
+    identity(
+        source_id,
+        KIND_MONTH,
+        composite_key(&[key, period_key]),
+        None,
+    )
 }
 
-pub fn message(row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(KIND_MESSAGE, row_id.to_string(), date_ms)
+pub fn message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
+    identity(source_id, KIND_MESSAGE, row_id.to_string(), date_ms)
 }
 
-pub fn call(row_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(KIND_CALL, row_id.to_string(), date_ms)
+pub fn call(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
+    identity(source_id, KIND_CALL, row_id.to_string(), date_ms)
 }
 
 #[cfg(test)]
@@ -50,15 +61,16 @@ mod tests {
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [
-            conversation("sms:+1555"),
-            month("sms:+1555", "2024-03"),
-            message("r1", MS),
-            call("r1", MS),
+            conversation("src", "sms:+1555"),
+            month("src", "sms:+1555", "2024-03"),
+            message("src", "r1", MS),
+            call("src", "r1", MS),
         ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
+                    "src",
                     Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key,
@@ -70,8 +82,11 @@ mod tests {
 
     #[test]
     fn items_carry_their_stamp_to_the_second_and_chats_none() {
-        assert_eq!(stamp_of(&message("r", MS).uuid), Some(1_700_000_000_000));
-        assert_eq!(stamp_of(&call("r", None).uuid), None);
-        assert_eq!(stamp_of(&conversation("c").uuid), None);
+        assert_eq!(
+            stamp_of(&message("src", "r", MS).uuid),
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(stamp_of(&call("src", "r", None).uuid), None);
+        assert_eq!(stamp_of(&conversation("src", "c").uuid), None);
     }
 }

@@ -5,9 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use datalib_etl_render::inputs::RawRange;
-use datalib_etl_slack_render::render::{
-    parse, render::render_all, slack_message_uuid, slack_thread_uuid,
-};
+use datalib_etl_slack_render::render::{ids, parse, render::render_all};
 use insta::{assert_json_snapshot, assert_snapshot};
 
 fn fixture_root() -> PathBuf {
@@ -103,8 +101,10 @@ fn renders_tng_fixture_grid_rows() {
         .expect("render");
     }
 
-    let picard_root_uuid = slack_message_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
-    let picard_thread_uuid = slack_thread_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
+    let picard_root_uuid =
+        ids::message("slack_api", "T_NCC1701D", "C_BRIDGE", "12604000100.000100").uuid;
+    let picard_thread_uuid =
+        ids::thread("slack_api", "T_NCC1701D", "C_BRIDGE", "12604000100.000100").uuid;
 
     let field = |r: &serde_json::Value, k: &str| -> Option<String> {
         r.get(k).and_then(|v| v.as_str()).map(str::to_string)

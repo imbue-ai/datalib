@@ -230,27 +230,24 @@ pub struct SlackAttachmentRow {
     pub blake3: Option<String>,
 }
 
-/// Thin wrappers over [`crate::ids`], kept because both stages and
-/// several tests already import these names. The recipes, the
-/// namespace and the separator all live in `crate::ids` now — the
-/// `SLACK_UUID_NS` constant and its `:`-joined strings are gone, which
-/// is what this module's old FIXME asked for.
-pub fn slack_message_uuid(team_id: &str, channel_id: &str, ts: &str) -> String {
-    crate::ids::message(team_id, channel_id, ts).uuid
+/// The raw store's keys: the upstream's own, joined with `#`. A
+/// message is `{team}#{channel}#{ts}`, a thread the same over its root's
+/// `ts`, so a channel's messages sort by time and a sync's new ones
+/// land at its tail. Not an entity id — those carry the configured
+/// source and are minted by the render (`docs/dev/entity_ids.md`).
+pub fn slack_message_key(team_id: &str, channel_id: &str, ts: &str) -> String {
+    format!("{team_id}#{channel_id}#{ts}")
 }
 
-pub fn slack_thread_uuid(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-    crate::ids::thread(team_id, channel_id, thread_ts).uuid
+pub fn slack_thread_key(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
+    format!("{team_id}#{channel_id}#{thread_ts}")
 }
 
-pub fn slack_reaction_uuid(
-    team_id: &str,
-    channel_id: &str,
-    ts: &str,
-    name: &str,
-    user: &str,
-) -> String {
-    crate::ids::reaction(team_id, channel_id, ts, name, user).uuid
+/// The three parts of a [`slack_thread_key`], for a render that has
+/// only the key in hand — the driver names stale buckets by it.
+pub fn split_thread_key(key: &str) -> Option<(&str, &str, &str)> {
+    let mut it = key.splitn(3, '#');
+    Some((it.next()?, it.next()?, it.next()?))
 }
 
 /// Composite-key recipe for [`RepliesPagesRow`]'s primary key.

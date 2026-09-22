@@ -15,7 +15,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_slack::ingest::db::db_path_for;
-use datalib_etl_slack::ingest::schema_raw::{slack_thread_uuid, SlackAttachmentRow};
+use datalib_etl_slack::ingest::schema_raw::{slack_thread_key, SlackAttachmentRow};
 use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
@@ -49,7 +49,9 @@ pub struct ScanResult {
 /// belonging to this thread plus the attachment bytes they reference.
 #[derive(Debug, Clone)]
 pub struct SlackThreadBucket {
-    pub thread_uuid: String,
+    /// The raw store's `thread_root_uuid`: `{team}#{channel}#{thread_ts}`,
+    /// the bucket key. The thread's entity id is minted from its parts.
+    pub thread_key: String,
     pub messages: Vec<Message>,
     pub blobs: BlobBundle,
     /// Every raw row this thread reads — its messages and attachment
@@ -189,7 +191,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
         msgs.push(msg);
     }
     let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
-    for (thread_uuid, (mut msgs, inputs)) in by_thread {
+    for (thread_key, (mut msgs, inputs)) in by_thread {
         msgs.sort_by(|a, b| {
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
@@ -201,7 +203,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
             }
         }
         threads.push(SlackThreadBucket {
-            thread_uuid,
+            thread_key,
             messages: msgs,
             blobs: BlobBundle::default(),
             inputs,
@@ -658,16 +660,16 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
     // Bucket by thread.
     let mut by_thread: BTreeMap<String, Vec<Message>> = BTreeMap::new();
     for (_, msg) in messages_by_key {
-        let uuid = slack_thread_uuid(&msg.team_id, &msg.channel_id, &msg.effective_thread_ts);
-        by_thread.entry(uuid).or_default().push(msg);
+        let key = slack_thread_key(&msg.team_id, &msg.channel_id, &msg.effective_thread_ts);
+        by_thread.entry(key).or_default().push(msg);
     }
     let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
-    for (thread_uuid, mut msgs) in by_thread {
+    for (thread_key, mut msgs) in by_thread {
         msgs.sort_by(|a, b| {
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
         threads.push(SlackThreadBucket {
-            thread_uuid,
+            thread_key,
             messages: msgs,
             blobs: BlobBundle::default(),
             inputs: Inputs::default(),

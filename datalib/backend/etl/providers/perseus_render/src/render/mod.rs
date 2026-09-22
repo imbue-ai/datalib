@@ -34,7 +34,7 @@ pub mod render;
 /// the bilingual-alignment edges from section-level placeholders
 /// (first-word ↔ first-word) to per-sentence anchors: each section's
 /// body now contains one `<span data-section-uuid="…">` per sentence
-/// (ids from `datalib_etl_perseus::sentence`), and the edges
+/// (ids from `crate::ids::sentence`), and the edges
 /// table carries one row per aligned (grc-sentence, eng-sentence)
 /// pair — within-section sentence alignment is computed by the
 /// `render::align` module using Ancient-Greek-BERT. v14 generalizes

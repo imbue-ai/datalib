@@ -233,6 +233,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
         !body.contains(&format!(
             r#"data-section-uuid="{}""#,
             datalib_etl_pdf_render::render::grid_rows::page(
+                STANZA,
                 &survey.rows[0].upstream_id.clone().unwrap(),
                 2,
                 survey.rows[0].created_at.as_deref(),

@@ -41,7 +41,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let mut items = Vec::with_capacity(photos.len() + 1);
     if let Some(description) = str_field(v, "description") {
         let date_ms = first_photo_ms.or_else(|| ts_ms(v, "last_modified_timestamp"));
-        let item_id = ids::album_description(row_id, date_ms);
+        let item_id = ids::album_description(&owner.source_id, row_id, date_ms);
         items.push(NormalizedChatItem {
             message_uuid: item_id.uuid,
             author_id: "me".to_string(),
@@ -65,7 +65,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         };
         let uri = att.ref_id.clone().unwrap_or_else(|| i.to_string());
         let date_ms = ts_ms(photo, "creation_timestamp");
-        let item_id = ids::photo(row_id, &uri, date_ms);
+        let item_id = ids::photo(&owner.source_id, row_id, &uri, date_ms);
         items.push(NormalizedChatItem {
             message_uuid: item_id.uuid,
             author_id: "me".to_string(),
@@ -88,7 +88,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
-    let album = ids::album(row_id);
+    let album = ids::album(&owner.source_id, row_id);
     NormalizedChat {
         inputs: inputs.declared(),
         path_prefix: None,
@@ -132,6 +132,7 @@ mod tests {
             "description": "Off-duty evenings on Deck 10.",
         });
         let owner = Owner {
+            source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
             account: None,
             inputs: Vec::new(),

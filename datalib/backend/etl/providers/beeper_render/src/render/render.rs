@@ -60,7 +60,7 @@ pub fn render_all(
         ..Default::default()
     };
 
-    for network in to_networks(parsed) {
+    for network in to_networks(parsed, source_id) {
         let s = datalib_etl_chat_common::render_all(
             &network.profile,
             &network.chats,

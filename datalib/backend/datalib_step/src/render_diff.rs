@@ -16,9 +16,6 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor};
 use datalib_etl_render::section::{join, Section};
-use datalib_id::{entity_id_str, stamp_of, IdNamespace, Scope};
-use datalib_schema::edges::EdgeRow;
-use datalib_schema::grid_rows::GridRow;
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -309,7 +306,23 @@ pub fn render_diff_source(
             totals.removed += diff.counts.removed;
             totals.modified += diff.counts.modified;
             totals.unchanged += diff.counts.unchanged;
-            let doc = rekeyed(&name, uuid, &base.md, diff.rows, diff.sections);
+            // The source's processors ran under the diff group's name, so
+            // every id here is already the diff's own — a diff row is
+            // about the source's entity but is not it, and the source's
+            // own row keeps its uuid. `upstream_id` is the backpointer to
+            // the real thing, which is what a person copying it wants.
+            let doc = RenderedMarkdown {
+                markdown_uuid: uuid.to_string(),
+                source_id: name.clone(),
+                upstream_cursor: base.md.upstream_cursor.clone(),
+                bucket_key: base.md.bucket_key.clone(),
+                md_path: base.md.md_path.clone(),
+                render_version: base.md.render_version,
+                rows: diff.rows,
+                sections: diff.sections,
+                edges: base.md.edges.clone(),
+                problems: base.md.problems.clone(),
+            };
             fs::write(&doc.md_path, join(&doc.sections))
                 .with_context(|| format!("write {}", doc.md_path.display()))?;
             store
@@ -407,113 +420,6 @@ pub fn render_diff_source(
         // No checkpoints: the one commit seals every document.
         unsealed: docs as u64,
     })
-}
-
-/// The diff's own ids. A diff row is about the source's entity but is
-/// not it — the source's own row keeps that uuid, and the unified index
-/// refuses two sources claiming one id — so every uuid the document
-/// carries is minted again under the diff group, by the one recipe
-/// (`docs/dev/entity_ids.md`), and the anchors in the markdown follow
-/// so a row still scrolls to its section. Only the places an id is an
-/// id are rewritten — the anchor attributes and the frontmatter keys —
-/// never a path: the file and its blobs are where the renderer put
-/// them. `upstream_id` stays too: it is the backpointer to the real
-/// thing, which is what a person copying it wants. The stamp in the
-/// source's id is kept, so a diff row sorts where the row it is about
-/// does.
-fn rekeyed(
-    group: &str,
-    markdown_uuid: &str,
-    base: &RenderedMarkdown,
-    rows: Vec<GridRow>,
-    sections: Vec<Section>,
-) -> RenderedMarkdown {
-    let mint = |old: &str| {
-        entity_id_str(
-            IdNamespace::Datalib,
-            Scope::SourceInstance(group),
-            "diff",
-            old,
-            stamp_of(old),
-        )
-    };
-    let mut map: BTreeMap<String, String> = BTreeMap::new();
-    map.insert(markdown_uuid.to_string(), mint(markdown_uuid));
-    for row in &rows {
-        map.entry(row.uuid.clone())
-            .or_insert_with(|| mint(&row.uuid));
-        let c = &row.conversation_uuid;
-        map.entry(c.clone()).or_insert_with(|| mint(c));
-    }
-    let swap = |s: &str| -> String { map.get(s).cloned().unwrap_or_else(|| s.to_string()) };
-    let swap_in = |s: &str, prefix: &str| -> String {
-        let mut out = s.to_string();
-        for (old, new) in &map {
-            let needle = format!("{prefix}{old}");
-            if out.contains(&needle) {
-                out = out.replace(&needle, &format!("{prefix}{new}"));
-            }
-        }
-        out
-    };
-    // The places an id is an id in a document: `id="m-…"`, every
-    // `…-uuid="…"` attribute (`data-section-uuid`, `data-page-title-uuid`),
-    // and the frontmatter's `markdown_uuid:` / `chat_uuid:` lines.
-    let swap_md = |md: &str| -> String {
-        let md = swap_in(md, "id=\"m-");
-        let md = swap_in(&md, "-uuid=\"");
-        let md = swap_in(&md, "markdown_uuid: ");
-        swap_in(&md, "chat_uuid: ")
-    };
-    let rows = rows
-        .into_iter()
-        .map(|row| GridRow {
-            uuid: swap(&row.uuid),
-            markdown_uuid: row.markdown_uuid.as_deref().map(swap),
-            conversation_uuid: swap(&row.conversation_uuid),
-            entire_chat: swap_in(&row.entire_chat, "/chat/"),
-            ..row
-        })
-        .collect();
-    let sections = sections
-        .into_iter()
-        .map(|s| Section {
-            uuid: s.uuid.as_deref().map(swap),
-            md: swap_md(&s.md),
-        })
-        .collect();
-    let edges = base
-        .edges
-        .iter()
-        .map(|e| {
-            let src_markdown_uuid = swap(&e.src_markdown_uuid);
-            let src_anchor_uuid = e.src_anchor_uuid.as_deref().map(swap);
-            EdgeRow {
-                edge_uuid: datalib_id::edge_id(
-                    &src_markdown_uuid,
-                    src_anchor_uuid.as_deref(),
-                    &e.dst_markdown_uuid,
-                    e.dst_anchor_uuid.as_deref(),
-                    e.label.as_deref(),
-                ),
-                src_markdown_uuid,
-                src_anchor_uuid,
-                ..e.clone()
-            }
-        })
-        .collect();
-    RenderedMarkdown {
-        markdown_uuid: swap(markdown_uuid),
-        source_id: group.to_string(),
-        upstream_cursor: base.upstream_cursor.clone(),
-        bucket_key: base.bucket_key.clone(),
-        md_path: base.md_path.clone(),
-        render_version: base.render_version,
-        rows,
-        sections,
-        edges,
-        problems: base.problems.clone(),
-    }
 }
 
 /// Run every processor once at `pin`, scanning from `cursor`, and keep
@@ -742,129 +648,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field"), "{err}");
-    }
-
-    #[test]
-    fn rekeying_moves_every_id_together_and_leaves_paths_alone() {
-        use datalib_schema::providers::Provider;
-        let row = GridRow::builder()
-            .uuid("m-1")
-            .provider(Provider::Test)
-            .kind("Message")
-            .source_label("Test")
-            .conversation_uuid("chat-1")
-            .markdown_uuid(Some("chat-1".to_string()))
-            .entire_chat("/chat/chat-1")
-            .qmd_path(Some("src/render_markdown/chat-1/all.md".to_string()))
-            .text("hi")
-            .upstream_id(Some("ts-1".to_string()))
-            .build()
-            .unwrap();
-        let base = RenderedMarkdown {
-            markdown_uuid: "chat-1".into(),
-            source_id: "src".into(),
-            upstream_cursor: None,
-            bucket_key: Some("chat-1".into()),
-            md_path: "/root/src/render_markdown/chat-1/all.md".into(),
-            render_version: 1,
-            rows: vec![],
-            sections: vec![],
-            edges: vec![EdgeRow {
-                edge_uuid: "old".into(),
-                src_markdown_uuid: "chat-1".into(),
-                src_anchor_uuid: Some("m-1".into()),
-                dst_markdown_uuid: "other-doc".into(),
-                dst_anchor_uuid: None,
-                label: None,
-            }],
-            problems: vec![],
-        };
-        let sections = vec![Section::keyed(
-            "m-1",
-            "<div id=\"m-m-1\" data-section-uuid=\"m-1\">x ![p](blobs/m-1.png)</div>\n".into(),
-        )];
-        let doc = rekeyed("src-diff", "chat-1", &base, vec![row], sections);
-        let new_doc = entity_id_str(
-            IdNamespace::Datalib,
-            Scope::SourceInstance("src-diff"),
-            "diff",
-            "chat-1",
-            None,
-        );
-        let new_row = entity_id_str(
-            IdNamespace::Datalib,
-            Scope::SourceInstance("src-diff"),
-            "diff",
-            "m-1",
-            None,
-        );
-        assert_eq!(doc.markdown_uuid, new_doc);
-        assert_eq!(doc.source_id, "src-diff");
-        assert_eq!(doc.rows[0].uuid, new_row);
-        assert_eq!(doc.rows[0].markdown_uuid.as_deref(), Some(new_doc.as_str()));
-        assert_eq!(doc.rows[0].conversation_uuid, new_doc);
-        assert_eq!(doc.rows[0].entire_chat, format!("/chat/{new_doc}"));
-        assert_eq!(
-            doc.rows[0].qmd_path.as_deref(),
-            Some("src/render_markdown/chat-1/all.md"),
-            "the file is where the renderer put it"
-        );
-        assert_eq!(doc.rows[0].upstream_id.as_deref(), Some("ts-1"));
-        assert_eq!(doc.sections[0].uuid.as_deref(), Some(new_row.as_str()));
-        assert_eq!(
-            doc.sections[0].md,
-            format!(
-                "<div id=\"m-{new_row}\" data-section-uuid=\"{new_row}\">x ![p](blobs/m-1.png)</div>\n"
-            ),
-            "anchors move, the blob path does not"
-        );
-        assert_eq!(doc.edges[0].src_markdown_uuid, new_doc);
-        assert_eq!(
-            doc.edges[0].src_anchor_uuid.as_deref(),
-            Some(new_row.as_str())
-        );
-        assert_eq!(doc.edges[0].dst_markdown_uuid, "other-doc");
-        assert_ne!(doc.edges[0].edge_uuid, "old");
-        assert_eq!(doc.md_path, base.md_path);
-    }
-
-    /// A diff row keeps the stamp of the row it is about, so it sorts
-    /// beside it in the index.
-    #[test]
-    fn rekeying_keeps_the_sources_stamp() {
-        use datalib_schema::providers::Provider;
-        let old = entity_id_str(
-            IdNamespace::Slack,
-            Scope::ProviderGlobal,
-            "message",
-            "m",
-            Some(1_700_000_000_000),
-        );
-        let row = GridRow::builder()
-            .uuid(old.clone())
-            .provider(Provider::Test)
-            .kind("Message")
-            .source_label("Test")
-            .conversation_uuid("chat-1")
-            .entire_chat("/chat/chat-1")
-            .text("hi")
-            .build()
-            .unwrap();
-        let base = RenderedMarkdown {
-            markdown_uuid: "chat-1".into(),
-            source_id: "src".into(),
-            upstream_cursor: None,
-            bucket_key: None,
-            md_path: "/root/x.md".into(),
-            render_version: 1,
-            rows: vec![],
-            sections: vec![],
-            edges: vec![],
-            problems: vec![],
-        };
-        let doc = rekeyed("src-diff", "chat-1", &base, vec![row], vec![]);
-        assert_ne!(doc.rows[0].uuid, old);
-        assert_eq!(stamp_of(&doc.rows[0].uuid), Some(1_700_000_000_000));
     }
 
     #[test]

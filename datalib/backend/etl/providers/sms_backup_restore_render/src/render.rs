@@ -105,7 +105,7 @@ pub fn render(
     if messages.is_empty() && calls.is_empty() {
         return Ok(RenderOutcome::default());
     }
-    let all_chats = build_chats(&messages, &calls);
+    let all_chats = build_chats(source_id, &messages, &calls);
 
     // Narrow to the conversations the diff named and the ones the driver
     // found stale through their declared inputs. Everything else is
@@ -131,7 +131,7 @@ pub fn render(
         .render
         .iter()
         .flatten()
-        .map(|key| ids::conversation(key).uuid)
+        .map(|key| ids::conversation(source_id, key).uuid)
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -263,7 +263,11 @@ fn attachment_refs(v: &Value) -> Vec<String> {
 
 /// Messages and calls as `(row id, payload)`; the id is what the chat
 /// declares it read.
-fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<NormalizedChat> {
+fn build_chats(
+    source_id: &str,
+    messages: &[(String, Value)],
+    calls: &[(String, Value)],
+) -> Vec<NormalizedChat> {
     let mut by_chat: BTreeMap<String, (Vec<&Value>, Inputs)> = BTreeMap::new();
     for (row_id, v) in messages {
         let (rows, inputs) = by_chat.entry(chat_id(v)).or_default();
@@ -302,7 +306,7 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
             })
             .unwrap_or(&id)
             .to_string();
-        let mut items: Vec<NormalizedChatItem> = rows.iter().map(|v| item(v)).collect();
+        let mut items: Vec<NormalizedChatItem> = rows.iter().map(|v| item(source_id, v)).collect();
         items.sort_by_key(|i| i.date_ms);
 
         let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
@@ -312,7 +316,7 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
         let buckets: Vec<NormalizedDoc> = by_month
             .into_iter()
             .map(|(period_key, items)| {
-                let month = ids::month(&id, &period_key);
+                let month = ids::month(source_id, &id, &period_key);
                 NormalizedDoc {
                     orphan_reactions: Vec::new(),
                     markdown_uuid: month.uuid,
@@ -323,7 +327,7 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
             })
             .collect();
 
-        let conversation = ids::conversation(&id);
+        let conversation = ids::conversation(source_id, &id);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
@@ -345,16 +349,16 @@ fn build_chats(messages: &[(String, Value)], calls: &[(String, Value)]) -> Vec<N
     chats
 }
 
-fn item(v: &Value) -> NormalizedChatItem {
+fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
     let kind = v.get("kind").and_then(Value::as_str).unwrap_or("sms");
     // Missing or non-numeric `date` is "we don't know when", which is a
     // null `created_at` — not the epoch.
     let date_ms = v.get("date").and_then(Value::as_i64);
     let row_id = v.get("id").and_then(Value::as_str).unwrap_or("");
     let id = if kind == "call" {
-        ids::call(row_id, date_ms)
+        ids::call(source_id, row_id, date_ms)
     } else {
-        ids::message(row_id, date_ms)
+        ids::message(source_id, row_id, date_ms)
     };
     let message_uuid = id.uuid.clone();
     let source_ref = Some(UpstreamRef::new(id.entity_kind, id.natural_key));
@@ -546,7 +550,7 @@ mod tests {
             json!({"id":"nd1","kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","is_me":false,"body":"When?","attachments":[]}),
             json!({"id":"nd2","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":"not-a-number","is_me":true,"body":"Unclear","attachments":[]}),
         ];
-        let chats = build_chats(&with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
         let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
         assert_eq!(items.len(), 2, "undated rows are kept, not dropped");
         for i in &items {
@@ -566,7 +570,7 @@ mod tests {
         let calls = vec![
             json!({"id":"c1","kind":"call","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","date":1778277000000i64,"call_type":"missed","duration":0}),
         ];
-        let chats = build_chats(&with_ids(&messages), &with_ids(&calls));
+        let chats = build_chats("sms", &with_ids(&messages), &with_ids(&calls));
         assert_eq!(chats.len(), 1, "calls + texts on one number → one chat");
         assert_eq!(chats[0].display, "Jean-Luc Picard");
         // 3 items across the buckets (2 texts + 1 call).
@@ -589,7 +593,7 @@ mod tests {
             "date":1781811656000i64,"is_me":false,"text":"Happy Thurs",
             "attachments":["x1/image000001.gif"]
         })];
-        let chats = build_chats(&with_ids(&messages), &[]);
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
         let it = chats[0].buckets[0]
             .items
             .iter()
@@ -615,7 +619,7 @@ mod tests {
             "id":"c9","kind":"call","conversation_key":"+1999","conversation_display":"Q",
             "date":1778277000000i64,"call_type":"missed","duration":0
         })];
-        let chats = build_chats(&[], &with_ids(&calls));
+        let chats = build_chats("sms", &[], &with_ids(&calls));
         let it = &chats[0].buckets[0].items[0];
         assert_eq!(it.kind, ItemKind::System);
         assert_eq!(it.system_note.as_deref(), Some("Missed call — Q"));

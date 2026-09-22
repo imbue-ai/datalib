@@ -22,8 +22,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/linkedin_config:datalib_etl_linkedin_config",
-        "//datalib/backend/id:datalib_id",
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:csv",
         "@datalib_crates//:serde",

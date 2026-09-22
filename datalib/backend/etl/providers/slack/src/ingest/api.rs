@@ -16,7 +16,7 @@ use datalib_etl::http::{
 use datalib_etl::latchkey::latchkey_curl_command;
 
 use super::db::RawDb;
-use super::schema_raw::{slack_message_uuid, SlackAttachmentRow};
+use super::schema_raw::{slack_message_key, SlackAttachmentRow};
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -190,7 +190,7 @@ pub async fn download_files_for_messages(
         let Some(message_ts) = m.get("ts").and_then(|v| v.as_str()) else {
             continue;
         };
-        let message_uuid = slack_message_uuid(team_id, channel_id, message_ts);
+        let message_uuid = slack_message_key(team_id, channel_id, message_ts);
         let Some(files) = m.get("files").and_then(|f| f.as_array()) else {
             continue;
         };

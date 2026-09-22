@@ -122,7 +122,7 @@ const TABLES: [&str; 4] = [
 /// `.doltlite_db` file or the per-source directory (whose entity db is
 /// `entities.doltlite_db`) — both resolve to the same sqlite file via
 /// [`db_path_for`].
-pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGithubApi> {
+pub fn parse_api_dir(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedGithubApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -146,7 +146,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGithubApi
     })
     .with_context(|| format!("load github db {}", db_path.display()))?;
 
-    let mut parsed = parse_loaded(raw);
+    let mut parsed = parse_loaded(source_id, raw);
     parsed.head = head;
     // A PR's row id is its bucket key, so a changed PR names itself —
     // gone or not; a changed child names its PR through the row, and a
@@ -203,7 +203,7 @@ fn pr_pk(repo: &str, num: u32) -> String {
     format!("{repo}#{num}")
 }
 
-pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
+pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> ParsedGithubApi {
     let mut out = ParsedGithubApi::default();
 
     if let Some(s) = raw.self_identity {
@@ -227,7 +227,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
             .and_then(|v| v.as_str())
             .map(String::from);
         out.pull_requests.push(PullRequestRow {
-            uuid: super::ids::pull_request(&repo, num, created_at.as_deref()).uuid,
+            uuid: super::ids::pull_request(source_id, &repo, num, created_at.as_deref()).uuid,
             row_id: pr.id,
             repo_full_name: repo,
             pr_number: num,
@@ -272,9 +272,9 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
         });
     }
 
-    push_issue_comments(&mut out.comments, raw.issue_comments);
-    push_reviews(&mut out.comments, raw.pr_reviews);
-    push_review_comments(&mut out.comments, raw.pr_review_comments);
+    push_issue_comments(source_id, &mut out.comments, raw.issue_comments);
+    push_reviews(source_id, &mut out.comments, raw.pr_reviews);
+    push_review_comments(source_id, &mut out.comments, raw.pr_review_comments);
 
     out
 }
@@ -283,7 +283,7 @@ fn str_field(p: &Value, key: &str) -> String {
     p.get(key).and_then(|v| v.as_str()).unwrap_or("").into()
 }
 
-fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+fn push_issue_comments(source_id: &str, out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     for c in rows {
         let id = c.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
         if c.repo_full_name.is_empty() || c.pr_number == 0 || id == 0 {
@@ -293,6 +293,7 @@ fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
         let created_at = str_field(p, "created_at");
         out.push(CommentRow {
             uuid: super::ids::comment(
+                source_id,
                 &c.repo_full_name,
                 ENTITY_ISSUE_COMMENT,
                 id,
@@ -327,7 +328,7 @@ fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     }
 }
 
-fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+fn push_reviews(source_id: &str, out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     for r in rows {
         let id = r.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
         if r.repo_full_name.is_empty() || r.pr_number == 0 || id == 0 {
@@ -336,8 +337,14 @@ fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
         let p = &r.payload;
         let created_at = str_field(p, "submitted_at");
         out.push(CommentRow {
-            uuid: super::ids::comment(&r.repo_full_name, ENTITY_PR_REVIEW, id, Some(&created_at))
-                .uuid,
+            uuid: super::ids::comment(
+                source_id,
+                &r.repo_full_name,
+                ENTITY_PR_REVIEW,
+                id,
+                Some(&created_at),
+            )
+            .uuid,
             table: "pr_reviews",
             row_id: r.id,
             repo_full_name: r.repo_full_name,
@@ -366,7 +373,7 @@ fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     }
 }
 
-fn push_review_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+fn push_review_comments(source_id: &str, out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
     for c in rows {
         let id = c.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
         if c.repo_full_name.is_empty() || c.pr_number == 0 || id == 0 {
@@ -386,6 +393,7 @@ fn push_review_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
         let created_at = str_field(p, "created_at");
         out.push(CommentRow {
             uuid: super::ids::comment(
+                source_id,
                 &c.repo_full_name,
                 ENTITY_PR_REVIEW_COMMENT,
                 id,
@@ -430,7 +438,8 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed =
+            parse_api_dir(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.pull_requests.is_empty());
         assert!(parsed.comments.is_empty());
         assert!(parsed.self_identity.is_none());

@@ -26,29 +26,30 @@ const ID_NAMESPACE: IdNamespace = IdNamespace::Yolink;
 const KIND_PAGE: &str = "timeseries";
 const KIND_DEVICE: &str = "device";
 
-/// The page's `markdown_uuid`. Scoped to the source id, not to anything
-/// upstream: there is exactly one page per source, and it must keep its
-/// identity across every re-render. No stamp: the page's `created_at`
-/// is its earliest reading, not the page's own.
+/// The page's `markdown_uuid`: there is exactly one page per source and
+/// nothing upstream behind it, so its key is the source id. No stamp:
+/// the page's `created_at` is its earliest reading, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         KIND_PAGE,
         source_id,
         None,
     )
 }
 
-/// A device's row, keyed on its config name under the source. The ids
-/// YoLink issues a device (`device_udid`, `family_device_id`) are read
-/// secrets, and a natural key is stored in `upstream_id` in the clear,
-/// so neither can be the key. No stamp: the row's `created_at` is its
-/// latest reading, which moves every sync.
+/// A device's row, keyed on its config name. The ids YoLink issues a
+/// device (`device_udid`, `family_device_id`) are read secrets, and a
+/// natural key is stored in `upstream_id` in the clear, so neither can
+/// be the key. No stamp: the row's `created_at` is its latest reading,
+/// which moves every sync.
 pub fn device_uuid(source_id: &str, device: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         KIND_DEVICE,
         device,
         None,
@@ -484,7 +485,6 @@ fn build_grid_rows(
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some(KIND_PAGE.to_string()))
-        .upstream_scope(Some(source_id.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
@@ -520,7 +520,6 @@ fn build_grid_rows(
                 .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(dev.name.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
-                .upstream_scope(Some(source_id.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
                 .build_or_record(source_id, m_uuid, RENDER_VERSION, problems),
         );

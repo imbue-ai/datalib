@@ -105,7 +105,7 @@ fn timeline_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let text = body.join("\n\n");
     let date_ms = ts_ms(v, "timestamp");
     let display = display_for(title.as_deref(), &text, "Facebook post");
-    let item_id = ids::post_text(row_id, date_ms);
+    let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
     one_item_chat(
         row_id,
         inputs,
@@ -167,7 +167,7 @@ fn other_page_post(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
     let text = body.join("\n\n");
     let display = display_for(None, &text, "Facebook post on another page");
     let date_ms = ts_ms(v, "timestamp");
-    let item_id = ids::post_text(row_id, date_ms);
+    let item_id = ids::post_text(&owner.source_id, row_id, date_ms);
     one_item_chat(
         row_id,
         inputs,
@@ -242,7 +242,7 @@ fn one_item_chat(
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
-    let post = ids::post(row_id);
+    let post = ids::post(&owner.source_id, row_id);
     NormalizedChat {
         inputs: inputs.declared(),
         path_prefix: None,
@@ -275,6 +275,7 @@ mod tests {
 
     fn owner() -> Owner {
         Owner {
+            source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),

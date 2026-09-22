@@ -389,7 +389,7 @@ async fn parse_async(
             project: None,
             external_id: Some(chat_id.natural_key),
             source_url: None,
-            upstream_scope: Some(source_id.to_string()),
+            upstream_scope: None,
             title: None,
             org_uuid: None,
             org_name: None,

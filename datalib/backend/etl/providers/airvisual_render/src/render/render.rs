@@ -25,27 +25,32 @@ const ID_NAMESPACE: IdNamespace = IdNamespace::Airvisual;
 const SOURCE_LABEL: &str = "AirVisual";
 
 /// The page's `markdown_uuid`. There is exactly one page per source and
-/// no AirVisual-side object behind it, so the scope is the source id —
-/// the `SourceInstance` case `entity_ids.md` reserves for exactly this.
+/// no AirVisual-side object behind it, so its key is the source id.
 /// No stamp: the page's `created_at` is its earliest sample, which is
 /// not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         "timeseries",
         source_id,
         None,
     )
 }
 
-/// A device's row, keyed on its serial: IQAir issues those per unit, so
-/// the same Pro configured in two sources is one device — and
-/// `IdClaims` will say so rather than let one source's row erase the
-/// other's. No stamp: the row's `created_at` is its latest sample,
-/// which moves every sync.
-pub fn device_uuid(serial: &str) -> String {
-    entity_id_str(ID_NAMESPACE, Scope::ProviderGlobal, "device", serial, None)
+/// A device's row, keyed on its serial: IQAir issues those per unit.
+/// No stamp: the row's `created_at` is its latest sample, which moves
+/// every sync.
+pub fn device_uuid(source_id: &str, serial: &str) -> String {
+    entity_id_str(
+        ID_NAMESPACE,
+        source_id,
+        Scope::ProviderGlobal,
+        "device",
+        serial,
+        None,
+    )
 }
 
 #[derive(Debug, Default, Clone)]
@@ -257,7 +262,7 @@ fn render_markdown(
     );
 
     render_plot_sections(&mut out, plots);
-    render_device_sections(&mut out, parsed);
+    render_device_sections(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
     out
 }
@@ -302,7 +307,7 @@ fn render_plot_sections(out: &mut String, plots: &[(&Quantity, PlotFacts)]) {
     }
 }
 
-fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual) {
+fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices)*\n\n");
@@ -311,7 +316,7 @@ fn render_device_sections(out: &mut String, parsed: &ParsedAirvisual) {
 
     let by_device = parsed.series_by_device();
     for dev in &parsed.devices {
-        let uuid = device_uuid(&dev.id);
+        let uuid = device_uuid(source_id, &dev.id);
         let _ = writeln!(
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--airvisual\">\n"
@@ -460,13 +465,12 @@ fn build_grid_rows(
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some("timeseries".to_string()))
-        .upstream_scope(Some(source_id.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
 
     for (idx, dev) in parsed.devices.iter().enumerate() {
-        let uuid = device_uuid(&dev.id);
+        let uuid = device_uuid(source_id, &dev.id);
         let series = by_device.get(dev.id.as_str());
         let mut text = format!("{} (serial {})", dev.name, dev.id);
         if let Some(m) = &dev.model {
@@ -524,13 +528,19 @@ mod tests {
         let a = document_uuid("air-cucina");
         assert_eq!(a, document_uuid("air-cucina"), "must be deterministic");
         assert_ne!(a, document_uuid("air-2"), "must be source-scoped");
-        assert_ne!(device_uuid("4133WV2JB9Z"), device_uuid("QKAO9PC1XDJ"));
+        assert_ne!(
+            device_uuid("air", "4133WV2JB9Z"),
+            device_uuid("air", "QKAO9PC1XDJ")
+        );
         assert_eq!(
-            device_uuid("4133WV2JB9Z"),
-            device_uuid("4133WV2JB9Z"),
+            device_uuid("air", "4133WV2JB9Z"),
+            device_uuid("air", "4133WV2JB9Z"),
             "a serial is the device wherever it is configured"
         );
-        assert_ne!(document_uuid("air-cucina"), device_uuid("air-cucina"));
+        assert_ne!(
+            document_uuid("air-cucina"),
+            device_uuid("air-cucina", "air-cucina")
+        );
     }
 
     #[test]

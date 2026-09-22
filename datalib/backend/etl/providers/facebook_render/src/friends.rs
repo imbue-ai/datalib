@@ -38,10 +38,10 @@ pub fn build_friends(friends: &[(String, Value)], owner: &Owner) -> Vec<Normaliz
             let since = ts_ms(v, "timestamp")
                 .and_then(datalib_time::IsoOffsetTimestamp::from_unix_millis)
                 .map(|t| t.to_rfc3339_secs());
-            let id = ids::friend(row_id);
+            let id = ids::friend(&owner.source_id, row_id);
             NormalizedContact {
                 contact_uuid: id.uuid,
-                group_uuid: ids::friends_group().uuid,
+                group_uuid: ids::friends_group(&owner.source_id).uuid,
                 group_label: GROUP_LABEL.to_string(),
                 display_name: str_field(v, "name").map(str::to_string),
                 external_id: Some(id.natural_key),
@@ -68,6 +68,7 @@ mod tests {
     #[test]
     fn a_friend_is_a_name_and_a_date() {
         let owner = Owner {
+            source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
             account: Some("picard@enterprise.starfleet".to_string()),
             inputs: Vec::new(),

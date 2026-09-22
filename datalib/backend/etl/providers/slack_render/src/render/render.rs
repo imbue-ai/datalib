@@ -18,7 +18,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_render::grid_index::RenderedMarkdown;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_mentions, to_commonmark, Labels};
-use super::{slack_link, ts_to_ms, Message, ParsedSlack};
+use super::{ids, slack_link, ts_to_ms, Message, ParsedSlack};
 use datalib_etl_render::inputs::Lookup;
 use datalib_schema::providers::Provider;
 
@@ -52,13 +52,13 @@ pub struct RenderSummary {
 
 fn profile() -> RenderProfile {
     RenderProfile {
-        stamp_precision: datalib_etl_slack::ids::STAMP_PRECISION,
+        stamp_precision: ids::STAMP_PRECISION,
         provider: Provider::Slack,
         source_label: "Slack".to_string(),
         chat_kind: "Slack Thread".to_string(),
         message_kind: "Slack Message".to_string(),
         reaction_kind: "Slack Reaction".to_string(),
-        chat_entity_kind: datalib_etl_slack::ids::KIND_THREAD,
+        chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
     }
 }
@@ -98,7 +98,7 @@ pub fn render_all(
         .iter()
         .filter_map(|(id, c)| Some((id.clone(), c.name.clone()?)))
         .collect();
-    let (chats, blobs_by_chat) = build_chats(parsed, &user_labels, &channel_labels);
+    let (chats, blobs_by_chat) = build_chats(parsed, source_id, &user_labels, &channel_labels);
 
     let cc = cc_render_all(
         &profile(),
@@ -121,6 +121,7 @@ pub fn render_all(
 
 fn build_chats(
     parsed: &ParsedSlack,
+    source_id: &str,
     user_labels: &BTreeMap<String, String>,
     channel_labels: &BTreeMap<String, String>,
 ) -> (Vec<NormalizedChat>, HashMap<String, BlobBundle>) {
@@ -163,12 +164,13 @@ fn build_chats(
             Some(c) => c.display(labels.users, self_user_id),
             None => format!("#{}", root.channel_id),
         };
-        let thread_uuid = bucket.thread_uuid.clone();
+        let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
+        let thread_uuid = thread.uuid.clone();
 
         let items: Vec<NormalizedChatItem> = bucket
             .messages
             .iter()
-            .map(|m| build_item(m, root, labels))
+            .map(|m| build_item(source_id, m, root, labels))
             .collect();
 
         // "#channel: <root snippet>" preserves the old scannable H1; the
@@ -189,10 +191,7 @@ fn build_chats(
             // `conversations.replies` takes back. Must be this
             // spelling, not a prettier one: the round-trip check
             // recomputes `uuid` from it.
-            external_id: Some(
-                datalib_etl_slack::ids::thread(&root.team_id, &root.channel_id, &root.ts)
-                    .natural_key,
-            ),
+            external_id: Some(thread.natural_key),
             // Thread permalink → chat-level `↗` + chat grid source_url.
             source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
             // Every row in this thread was minted under
@@ -215,7 +214,12 @@ fn build_chats(
     (chats, blobs_by_chat)
 }
 
-fn build_item(m: &Message, root: &Message, labels: Labels<'_>) -> NormalizedChatItem {
+fn build_item(
+    source_id: &str,
+    m: &Message,
+    root: &Message,
+    labels: Labels<'_>,
+) -> NormalizedChatItem {
     let author_display = m
         .user_id
         .as_deref()
@@ -223,13 +227,13 @@ fn build_item(m: &Message, root: &Message, labels: Labels<'_>) -> NormalizedChat
         .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
     let body = to_commonmark(m.text.trim_end(), labels);
     let attachments = build_attachments(&m.raw_json);
-    let reactions = build_reactions(&m.raw_json, m, labels.users);
+    let reactions = build_reactions(source_id, &m.raw_json, m, labels.users);
     let kind = if attachments.is_empty() {
         ItemKind::Text
     } else {
         ItemKind::Attachment
     };
-    let msg_id = datalib_etl_slack::ids::message(&m.team_id, &m.channel_id, &m.ts);
+    let msg_id = ids::message(source_id, &m.team_id, &m.channel_id, &m.ts);
     // A `ts` is the message's identity as well as its time; one that
     // will not parse is a record with a name and no place in time.
     let mut problems = Vec::new();
@@ -337,6 +341,7 @@ fn image_mime_for(filetype: &str) -> Option<String> {
 /// searchable grid row. A count-only reaction (no `users` list) yields a
 /// single row labelled with the count.
 fn build_reactions(
+    source_id: &str,
     raw: &Value,
     m: &Message,
     user_labels: Lookup<'_, BTreeMap<String, String>>,
@@ -360,7 +365,7 @@ fn build_reactions(
             let count = r.get("count").and_then(|v| v.as_u64()).unwrap_or(1);
             // No per-user breakdown: one aggregate row, keyed with an
             // empty user component.
-            let id = datalib_etl_slack::ids::reaction(&m.team_id, &m.channel_id, &m.ts, name, "");
+            let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
                 reaction_uuid: id.uuid.clone(),
                 reactor_display: format!("{count}"),
@@ -370,8 +375,7 @@ fn build_reactions(
             });
         } else {
             for u in users {
-                let id =
-                    datalib_etl_slack::ids::reaction(&m.team_id, &m.channel_id, &m.ts, name, u);
+                let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
                     reaction_uuid: id.uuid.clone(),
                     reactor_display: user_labels.get(u).cloned().unwrap_or_else(|| u.to_string()),

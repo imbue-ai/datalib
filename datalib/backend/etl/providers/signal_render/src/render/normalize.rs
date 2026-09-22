@@ -74,7 +74,7 @@ pub fn to_chats(
             account: None,
             project: None,
             external_id: Some(chat_id.natural_key),
-            upstream_scope: Some(source_id.to_string()),
+            upstream_scope: None,
             // Signal Android backups expose no per-thread web URL.
             source_url: None,
             org_uuid: None,

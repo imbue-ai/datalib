@@ -22,24 +22,25 @@ const KIND_PAGE: &str = "weight";
 const KIND_DEVICE: &str = "device";
 
 /// The page's `markdown_uuid`: one page per source and no Garmin-side
-/// object behind it, so the scope is the source id. No stamp: the
-/// page's `created_at` is its first weigh-in, not the page's own.
+/// object behind it, so its key is the source id. No stamp: the page's
+/// `created_at` is its first weigh-in, not the page's own.
 pub fn document_uuid(source_id: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         KIND_PAGE,
         source_id,
         None,
     )
 }
 
-/// A device's row, keyed on the id Garmin issues it, so the same watch
-/// configured in two sources is one device and `IdClaims` says so. No
-/// stamp: the row's `created_at` is its last sync, which moves.
-pub fn device_uuid(device_id: &str) -> String {
+/// A device's row, keyed on the id Garmin issues it. No stamp: the
+/// row's `created_at` is its last sync, which moves.
+pub fn device_uuid(source_id: &str, device_id: &str) -> String {
     entity_id_str(
         ID_NAMESPACE,
+        source_id,
         Scope::ProviderGlobal,
         KIND_DEVICE,
         device_id,
@@ -166,7 +167,7 @@ fn render_markdown(
     );
 
     render_weight_section(&mut out, parsed, plot_file);
-    render_device_section(&mut out, parsed);
+    render_device_section(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
     out
 }
@@ -226,14 +227,14 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
     out.push('\n');
 }
 
-fn render_device_section(out: &mut String, parsed: &ParsedGarmin) {
+fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices registered)*\n\n");
         return;
     }
     for d in &parsed.devices {
-        let uuid = device_uuid(&d.id);
+        let uuid = device_uuid(source_id, &d.id);
         let _ = writeln!(
             out,
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
@@ -323,14 +324,13 @@ fn build_grid_rows(
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some(KIND_PAGE.to_string()))
-        .upstream_scope(Some(source_id.to_string()))
         .build_or_record(source_id, m_uuid, RENDER_VERSION, problems)
         .into_iter()
         .collect();
     for (idx, d) in parsed.devices.iter().enumerate() {
         rows.extend(
             GridRow::builder()
-                .uuid(device_uuid(&d.id))
+                .uuid(device_uuid(source_id, &d.id))
                 .provider(Provider::Garmin)
                 .kind("Garmin Device")
                 .source_label("Garmin")
@@ -397,8 +397,8 @@ mod tests {
     fn page_ids_are_source_scoped_and_device_ids_are_garmins() {
         assert_eq!(document_uuid("garmin"), document_uuid("garmin"));
         assert_ne!(document_uuid("garmin"), document_uuid("garmin-2"));
-        assert_ne!(device_uuid("1"), device_uuid("2"));
-        assert_ne!(document_uuid("1"), device_uuid("1"));
+        assert_ne!(device_uuid("g", "1"), device_uuid("g", "2"));
+        assert_ne!(document_uuid("1"), device_uuid("1", "1"));
     }
 
     #[test]

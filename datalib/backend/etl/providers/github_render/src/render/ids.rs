@@ -17,6 +17,7 @@ pub const KIND_PR_REVIEW_COMMENT: &str = "pr_review_comment";
 /// stores it — a PR's or a comment's own, never derived — so the id
 /// carries it.
 fn identity(
+    source_id: &str,
     repo: &str,
     entity_kind: &'static str,
     natural_key: String,
@@ -24,6 +25,7 @@ fn identity(
 ) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::Upstream(repo),
         entity_kind,
         natural_key,
@@ -31,12 +33,23 @@ fn identity(
     )
 }
 
-pub fn pull_request(repo: &str, number: u32, created_at: Option<&str>) -> Identity {
-    identity(repo, KIND_PR, number.to_string(), created_at)
+pub fn pull_request(
+    source_id: &str,
+    repo: &str,
+    number: u32,
+    created_at: Option<&str>,
+) -> Identity {
+    identity(source_id, repo, KIND_PR, number.to_string(), created_at)
 }
 
-pub fn comment(repo: &str, kind: &'static str, id: i64, created_at: Option<&str>) -> Identity {
-    identity(repo, kind, id.to_string(), created_at)
+pub fn comment(
+    source_id: &str,
+    repo: &str,
+    kind: &'static str,
+    id: i64,
+    created_at: Option<&str>,
+) -> Identity {
+    identity(source_id, repo, kind, id.to_string(), created_at)
 }
 
 #[cfg(test)]
@@ -49,14 +62,15 @@ mod tests {
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [
-            pull_request("o/r", 42, AT),
-            comment("o/r", KIND_ISSUE_COMMENT, 7, AT),
-            comment("o/r", KIND_PR_REVIEW, 7, None),
+            pull_request("gh", "o/r", 42, AT),
+            comment("gh", "o/r", KIND_ISSUE_COMMENT, 7, AT),
+            comment("gh", "o/r", KIND_PR_REVIEW, 7, None),
         ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
+                    "gh",
                     Scope::Upstream("o/r"),
                     got.entity_kind,
                     &got.natural_key,
@@ -71,26 +85,26 @@ mod tests {
     #[test]
     fn kinds_and_repos_separate_the_same_number() {
         assert_ne!(
-            comment("o/r", KIND_ISSUE_COMMENT, 7, AT).uuid,
-            comment("o/r", KIND_PR_REVIEW_COMMENT, 7, AT).uuid
+            comment("gh", "o/r", KIND_ISSUE_COMMENT, 7, AT).uuid,
+            comment("gh", "o/r", KIND_PR_REVIEW_COMMENT, 7, AT).uuid
         );
         assert_ne!(
-            pull_request("o/r", 7, AT).uuid,
-            comment("o/r", KIND_ISSUE_COMMENT, 7, AT).uuid
+            pull_request("gh", "o/r", 7, AT).uuid,
+            comment("gh", "o/r", KIND_ISSUE_COMMENT, 7, AT).uuid
         );
         assert_ne!(
-            pull_request("o/r", 7, AT).uuid,
-            pull_request("o/other", 7, AT).uuid
+            pull_request("gh", "o/r", 7, AT).uuid,
+            pull_request("gh", "o/other", 7, AT).uuid
         );
     }
 
     #[test]
     fn the_stamp_is_githubs_created_at() {
         assert_eq!(
-            stamp_of(&pull_request("o/r", 1, AT).uuid),
+            stamp_of(&pull_request("gh", "o/r", 1, AT).uuid),
             Some(1_700_000_000_000)
         );
-        assert_eq!(stamp_of(&pull_request("o/r", 1, Some("")).uuid), None);
-        assert_eq!(stamp_of(&pull_request("o/r", 1, None).uuid), None);
+        assert_eq!(stamp_of(&pull_request("gh", "o/r", 1, Some("")).uuid), None);
+        assert_eq!(stamp_of(&pull_request("gh", "o/r", 1, None).uuid), None);
     }
 }

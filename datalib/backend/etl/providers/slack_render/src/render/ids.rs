@@ -1,4 +1,4 @@
-//! Slack entity ids.
+//! Slack entity ids, and the `ts` parsing they share with the render.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Scope};
 use datalib_time::{IsoOffsetTimestamp, RecordStampPrecision};
@@ -44,6 +44,7 @@ pub fn ts_to_ms(ts: &str) -> Option<i64> {
 /// else has to agree with it. A thread's id carries none: its row's
 /// stamp is derived from its items.
 fn identity(
+    source_id: &str,
     team_id: &str,
     entity_kind: &'static str,
     natural_key: String,
@@ -51,6 +52,7 @@ fn identity(
 ) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::Upstream(team_id),
         entity_kind,
         natural_key,
@@ -58,8 +60,9 @@ fn identity(
     )
 }
 
-pub fn thread(team_id: &str, channel_id: &str, thread_ts: &str) -> Identity {
+pub fn thread(source_id: &str, team_id: &str, channel_id: &str, thread_ts: &str) -> Identity {
     identity(
+        source_id,
         team_id,
         KIND_THREAD,
         composite_key(&[channel_id, thread_ts]),
@@ -67,8 +70,9 @@ pub fn thread(team_id: &str, channel_id: &str, thread_ts: &str) -> Identity {
     )
 }
 
-pub fn message(team_id: &str, channel_id: &str, ts: &str) -> Identity {
+pub fn message(source_id: &str, team_id: &str, channel_id: &str, ts: &str) -> Identity {
     identity(
+        source_id,
         team_id,
         KIND_MESSAGE,
         composite_key(&[channel_id, ts]),
@@ -76,8 +80,16 @@ pub fn message(team_id: &str, channel_id: &str, ts: &str) -> Identity {
     )
 }
 
-pub fn reaction(team_id: &str, channel_id: &str, ts: &str, name: &str, user: &str) -> Identity {
+pub fn reaction(
+    source_id: &str,
+    team_id: &str,
+    channel_id: &str,
+    ts: &str,
+    name: &str,
+    user: &str,
+) -> Identity {
     identity(
+        source_id,
         team_id,
         KIND_REACTION,
         composite_key(&[channel_id, ts, name, user]),
@@ -97,8 +109,8 @@ mod tests {
     fn a_thread_root_and_its_own_message_differ() {
         let ts = "1700000000.000100";
         assert_ne!(
-            thread("T1", "C1", ts).uuid,
-            message("T1", "C1", ts).uuid,
+            thread("src", "T1", "C1", ts).uuid,
+            message("src", "T1", "C1", ts).uuid,
             "thread root and its message must not share an id"
         );
     }
@@ -107,22 +119,23 @@ mod tests {
     fn workspaces_are_separated() {
         // `channel_id` is unique per workspace, not globally.
         assert_ne!(
-            message("T_A", "C1", "1.1").uuid,
-            message("T_B", "C1", "1.1").uuid,
+            message("src", "T_A", "C1", "1.1").uuid,
+            message("src", "T_B", "C1", "1.1").uuid,
         );
     }
 
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for (team, got) in [
-            ("T1", thread("T1", "C1", "1.1")),
-            ("T1", message("T1", "C1", "1.1")),
-            ("T1", reaction("T1", "C1", "1.1", "wave", "U1")),
+            ("T1", thread("src", "T1", "C1", "1.1")),
+            ("T1", message("src", "T1", "C1", "1.1")),
+            ("T1", reaction("src", "T1", "C1", "1.1", "wave", "U1")),
         ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
+                    "src",
                     Scope::Upstream(team),
                     got.entity_kind,
                     &got.natural_key,
@@ -138,15 +151,15 @@ mod tests {
     fn the_stamp_is_the_ts_in_the_key() {
         let ts = "1700000000.123456";
         assert_eq!(
-            stamp_of(&message("T1", "C1", ts).uuid),
+            stamp_of(&message("src", "T1", "C1", ts).uuid),
             Some(1_700_000_000_000)
         );
         assert_eq!(
-            stamp_of(&reaction("T1", "C1", ts, "wave", "").uuid),
+            stamp_of(&reaction("src", "T1", "C1", ts, "wave", "").uuid),
             Some(1_700_000_000_000)
         );
-        assert_eq!(stamp_of(&thread("T1", "C1", ts).uuid), None);
-        assert_eq!(stamp_of(&message("T1", "C1", "not-a-ts").uuid), None);
+        assert_eq!(stamp_of(&thread("src", "T1", "C1", ts).uuid), None);
+        assert_eq!(stamp_of(&message("src", "T1", "C1", "not-a-ts").uuid), None);
     }
 
     /// A reaction's per-user row and the aggregate row (empty `user`)
@@ -154,12 +167,12 @@ mod tests {
     #[test]
     fn reactions_separate_by_user_and_emoji() {
         assert_ne!(
-            reaction("T1", "C1", "1.1", "wave", "U1").uuid,
-            reaction("T1", "C1", "1.1", "wave", "").uuid,
+            reaction("src", "T1", "C1", "1.1", "wave", "U1").uuid,
+            reaction("src", "T1", "C1", "1.1", "wave", "").uuid,
         );
         assert_ne!(
-            reaction("T1", "C1", "1.1", "wave", "U1").uuid,
-            reaction("T1", "C1", "1.1", "tada", "U1").uuid,
+            reaction("src", "T1", "C1", "1.1", "wave", "U1").uuid,
+            reaction("src", "T1", "C1", "1.1", "tada", "U1").uuid,
         );
     }
 }

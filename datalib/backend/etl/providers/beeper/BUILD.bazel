@@ -37,7 +37,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
-        "//datalib/backend/id:datalib_id",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",

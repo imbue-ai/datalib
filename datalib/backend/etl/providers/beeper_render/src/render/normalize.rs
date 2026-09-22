@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 
-use datalib_etl_beeper::ids;
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     NormalizedReaction, OrphanReactions, UpstreamRef,
@@ -16,6 +15,7 @@ use datalib_etl_chat_common::RenderProfile;
 use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
+use super::ids;
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
 use super::RENDER_VERSION;
 
@@ -32,7 +32,7 @@ pub struct NetworkChats {
 /// spanning three periods yields three chats over one `chat_uuid`. That
 /// keeps the chat-level grid row per-document, which is what beeper has
 /// always emitted, and it keeps each bucket's attachments keyed apart.
-pub fn to_networks(parsed: &ParsedBeeper) -> Vec<NetworkChats> {
+pub fn to_networks(parsed: &ParsedBeeper, source_id: &str) -> Vec<NetworkChats> {
     let mut by_network: BTreeMap<String, Vec<NormalizedChat>> = BTreeMap::new();
 
     for doc in &parsed.docs {
@@ -52,7 +52,7 @@ pub fn to_networks(parsed: &ParsedBeeper) -> Vec<NetworkChats> {
         by_network
             .entry(room.network.clone())
             .or_default()
-            .push(to_chat(room, doc, inputs));
+            .push(to_chat(source_id, room, doc, inputs));
     }
 
     by_network
@@ -90,9 +90,12 @@ pub fn profile_for(network: &str) -> RenderProfile {
     }
 }
 
-fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
-    let items: Vec<NormalizedChatItem> =
-        doc.messages.iter().map(|m| to_item(room, doc, m)).collect();
+fn to_chat(source_id: &str, room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
+    let items: Vec<NormalizedChatItem> = doc
+        .messages
+        .iter()
+        .map(|m| to_item(source_id, room, doc, m))
+        .collect();
 
     // Reactions whose target is not one of this bucket's messages.
     //
@@ -112,14 +115,14 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
         .filter(|(target, _)| !known.contains(target.as_str()))
         .map(|(target, rs)| OrphanReactions {
             target_native_id: target.clone(),
-            reactions: rs.iter().map(to_reaction).collect(),
+            reactions: rs.iter().map(|r| to_reaction(source_id, r)).collect(),
         })
         .collect();
 
     NormalizedChat {
         inputs: inputs.declared(),
         id: bundle_key(doc),
-        chat_uuid: room.room_uuid.clone(),
+        chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
         display: room
             .title
             .clone()
@@ -145,7 +148,7 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
         // on disk: `render_markdown/<network>/<room_uuid>/<period>.md`.
         path_prefix: Some(room.network.clone()),
         buckets: vec![{
-            let period = ids::period(&room.native_room_id, &doc.period_key);
+            let period = ids::period(source_id, &room.native_room_id, &doc.period_key);
             NormalizedDoc {
                 period_key: doc.period_key.clone(),
                 markdown_uuid: period.uuid,
@@ -157,11 +160,11 @@ fn to_chat(room: &Room, doc: &DocBucket, inputs: &Inputs) -> NormalizedChat {
     }
 }
 
-fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
+fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
     let reactions: Vec<NormalizedReaction> = doc
         .reactions_by_target
         .get(&m.native_event_id)
-        .map(|rs| rs.iter().map(to_reaction).collect())
+        .map(|rs| rs.iter().map(|r| to_reaction(source_id, r)).collect())
         .unwrap_or_default();
 
     let attachments: Vec<NormalizedAttachment> =
@@ -189,7 +192,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
         // the small italic line every provider's system events get, and
         // kept out of the chat row's search text.
         return NormalizedChatItem {
-            message_uuid: m.event_uuid.clone(),
+            message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
             author_id: m.sender_uuid.clone().unwrap_or_default(),
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
@@ -207,7 +210,7 @@ fn to_item(room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
     }
 
     NormalizedChatItem {
-        message_uuid: m.event_uuid.clone(),
+        message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
         author_id: m.sender_uuid.clone().unwrap_or_default(),
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
@@ -250,11 +253,11 @@ fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
     }
 }
 
-fn to_reaction(r: &Event) -> NormalizedReaction {
+fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
     NormalizedReaction {
         // Beeper's own event_uuid already collapses sender+target+emoji
         // on the source side, so it is the reaction's identity.
-        reaction_uuid: r.event_uuid.clone(),
+        reaction_uuid: ids::event(source_id, &r.native_event_id, r.timestamp_ms).uuid,
         reactor_display: r.sender_label.clone().unwrap_or_else(|| "?".into()),
         emoji: r.reaction_emoji.clone().unwrap_or_else(|| "?".into()),
         date_ms: Some(r.timestamp_ms),

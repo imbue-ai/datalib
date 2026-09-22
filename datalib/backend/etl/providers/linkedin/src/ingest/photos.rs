@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::Row;
 
-use super::schema_raw::connection_uuid;
+use super::schema_raw::connection_key;
 use super::RawDb;
 
 /// The shared contact→photo edge table name (same in the contacts
@@ -108,7 +108,7 @@ pub async fn fetch_connection_photos(
         if url.is_empty() {
             continue;
         }
-        let owner_id = connection_uuid(url);
+        let owner_id = connection_key(url);
         if already.contains(&owner_id) {
             continue;
         }
@@ -165,7 +165,7 @@ enum Outcome {
 }
 
 /// Render-side: load every stored connection photo as
-/// `owner_id (connection_uuid) → (bytes, content_type)`. Joins
+/// `owner_id (the connection's URL) → (bytes, content_type)`. Joins
 /// `contact_photos` → `cas_objects`. Empty when photos were never
 /// fetched (the table won't exist). Never fails on a missing table.
 /// A fetched photo: the `contact_photos` row it came through (what a

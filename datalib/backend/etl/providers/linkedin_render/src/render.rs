@@ -15,7 +15,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
-use datalib_etl_linkedin::ids;
+use crate::ids;
 use datalib_etl_linkedin::ingest::schema_raw::message_tables;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
@@ -103,7 +103,7 @@ pub fn render(
 
     let mut chats: Vec<NormalizedChat> = Vec::new();
     for (table, rows) in &by_table {
-        chats.extend(build_chats(table, rows, account, account_inputs));
+        chats.extend(build_chats(source_id, table, rows, account, account_inputs));
     }
 
     // What to render: the chats the driver found stale, plus the ones a
@@ -156,6 +156,7 @@ pub fn render(
 /// Rows as `(row id, payload)`: the id is what the conversation declares
 /// it read, beside the account rows every document carries.
 fn build_chats(
+    source_id: &str,
     table: &str,
     rows: &[(String, Value)],
     account: Option<&str>,
@@ -185,7 +186,7 @@ fn build_chats(
                 let content = field(p, "CONTENT");
                 let mut problems = Vec::new();
                 let date_ms = own_stamp_ms(Some(date), "DATE", parse_date_ms, &mut problems);
-                let id = ids::message(table, row_id, date_ms);
+                let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
                     message_uuid: id.uuid,
                     author_id: nonempty(field(p, "SENDER PROFILE URL"))
@@ -213,12 +214,12 @@ fn build_chats(
             .map(str::to_string)
             .unwrap_or_else(|| participants(&payloads));
 
-        let conversation = ids::conversation(table, &conv);
+        let conversation = ids::conversation(source_id, table, &conv);
         chats.push(NormalizedChat {
             inputs: inputs.declared(),
             path_prefix: None,
             id: format!("{table}:{conv}"),
-            chat_uuid: conversation.uuid,
+            chat_uuid: conversation.uuid.clone(),
             display,
             title: None,
             author: None,
@@ -233,7 +234,7 @@ fn build_chats(
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 period_key: "all".to_string(),
-                markdown_uuid: ids::conversation(table, &conv).uuid,
+                markdown_uuid: conversation.uuid,
                 source_ref: None,
                 items,
             }],
@@ -308,7 +309,7 @@ mod tests {
             msg("c1", "B", "A", "2026-06-16 04:58:21 UTC", "first"),
             msg("c2", "A", "C", "2026-01-01 00:00:00 UTC", "other"),
         ];
-        let chats = build_chats("messages", &with_ids(&payloads), None, &[]);
+        let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
         assert_eq!(chats.len(), 2);
         let c1 = chats.iter().find(|c| c.id == "messages:c1").unwrap();
         assert_eq!(c1.buckets[0].items.len(), 2);
@@ -346,7 +347,7 @@ mod tests {
     #[test]
     fn undated_message_gets_a_null_timestamp() {
         let payloads = vec![msg("c1", "A", "B", "", "undated")];
-        let chats = build_chats("messages", &with_ids(&payloads), None, &[]);
+        let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
         assert_eq!(chats[0].buckets[0].items[0].date_ms, None);
     }
 }

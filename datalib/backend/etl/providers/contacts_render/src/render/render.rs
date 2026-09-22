@@ -128,7 +128,7 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
         group_label: contact.addressbook.clone(),
         display_name: contact.display_name.clone(),
         external_id: Some(id.natural_key),
-        upstream_scope: Some(source_id.to_string()),
+        upstream_scope: None,
         // A card carries no creation stamp.
         created_at: None,
         // vCard `REV` is the revision stamp. Fastmail emits *basic* ISO
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(n.group_label, "Bridge");
         assert_eq!(n.display_name.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(n.external_id.as_deref(), Some("Bridge#tng-picard"));
-        assert_eq!(n.upstream_scope.as_deref(), Some("tng_contacts"));
+        assert_eq!(n.upstream_scope, None);
         assert_eq!(n.created_at, None, "a card has no creation stamp");
         assert_eq!(n.modified_at.as_deref(), Some("2370-04-15T00:00:00Z"));
         // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.

@@ -146,6 +146,7 @@ pub fn render_targets(
         progress.inc(1);
         let md_path = md_path_for(out_dir, &t.blake3);
         let doc_uuid = grid_rows::document(
+            source_id,
             &t.blake3,
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
@@ -237,6 +238,7 @@ fn render_one(
         // byte-equal to the page grid row's `uuid` or row→preview
         // navigation silently fails (see `etl::section` docs).
         let uuid = grid_rows::page(
+            source_id,
             &t.blake3,
             p.number,
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
@@ -267,7 +269,7 @@ fn render_one(
         modified_at: t.doc_modified_at.as_deref(),
         qmd_path: Some(&qmd_rel),
     };
-    let rows = grid_rows::rows_for_document(&meta, &page_rows);
+    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
 
     Ok(RenderedMarkdown {
         markdown_uuid: doc_uuid.to_string(),

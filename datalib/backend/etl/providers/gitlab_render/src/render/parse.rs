@@ -97,7 +97,7 @@ pub struct ParsedGitlabApi {
 /// Every table an MR's document reads; the forward scan diffs each.
 const TABLES: [&str; 2] = ["merge_requests", "discussions"];
 
-pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGitlabApi> {
+pub fn parse_api_dir(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedGitlabApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {
         // No store: this source has never been downloaded. That is
@@ -121,7 +121,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedGitlabApi
     })
     .with_context(|| format!("load gitlab db {}", db_path.display()))?;
 
-    let mut parsed = parse_loaded(raw);
+    let mut parsed = parse_loaded(source_id, raw);
     parsed.head = head;
     // An MR's row id is its bucket key, so a changed MR names itself —
     // gone or not; a changed discussion names its MR through the row,
@@ -169,7 +169,7 @@ async fn read_everything(
     Ok((raw, Some(pin.commit().to_string()), changed))
 }
 
-pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
+pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> ParsedGitlabApi {
     let mut out = ParsedGitlabApi::default();
 
     if let Some(s) = raw.self_identity {
@@ -194,7 +194,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
             .and_then(|v| v.as_str())
             .map(String::from);
         out.merge_requests.push(MergeRequestRow {
-            uuid: super::ids::merge_request(&proj, iid, created_at.as_deref()).uuid,
+            uuid: super::ids::merge_request(source_id, &proj, iid, created_at.as_deref()).uuid,
             row_id: mr.id,
             project_full_path: proj,
             mr_iid: iid,
@@ -308,7 +308,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 .unwrap_or("")
                 .into();
             out.notes.push(NoteRow {
-                uuid: super::ids::note(&proj, id, Some(&created_at)).uuid,
+                uuid: super::ids::note(source_id, &proj, id, Some(&created_at)).uuid,
                 row_id: row_id.clone(),
                 project_full_path: proj.clone(),
                 mr_iid: iid,
@@ -353,7 +353,8 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse_api_dir(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed =
+            parse_api_dir(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.merge_requests.is_empty());
         assert!(parsed.notes.is_empty());
         assert!(parsed.self_identity.is_none());

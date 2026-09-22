@@ -16,7 +16,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use serde_json::Value;
 
-use datalib_etl_linkedin::ids;
+use crate::ids;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -94,7 +94,7 @@ pub fn render_posts(
         return Ok(FeedOutcome::default());
     };
 
-    let mut chats = build_post_chats(&shares, &comments, account, account_inputs);
+    let mut chats = build_post_chats(source_id, &shares, &comments, account, account_inputs);
 
     // What to render: the threads the driver found stale, plus the ones a
     // new or changed row maps to through the rows just loaded. A removed
@@ -155,6 +155,7 @@ struct Thread<'a> {
 /// thread declares it read, beside the account rows every document
 /// carries.
 fn build_post_chats(
+    source_id: &str,
     shares: &[(String, Value)],
     comments: &[(String, Value)],
     account: Option<&str>,
@@ -220,7 +221,7 @@ fn build_post_chats(
                 }
             }
             items.push(me_item(
-                |at| ids::share(row_id, at),
+                |at| ids::share(source_id, row_id, at),
                 date,
                 body,
                 &thread.url,
@@ -234,7 +235,7 @@ fn build_post_chats(
                 .iter()
                 .filter_map(|(_, c)| parse_date_ms(field(c, "Date")))
                 .min();
-            items.push(post_placeholder(&key, earliest, &thread.url));
+            items.push(post_placeholder(source_id, &key, earliest, &thread.url));
         }
 
         // Comments, oldest-first.
@@ -244,14 +245,14 @@ fn build_post_chats(
             let date = field(c, "Date");
             let body = nonempty(field(c, "Message")).unwrap_or("").to_string();
             items.push(me_item(
-                |at| ids::comment(row_id, at),
+                |at| ids::comment(source_id, row_id, at),
                 date,
                 body,
                 &thread.url,
             ));
         }
 
-        let post = ids::post(&key);
+        let post = ids::post(source_id, &key);
         let comment_payloads: Vec<&Value> = thread.comments.iter().map(|(_, c)| *c).collect();
         chats.push(NormalizedChat {
             inputs: thread.inputs.declared(),
@@ -317,12 +318,17 @@ fn me_item(
     }
 }
 
-fn post_placeholder(key: &str, date_ms: Option<i64>, url: &str) -> NormalizedChatItem {
+fn post_placeholder(
+    source_id: &str,
+    key: &str,
+    date_ms: Option<i64>,
+    url: &str,
+) -> NormalizedChatItem {
     let note = match nonempty(url) {
         Some(u) => format!("Original post not included in the LinkedIn export — {u}"),
         None => "Original post not included in the LinkedIn export.".to_string(),
     };
-    let id = ids::post_origin(key, date_ms);
+    let id = ids::post_origin(source_id, key, date_ms);
     NormalizedChatItem {
         message_uuid: id.uuid,
         author_id: "linkedin".to_string(),
@@ -466,7 +472,7 @@ mod tests {
         let shares = vec![share(ugc, "2026-05-07 16:41:18", "My post body")];
         let comments = vec![comment(ugc, "2026-05-08 09:00:00", "Following up")];
 
-        let chats = build_post_chats(&with_ids(&shares), &with_ids(&comments), None, &[]);
+        let chats = build_post_chats("li", &with_ids(&shares), &with_ids(&comments), None, &[]);
         assert_eq!(chats.len(), 1, "share + comment on same URN merge");
         let items = &chats[0].buckets[0].items;
         assert_eq!(items.len(), 2, "post + one comment");
@@ -494,6 +500,7 @@ mod tests {
     fn comment_only_thread_notes_missing_original() {
         let act = "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681";
         let chats = build_post_chats(
+            "li",
             &[],
             &with_ids(&[comment(act, "2026-04-30 15:32:07", "Great point!")]),
             None,
@@ -519,6 +526,7 @@ mod tests {
         let a = "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A111";
         let b = "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A222";
         let chats = build_post_chats(
+            "li",
             &with_ids(&[
                 share(a, "2026-01-01 00:00:00", "A"),
                 share(b, "2026-01-02 00:00:00", "B"),

@@ -12,9 +12,15 @@ pub const KIND_PAGE: &str = "page";
 pub const KIND_DISCUSSION: &str = "discussion";
 pub const KIND_COMMENT: &str = "comment";
 
-fn identity(entity_kind: &'static str, natural_key: &str, created_time: Option<&str>) -> Identity {
+fn identity(
+    source_id: &str,
+    entity_kind: &'static str,
+    natural_key: &str,
+    created_time: Option<&str>,
+) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::ProviderGlobal,
         entity_kind,
         natural_key.to_string(),
@@ -23,17 +29,17 @@ fn identity(entity_kind: &'static str, natural_key: &str, created_time: Option<&
 }
 
 /// `created_time` is the page's own, as the row stores it.
-pub fn page(page_id: &str, created_time: Option<&str>) -> Identity {
-    identity(KIND_PAGE, page_id, created_time)
+pub fn page(source_id: &str, page_id: &str, created_time: Option<&str>) -> Identity {
+    identity(source_id, KIND_PAGE, page_id, created_time)
 }
 
 /// No stamp: a thread's `created_at` is its first comment's.
-pub fn discussion(discussion_id: &str) -> Identity {
-    identity(KIND_DISCUSSION, discussion_id, None)
+pub fn discussion(source_id: &str, discussion_id: &str) -> Identity {
+    identity(source_id, KIND_DISCUSSION, discussion_id, None)
 }
 
-pub fn comment(comment_id: &str, created_time: Option<&str>) -> Identity {
-    identity(KIND_COMMENT, comment_id, created_time)
+pub fn comment(source_id: &str, comment_id: &str, created_time: Option<&str>) -> Identity {
+    identity(source_id, KIND_COMMENT, comment_id, created_time)
 }
 
 #[cfg(test)]
@@ -45,11 +51,16 @@ mod tests {
 
     #[test]
     fn natural_key_regenerates_the_uuid() {
-        for got in [page("p", AT), discussion("d"), comment("c", AT)] {
+        for got in [
+            page("src", "p", AT),
+            discussion("src", "d"),
+            comment("src", "c", AT),
+        ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
+                    "src",
                     Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key,
@@ -61,14 +72,20 @@ mod tests {
 
     #[test]
     fn kinds_separate_the_same_notion_id() {
-        assert_ne!(page("x", AT).uuid, comment("x", AT).uuid);
-        assert_ne!(page("x", None).uuid, discussion("x").uuid);
+        assert_ne!(page("src", "x", AT).uuid, comment("src", "x", AT).uuid);
+        assert_ne!(page("src", "x", None).uuid, discussion("src", "x").uuid);
     }
 
     #[test]
     fn pages_and_comments_carry_their_stamp_and_threads_none() {
-        assert_eq!(stamp_of(&page("p", AT).uuid), Some(1_700_000_000_000));
-        assert_eq!(stamp_of(&comment("c", AT).uuid), Some(1_700_000_000_000));
-        assert_eq!(stamp_of(&discussion("d").uuid), None);
+        assert_eq!(
+            stamp_of(&page("src", "p", AT).uuid),
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(
+            stamp_of(&comment("src", "c", AT).uuid),
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(stamp_of(&discussion("src", "d").uuid), None);
     }
 }

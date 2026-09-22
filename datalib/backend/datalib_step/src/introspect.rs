@@ -75,7 +75,8 @@ impl Subject {
     fn uuid(&self, source_id: &str) -> String {
         entity_id_str(
             IdNamespace::Datalib,
-            Scope::SourceInstance(source_id),
+            source_id,
+            Scope::ProviderGlobal,
             self.kind.as_str(),
             &self.path,
             None,
@@ -401,8 +402,9 @@ pub fn plan(
                 .modified_at(Some(now.to_string()))
                 // No `account`: this row measures a source, it belongs
                 // to no upstream login, and the group id it used to
-                // carry here polluted every `account:` filter. The
-                // group id is on `upstream_scope` below.
+                // carry here polluted every `account:` filter. Which
+                // source it measures is `markdowns.source_id`, as for
+                // every row.
                 .conversation_name(Some(format!("{source_id} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
@@ -412,12 +414,11 @@ pub fn plan(
                 // The machine-parsable half: `upstream_id` is the
                 // measured path verbatim and `upstream_entity_kind` the
                 // enum's own string, so
-                // `entity_id(provider, scope, kind, id) == uuid` holds
-                // by construction and the row can be taken back to the
-                // thing it measured.
+                // `entity_id(provider, source, scope, kind, id) == uuid`
+                // holds by construction and the row can be taken back
+                // to the thing it measured.
                 .upstream_id(Some(s.path.clone()))
                 .upstream_entity_kind(Some(s.kind.as_str().to_string()))
-                .upstream_scope(Some(source_id.to_string()))
                 .byte_size(s.bytes)
                 .item_count(s.items)
                 .build()
@@ -564,7 +565,8 @@ mod tests {
             .expect("the stored provider tag names an id namespace");
         let recomputed = entity_id_str(
             namespace,
-            Scope::SourceInstance(row.upstream_scope.as_deref().unwrap()),
+            "s",
+            Scope::ProviderGlobal,
             row.upstream_entity_kind.as_deref().unwrap(),
             row.upstream_id.as_deref().unwrap(),
             None,

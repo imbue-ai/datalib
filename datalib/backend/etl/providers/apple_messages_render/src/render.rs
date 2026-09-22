@@ -61,9 +61,10 @@ const APPLE_EPOCH_MS: i64 = 978_307_200_000;
 /// `date_ms` is the item's `date_ms`, so the stamp in the id is the
 /// row's; a chat's and a document's ids carry none, their rows' stamps
 /// being derived from their items.
-fn uuid(entity_kind: &str, natural_key: &str, date_ms: Option<i64>) -> String {
+fn uuid(source_id: &str, entity_kind: &str, natural_key: &str, date_ms: Option<i64>) -> String {
     entity_id_str(
         IdNamespace::AppleMessages,
+        source_id,
         Scope::ProviderGlobal,
         entity_kind,
         natural_key,
@@ -71,12 +72,12 @@ fn uuid(entity_kind: &str, natural_key: &str, date_ms: Option<i64>) -> String {
     )
 }
 
-pub fn chat_uuid(chat_guid: &str) -> String {
-    uuid(ENTITY_KIND_CONVERSATION, chat_guid, None)
+pub fn chat_uuid(source_id: &str, chat_guid: &str) -> String {
+    uuid(source_id, ENTITY_KIND_CONVERSATION, chat_guid, None)
 }
 
-pub fn message_uuid(message_guid: &str, date_ms: Option<i64>) -> String {
-    uuid(KIND_MESSAGE, message_guid, date_ms)
+pub fn message_uuid(source_id: &str, message_guid: &str, date_ms: Option<i64>) -> String {
+    uuid(source_id, KIND_MESSAGE, message_guid, date_ms)
 }
 
 fn profile() -> RenderProfile {
@@ -122,7 +123,7 @@ pub fn render(
             let Some(reader) = doltlite_raw::open_reader(&db_path, range.pin).await? else {
                 return Ok((Vec::new(), None, None));
             };
-            let loaded = load(reader.pool(), period, range, reader.pin()).await;
+            let loaded = load(reader.pool(), source_id, period, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             reader.close().await;
@@ -145,7 +146,7 @@ pub fn render(
         .render
         .iter()
         .flatten()
-        .map(|guid| chat_uuid(guid))
+        .map(|guid| chat_uuid(source_id, guid))
         .chain(narrowed.gone.iter().cloned())
         .map(|key| Bucket {
             key,
@@ -184,6 +185,7 @@ type Loaded = (Vec<NormalizedChat>, Option<HashSet<String>>, Option<String>);
 /// since the cursor names (`None` renders everything), and the commit.
 async fn load(
     pool: &SqlitePool,
+    source_id: &str,
     period: Period,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
@@ -335,7 +337,7 @@ async fn load(
                     .unwrap_or_default(),
                 removal: tapback >= 3000,
                 reaction: NormalizedReaction {
-                    reaction_uuid: uuid(KIND_REACTION, &guid, date_ms),
+                    reaction_uuid: uuid(source_id, KIND_REACTION, &guid, date_ms),
                     reactor_display: author_display,
                     emoji: tapback_emoji(tapback % 1000, r.get("associated_message_emoji")),
                     date_ms,
@@ -354,7 +356,7 @@ async fn load(
             (None, true) => ItemKind::Text,
         };
         chat.items.push(NormalizedChatItem {
-            message_uuid: message_uuid(&guid, date_ms),
+            message_uuid: message_uuid(source_id, &guid, date_ms),
             author_id,
             author_display,
             date_ms,
@@ -374,7 +376,10 @@ async fn load(
     let forward = changed_rows(pool, range, pin, FORWARD_TABLES)
         .await?
         .map(|changed| forward_chats(&changed, &chats, &chat_idx, &chat_of_message));
-    let out = chats.into_iter().map(|c| c.finish(period)).collect();
+    let out = chats
+        .into_iter()
+        .map(|c| c.finish(source_id, period))
+        .collect();
     Ok((out, forward, Some(pin.commit().to_string())))
 }
 
@@ -420,7 +425,7 @@ struct Tapback {
 }
 
 impl ChatBuild {
-    fn finish(mut self, period: Period) -> NormalizedChat {
+    fn finish(mut self, source_id: &str, period: Period) -> NormalizedChat {
         // Tapbacks, in date order: an add lands on its message, a
         // removal takes the same person's same tapback off it again.
         let index: HashMap<String, usize> = self
@@ -460,7 +465,7 @@ impl ChatBuild {
             .map(|period_key| {
                 let key = composite_key(&[&self.guid, &period_key]);
                 NormalizedDoc {
-                    markdown_uuid: uuid(KIND_DOCUMENT, &key, None),
+                    markdown_uuid: uuid(source_id, KIND_DOCUMENT, &key, None),
                     source_ref: Some(UpstreamRef::new(KIND_DOCUMENT, key)),
                     items: by_period.remove(&period_key).unwrap_or_default(),
                     period_key,
@@ -477,7 +482,7 @@ impl ChatBuild {
         NormalizedChat {
             inputs: self.inputs.declared(),
             path_prefix: None,
-            chat_uuid: chat_uuid(&self.guid),
+            chat_uuid: chat_uuid(source_id, &self.guid),
             external_id: Some(self.guid.clone()),
             id: self.guid,
             display,

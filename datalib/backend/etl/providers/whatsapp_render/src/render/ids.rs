@@ -23,7 +23,8 @@ fn identity(
 ) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         entity_kind,
         natural_key,
         STAMP_PRECISION.stored_ms(date_ms),
@@ -96,7 +97,8 @@ mod tests {
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
-                    Scope::SourceInstance("wa"),
+                    "wa",
+                    Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

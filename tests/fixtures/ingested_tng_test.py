@@ -107,36 +107,35 @@ MAX_STAMP_MS = (1 << 48) - 1
 # unscoped)`: the tag for a row whose `upstream_scope` is set — its
 # value is per-row, so the row supplies it — and the tag for a row
 # whose `upstream_scope` is NULL. `None` on either side means a row of
-# that shape is a failure. A provider may use both: airvisual and garmin
-# mint their one page under the source and their device rows under the
-# provider. The table has to live here because `upstream_scope` is NULL
-# for both `ProviderGlobal` and `Content`, making the two
-# indistinguishable from the row alone.
+# that shape is a failure. The table has to live here because
+# `upstream_scope` is NULL for both `ProviderGlobal` and `Content`,
+# making the two indistinguishable from the row alone. The configured
+# source is a component of every id and comes from `markdowns` per row.
 #
 # Every provider that renders is here; one absent from it is skipped by
 # the round-trip check, and `PORTED_PROVIDERS` keeps that from being
 # silent.
 SCOPE_TAG_BY_PROVIDER = {
-    "airvisual": ("src", "pg"),
+    "airvisual": (None, "pg"),
     "beeper": (None, "pg"),
     "chatgpt": (None, "pg"),
     "claude": (None, "pg"),
     "claude_code": (None, "pg"),
-    "contacts": ("src", None),
+    "contacts": (None, "pg"),
     "email": ("up", None),
     "facebook": (None, "pg"),
-    "garmin": ("src", "pg"),
+    "garmin": (None, "pg"),
     "github": ("up", None),
     "gitlab": ("up", None),
     "google_takeout": (None, "pg"),
     "linkedin": (None, "pg"),
     "notion": (None, "pg"),
     "pdf": (None, "content"),
-    "signal": ("src", None),
+    "signal": (None, "pg"),
     "slack": ("up", None),
     "sms_backup_restore": (None, "pg"),
-    "whatsapp": ("src", None),
-    "yolink": ("src", None),
+    "whatsapp": (None, "pg"),
+    "yolink": (None, "pg"),
 }
 
 # Providers whose rows MUST round-trip: every source in the fixture that
@@ -157,13 +156,13 @@ PORTED_PROVIDERS = frozenset(SCOPE_TAG_BY_PROVIDER)
 # `created_at = "stardate 47988.1"`, which the claude renderer records as
 # a nulled `created_at` on that message.
 POISONED_PROBLEM = (
-    "2e02b541-6fff-525f-a7f8-54d13990f50d"  # problem_uuid
+    "52bc57ee-c234-5f45-b4de-da9365e2e94a"  # problem_uuid
     "|warning|parse|markdown"
-    "|00000000-0000-8372-b44e-148a47ada7a2"  # the conversation's markdown_uuid
+    "|00000000-0000-8ae1-8f22-a8a581af5808"  # the conversation's markdown_uuid
     # The reply's item uuid. Its `created_at` would not parse, so the
     # item inherited the previous message's stamp — which is what the
     # id's leading bits carry.
-    "|0b75c4b3-d900-83dd-bce7-7e0b22d3af16"
+    "|0b75c4b3-d900-8fa6-942f-b168cb67c041"
     "|created_at|coercion_failed|stardate 47988.1"
 )
 CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
@@ -186,16 +185,22 @@ EXPECTED_PROBLEMS = {
 }
 
 
-def datalib_entity_id(namespace, scope_tag, scope_val, entity_kind, natural_key, at_ms):
+def datalib_entity_id(
+    namespace, source_id, scope_tag, scope_val, entity_kind, natural_key, at_ms
+):
     """The v8 layout: `at_ms` in the leading 48 bits (0 for none), the
-    version nibble 8, and the rest of a UUIDv5 over the five-component
+    version nibble 8, and the rest of a UUIDv5 over the six-component
     recipe joined with \x1f.
 
     `namespace` is `IdNamespace::as_str`, which for every provider
     equals its `grid_rows.provider` tag — they are still two
-    vocabularies, and a provider added later may differ.
+    vocabularies, and a provider added later may differ. `source_id` is
+    the group id the row rendered under, which is why two sources cannot
+    share an id.
     """
-    name = ID_SEP.join([namespace, scope_tag, scope_val, entity_kind, natural_key])
+    name = ID_SEP.join(
+        [namespace, source_id, scope_tag, scope_val, entity_kind, natural_key]
+    )
     b = bytearray(uuidlib.uuid5(DATALIB_ID_NS, name).bytes)
     ms = min(max(at_ms or 0, 0), MAX_STAMP_MS)
     b[0:6] = ms.to_bytes(6, "big")
@@ -416,8 +421,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Sources that rendered documents but carry no storage rows.
 
         Every source's render wave ends by measuring its raw store, so
-        every source in `markdowns` should also appear as an
-        `upstream_scope` on some `provider='datalib'` row.
+        every source in `markdowns` should also own the document of some
+        `provider='datalib'` row.
 
         The failure this catches is silent and partial. A full walk ends
         in a sweep that deletes anything the run did not produce —
@@ -432,8 +437,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._index_db,
             "SELECT DISTINCT m.source_id FROM markdowns m "
             "WHERE m.source_id NOT IN ("
-            "  SELECT upstream_scope FROM grid_rows "
-            "  WHERE provider = 'datalib' AND upstream_scope IS NOT NULL"
+            "  SELECT d.source_id FROM grid_rows g "
+            "  JOIN markdowns d ON d.markdown_uuid = g.markdown_uuid "
+            "  WHERE g.provider = 'datalib'"
             f") AND m.source_id NOT IN ({_sql_in(DIFF_GROUPS)}) ORDER BY m.source_id;",
         )
 
@@ -619,28 +625,32 @@ class IngestedTngPipelineTest(unittest.TestCase):
         its items and a provider may decline to embed it; a non-zero
         stamp that is not the row's is the bug this catches.
 
-        A diff group's rows are left out: they carry the source's
-        provider and its `upstream_id` — the backpointer to the real
-        thing — but their uuid is minted under the diff group
-        (`docs/dev/entity_ids.md` §"Rows datalib itself mints"), so the
-        source's recipe is not meant to regenerate it.
+        A diff group's rows are included: the source's processors ran
+        under the diff group's name, so its rows carry the source's
+        provider and backpointer and regenerate under the diff group's
+        id, like any other source's.
         """
         rows = self._query(
             self._index_db,
-            "SELECT provider, uuid, IFNULL(upstream_entity_kind, ''), "
-            "       IFNULL(upstream_id, ''), IFNULL(upstream_scope, ''), "
-            "       IFNULL(created_at_utc, '') "
-            "FROM grid_rows "
-            f"WHERE provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
-            "  AND diff_status IS NULL "
-            "ORDER BY uuid;",
+            "SELECT g.provider, g.uuid, IFNULL(g.upstream_entity_kind, ''), "
+            "       IFNULL(g.upstream_id, ''), IFNULL(g.upstream_scope, ''), "
+            "       IFNULL(g.created_at_utc, ''), m.source_id "
+            "FROM grid_rows g JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid "
+            f"WHERE g.provider IN ({_sql_in(SCOPE_TAG_BY_PROVIDER)}) "
+            "ORDER BY g.uuid;",
         )
         failures = []
         stamped = 0
         for line in rows:
-            provider, row_uuid, entity_kind, native_id, row_scope, created = line.split(
-                "|", 5
-            )
+            (
+                provider,
+                row_uuid,
+                entity_kind,
+                native_id,
+                row_scope,
+                created,
+                source_id,
+            ) = line.split("|", 6)
             if not entity_kind or not native_id:
                 failures.append(
                     f"{provider} {row_uuid}: ported provider left "
@@ -667,7 +677,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     )
                     continue
             want = datalib_entity_id(
-                provider, scope_tag, scope_val, entity_kind, native_id, at_ms
+                provider, source_id, scope_tag, scope_val, entity_kind, native_id, at_ms
             )
             if want != row_uuid:
                 failures.append(

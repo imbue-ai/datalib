@@ -1,9 +1,6 @@
-//! Beeper entity ids. They are also the raw store's primary keys —
-//! `rooms.id`, `users.id`, `events.id` — so an ingest mints them and
-//! render reads them back, which is why this module is on the ingest
-//! side. Matrix room, user and event ids are unique across Matrix, so
-//! the scope is provider-global; `rooms.source` says which on-disk
-//! store a row was read from and is not part of its identity.
+//! Beeper entity ids. The raw store keys rooms, users and events by
+//! their Matrix ids, which are unique across Matrix, so the natural key
+//! is the raw key and the scope is provider-global.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Scope};
 use datalib_time::RecordStampPrecision;
@@ -17,9 +14,15 @@ pub const KIND_PERIOD: &str = "room_period";
 pub const KIND_USER: &str = "user";
 pub const KIND_EVENT: &str = "event";
 
-fn identity(entity_kind: &'static str, natural_key: String, date_ms: Option<i64>) -> Identity {
+fn identity(
+    source_id: &str,
+    entity_kind: &'static str,
+    natural_key: String,
+    date_ms: Option<i64>,
+) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
+        source_id,
         Scope::ProviderGlobal,
         entity_kind,
         natural_key,
@@ -27,28 +30,34 @@ fn identity(entity_kind: &'static str, natural_key: String, date_ms: Option<i64>
     )
 }
 
-pub fn room(native_room_id: &str) -> Identity {
-    identity(KIND_ROOM, native_room_id.to_string(), None)
+pub fn room(source_id: &str, native_room_id: &str) -> Identity {
+    identity(source_id, KIND_ROOM, native_room_id.to_string(), None)
 }
 
-pub fn period(native_room_id: &str, period_key: &str) -> Identity {
+pub fn period(source_id: &str, native_room_id: &str, period_key: &str) -> Identity {
     identity(
+        source_id,
         KIND_PERIOD,
         composite_key(&[native_room_id, period_key]),
         None,
     )
 }
 
-pub fn user(native_user_id: &str) -> Identity {
-    identity(KIND_USER, native_user_id.to_string(), None)
+pub fn user(source_id: &str, native_user_id: &str) -> Identity {
+    identity(source_id, KIND_USER, native_user_id.to_string(), None)
 }
 
 /// An event's stamp is its `timestamp_ms`, which is also the raw row's;
 /// a reaction is an event too. The events table is keyed by this, so
 /// a sync's new events land in adjacent leaves of the raw store as
 /// well as the render store.
-pub fn event(native_event_id: &str, timestamp_ms: i64) -> Identity {
-    identity(KIND_EVENT, native_event_id.to_string(), Some(timestamp_ms))
+pub fn event(source_id: &str, native_event_id: &str, timestamp_ms: i64) -> Identity {
+    identity(
+        source_id,
+        KIND_EVENT,
+        native_event_id.to_string(),
+        Some(timestamp_ms),
+    )
 }
 
 #[cfg(test)]
@@ -59,15 +68,16 @@ mod tests {
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for got in [
-            room("!r:beeper.local"),
-            period("!r:beeper.local", "2024-03"),
-            user("@u:beeper.local"),
-            event("$e", 1_700_000_000_123),
+            room("src", "!r:beeper.local"),
+            period("src", "!r:beeper.local", "2024-03"),
+            user("src", "@u:beeper.local"),
+            event("src", "$e", 1_700_000_000_123),
         ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
+                    "src",
                     Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key,
@@ -80,14 +90,14 @@ mod tests {
     #[test]
     fn an_event_carries_its_stamp_to_the_millisecond() {
         assert_eq!(
-            stamp_of(&event("$e", 1_700_000_000_123).uuid),
+            stamp_of(&event("src", "$e", 1_700_000_000_123).uuid),
             Some(1_700_000_000_123)
         );
-        assert_eq!(stamp_of(&room("!r").uuid), None);
+        assert_eq!(stamp_of(&room("src", "!r").uuid), None);
     }
 
     #[test]
     fn kinds_separate() {
-        assert_ne!(room("x").uuid, user("x").uuid);
+        assert_ne!(room("src", "x").uuid, user("src", "x").uuid);
     }
 }

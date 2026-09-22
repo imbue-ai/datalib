@@ -296,6 +296,7 @@ fn names_of(v: Option<&Value>) -> String {
 }
 
 fn render_thread(
+    stanza: &str,
     disc_id: &str,
     page_title: &str,
     members: &[&Value],
@@ -322,6 +323,7 @@ fn render_thread(
     }
     for c in members {
         let uuid = super::ids::comment(
+            stanza,
             c.get("id").and_then(|v| v.as_str()).unwrap_or(""),
             c.get("created_time").and_then(|v| v.as_str()),
         )
@@ -453,7 +455,7 @@ pub fn render_notion(
             .as_deref()
             .and_then(|b| anchors.get(b))
             .map(String::as_str);
-        let p = render_thread(discussion_uuid, page_title, members, anchor, dir)?;
+        let p = render_thread(stanza, discussion_uuid, page_title, members, anchor, dir)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
@@ -563,6 +565,7 @@ mod tests {
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "Recommend recalibration"}]});
         let p = render_thread(
+            "notion",
             "d1",
             "Handbook",
             &[&c],
@@ -585,7 +588,7 @@ mod tests {
                        "original_content_deleted": true,
                        "display_name": {"resolved_name": "Data"},
                        "rich_text": [{"plain_text": "hi"}]});
-        let p = render_thread("d1", "Handbook", &[&c], None, d.path()).unwrap();
+        let p = render_thread("notion", "d1", "Handbook", &[&c], None, d.path()).unwrap();
         let md = fs::read_to_string(p).unwrap();
         assert!(md.contains("deleted upstream"), "{md}");
     }

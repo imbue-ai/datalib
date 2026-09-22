@@ -223,7 +223,7 @@ pub fn render_all(
                 continue;
             }
         }
-        let (chat, bundle) = build_chat(bucket, &mailbox_name, &account_label, outlink);
+        let (chat, bundle) = build_chat(source_id, bucket, &mailbox_name, &account_label, outlink);
         blobs_by_chat.insert(chat.id.clone(), bundle);
         chats.push(chat);
     }
@@ -250,13 +250,14 @@ fn account_label_from_payload(id: &str, payload: &serde_json::Value) -> Option<S
 }
 
 fn build_chat(
+    source_id: &str,
     bucket: &super::parse::EmailThreadBucket,
     mailbox_name: &HashMap<String, String>,
     account_label: &HashMap<String, String>,
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
-    let thread_id = ids::thread(account_id, &bucket.thread_id);
+    let thread_id = ids::thread(source_id, account_id, &bucket.thread_id);
     let tuid = thread_id.uuid.clone();
     // The account row and each mailbox row are looked up per thread,
     // and declared as they are.
@@ -425,7 +426,7 @@ fn build_chat(
             iso_to_ms,
             &mut problems,
         );
-        let email_id = ids::email(&em.account_id, &em.id, date_ms);
+        let email_id = ids::email(source_id, &em.account_id, &em.id, date_ms);
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
             author_id: em.account_id.clone(),
@@ -792,10 +793,6 @@ fn autolink_bare_urls(s: &str) -> String {
     out
 }
 
-pub fn thread_uuid(account_id: &str, thread_id: &str) -> String {
-    ids::thread(account_id, thread_id).uuid
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,12 +820,6 @@ mod tests {
                 "iso_to_ms({bad:?}) fabricated a stamp"
             );
         }
-    }
-
-    #[test]
-    fn thread_uuid_is_stable() {
-        assert_eq!(thread_uuid("acct", "t1"), thread_uuid("acct", "t1"));
-        assert_ne!(thread_uuid("acct", "t1"), thread_uuid("acct", "t2"));
     }
 
     #[test]

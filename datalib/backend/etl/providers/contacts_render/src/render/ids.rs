@@ -13,7 +13,8 @@ pub const KIND_ADDRESSBOOK: &str = "addressbook";
 fn identity(source_id: &str, entity_kind: &'static str, natural_key: String) -> Identity {
     Identity::mint(
         ID_NAMESPACE,
-        Scope::SourceInstance(source_id),
+        source_id,
+        Scope::ProviderGlobal,
         entity_kind,
         natural_key,
         None,
@@ -50,7 +51,8 @@ mod tests {
                 got.uuid,
                 entity_id_str(
                     ID_NAMESPACE,
-                    Scope::SourceInstance("c"),
+                    "c",
+                    Scope::ProviderGlobal,
                     got.entity_kind,
                     &got.natural_key,
                     got.at,

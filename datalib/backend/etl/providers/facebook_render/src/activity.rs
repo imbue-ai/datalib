@@ -59,7 +59,7 @@ pub fn build_comments(comments: &[(String, Value)], owner: &Owner) -> Vec<Normal
             .filter_map(|m| media_attachment(m, row_id, &inputs))
             .collect();
         let date_ms = ts_ms(v, "timestamp");
-        let item_id = ids::comment(row_id, date_ms);
+        let item_id = ids::comment(&owner.source_id, row_id, date_ms);
         items.push(NormalizedChatItem {
             message_uuid: item_id.uuid,
             author_id: if author == owner.name {
@@ -153,7 +153,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             // draws it as the `↗` link, so the body need not repeat it.
             let text = format!("{emoji} {what}");
             let row_ids: Vec<&str> = r.row_ids.iter().map(String::as_str).collect();
-            let item_id = ids::reaction(&row_ids, Some(ms));
+            let item_id = ids::reaction(&owner.source_id, &row_ids, Some(ms));
             NormalizedChatItem {
                 message_uuid: item_id.uuid,
                 author_id: "me".to_string(),
@@ -247,7 +247,7 @@ fn monthly_chat(
             .or_default()
             .push(item);
     }
-    let feed = ids::feed(id);
+    let feed = ids::feed(&owner.source_id, id);
     NormalizedChat {
         inputs: inputs.declared(),
         path_prefix: None,
@@ -266,7 +266,7 @@ fn monthly_chat(
         buckets: by_month
             .into_iter()
             .map(|(period_key, items)| {
-                let month = ids::feed_month(id, &period_key);
+                let month = ids::feed_month(&owner.source_id, id, &period_key);
                 NormalizedDoc {
                     orphan_reactions: Vec::new(),
                     markdown_uuid: month.uuid,
@@ -286,6 +286,7 @@ mod tests {
 
     fn owner() -> Owner {
         Owner {
+            source_id: "fb".to_string(),
             name: "Jean-Luc Picard".to_string(),
             account: None,
             inputs: Vec::new(),

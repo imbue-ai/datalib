@@ -222,10 +222,10 @@ fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
+pub fn parse(path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedExport> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        return parse_doltlite(&db_path, range);
+        return parse_doltlite(&db_path, source_id, range);
     }
     // No store: this source has never been downloaded. That is the
     // normal state of every source in a freshly scaffolded config, not
@@ -235,14 +235,18 @@ pub fn parse(path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
     Ok(ParsedExport::default())
 }
 
-fn parse_doltlite(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
+fn parse_doltlite(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedExport> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_doltlite_async(db_path, range).await })
+            .block_on(async move { parse_doltlite_async(db_path, source_id, range).await })
     })
 }
 
-async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<ParsedExport> {
+async fn parse_doltlite_async(
+    db_path: &Path,
+    source_id: &str,
+    range: RawRange<'_>,
+) -> Result<ParsedExport> {
     // Pinned at open — at the driver's commit, else HEAD — with the views
     // installed before anything reads. No commit means nothing has been
     // committed here to render: emptiness, not a reason to read the
@@ -289,7 +293,7 @@ async fn parse_doltlite_async(db_path: &Path, range: RawRange<'_>) -> Result<Par
     let total = all_convs.len();
     let all_projects = load_project_rows(&pool, datalib_etl::pin::Reads::At(&pin)).await?;
 
-    let scan = scan_diff(&pool, range, &pin, &all_convs, &all_projects).await?;
+    let scan = scan_diff(&pool, source_id, range, &pin, &all_convs, &all_projects).await?;
 
     let (filtered, docs_skipped) = match &scan.render {
         None => (all_convs, 0usize),
@@ -480,6 +484,7 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
 /// inputs it declared, so nothing fans out.
 async fn scan_diff(
     pool: &SqlitePool,
+    source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
     conversations: &[LoadedConversation],
@@ -518,10 +523,15 @@ async fn scan_diff(
     // the upstream uuid.
     let by_key: std::collections::HashMap<String, &str> = conversations
         .iter()
-        .map(|c| (super::ids::conversation(&c.id).uuid, c.id.as_str()))
+        .map(|c| {
+            (
+                super::ids::conversation(source_id, &c.id).uuid,
+                c.id.as_str(),
+            )
+        })
         .chain(projects.iter().map(|p| {
             (
-                super::ids::project(&p.project_uuid).uuid,
+                super::ids::project(source_id, &p.project_uuid).uuid,
                 p.project_uuid.as_str(),
             )
         }))
@@ -730,7 +740,7 @@ mod no_data_tests {
     /// "Rendering a source with no data".
     #[test]
     fn parse_missing_source_returns_empty_silently() {
-        let parsed = parse(Path::new("/this/does/not/exist"), RawRange::cold()).unwrap();
+        let parsed = parse(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.conversations.is_empty());
         assert!(parsed.accounts.is_empty());
         assert!(parsed.projects.is_empty());

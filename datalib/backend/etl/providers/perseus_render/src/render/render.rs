@@ -20,7 +20,8 @@ use datalib_schema::providers::Provider;
 use super::align::{split, PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, Edition, ParsedPerseus, Section};
 use super::RENDER_VERSION;
-use datalib_etl_perseus::{self as ids, WORK_SHORT, WORK_TITLE, WORK_URN};
+use crate::ids;
+use datalib_etl_perseus::{WORK_SHORT, WORK_TITLE, WORK_URN};
 use datalib_id::edge_id;
 
 /// The edition a book page links out to: the one Scaife opens by default.
@@ -121,7 +122,7 @@ fn render_book(
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
-    let m_uuid = ids::book(&book.n).uuid;
+    let m_uuid = ids::book(source_id, &book.n).uuid;
     let book_dir = render_markdown_root(out_dir, source_id).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
@@ -165,7 +166,7 @@ fn render_chapter(
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
-    let m_uuid = ids::chapter(&book.n, &chapter.n, &edition.id).uuid;
+    let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
     let rel = chapter_md_rel(source_id, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
 
@@ -173,7 +174,7 @@ fn render_chapter(
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
 
-    let md = render_chapter_md(chapter, edition, alignments);
+    let md = render_chapter_md(source_id, chapter, edition, alignments);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
@@ -193,7 +194,7 @@ fn render_chapter(
         if text.is_empty() {
             continue;
         }
-        let s_uuid = ids::section(&book.n, &chapter.n, &sec.n, &edition.id).uuid;
+        let s_uuid = ids::section(source_id, &book.n, &chapter.n, &sec.n, &edition.id).uuid;
         rows.extend(section_grid_row(
             book,
             chapter,
@@ -209,7 +210,7 @@ fn render_chapter(
         ));
         idx += 1;
     }
-    let edges = chapter_edges(book, chapter, edition, &m_uuid, alignments);
+    let edges = chapter_edges(source_id, book, chapter, edition, &m_uuid, alignments);
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -303,6 +304,7 @@ fn render_book_md(book: &Book) -> String {
 }
 
 fn render_chapter_md(
+    source_id: &str,
     chapter: &Chapter,
     edition: &Edition,
     alignments: &PerseusAlignments,
@@ -333,11 +335,19 @@ fn render_chapter_md(
         if text.is_empty() {
             continue;
         }
-        let s_uuid = ids::section(&chapter.book_n, &chapter.n, &sec.n, &edition.id).uuid;
+        let s_uuid = ids::section(source_id, &chapter.book_n, &chapter.n, &sec.n, &edition.id).uuid;
         let body = if aligned {
             let sentences = split::split_for(&edition.lang, text);
             wrap_sentences(text, &sentences, |i| {
-                ids::sentence(&chapter.book_n, &chapter.n, &sec.n, &edition.id, i).uuid
+                ids::sentence(
+                    source_id,
+                    &chapter.book_n,
+                    &chapter.n,
+                    &sec.n,
+                    &edition.id,
+                    i,
+                )
+                .uuid
             })
         } else {
             text.to_string()
@@ -438,7 +448,7 @@ fn book_grid_row(
             "https://scaife.perseus.org/reader/{DEFAULT_EDITION_URN}:{}/",
             book.n
         )))
-        .upstream_id(Some(ids::book(&book.n).natural_key))
+        .upstream_id(Some(ids::book(stanza, &book.n).natural_key))
         .upstream_entity_kind(Some(ids::KIND_BOOK.to_string()))
         .markdown_uuid(Some(bk_uuid.to_string()))
         .build_or_record(stanza, bk_uuid, RENDER_VERSION, problems)
@@ -479,7 +489,7 @@ fn chapter_grid_row(
             edition.id
         )))
         .upstream_id(Some(
-            ids::chapter(&book.n, &chapter.n, &edition.id).natural_key,
+            ids::chapter(stanza, &book.n, &chapter.n, &edition.id).natural_key,
         ))
         .upstream_entity_kind(Some(ids::KIND_CHAPTER.to_string()))
         .markdown_uuid(Some(ch_uuid.to_string()))
@@ -531,7 +541,7 @@ fn section_grid_row(
             edition.id
         )))
         .upstream_id(Some(
-            ids::section(&book.n, &chapter.n, &sec.n, &edition.id).natural_key,
+            ids::section(stanza, &book.n, &chapter.n, &sec.n, &edition.id).natural_key,
         ))
         .upstream_entity_kind(Some(ids::KIND_SECTION.to_string()))
         .markdown_uuid(Some(ch_uuid.to_string()))
@@ -544,6 +554,7 @@ fn section_grid_row(
 /// aligned sentence pair. Empty unless `edition` is in an
 /// `alignment_pairs` entry.
 fn chapter_edges(
+    source_id: &str,
     book: &Book,
     chapter: &Chapter,
     edition: &Edition,
@@ -565,7 +576,7 @@ fn chapter_edges(
             } else {
                 continue;
             };
-            let other_md = ids::chapter(&book.n, &chapter.n, other_id).uuid;
+            let other_md = ids::chapter(source_id, &book.n, &chapter.n, other_id).uuid;
 
             // One doc-level edge per counterpart, label = its short id.
             if doc_level_seen.insert(other_id.to_string()) {
@@ -588,10 +599,11 @@ fn chapter_edges(
                 };
                 for &si in this_idxs {
                     let src_anchor =
-                        ids::sentence(&book.n, &chapter.n, &sec.n, &edition.id, si).uuid;
+                        ids::sentence(source_id, &book.n, &chapter.n, &sec.n, &edition.id, si).uuid;
                     for &di in other_idxs {
                         let dst_anchor =
-                            ids::sentence(&book.n, &chapter.n, &sec.n, other_id, di).uuid;
+                            ids::sentence(source_id, &book.n, &chapter.n, &sec.n, other_id, di)
+                                .uuid;
                         edges.push(EdgeRow {
                             edge_uuid: edge_id(
                                 m_uuid,
@@ -647,9 +659,9 @@ mod tests {
             n: "1".into(),
             sections: vec![section("1", &[("perseus-grc2", "Θουκυδίδης ξυνέγραψε.")])],
         };
-        let md = render_chapter_md(&chapter, &ed, &PerseusAlignments::default());
+        let md = render_chapter_md("perseus", &chapter, &ed, &PerseusAlignments::default());
         assert!(md.contains("# Thucydides 1.1 — Ἱστορίαι — Jones"));
-        let s_uuid = ids::section("1", "1", "1", "perseus-grc2").uuid;
+        let s_uuid = ids::section("perseus", "1", "1", "1", "perseus-grc2").uuid;
         assert!(md.contains(&format!("data-section-uuid=\"{s_uuid}\"")));
         // No per-sentence spans when the edition isn't in a pair.
         assert!(!md.contains("<span data-section-uuid"));
@@ -668,10 +680,11 @@ mod tests {
             sections: vec![section("1", &[("1st1K-eng1", "First. Second.")])],
         };
         let edges = chapter_edges(
+            "perseus",
             &book,
             &chapter,
             &ed,
-            &ids::chapter("1", "1", "1st1K-eng1").uuid,
+            &ids::chapter("perseus", "1", "1", "1st1K-eng1").uuid,
             &PerseusAlignments::default(),
         );
         assert!(edges.is_empty());

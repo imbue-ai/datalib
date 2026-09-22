@@ -80,7 +80,7 @@ pub fn render_all(
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for c in &parsed.conversations {
         let shredded = shred(c);
-        let mut chat = build_chat(&shredded, parsed);
+        let mut chat = build_chat(&shredded, parsed, source_id);
         chat.inputs = c.inputs.declared();
         blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
         chats.push(chat);
@@ -102,7 +102,11 @@ pub fn render_all(
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the
 /// `current_node → root` parent walk (falling back to a `create_time`
 /// sort), one [`NormalizedChatItem`] each.
-fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> NormalizedChat {
+fn build_chat(
+    shredded: &ShreddedConversation,
+    parsed: &ParsedChatGPTApi,
+    source_id: &str,
+) -> NormalizedChat {
     let conv = &shredded.conv;
     let conv_id = conv.conversation_id.clone();
 
@@ -161,7 +165,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
             ItemKind::Attachment
         };
 
-        let msg_id = ids::message(&m.message_id, ms);
+        let msg_id = ids::message(source_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
             message_uuid: msg_id.uuid.clone(),
             author_id: m.role.clone().unwrap_or_else(|| "unknown".into()),
@@ -188,7 +192,7 @@ fn build_chat(shredded: &ShreddedConversation, parsed: &ParsedChatGPTApi) -> Nor
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".to_string());
-    let chat_uuid = ids::conversation(&conv_id).uuid;
+    let chat_uuid = ids::conversation(source_id, &conv_id).uuid;
     NormalizedChat {
         inputs: Vec::new(),
         path_prefix: None,

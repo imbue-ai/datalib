@@ -24,7 +24,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/perseus_config:datalib_etl_perseus_config",
-        "//datalib/backend/id:datalib_id",
         "@datalib_crates//:anyhow",
         # Sentence-level alignment via Ancient-Greek-BERT runs through
         # candle-transformers; weights are pulled lazily by hf-hub and

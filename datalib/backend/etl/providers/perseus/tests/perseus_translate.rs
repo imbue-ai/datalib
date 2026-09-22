@@ -12,15 +12,15 @@ use datalib_etl::progress::Progress;
 use datalib_etl_perseus::TLG_FILE_PREFIX;
 
 fn book_uuid(b: &str) -> String {
-    datalib_etl_perseus::book(b).uuid
+    datalib_etl_perseus_render::ids::book("perseus", b).uuid
 }
 
 fn chapter_uuid(b: &str, c: &str, e: &str) -> String {
-    datalib_etl_perseus::chapter(b, c, e).uuid
+    datalib_etl_perseus_render::ids::chapter("perseus", b, c, e).uuid
 }
 
 fn paragraph_uuid(b: &str, c: &str, s: &str, e: &str) -> String {
-    datalib_etl_perseus::section(b, c, s, e).uuid
+    datalib_etl_perseus_render::ids::section("perseus", b, c, s, e).uuid
 }
 use datalib_etl_perseus_render::render::align::PerseusAlignments;
 use datalib_etl_perseus_render::render::{parse, render};
