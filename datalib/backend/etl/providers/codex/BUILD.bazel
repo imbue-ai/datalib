@@ -4,7 +4,7 @@ exports_files(["Cargo.toml"])
 
 # TNG-themed Codex rollouts in the layout `~/.codex` has: two threads
 # under `sessions/<YYYY>/<MM>/<DD>/`, one of them the parent of a spawned
-# sub-agent thread. Used by :codex_fixture_e2e and the central fixture
+# sub-agent thread. Used by :codex_tests and the central fixture
 # pipeline at //tests/fixtures:ingested_tng.
 filegroup(
     name = "tng_fixture",
@@ -40,12 +40,13 @@ rust_test(
     edition = "2021",
 )
 
-# Ingest the checked-in fixture, assert the rows, render, and read the
-# documents back — the whole provider against the real file layout.
+# Every hermetic Codex test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
-    name = "codex_fixture_e2e",
-    size = "small",
-    srcs = ["tests/fixture_e2e.rs"],
+    name = "codex_tests",
+    srcs = glob(["tests/codex_tests/*.rs"]),
+    crate_root = "tests/codex_tests/main.rs",
     data = [":tng_fixture"],
     edition = "2021",
     env = {
