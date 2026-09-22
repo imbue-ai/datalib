@@ -99,10 +99,9 @@ impl<'a> RunCtx<'a> {
         }
     }
 
-    /// How often this run seals partial output. An ingest that prunes to a
-    /// snapshot passes `Never` itself (see `checkpointer::Policy`).
-    pub fn checkpoint_policy(&self) -> crate::checkpointer::Policy {
-        crate::checkpointer::Policy::Every(self.control.checkpoint_cadence.unwrap_or_default())
+    /// How often this run seals partial output.
+    pub fn checkpoint_cadence(&self) -> crate::checkpointer::Cadence {
+        self.control.checkpoint_cadence.unwrap_or_default()
     }
 
     /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)

@@ -35,31 +35,17 @@ impl Default for Cadence {
     }
 }
 
-/// Whether a producer checkpoints at all, and how often.
-///
-/// `Never` is not a tuning choice. A run that wipes and refills has to be
-/// atomic: half a refill is indistinguishable from a source that lost most
-/// of its data, and publishing that lets every consumer downstream act on it.
-/// `whatsapp`, `pdf` and `fsindex` truncate on *every* run — for them the
-/// truncate is what makes upstream deletions fall out — so a checkpoint
-/// taken partway through their refill publishes exactly the mass deletion
-/// this exists to prevent. A provider like that either takes `Never`, or
-/// seals only after its refill completes. Neither is something a shared
-/// cadence can work out; whoever wires a provider up has to answer it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Policy {
-    Never,
-    Every(Cadence),
-}
-
 /// Asks "should I seal now?" — never fires on its own.
 ///
 /// It has to be asked rather than tick, because only the caller knows where
 /// its store is consistent. A commit landing mid-prune or mid-reconcile
-/// publishes a store that is missing data it will have again a moment later.
+/// publishes a store that is missing data it will have again a moment
+/// later — and a provider that truncates and refills on every run
+/// (`whatsapp`, `pdf`, `fsindex`) must not ask until the refill is done,
+/// since half of one reads as a source that lost most of its data.
 #[derive(Debug)]
 pub struct Checkpointer {
-    policy: Policy,
+    cadence: Cadence,
     last_commit: Instant,
     /// Rows written since the last commit. Zero means there is nothing to
     /// seal, and committing anyway would fill `dolt_log` with empty commits
@@ -68,10 +54,10 @@ pub struct Checkpointer {
 }
 
 impl Checkpointer {
-    pub fn new(policy: Policy) -> Self {
+    pub fn new(cadence: Cadence) -> Self {
         let now = Instant::now();
         Self {
-            policy,
+            cadence,
             last_commit: now,
             pending: 0,
         }
@@ -89,13 +75,10 @@ impl Checkpointer {
     }
 
     fn should_seal_at(&self, now: Instant) -> bool {
-        let Policy::Every(cadence) = self.policy else {
-            return false;
-        };
         if self.pending == 0 {
             return false;
         }
-        now.duration_since(self.last_commit) >= cadence.at_most_every
+        now.duration_since(self.last_commit) >= self.cadence.at_most_every
     }
 
     /// Record that the caller committed.
@@ -119,7 +102,7 @@ mod tests {
 
     #[test]
     fn a_writer_seals_once_the_ceiling_has_passed() {
-        let mut c = Checkpointer::new(Policy::Every(Cadence::default()));
+        let mut c = Checkpointer::new(Cadence::default());
         c.wrote(1);
         assert!(!at(&c, Duration::from_secs(1)), "too soon");
         assert!(at(&c, Duration::from_secs(16)));
@@ -130,22 +113,13 @@ mod tests {
     /// to discover nothing moved.
     #[test]
     fn nothing_written_never_seals() {
-        let c = Checkpointer::new(Policy::Every(Cadence::default()));
+        let c = Checkpointer::new(Cadence::default());
         assert!(!at(&c, Duration::from_secs(600)));
-    }
-
-    /// A wipe-and-re-ingest run is atomic: half of one looks exactly like a
-    /// source that lost most of its data, and a checkpoint would publish that.
-    #[test]
-    fn a_never_policy_never_seals() {
-        let mut c = Checkpointer::new(Policy::Never);
-        c.wrote(10_000);
-        assert!(!at(&c, Duration::from_secs(3600)));
     }
 
     #[test]
     fn sealing_clears_the_pending_work() {
-        let mut c = Checkpointer::new(Policy::Every(Cadence::default()));
+        let mut c = Checkpointer::new(Cadence::default());
         c.wrote(5);
         assert_eq!(c.pending(), 5);
         c.sealed();

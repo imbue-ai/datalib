@@ -98,7 +98,7 @@ impl RawStoreSession {
                 source_id: ctx.name.to_string(),
                 cas_pool,
                 checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(
-                    ctx.checkpoint_policy(),
+                    ctx.checkpoint_cadence(),
                 )),
                 progress: ctx.progress.clone(),
                 stop: ctx.control.stop.clone(),
@@ -228,27 +228,27 @@ mod tests {
     }
 
     fn state(pool: SqlitePool, cas: Option<SqlitePool>, p: crate::progress::Progress) -> SealState {
-        state_with_policy(
+        state_with_cadence(
             pool,
             cas,
             p,
-            crate::checkpointer::Policy::Every(crate::checkpointer::Cadence {
+            crate::checkpointer::Cadence {
                 at_most_every: std::time::Duration::ZERO,
-            }),
+            },
         )
     }
 
-    fn state_with_policy(
+    fn state_with_cadence(
         pool: SqlitePool,
         cas: Option<SqlitePool>,
         p: crate::progress::Progress,
-        policy: crate::checkpointer::Policy,
+        cadence: crate::checkpointer::Cadence,
     ) -> SealState {
         SealState {
             pool,
             source_id: "t".into(),
             cas_pool: cas,
-            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(policy)),
+            checkpointer: std::sync::Mutex::new(crate::checkpointer::Checkpointer::new(cadence)),
             progress: p,
             stop: crate::stop::StopFlag::default(),
         }
@@ -256,9 +256,8 @@ mod tests {
 
     /// Ctrl-C wants one last seal, and the only place a seal is safe is
     /// where the provider says its store is consistent — its `wrote`. So a
-    /// stop makes that call seal whatever the cadence says, `Never`
-    /// included; it is the last chance, and the caller just vouched for
-    /// the state.
+    /// stop makes that call seal whatever the cadence says; it is the
+    /// last chance, and the caller just vouched for the state.
     #[tokio::test]
     async fn a_stop_seals_at_the_next_consistent_point_whatever_the_cadence() {
         let dir = tempfile::tempdir().unwrap();
@@ -266,11 +265,13 @@ mod tests {
         if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
             return;
         }
-        let state = state_with_policy(
+        let state = state_with_cadence(
             entities.clone(),
             None,
             crate::progress::Progress::noop(),
-            crate::checkpointer::Policy::Never,
+            crate::checkpointer::Cadence {
+                at_most_every: std::time::Duration::from_secs(3600),
+            },
         );
         let before = commits(&entities).await;
         sqlx::query("INSERT INTO rows_t VALUES ('a')")
@@ -281,7 +282,7 @@ mod tests {
         assert_eq!(
             commits(&entities).await,
             before,
-            "Never means never, until a stop"
+            "an hour's cadence has not come round"
         );
 
         state.stop.request();

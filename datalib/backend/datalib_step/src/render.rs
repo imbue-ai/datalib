@@ -226,9 +226,7 @@ pub fn render_source(
     let (raw_pin, stale_buckets) =
         reverse_lookup(&store, raw_db.as_deref(), raw_cursor.as_deref())?;
 
-    let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(
-        datalib_etl::checkpointer::Policy::Every(cadence),
-    );
+    let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(cadence);
     let mut docs = 0usize;
     let mut removed = 0usize;
     // Every document this run emitted. On a full render it is what the

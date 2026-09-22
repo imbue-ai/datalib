@@ -636,8 +636,8 @@ truncate is what makes upstream deletions fall out.
 For these, "a write burst went quiet" is not a consistent point — it is
 most likely to be reached while the table is empty. Their only
 consistent point is *after the refill completes*, which for a run that
-rewrites everything is the end of the run. So they take `Never`, or
-they seal once at a boundary they name themselves.
+rewrites everything is the end of the run. So they do not ask the
+checkpointer until then: they seal once at a boundary they name.
 
 No shared cadence can work this out, which is the real content of "each
 provider needs someone to look at its consistent point": the thing to
