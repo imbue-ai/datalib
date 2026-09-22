@@ -18,6 +18,14 @@ const GIT_HASH = process.env.DATALIB_GIT_HASH;
 
 const ROWS = ".rl-grid .slick-row:not(.slick-group)";
 
+/// A value as the query bar writes it into a `key:value` token, the way
+/// `src/grid/query.ts` does — spelled out here because a spec runs
+/// outside the app's module graph.
+const quoted = (v: string) =>
+  /[\s:"]/.test(v) || v === "" || v.startsWith("-")
+    ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+    : v;
+
 /// The log opens as the column after the Manage card, titled for
 /// what it shows.
 async function openServerLog(page: Page) {
@@ -46,18 +54,27 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
-  // The server's boot lines all come from its main thread but one; the
-  // menu names the value under the click.
-  const mainCell = dialog
-    .locator(`${ROWS} .slick-cell[col-id="thread"]`)
-    .filter({ hasText: /^main$/ })
-    .first();
-  await mainCell.click({ button: "right" });
-  await expect(menuEntry(page, "Keep only Thread=main")).toBeVisible();
-  await expect(menuEntry(page, "Exclude all Thread=main")).toBeVisible();
-  await menuEntry(page, "Keep only Thread=main").click();
+  // The menu names the value under the click. Message is the column it
+  // is opened on because `msg:` matches a line's message exactly, so
+  // keeping only the first line's own message narrows to a set this
+  // test can predict without knowing what the server logged. Not
+  // trimmed, for the same reason: the token has to carry the value the
+  // cell holds.
+  const msgCell = dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]');
+  const msg = (await msgCell.textContent()) ?? "";
+  expect(msg.trim(), "the first line should have a message").not.toBe("");
+  // The click and the menu are retried as a pair: a right-click that
+  // lands while the tail is replacing the row it is on opens nothing,
+  // and waiting alone would then wait forever.
+  const keepOnly = menuEntry(page, `Keep only Message=${msg}`);
+  await expect(async () => {
+    if (!(await keepOnly.isVisible())) await msgCell.click({ button: "right", timeout: 2_000 });
+    await expect(keepOnly).toBeVisible({ timeout: 2_000 });
+  }, "the cell's menu never opened").toPass({ timeout: 15_000, intervals: [250, 500] });
+  await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
+  await keepOnly.click();
 
-  await expect(query).toHaveValue("min_level:info thread:main");
+  await expect(query).toHaveValue(`min_level:info msg:${quoted(msg)}`);
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect
@@ -68,12 +85,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
     .toBe(true);
   await expect
     .poll(async () => {
-      const threads = await dialog
-        .locator(`${ROWS} .slick-cell[col-id="thread"]`)
-        .allTextContents();
-      return [...new Set(threads.map((t) => t.trim()))];
+      const msgs = await dialog.locator(`${ROWS} .slick-cell[col-id="msg"]`).allTextContents();
+      return [...new Set(msgs)];
     })
-    .toEqual(["main"]);
+    .toEqual([msg]);
 
   await dialog.locator(ROWS).first().click({ button: "right" });
   await menuEntry(page, "Clear the query").click();
@@ -89,6 +104,48 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(query).toHaveValue("min_level:warn");
   await level.selectOption("trace");
   await expect(query).toHaveValue("");
+});
+
+// The log opens on the seven columns a reader wants on every line. The
+// other five are hidden rather than gone, and the grid menu's column
+// picker is the only way back to them — so this checks both halves:
+// what is up by default, and that a hidden one can be put back.
+test("the grid menu puts back a column the log starts without", async ({ page }) => {
+  const dialog = await openServerLog(page);
+  const headers = dialog.locator(".rl-grid .slick-header-column");
+  await expect(headers).toHaveText([
+    "Time",
+    "Step",
+    "Level",
+    "Stream",
+    "Source",
+    "Message",
+    "Fields",
+  ]);
+
+  await dialog.locator(".slick-grid-menu-button").click();
+  // The picker lists the hidden five as well, each with its box clear.
+  const picker = page.locator(".slick-grid-menu .slick-column-picker-list").filter({
+    hasText: "Thread",
+  });
+  for (const name of ["Run", "Process", "Commit", "Thread", "Target"]) {
+    await expect(picker.getByLabel(name, { exact: true })).not.toBeChecked();
+  }
+  await expect(picker.getByLabel("Time", { exact: true })).toBeChecked();
+  await picker.getByText("Thread", { exact: true }).click();
+  await page.keyboard.press("Escape");
+
+  // Thread comes back where it sits in the set, not on the end.
+  await expect(headers).toHaveText([
+    "Time",
+    "Step",
+    "Level",
+    "Stream",
+    "Thread",
+    "Source",
+    "Message",
+    "Fields",
+  ]);
 });
 
 // A tracing line carries the file and line that wrote it; the Source
