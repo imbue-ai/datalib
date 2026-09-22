@@ -103,7 +103,8 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset…" does not apply: a reset empties a tree's store, and only
+/// Why "Reset (preserve attachments)…" does not apply: a reset drops a
+/// tree's store, and only
 /// a source's steps keep one worth emptying — the index follows its
 /// sources, and an applet writes nothing.
 export function notResettableReason(t: MenuTarget): string | null {
@@ -116,7 +117,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset with attachments…" does not apply: only a download keeps
+/// Why "Reset (drop attachments)…" does not apply: only a download keeps
 /// them.
 export function noAttachmentsReason(t: MenuTarget): string | null {
   const why = notResettableReason(t);
@@ -232,12 +233,12 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   entries.push({ separator: true });
   entries.push({
     action: "reset",
-    name: one ? "Reset…" : `Reset ${plural(targets.length, "entry")}…`,
+    name: "Reset (preserve attachments)…",
     disabled: firstBlocked(targets, notResettableReason),
   });
   entries.push({
     action: "reset_blobs",
-    name: "Reset with attachments…",
+    name: "Reset (drop attachments)…",
     disabled: firstBlocked(targets, noAttachmentsReason),
   });
   entries.push({

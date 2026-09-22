@@ -143,7 +143,8 @@ Via the server instead: `POST /api/sync/jobs` enqueues —
 `{"kind":"all"}` with an optional comma-separated `source_ids`, or
 `{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
 for `datalib-dag --reset` of those steps (`+blobs` on an ingest step
-takes its attachments with it), which the Manage screen offers as "Reset…"
+takes its attachments with it), which the Manage screen offers as "Reset (preserve attachments)…" and
+"Reset (drop attachments)…"
 on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
 cancels; `GET /api/sync/stream` pushes a
 frame when a job starts or ends and whenever the run store moves. The
