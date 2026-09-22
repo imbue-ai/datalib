@@ -124,8 +124,26 @@ pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
 /// not synced has none and the reader must not be what makes it. One
 /// connection, never recycled: doltlite's session state is per
 /// connection, and a replacement starts on `main` with a clean tree. The
-/// long acquire timeout is for cold opens of multi-GB stores, which take
-/// seconds.
+/// acquire timeout is [`acquire_timeout`].
+/// How long a pool waits for its one connection before giving up. Far past
+/// sqlx's 30s default because a cold open of a multi-GB store legitimately
+/// takes seconds inside `sqlite3_open_v2`; five minutes is "something else
+/// is wrong" territory.
+///
+/// `DATALIB_POOL_ACQUIRE_SECS` lowers it. A caller that kills this process
+/// on a deadline of its own must set it below that deadline, or a pool wait
+/// is killed before sqlx can say which store it was waiting on — which is
+/// the difference between a diagnosis and a silent hang.
+pub fn acquire_timeout() -> Duration {
+    const DEFAULT_SECS: u64 = 300;
+    let secs = std::env::var("DATALIB_POOL_ACQUIRE_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_SECS);
+    Duration::from_secs(secs)
+}
+
 pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .read_only(true)
@@ -134,7 +152,7 @@ pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .acquire_timeout(Duration::from_secs(300))
+        .acquire_timeout(acquire_timeout())
         .connect_with(opts)
         .await
 }
@@ -166,6 +184,31 @@ mod tests {
             format!("dolt_at_grid_rows('{HASH}')")
         );
     }
+
+    /// The env override exists so a caller with a deadline shorter than
+    /// the default can make a pool wait fail by name instead of being
+    /// killed mid-wait. Serialised with the other env test: one process.
+    #[test]
+    fn the_acquire_timeout_is_overridable_and_refuses_nonsense() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let restore = std::env::var("DATALIB_POOL_ACQUIRE_SECS").ok();
+        unsafe { std::env::remove_var("DATALIB_POOL_ACQUIRE_SECS") };
+        assert_eq!(acquire_timeout(), Duration::from_secs(300));
+        for (set, want) in [("45", 45), ("0", 300), ("", 300), ("soon", 300)] {
+            unsafe { std::env::set_var("DATALIB_POOL_ACQUIRE_SECS", set) };
+            assert_eq!(
+                acquire_timeout(),
+                Duration::from_secs(want),
+                "DATALIB_POOL_ACQUIRE_SECS={set:?}"
+            );
+        }
+        match restore {
+            Some(v) => unsafe { std::env::set_var("DATALIB_POOL_ACQUIRE_SECS", v) },
+            None => unsafe { std::env::remove_var("DATALIB_POOL_ACQUIRE_SECS") },
+        }
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     async fn writer(db: &Path) -> SqlitePool {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
