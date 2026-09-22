@@ -5,6 +5,10 @@ exports_files(["Cargo.toml"])
 rust_library(
     name = "datalib_qmd_indexer",
     srcs = ["src/lib.rs"],
+    # `include_str!`'d into the crate: the script that drives qmd's
+    # embedding SDK. Not a `srcs` entry — it is data the compiler reads,
+    # not Rust to compile.
+    compile_data = ["src/js/embed_ndjson.mjs"],
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
@@ -28,10 +32,17 @@ rust_library(
     # Before adding a crate here: put the helper in `datalib_runtime` (or
     # re-export it through there) instead. Adding a dep is the move that
     # quietly undoes all of this.
+    #
+    # serde_json is free in the sense this note cares about: it is
+    # already in this binary, pulled in by datalib_obs through
+    # opentelemetry_sdk, so naming it directly adds nothing to the
+    # digest set. `bazel query 'somepath(:qmd_indexer_bin, <it>)'` if
+    # you want to check that again.
     deps = [
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
     ],
 )
 

@@ -8,8 +8,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use datalib_etl::progress::Progress;
+use datalib_qmd_indexer::EmbedProgress;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 
@@ -94,6 +97,91 @@ async fn read_collection_names(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// One call on a [`Progress`] handle. Named so the translation below can
+/// be a pure function over values and tested without running qmd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProgressCall {
+    SetLength(u64),
+    Inc(u64),
+    Message(String),
+}
+
+/// What one of qmd's `EmbedProgress` readings implies, given the reading
+/// before it.
+///
+/// qmd reports absolute positions and the handle takes deltas, so the
+/// previous reading is the whole state this needs. Progress is counted
+/// in **input bytes**: `total_chunks` climbs as qmd discovers chunks
+/// batch by batch, so a chunk ratio would read wrong — the chunk counts
+/// go in the message, where they are a count rather than a fraction.
+///
+/// A reading identical to the one before produces nothing. qmd repeats
+/// its final reading, and a step whose message is rewritten with the
+/// same text is a step the UI has to redraw for no reason.
+pub(crate) fn embed_progress_calls(
+    prev: Option<EmbedProgress>,
+    now: EmbedProgress,
+) -> Vec<ProgressCall> {
+    if prev == Some(now) {
+        return Vec::new();
+    }
+    let mut calls = Vec::new();
+    if prev.map(|p| p.total_bytes) != Some(now.total_bytes) {
+        calls.push(ProgressCall::SetLength(now.total_bytes));
+    }
+    // `saturating_sub` rather than an assert: a position that went
+    // backwards is qmd's business, and dropping an embed over it would
+    // trade a wrong progress bar for a failed index.
+    let advanced = now
+        .bytes_processed
+        .saturating_sub(prev.map_or(0, |p| p.bytes_processed));
+    if advanced > 0 {
+        calls.push(ProgressCall::Inc(advanced));
+    }
+    calls.push(ProgressCall::Message(embed_message(now)));
+    calls
+}
+
+fn embed_message(p: EmbedProgress) -> String {
+    // Both figures in the unit the *total* deserves, so they stay
+    // comparable. Sized off the total and not off each number: early in
+    // a small run, "0.0/0.7 MB" reads like nothing is happening.
+    const MB: u64 = 1024 * 1024;
+    let (unit, scale) = if p.total_bytes >= MB {
+        ("MB", MB as f64)
+    } else {
+        ("KB", 1024.0)
+    };
+    let mut msg = format!(
+        "embedding: {} chunks · {:.1}/{:.1} {unit}",
+        p.chunks_embedded,
+        p.bytes_processed as f64 / scale,
+        p.total_bytes as f64 / scale,
+    );
+    if p.errors > 0 {
+        msg.push_str(&format!(" · {} retrying", p.errors));
+    }
+    msg
+}
+
+/// Bridge qmd's absolute readings onto the step's progress handle. The
+/// previous reading is the only state, held here because the indexer
+/// hands each one over as it arrives.
+fn embed_progress_sink(progress: Progress) -> datalib_qmd_indexer::OnEmbedProgress {
+    let prev: Mutex<Option<EmbedProgress>> = Mutex::new(None);
+    Arc::new(move |now: EmbedProgress| {
+        let mut prev = prev.lock().unwrap_or_else(|e| e.into_inner());
+        for call in embed_progress_calls(*prev, now) {
+            match call {
+                ProgressCall::SetLength(total) => progress.set_length(Some(total)),
+                ProgressCall::Inc(delta) => progress.inc(delta),
+                ProgressCall::Message(msg) => progress.set_message(&msg),
+            }
+        }
+        *prev = Some(now);
+    })
+}
+
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
@@ -116,6 +204,7 @@ pub async fn run(
     if let Some(d) = models_dir {
         opts.models_dir = d;
     }
+    opts.on_embed_progress = Some(embed_progress_sink(progress.clone()));
     // Models first, then the index: qmd finds every pinned GGUF already
     // in place and never fetches one itself. run_index shells out to
     // qmd; blocking work.
@@ -162,6 +251,91 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(bytes_processed: u64, total_bytes: u64, chunks_embedded: u64) -> EmbedProgress {
+        EmbedProgress {
+            chunks_embedded,
+            total_chunks: 0,
+            bytes_processed,
+            total_bytes,
+            errors: 0,
+        }
+    }
+
+    /// The first reading has to declare the total, or the bar has no
+    /// scale — and its bytes are progress already, not a baseline.
+    #[test]
+    fn the_first_reading_sets_the_length_and_counts_its_own_bytes() {
+        assert_eq!(
+            embed_progress_calls(None, at(100, 1000, 8)),
+            vec![
+                ProgressCall::SetLength(1000),
+                ProgressCall::Inc(100),
+                ProgressCall::Message("embedding: 8 chunks · 0.1/1.0 KB".to_string()),
+            ]
+        );
+    }
+
+    /// qmd reports absolute positions; the handle takes deltas. This is
+    /// the conversion, and getting it wrong double-counts every batch.
+    #[test]
+    fn a_later_reading_increments_by_the_difference() {
+        let calls = embed_progress_calls(Some(at(100, 1000, 8)), at(250, 1000, 20));
+        assert_eq!(calls[0], ProgressCall::Inc(150));
+        assert_eq!(calls.len(), 2, "the total didn't change, so no SetLength");
+    }
+
+    /// qmd emits its final reading twice (observed on every run). A
+    /// repeat must produce nothing at all — not a zero-Inc, not a
+    /// redundant message the UI has to redraw.
+    #[test]
+    fn an_identical_reading_says_nothing() {
+        let same = at(1000, 1000, 60);
+        assert_eq!(embed_progress_calls(Some(same), same), Vec::new());
+    }
+
+    /// Defensive, and deliberately not a panic: a position that went
+    /// backwards is qmd's business. Losing an index over a wrong
+    /// progress bar would be the worse trade.
+    #[test]
+    fn a_position_that_went_backwards_does_not_underflow() {
+        let calls = embed_progress_calls(Some(at(500, 1000, 40)), at(200, 1000, 40));
+        assert!(
+            !calls.iter().any(|c| matches!(c, ProgressCall::Inc(_))),
+            "nothing advanced, so nothing should increment: {calls:?}"
+        );
+    }
+
+    /// The message is what the Manage row shows while the run is
+    /// silent, so it carries the chunk count (a count — `total_chunks`
+    /// climbs as qmd discovers chunks, so a ratio would read wrong) and
+    /// the byte position, with retries only when there are some.
+    #[test]
+    fn the_message_reports_chunks_bytes_and_retries() {
+        let mb = 1024 * 1024;
+        assert_eq!(
+            embed_message(at(3 * mb / 2, 7 * mb, 312)),
+            "embedding: 312 chunks · 1.5/7.0 MB"
+        );
+        assert_eq!(
+            embed_message(EmbedProgress {
+                errors: 4,
+                ..at(3 * mb / 2, 7 * mb, 312)
+            }),
+            "embedding: 312 chunks · 1.5/7.0 MB · 4 retrying"
+        );
+    }
+
+    /// A corpus under a megabyte is reported in KB. In MB its whole
+    /// run reads "0.0/0.7 MB", which looks like nothing is happening —
+    /// the opposite of what this message is for.
+    #[test]
+    fn a_small_corpus_is_reported_in_kb() {
+        assert_eq!(
+            embed_message(at(34_070, 748_933, 32)),
+            "embedding: 32 chunks · 33.3/731.4 KB"
+        );
+    }
 
     /// An input is a step id, which is also the tree it writes. The
     /// group is its first segment — not the whole string, and not a
