@@ -22,13 +22,17 @@ const LIBRARY_CAPS: &str =
     "sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn,html5ever=error,axum=info";
 
 /// The `RUST_LOG`-grammar filter for one level of our own lines.
-/// Third-party crates follow the level down to `debug` and no further:
-/// their `trace` is connection bookkeeping and byte counts, not what a
-/// question about a sync needs. The step and the runner that stores
-/// its lines share one filter on purpose: a step that filtered at
-/// `info` would never hand the runner a `debug` line to keep.
+/// Third-party crates follow the level down to `info` and no further:
+/// their `debug` is glob compilation, parser state and byte counts,
+/// not what a question about a sync needs. The step and the runner
+/// that stores its lines share one filter on purpose: a step that
+/// filtered at `info` would never hand the runner a `debug` line to
+/// keep.
 pub fn filter_at(level: &str) -> String {
-    let libraries = if level == "trace" { "debug" } else { level };
+    let libraries = match level {
+        "trace" | "debug" => "info",
+        other => other,
+    };
     let ours = OUR_TARGETS
         .iter()
         .map(|t| format!("{t}={level}"))
@@ -47,13 +51,14 @@ mod tests {
     use super::{default_filter, filter_at};
 
     #[test]
-    fn our_crates_take_the_level_and_libraries_stop_at_debug() {
+    fn our_crates_take_the_level_and_libraries_stop_at_info() {
         assert_eq!(
             filter_at("trace"),
-            "debug,datalib=trace,fsindex=trace,dirtree_diff=trace,\
+            "info,datalib=trace,fsindex=trace,dirtree_diff=trace,\
              sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn,html5ever=error,axum=info"
         );
-        assert!(filter_at("info").starts_with("info,datalib=info,"));
+        assert!(filter_at("debug").starts_with("info,datalib=debug,"));
+        assert!(filter_at("warn").starts_with("warn,datalib=warn,"));
         assert_eq!(default_filter(), filter_at("trace"));
     }
 }

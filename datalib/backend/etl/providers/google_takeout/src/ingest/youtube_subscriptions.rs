@@ -28,7 +28,12 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
             }
             let cells = split_csv_row(line);
             if cells.len() < 3 {
-                warn!(event = "youtube_subscriptions_short_row", row = i, line);
+                warn!(
+                    event = "youtube_subscriptions_short_row",
+                    row = i,
+                    line,
+                    "a subscriptions row is short; skipped it"
+                );
                 continue;
             }
             let channel_id = cells[0].trim().to_string();

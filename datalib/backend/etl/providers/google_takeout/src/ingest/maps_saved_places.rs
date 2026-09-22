@@ -22,7 +22,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
     let n = file_checkpoint::ingest_changed(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
         let geo: Value = serde_json::from_slice(bytes).context("parse Saved Places.json")?;
         let Some(features) = geo.get("features").and_then(|v| v.as_array()) else {
-            warn!(event = "maps_saved_no_features", path = FILE_REL);
+            warn!(
+                event = "maps_saved_no_features",
+                path = FILE_REL,
+                "the saved-places file has no features"
+            );
             return Ok(Vec::new());
         };
         let mut rows: Vec<MapsSavedPlaceRow> = Vec::with_capacity(features.len());
@@ -37,7 +41,11 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                 .unwrap_or("");
             let key = extract_ftid_or_cid(url).unwrap_or("");
             if key.is_empty() || date.is_empty() {
-                warn!(event = "maps_saved_missing_key", path = FILE_REL);
+                warn!(
+                    event = "maps_saved_missing_key",
+                    path = FILE_REL,
+                    "a saved place has no key; skipped it"
+                );
                 continue;
             }
             let id = ns_id(&format!("maps_saved:{key}:{date}"));

@@ -171,7 +171,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 ));
             }
             Err(e) => {
-                warn!(event = "facebook_file_failed", file = %path.display(), table, error = %format!("{e:#}"));
+                warn!(event = "facebook_file_failed", file = %path.display(), table, error = %format!("{e:#}"), "an export file could not be ingested");
                 summary.parse_errors += 1;
             }
         }
@@ -306,7 +306,7 @@ async fn store_media(
                         summary.media_stored += 1;
                     }
                     Err(e) => {
-                        warn!(event = "facebook_media_missing", uri, error = %e);
+                        warn!(event = "facebook_media_missing", uri, error = %e, "a media file the export names is not there");
                         missing.insert(uri.clone());
                         acc.add_failed(id, &uri, "media file not in the export");
                         summary.media_missing += 1;

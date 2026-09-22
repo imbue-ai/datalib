@@ -118,10 +118,16 @@ pub fn record(collection: &str, held: usize, gone: usize) {
             "this run deleted most of a collection. If that is not what you \
              did upstream, our enumeration may have narrowed — the old rows \
              are still in history: dolt_diff_<table> names them and \
-             dolt_at_<table>('HEAD^1') reads them back",
+             dolt_at_<table>('HEAD^1') reads them back"
         );
     } else {
-        tracing::info!(event = "pruned", collection, held, removed = gone);
+        tracing::info!(
+            event = "pruned",
+            collection,
+            held,
+            removed = gone,
+            "pruned rows the upstream no longer has"
+        );
     }
 }
 

@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
         errors = summary.errors,
         requests = summary.requests,
         network_seconds = summary.network_seconds,
+        "the chatgpt download is done"
     );
     Ok(())
 }

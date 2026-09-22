@@ -194,7 +194,7 @@ pub fn render_all(
         if !resolved.unmatched.is_empty() {
             tracing::warn!(
                 source = source_id,
-                unmatched = ?resolved.unmatched,
+                unmatched = %resolved.unmatched.join(", "),
                 "only_render_labels matched no mailbox; check spelling / parent path",
             );
         }

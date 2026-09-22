@@ -170,7 +170,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     .set_message(&format!("{table}: {n} rows ({} files)", summary.files));
             }
             Err(e) => {
-                warn!(event = "linkedin_csv_failed", file = %path.display(), table, error = %e);
+                warn!(event = "linkedin_csv_failed", file = %path.display(), table, error = %e, "a CSV of the export could not be ingested");
                 summary.parse_errors += 1;
             }
         }
@@ -190,7 +190,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 ));
             }
             Err(e) => {
-                warn!(event = "linkedin_articles_failed", error = %e);
+                warn!(event = "linkedin_articles_failed", error = %e, "the articles could not be ingested");
                 summary.parse_errors += 1;
             }
         }
@@ -219,8 +219,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 no_photo = s.no_photo,
                 transient = s.transient,
                 gave_up = s.gave_up,
+                "fetched the profile photos"
             ),
-            Err(e) => warn!(event = "linkedin_photos_failed", error = %e),
+            Err(e) => {
+                warn!(event = "linkedin_photos_failed", error = %e, "the profile photos could not be fetched")
+            }
         }
     }
     Ok(summary)

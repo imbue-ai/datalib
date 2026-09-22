@@ -415,6 +415,37 @@ async fn retention_drops_runs_older_than_the_window() {
     assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("new"));
 }
 
+/// Age is measured from the run being begun, not the wall clock. A
+/// runner pinned with `--now` stamps every run with that clock; under
+/// the wall clock a root a year "old" would lose run 1 the moment run 2
+/// began, five minutes later by its own reckoning.
+#[tokio::test]
+async fn retention_ages_runs_against_the_newest_run_not_the_wall_clock() {
+    let td = tempfile::tempdir().unwrap();
+    let a_month = Retention {
+        max_runs: 100,
+        max_age_days: 30,
+        ..Retention::default()
+    };
+    let a_year_ago =
+        datalib_time::IsoOffsetTimestamp::now_local().bump_micros(-365 * 86_400 * 1_000_000);
+    let first = a_year_ago.to_rfc3339();
+    let five_minutes_on = a_year_ago.bump_micros(5 * 60 * 1_000_000).to_rfc3339();
+    {
+        let w = RunWriter::start(td.path(), "first", &first, None, a_month).unwrap();
+        w.log(line("a", "info", "pinned, a year back"));
+    }
+    {
+        let _w = RunWriter::start(td.path(), "second", &five_minutes_on, None, a_month).unwrap();
+    }
+    assert_eq!(
+        log_after(td.path(), "first", None, 0, 10).await.len(),
+        1,
+        "run 1 is five minutes older than run 2, not a year older than today"
+    );
+    assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("second"));
+}
+
 /// Reading a root that has never synced is not an error — a fresh data
 /// root has no store, and the answer is "nothing is running".
 #[tokio::test]

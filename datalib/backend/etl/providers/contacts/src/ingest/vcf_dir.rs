@@ -76,7 +76,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     summary.errors += scan.errors.len();
     for e in &scan.errors {
-        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error);
+        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error, "an entry of the vcf directory could not be walked");
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
@@ -100,6 +100,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     event = "carddav_vcf_ingest_failed",
                     path = %f.path.display(),
                     error = %e,
+                    "a vcf file could not be ingested"
                 );
             }
         }
@@ -110,7 +111,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // store. `None` is a reader, which never reaches this path.
     if let Some(cas) = db.cas() {
         if let Err(e) = super::photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_vcf_photo_lift_failed", error = %e);
+            warn!(event = "carddav_vcf_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
         }
     }
     Ok(summary)

@@ -12,6 +12,7 @@ pub fn item_fetched(url: &str, bytes: u64, duration_ms: u64) {
         url = url,
         bytes = bytes,
         duration_ms = duration_ms,
+        "fetched one item"
     );
 }
 
@@ -21,5 +22,6 @@ pub fn indexed_batch(entity: &str, count: usize, duration_ms: u64) {
         entity = entity,
         count = count,
         duration_ms = duration_ms,
+        "indexed one batch"
     );
 }

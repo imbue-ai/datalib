@@ -140,7 +140,7 @@ pub async fn changed_rows(
                     table,
                     from,
                     error = %format!("{e:#}"),
-                    "render: the cursor cannot be diffed; rendering everything"
+                    "the cursor cannot be diffed; rendering everything"
                 );
                 return Ok(None);
             }

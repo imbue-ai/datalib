@@ -104,6 +104,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         event = "signal_open_snapshot",
         snapshot = %snapshot_dir.display(),
         files_root = %files_root.display(),
+        "opened the backup snapshot"
     );
 
     // Resume cursor, fast path: fingerprint the snapshot by the content of its
@@ -119,6 +120,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             snapshot = %snapshot_dir.display(),
             fingerprint = %fingerprint,
             note = "skipping decrypt + walk; `datalib-dag --reset` this step to re-ingest",
+            "this snapshot was ingested before; nothing to do"
         );
         return Ok(FetchSummary {
             snapshot: snapshot_dir
@@ -196,7 +198,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let frame = match frame {
             Ok(f) => f,
             Err(e) => {
-                warn!(event = "signal_frame_decode_error", error = %e);
+                warn!(event = "signal_frame_decode_error", error = %e, "a backup frame did not decode");
                 continue;
             }
         };
@@ -431,6 +433,7 @@ fn ingest_attachment(
                 media_name = %media_name,
                 path = %enc_path.display(),
                 error = %e,
+                "an attachment the backup names is not there"
             );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),
@@ -453,6 +456,7 @@ fn ingest_attachment(
                 event = "signal_attachment_decrypt_failed",
                 media_name = %media_name,
                 error = %e,
+                "an attachment could not be decrypted"
             );
             pending.rows.push(schema_raw::ChatItemAttachmentRow {
                 id: attachment_id.clone(),

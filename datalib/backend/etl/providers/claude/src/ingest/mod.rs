@@ -211,18 +211,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         age_s = age.num_seconds().max(0),
                         ttl_s = ORGS_TTL.num_seconds(),
                         count = orgs.len(),
+                        "the org listing is fresh enough; not re-listing"
                     );
                     Some(orgs)
                 }
                 Ok(_) => None,
                 Err(e) => {
-                    warn!(event = "claude_orgs_load_failed", error = %e);
+                    warn!(event = "claude_orgs_load_failed", error = %e, "could not load the stored orgs");
                     None
                 }
             },
             Ok(_) => None,
             Err(e) => {
-                warn!(event = "claude_orgs_sweep_age_failed", error = %e);
+                warn!(event = "claude_orgs_sweep_age_failed", error = %e, "could not read when the orgs were last swept");
                 None
             }
         };
@@ -231,14 +232,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Some(orgs) => orgs,
             None => {
                 let orgs = client.list_orgs().await.map_err(credential_hint)?;
-                info!(event = "claude_orgs", count = orgs.len());
+                info!(
+                    event = "claude_orgs",
+                    count = orgs.len(),
+                    "listed the orgs this credential can see"
+                );
                 if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
-                    warn!(event = "claude_orgs_upsert_failed", error = %e);
+                    warn!(event = "claude_orgs_upsert_failed", error = %e, "could not store the orgs");
                 } else if let Err(e) = db.record_sweep(ORGS_SWEEP_KEY).await {
                     // Only stamp the marker once the rows are actually
                     // stored — otherwise a failed upsert would leave a
                     // fresh marker pointing at an empty table.
-                    warn!(event = "claude_orgs_sweep_record_failed", error = %e);
+                    warn!(event = "claude_orgs_sweep_record_failed", error = %e, "could not record the org sweep");
                 }
                 orgs
             }
@@ -253,7 +258,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 ingest_export_users(&db, export_dir, &now)
                     .await
                     .unwrap_or_else(|e| {
-                        warn!(event = "claude_export_users_failed", error = %e);
+                        warn!(event = "claude_export_users_failed", error = %e, "the users of the export could not be stored");
                     });
             }
         }
@@ -262,15 +267,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 Ok(acct) => {
                     let entry = pick_user_fields(&acct);
                     if let Err(e) = upsert_users(&db, &[entry], &now).await {
-                        warn!(event = "claude_synthesize_user_failed", error = %e);
+                        warn!(event = "claude_synthesize_user_failed", error = %e, "could not synthesize the account's user row");
                     } else {
-                        info!(event = "claude_users_synthesized");
+                        info!(
+                            event = "claude_users_synthesized",
+                            "synthesized the users from the account"
+                        );
                     }
                 }
                 Err(e) => warn!(
                     event = "claude_current_account_failed",
                     error = %e,
-                    note = "users will be empty"
+                    note = "users will be empty",
+                    "could not read the current account"
                 ),
             }
         }
@@ -282,6 +291,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // labels stale: a conversation resolves its `project` grid
         // column through `project_name_by_uuid`, and with no projects
         // mirrored that column falls back to a bare UUID.
+        // An org that refuses one request refuses them all: once it has
+        // answered 403 past the transient retries it is not asked again
+        // this run. The listing walk learns this from `list_conversations`;
+        // the one-by-one path below has no listing, so it learns it here.
+        let mut forbidden_orgs: HashSet<String> = HashSet::new();
         if opts.projects {
             let only: HashSet<String> = opts
                 .project_uuids
@@ -296,6 +310,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &mut summary,
                 &opts.progress,
                 &now,
+                &mut forbidden_orgs,
             )
             .await;
         }
@@ -314,6 +329,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     &mut summary,
                     &mut blake3_by_file,
                     &now,
+                    &mut forbidden_orgs,
                 )
                 .await?;
                 match outcome {
@@ -369,7 +385,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     info!(
                         event = "claude_org_forbidden",
                         org = %org_name,
-                        note = "no chat permission for this org"
+                        note = "no chat permission for this org",
+                        "this org refuses conversation listings; skipping it"
                     );
                     summary.forbidden_orgs += 1;
                     continue;
@@ -379,7 +396,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             info!(
                 event = "claude_org_listing_count",
                 org = %org_name,
-                count = listing.len()
+                count = listing.len(),
+                "listed one org's conversations"
             );
             sleep(SLEEP_BETWEEN).await;
             listings_by_org.push((org_uuid.to_string(), org_name, listing));
@@ -453,6 +471,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 stale = stale.len(),
                 up_to_date = up_to_date,
                 out_of_scope = out_of_scope,
+                "sorted one org's listing into what to fetch"
             );
             summary.skipped += up_to_date;
 
@@ -498,7 +517,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 // Asked to stop: the conversation that just landed sealed
                 // with its blobs, so end here.
                 if opts.control.stop.requested() {
-                    info!(event = "claude_interrupted", org = %plan.org_name);
+                    info!(event = "claude_interrupted", org = %plan.org_name, "told to stop; leaving the rest of this org for the next run");
                     break 'orgs;
                 }
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
@@ -547,7 +566,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                     Err((e, retries)) => {
                         summary.forbidden_retry_attempts += retries as u64;
-                        warn!(event = "claude_fetch_error", uuid = uuid, error = %e);
+                        warn!(event = "claude_fetch_error", uuid = uuid, error = %e, "a conversation could not be fetched");
                         let _ = db.record_conversation_error(uuid, &e.to_string()).await;
                         summary.errors += 1;
                     }
@@ -576,6 +595,7 @@ async fn sync_projects(
     summary: &mut FetchSummary,
     progress: &datalib_etl::progress::Progress,
     now: &IsoOffsetTimestamp,
+    forbidden_orgs: &mut HashSet<String>,
 ) {
     // Track which requested UUIDs we actually saw, so a typo doesn't
     // silently mirror nothing.
@@ -595,12 +615,14 @@ async fn sync_projects(
                 info!(
                     event = "claude_projects_forbidden",
                     org = %org_name,
-                    note = "no project permission for this org"
+                    "this org refuses project listings; its conversations are not \
+                     asked for one by one either"
                 );
+                forbidden_orgs.insert(org_uuid.to_string());
                 continue;
             }
             Err(e) => {
-                warn!(event = "claude_projects_list_failed", org = %org_name, error = %e);
+                warn!(event = "claude_projects_list_failed", org = %org_name, error = %e, "an org's projects could not be listed");
                 summary.errors += 1;
                 continue;
             }
@@ -608,7 +630,8 @@ async fn sync_projects(
         info!(
             event = "claude_project_listing_count",
             org = %org_name,
-            count = listing.len()
+            count = listing.len(),
+            "listed one org's projects"
         );
 
         // Narrow before the skip-check so a filtered run doesn't even
@@ -645,7 +668,7 @@ async fn sync_projects(
         let existing = match db.existing_project_updated_at(&listed_ids).await {
             Ok(m) => m,
             Err(e) => {
-                warn!(event = "claude_projects_skipcheck_failed", error = %e);
+                warn!(event = "claude_projects_skipcheck_failed", error = %e, "could not read when the projects were last swept");
                 summary.errors += 1;
                 continue;
             }
@@ -669,7 +692,7 @@ async fn sync_projects(
                 match upsert_project(db, project, uuid, org_uuid, &org_name, now).await {
                     Ok(()) => summary.projects_fetched += 1,
                     Err(e) => {
-                        warn!(event = "claude_project_upsert_failed", uuid = uuid, error = %e);
+                        warn!(event = "claude_project_upsert_failed", uuid = uuid, error = %e, "a project could not be stored");
                         summary.errors += 1;
                         continue;
                     }
@@ -690,19 +713,23 @@ async fn sync_projects(
                         // stored, so an interrupted sweep doesn't
                         // poison the TTL check (same rule as `orgs`).
                         if let Err(e) = db.record_sweep(&project_docs_sweep_key(uuid)).await {
-                            warn!(event = "claude_project_docs_sweep_failed", error = %e);
+                            warn!(event = "claude_project_docs_sweep_failed", error = %e, "could not record the project-docs sweep");
                         }
                     }
                     Err(e) => {
-                        warn!(event = "claude_project_docs_upsert_failed", uuid = uuid, error = %e);
+                        warn!(event = "claude_project_docs_upsert_failed", uuid = uuid, error = %e, "a project's docs could not be stored");
                         summary.errors += 1;
                     }
                 },
                 Err(ClaudeError::Forbidden(_)) => {
-                    info!(event = "claude_project_docs_forbidden", uuid = uuid);
+                    info!(
+                        event = "claude_project_docs_forbidden",
+                        uuid = uuid,
+                        "this project refuses its docs listing; skipping them"
+                    );
                 }
                 Err(e) => {
-                    warn!(event = "claude_project_docs_failed", uuid = uuid, error = %e);
+                    warn!(event = "claude_project_docs_failed", uuid = uuid, error = %e, "a project's docs could not be fetched");
                     summary.errors += 1;
                 }
             }
@@ -719,7 +746,8 @@ async fn sync_projects(
             warn!(
                 event = "claude_project_uuid_not_found",
                 uuid = %requested,
-                note = "listed in sync.project_uuids but not present in any visible org"
+                note = "listed in sync.project_uuids but not present in any visible org",
+                "a configured project uuid is in no org"
             );
         }
     }
@@ -738,7 +766,7 @@ async fn docs_need_refetch(db: &RawDb, project_uuid: &str, metadata_changed: boo
         Ok(Some(age)) => age >= PROJECT_DOCS_TTL,
         Ok(None) => true,
         Err(e) => {
-            warn!(event = "claude_project_docs_sweep_age_failed", error = %e);
+            warn!(event = "claude_project_docs_sweep_age_failed", error = %e, "could not read when the project docs were last swept");
             true
         }
     }
@@ -898,12 +926,17 @@ async fn fetch_single(
     summary: &mut FetchSummary,
     blake3_by_file: &mut HashMap<String, String>,
     now: &IsoOffsetTimestamp,
+    forbidden_orgs: &mut HashSet<String>,
 ) -> Result<SingleOutcome> {
     let mut forbidden_somewhere = false;
     for org in orgs {
         let Some((org_uuid, org_name)) = org_identity(org) else {
             continue;
         };
+        if forbidden_orgs.contains(org_uuid) {
+            forbidden_somewhere = true;
+            continue;
+        }
         // Same retry the listing walk uses. Without it a transient 403
         // — which claude.ai issues routinely on a detail GET — reads as
         // "not in this org", and the uuid is reported missing.
@@ -918,7 +951,8 @@ async fn fetch_single(
                 info!(
                     event = "claude_fetch_single_ok",
                     uuid = conv_uuid,
-                    org = %org_name
+                    org = %org_name,
+                    "fetched one conversation by id"
                 );
                 fetch_files_for(db, &full, conv_uuid, summary, blake3_by_file, now).await;
                 return Ok(SingleOutcome::Fetched);
@@ -928,8 +962,9 @@ async fn fetch_single(
                     event = "claude_fetch_single_forbidden",
                     uuid = conv_uuid,
                     org = %org_name,
-                    "still 403 after the transient retries",
+                    "still 403 after the transient retries; not asking this org again",
                 );
+                forbidden_orgs.insert(org_uuid.to_string());
                 forbidden_somewhere = true;
                 continue;
             }
@@ -937,12 +972,13 @@ async fn fetch_single(
                 info!(
                     event = "claude_fetch_single_not_in_org",
                     uuid = conv_uuid,
-                    org = %org_name
+                    org = %org_name,
+                    "this org has no conversation with that id"
                 );
                 continue;
             }
             Err(e) => {
-                warn!(event = "claude_fetch_error", uuid = conv_uuid, error = %e);
+                warn!(event = "claude_fetch_error", uuid = conv_uuid, error = %e, "a conversation could not be fetched");
                 let _ = db
                     .record_conversation_error(conv_uuid, &e.to_string())
                     .await;
@@ -996,6 +1032,7 @@ async fn get_conversation_with_403_retry(
                         event = "claude_fetch_403_retry_ok",
                         uuid = conv_uuid,
                         attempt = attempt,
+                        "the retry after a 403 succeeded"
                     );
                 }
                 return Ok(RetryOutcome {
@@ -1004,11 +1041,12 @@ async fn get_conversation_with_403_retry(
                 });
             }
             Err(ClaudeError::Forbidden(msg)) => {
-                warn!(
+                info!(
                     event = "claude_fetch_403_transient",
                     uuid = conv_uuid,
                     attempt = attempt,
                     error = %msg,
+                    "403 on a detail fetch; retrying in case it is transient",
                 );
                 last_err = Some(ClaudeError::Forbidden(msg));
             }
@@ -1171,7 +1209,7 @@ async fn ingest_export_users(
         serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))?;
     if let Some(arr) = v.as_array() {
         if let Err(e) = upsert_users(db, arr, now).await {
-            warn!(event = "claude_users_upsert_failed", error = %e);
+            warn!(event = "claude_users_upsert_failed", error = %e, "could not store the users");
         }
     }
     Ok(())
@@ -1238,7 +1276,7 @@ async fn fetch_files_for(
                 summary.failed_blobs += 1;
             }
             Err(e) => {
-                warn!(event = "claude_media_unexpected_err", file_uuid = %file_uuid, error = %e);
+                warn!(event = "claude_media_unexpected_err", file_uuid = %file_uuid, error = %e, "a media download failed in a way this build does not classify");
                 attach.add_failed(conv_uuid, file_uuid, e.to_string());
                 summary.failed_blobs += 1;
             }
@@ -1255,7 +1293,7 @@ async fn fetch_files_for(
         })
         .await;
     if let Err(e) = flush_result {
-        warn!(event = "claude_attachment_flush_err", conv = %conv_uuid, error = %e);
+        warn!(event = "claude_attachment_flush_err", conv = %conv_uuid, error = %e, "a conversation's attachments could not be written");
     }
     let _ = now;
 }
@@ -1278,7 +1316,11 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
     let preview_path = match preview_path {
         Some(p) => p,
         None => {
-            warn!(event = "claude_media_no_preview_url", file_uuid = file_uuid);
+            warn!(
+                event = "claude_media_no_preview_url",
+                file_uuid = file_uuid,
+                "a file has no preview URL; skipped it"
+            );
             return Ok(None);
         }
     };
@@ -1305,6 +1347,7 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
                 event = "claude_media_failed",
                 file_uuid = file_uuid,
                 error = %msg,
+                "a file could not be downloaded"
             );
             Ok(None)
         }
@@ -1314,6 +1357,7 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
                 event = "claude_media_failed",
                 file_uuid = file_uuid,
                 error = %msg,
+                "a file could not be downloaded"
             );
             Ok(None)
         }

@@ -95,6 +95,7 @@ async fn main() -> Result<()> {
         skipped_blobs = summary.skipped_blobs,
         failed_blobs = summary.failed_blobs,
         official_requests = summary.official_requests,
+        "the notion download is done"
     );
     Ok(())
 }

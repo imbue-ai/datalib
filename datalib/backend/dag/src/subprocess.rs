@@ -412,6 +412,10 @@ fn unwrap_line(step: &str, stream: Stream, line: &str) -> Event {
                 .and_then(|v| v.as_str().map(str::to_string))
         })
         .unwrap_or_else(|| line.to_string());
+    // A line bridged from the `log` crate carries `log.file`,
+    // `log.line`, `log.module_path` and `log.target` beside the
+    // envelope's own `filename`, `line_number` and `target`.
+    fields.retain(|k, _| !k.starts_with("log."));
     for (k, v) in env {
         if !ENVELOPE_LIFTED.contains(&k.as_str()) {
             fields.entry(k).or_insert(v);
@@ -449,6 +453,13 @@ fn retag(ev: Event, id: &str) -> Event {
             step: id,
             status,
             error,
+            exit_code,
+            signal,
+        },
+        Event::PassEnd {
+            exit_code, signal, ..
+        } => Event::PassEnd {
+            step: id,
             exit_code,
             signal,
         },

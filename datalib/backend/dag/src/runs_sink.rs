@@ -45,6 +45,11 @@ fn now() -> (String, Option<String>) {
     now_split()
 }
 
+/// The `target` of a line the runner writes about a step — a
+/// checkpoint sealed, why the step ended, a hint — so a filter on
+/// target finds the runner's lines the way it finds a crate's.
+const RUNNER_TARGET: &str = "datalib_dag::runner";
+
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
     /// observability: a sync that runs without a record is much better
@@ -226,12 +231,34 @@ impl EventSink for RunStoreSink {
                         ts_utc,
                         tz_offset,
                         level: level.as_str().into(),
+                        target: Some(RUNNER_TARGET.into()),
                         msg: error.clone(),
                         fields: Some(
                             serde_json::json!({ "finished": status.as_str() }).to_string(),
                         ),
                         ..Default::default()
                     });
+                }
+            }
+            // The pass's process is closed the way a finished attempt's
+            // is; the step row is not touched, since the step goes on.
+            Event::PassEnd {
+                step,
+                exit_code,
+                signal,
+            } => {
+                let finished_at_utc = now().0;
+                let mut ended = None;
+                self.update(step, |a| {
+                    if let Some(p) = a.process.as_mut() {
+                        p.finished_at_utc = Some(finished_at_utc.clone());
+                        p.exit_code = exit_code.map(i64::from);
+                        p.signal = signal.map(i64::from);
+                        ended = Some(p.clone());
+                    }
+                });
+                if let Some(p) = ended {
+                    self.writer.process(p);
                 }
             }
             Event::Metric {
@@ -276,6 +303,7 @@ impl EventSink for RunStoreSink {
                     ts_utc,
                     tz_offset,
                     level: LogLevel::Info.as_str().into(),
+                    target: Some(RUNNER_TARGET.into()),
                     msg: format!("sealed checkpoint #{n}: {since_last}now at {version}"),
                     fields: Some(
                         serde_json::json!({ "version": version, "rows": rows, "checkpoint": n })
@@ -314,7 +342,11 @@ impl EventSink for RunStoreSink {
                     tz_offset,
                     stream: stream.map(|s| s.as_str().to_string()),
                     level: level.as_str().into(),
-                    target: target.clone(),
+                    // A line with no stream came from the runner itself,
+                    // not out of a pipe; the runner is then its target.
+                    target: target
+                        .clone()
+                        .or_else(|| stream.is_none().then(|| RUNNER_TARGET.into())),
                     thread: thread.clone(),
                     msg: msg.clone(),
                     fields: fields
@@ -331,6 +363,7 @@ impl EventSink for RunStoreSink {
                     ts_utc,
                     tz_offset,
                     level: LogLevel::Warn.as_str().into(),
+                    target: Some(RUNNER_TARGET.into()),
                     msg: msg.clone(),
                     fields: Some(r#"{"hint":true}"#.into()),
                     ..Default::default()
@@ -411,6 +444,45 @@ mod tests {
         assert_eq!(lines[0].process_id, runner.process_id);
         assert_eq!(lines[0].process.as_deref(), Some("dag"));
         assert_eq!(lines[0].git_hash.as_deref(), Some("ae2d52f0"));
+    }
+
+    /// A streaming consumer is spawned once per producer checkpoint,
+    /// and every pass is a process that ends — with an exit code — while
+    /// the step stays running until its final pass. Without `PassEnd`
+    /// every pass but the last was left open, its exit code lost.
+    #[tokio::test]
+    async fn a_streaming_pass_closes_its_process_and_leaves_the_step_running() {
+        let start = || Event::StepStart {
+            step: "unified_index/grid".into(),
+            attempt: 1,
+            builtin: true,
+        };
+        let (td, snap) = run(&[
+            start(),
+            Event::PassEnd {
+                step: "unified_index/grid".into(),
+                exit_code: Some(0),
+                signal: None,
+            },
+            start(),
+        ])
+        .await;
+        let mut passes: Vec<_> = processes(td.path(), None, Some("step"), 10)
+            .await
+            .into_iter()
+            .filter(|p| p.step.as_deref() == Some("unified_index/grid"))
+            .collect();
+        passes.sort_by(|a, b| a.started_at_utc.cmp(&b.started_at_utc));
+        assert_eq!(passes.len(), 2, "one process per pass");
+        assert_eq!(passes[0].exit_code, Some(0));
+        assert!(passes[0].finished_at_utc.is_some(), "the first pass ended");
+        assert!(passes[1].finished_at_utc.is_none(), "the second is running");
+        let step = snap
+            .steps
+            .iter()
+            .find(|s| s.step == "unified_index/grid")
+            .expect("the step row");
+        assert_eq!(step.state, "running");
     }
 
     /// Each attempt of a step is a process of the run: what came out of

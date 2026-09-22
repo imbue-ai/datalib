@@ -90,6 +90,7 @@ async fn ingest_all(db: &RawDb, opts: &IngestOptions, summary: &mut IngestSummar
         warn!(
             event = "claude_export_no_users_json",
             dir = %dir.display(),
+            "the export has no users.json; users will be synthesized"
         );
     }
 
@@ -230,7 +231,10 @@ async fn upsert_conversations(
     let mut rows = Vec::with_capacity(convs.len());
     for c in convs {
         let Some(id) = str_field(c, "uuid") else {
-            warn!(event = "claude_export_conversation_without_uuid");
+            warn!(
+                event = "claude_export_conversation_without_uuid",
+                "a conversation in the export has no uuid; skipped it"
+            );
             continue;
         };
         rows.push(ConversationRowSchema {
@@ -261,7 +265,10 @@ async fn upsert_projects(
     let mut doc_rows: Vec<ProjectDocRow> = Vec::new();
     for p in projects {
         let Some(project_uuid) = str_field(p, "uuid") else {
-            warn!(event = "claude_export_project_without_uuid");
+            warn!(
+                event = "claude_export_project_without_uuid",
+                "a project in the export has no uuid; skipped it"
+            );
             continue;
         };
         for d in docs_of(p) {

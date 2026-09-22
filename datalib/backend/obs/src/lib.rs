@@ -140,8 +140,12 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     if use_json {
         registry
             .with(
+                // The current span says what a line is about (which
+                // channel, which call); the whole ancestry on every
+                // line repeated the store's path a hundred times over.
                 tracing_subscriber::fmt::layer()
                     .json()
+                    .with_span_list(false)
                     .with_writer(writer)
                     .with_file(true)
                     .with_line_number(true)

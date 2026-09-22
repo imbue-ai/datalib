@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
         entries = cache.count().await.unwrap_or(-1),
         "reading this host's fingerprint cache from {} ({} entries)",
         cache.path().display(),
-        cache.count().await.unwrap_or(-1),
+        cache.count().await.unwrap_or(-1)
     );
     // Live terminal bar attached to obs's shared MultiProgress (same
     // wiring the pipeline gives each source). Falls back to
@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
             diff.added,
             diff.modified,
             diff.removed,
-            unchanged,
+            unchanged
         );
     }
 
@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
     let gc_ms = match db.gc().await {
         Ok(d) => d.as_secs_f64() * 1000.0,
         Err(e) => {
-            tracing::warn!(event = "fsindex_gc_failed", error = %format!("{e:#}"));
+            tracing::warn!(event = "fsindex_gc_failed", error = %format!("{e:#}"), "the cache could not be garbage-collected");
             -1.0
         }
     };
@@ -180,6 +180,7 @@ async fn main() -> Result<()> {
         commit_ms = commit_ms,
         gc_ms = gc_ms,
         wall_seconds = elapsed.as_secs_f64(),
+        "the scan is done"
     );
     // CLI summary to stdout: this binary is a pipe-friendly tool, so a
     // one-line machine-greppable summary on stdout is intentional (the

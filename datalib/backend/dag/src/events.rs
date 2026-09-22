@@ -29,6 +29,16 @@ pub enum Event {
         #[serde(default)]
         builtin: bool,
     },
+    /// A streaming pass of the step ended: its process is over, and this
+    /// is how, but the step is not — the final pass is still to come, so
+    /// its state stays where it was.
+    PassEnd {
+        step: StepId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
+    },
     /// Terminal state for the step this run.
     StepFinish {
         step: StepId,

@@ -35,9 +35,11 @@ since run 3 wipes the cursor and then re-creates it.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import unittest
@@ -743,7 +745,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # The step's tracing event, as it reaches stderr: JSON nested inside
     # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
-    _GRID_INDEX_READ = re.compile(r'build_grid_index done.*?\\?"read\\?":\s*(\d+)')
+    _GRID_INDEX_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
 
     def _grid_index_reads(self, stderr: str) -> list[int]:
         """How many documents each grid_index step in a run READ.
@@ -1536,6 +1538,97 @@ class IngestedTngPipelineTest(unittest.TestCase):
             EXPECTED_PROVIDERS,
             "run 6 removed one pull request, not a provider",
         )
+
+        self._assert_run_store_hygiene()
+
+    # ── the run store ───────────────────────────────────────────────
+
+    # How often one message may repeat within one step attempt at `info`
+    # or above before it counts as spam. The number is a policy, not a
+    # measurement: a walk that says the same thing per page is fine at
+    # tens, and a fan-in that said the same thing per source per pass
+    # reached six hundred.
+    _SPAM_CEILING = 100
+
+    # A field value that is Rust's `Debug` rendering of an Option, a
+    # struct or a list: `?value` at the call site. Nothing can filter on
+    # it; the site wanted `%value`, `.as_deref()` or a join.
+    _DEBUG_FORMATTED = re.compile(r"^Some\(|^None$|^\w+ \{ .* \}$|^\[\".*\"\]$")
+
+    def _assert_run_store_hygiene(self) -> None:
+        """What every run of the real pipeline must leave in the run store.
+
+        Every rule here was broken by a line seen in a live bake: a
+        streaming pass whose process never ended, a runner line with
+        no target, a field holding `Some(Origin)`, a fan-in saying the
+        same thing per source per pass. Plain SQLite, so the reader is
+        stdlib `sqlite3` and not doltlite.
+        """
+        store = self.workspace / "system" / "runs" / "runs.sqlite"
+        self.assertTrue(store.exists(), f"no run store at {store}")
+        con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            open_processes = con.execute(
+                "SELECT step, count(*) FROM processes WHERE process = 'step' "
+                "AND (finished_at_utc IS NULL OR (exit_code IS NULL AND signal IS NULL)) "
+                "GROUP BY step"
+            ).fetchall()
+            self.assertEqual(
+                open_processes,
+                [],
+                "every step process the runner started has an end and an exit "
+                "(a streaming pass included)",
+            )
+            untargeted = con.execute(
+                "SELECT count(*), min(msg) FROM log WHERE target IS NULL OR target = ''"
+            ).fetchone()
+            self.assertEqual(
+                untargeted[0], 0, f"a line has no target, e.g. {untargeted[1]!r}"
+            )
+            silent = con.execute(
+                "SELECT p.step FROM processes p LEFT JOIN log l USING (process_id) "
+                "WHERE p.process = 'step' GROUP BY p.process_id HAVING count(l.seq) = 0"
+            ).fetchall()
+            self.assertEqual(silent, [], "a step process wrote no line at all")
+            debug_formatted = []
+
+            def walk(msg: str, prefix: str, obj: dict) -> None:
+                # `span` is the current span's fields, nested one level.
+                for key, value in obj.items():
+                    if key.startswith("log."):
+                        debug_formatted.append(
+                            (msg, prefix + key, "bridged log.* field")
+                        )
+                    elif isinstance(value, dict):
+                        walk(msg, prefix + key + ".", value)
+                    elif isinstance(value, str) and self._DEBUG_FORMATTED.search(value):
+                        debug_formatted.append((msg, prefix + key, value[:60]))
+
+            for msg, fields in con.execute(
+                "SELECT msg, fields FROM log WHERE fields IS NOT NULL"
+            ):
+                walk(msg, "", json.loads(fields))
+            self.assertEqual(
+                debug_formatted[:10],
+                [],
+                f"{len(debug_formatted)} field(s) carry a Debug rendering or a "
+                "bridged log.* duplicate",
+            )
+            spam = con.execute(
+                "SELECT run_id, step, attempt, target, msg, count(*) n FROM log "
+                "WHERE level IN ('info', 'warn', 'error') "
+                "GROUP BY run_id, step, attempt, target, msg HAVING n > ? "
+                "ORDER BY n DESC",
+                (self._SPAM_CEILING,),
+            ).fetchall()
+            self.assertEqual(
+                spam,
+                [],
+                f"a message repeats more than {self._SPAM_CEILING} times in one "
+                "step attempt at info or above",
+            )
+        finally:
+            con.close()
 
 
 if __name__ == "__main__":

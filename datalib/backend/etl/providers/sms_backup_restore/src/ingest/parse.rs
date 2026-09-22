@@ -176,6 +176,7 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                                 event = "sms_mms_part_base64_failed",
                                 ct,
                                 error = %e,
+                                "an MMS part's base64 did not decode; skipped it"
                             );
                         }
                     }

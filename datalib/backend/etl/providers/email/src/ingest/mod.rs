@@ -250,6 +250,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         hostname = %opts.hostname,
         account_id = %account_id,
         api_url = %session.api_url,
+        "opened the JMAP session"
     );
 
     // Stamp the run + a record of the account itself.
@@ -375,6 +376,7 @@ async fn run_sync(
             event = "jmap_label_filter",
             requested = opts.only_mailbox_labels.len(),
             resolved_mailboxes = resolved.ids.len(),
+            "resolved the label filter to mailboxes"
         );
         Some(resolved.ids)
     };
@@ -404,7 +406,7 @@ async fn run_sync(
             } else {
                 info!(
                     event = "jmap_label_filter_widened",
-                    added = ?added,
+                    added = %added.join(", "),
                     resolved_mailboxes = resolved.ids.len(),
                     "enumerating newly-in-scope mailboxes",
                 );
@@ -456,6 +458,7 @@ async fn run_sync(
         blobs_downloaded = summary.blobs_downloaded,
         blobs_oversize = summary.blobs_oversize,
         blobs_errored = summary.blobs_errored,
+        "the JMAP download is done"
     );
     Ok(summary)
 }
@@ -674,7 +677,11 @@ async fn incremental_emails(
             // state for this page is saved only below, so the next run
             // takes the page again from where this one started.
             if sealer.is_some_and(|s| s.stopping()) {
-                info!(event = "jmap_interrupted", phase = "Email/changes");
+                info!(
+                    event = "jmap_interrupted",
+                    phase = "Email/changes",
+                    "told to stop; leaving the rest of this phase for the next run"
+                );
                 return Ok(());
             }
             let resp = email_get(session, account_id, batch).await?;
@@ -812,7 +819,11 @@ async fn full_enumerate_emails(
             // Asked to stop: the batch that just landed sealed; with no
             // state token stored, the next run enumerates again.
             if sealer.is_some_and(|s| s.stopping()) {
-                info!(event = "jmap_interrupted", phase = "Email/query");
+                info!(
+                    event = "jmap_interrupted",
+                    phase = "Email/query",
+                    "told to stop; leaving the rest of this phase for the next run"
+                );
                 return Ok(());
             }
             let getresp = email_get(session, account_id, batch).await?;
@@ -983,10 +994,17 @@ async fn sync_blobs(
 
     summary.blobs_skipped = have_bytes.len();
     if wanted.is_empty() {
-        debug!(event = "jmap_blobs_up_to_date");
+        debug!(
+            event = "jmap_blobs_up_to_date",
+            "every blob is already stored"
+        );
         return Ok(());
     }
-    info!(event = "jmap_blobs_pending", count = wanted.len());
+    info!(
+        event = "jmap_blobs_pending",
+        count = wanted.len(),
+        "blobs still to fetch"
+    );
 
     // Accumulate downloads + their `email_blobs` edges in the shared
     // CAS-edge accumulator: each fetched `.eml` carries its bytes (for
@@ -1029,7 +1047,8 @@ async fn sync_blobs(
     info!(
         event = "jmap_blobs_fetch",
         pending = jobs.len(),
-        concurrency
+        concurrency,
+        "fetching the pending blobs"
     );
 
     // Inner per-`.eml` bar nested under the outer phase bar (which only
@@ -1078,7 +1097,7 @@ async fn sync_blobs(
             }
             Err(e) => {
                 summary.blobs_errored += 1;
-                warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e);
+                warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e, "a blob could not be fetched");
                 acc.add_failed(&owning_id, &blob_id, e.to_string());
             }
         }

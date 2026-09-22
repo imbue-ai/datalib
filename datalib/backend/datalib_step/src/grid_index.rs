@@ -46,7 +46,7 @@ pub async fn run(
     // the same rule the qmd step follows, so the two indexes agree on
     // what a source is.
     let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
-    tracing::info!(sources = ?sources, "grid_index: the render stores the graph names");
+    tracing::info!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
     let summary =
         build_grid_index_for(&pool, data_root, &sources, |m| progress.set_message(m), now)
@@ -60,7 +60,7 @@ pub async fn run(
         loaded = summary.markdowns_loaded,
         removed = summary.markdowns_removed,
         rows = summary.rows_inserted,
-        "grid_index: build_grid_index done"
+        "the index is built"
     );
 
     for (name, n) in [
@@ -95,7 +95,7 @@ pub async fn run(
         .await
         .context("grid_index commit")?;
     if let Some(h) = commit.as_deref() {
-        tracing::info!(commit = h, "grid_index: committed");
+        tracing::info!(commit = h, "committed the index");
     }
     // HEAD, not the commit this run happened to make: `commit_run`
     // returns `None` both without doltlite *and* when the working tree

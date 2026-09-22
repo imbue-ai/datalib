@@ -105,6 +105,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
                         activity_id = %id,
                         file_name = %file_name,
                         error = %e,
+                        "an attachment the activity names is not in the export"
                     );
                     acc.add_failed(&id, &file_name, "attachment file missing on disk");
                 }

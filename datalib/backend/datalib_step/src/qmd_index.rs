@@ -61,7 +61,7 @@ async fn collections_to_retire(data_root: &Path, keep: &[String]) -> Vec<String>
     let found = match read_collection_names(&path).await {
         Ok(names) => names,
         Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "qmd: could not read collections");
+            tracing::warn!(error = %e, path = %path.display(), "could not read qmd's collections");
             return Vec::new();
         }
     };
@@ -105,7 +105,10 @@ pub async fn run(
     let groups = groups_from_inputs(&env.inputs);
     let retire = collections_to_retire(data_root, &groups).await;
     if !retire.is_empty() {
-        tracing::info!(collections = ?retire, "qmd: retiring collections no group claims");
+        tracing::info!(
+            collections = %retire.join(", "),
+            "retiring the collections no group claims"
+        );
     }
     let mut opts = datalib_qmd_indexer::IndexOptions::new(data_root);
     opts.groups = groups;
@@ -141,7 +144,7 @@ pub async fn run(
     })
     .await
     .context("qmd task panicked")??;
-    tracing::info!(index = %outcome.index_path.display(), "qmd: done");
+    tracing::info!(index = %outcome.index_path.display(), "the qmd index is done");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
     // whole `unified_index/` tree for the same reason the grid step

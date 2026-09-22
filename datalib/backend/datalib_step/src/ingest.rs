@@ -32,8 +32,8 @@ pub async fn run(
 
     tracing::info!(
         source = %planned.name,
-        reach = ?planned.reach,
-        "download: ingest method declared by the provider",
+        reach = planned.reach.map(|r| r.as_str()),
+        "the ingest method the provider declared",
     );
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
@@ -44,7 +44,7 @@ pub async fn run(
     if planned.always_clear_before_ingest {
         tracing::info!(
             source = %planned.name,
-            "download: always_clear_before_ingest — emptying this source's store \
+            "always_clear_before_ingest — emptying this source's store \
              so anything its input has dropped falls out (the old rows stay in \
              doltlite history)",
         );
@@ -75,7 +75,7 @@ pub async fn run(
                 .run(&ctx)
                 .await
                 .with_context(|| format!("processor {}", proc.id()))?;
-            tracing::info!(source = %planned.name, summary = %summary, "download: done");
+            tracing::info!(source = %planned.name, summary = %summary, "the download is done");
         }
         Ok::<_, anyhow::Error>(())
     };
@@ -107,7 +107,7 @@ pub async fn run(
         }
         Err(e) => tracing::warn!(
             error = %format!("{e:#}"),
-            "download: could not count the raw store's problems; the Manage row shows none"
+            "could not count the raw store's problems; the Manage row shows none"
         ),
     }
 
@@ -130,7 +130,7 @@ pub async fn run(
         Err(e) => {
             tracing::warn!(
                 error = %format!("{e:#}"),
-                "download: could not read the raw store version;                  the runner will content-hash the tree instead"
+                "could not read the raw store version;                  the runner will content-hash the tree instead"
             );
             Ok(vec![])
         }

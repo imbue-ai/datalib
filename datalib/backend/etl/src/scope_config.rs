@@ -72,6 +72,7 @@ pub async fn store_if_satisfied(
                 event = "scope_config_store_failed",
                 scope = scope,
                 error = %format!("{e:#}"),
+                "could not store the scope's config record"
             );
             false
         }
@@ -89,6 +90,7 @@ pub async fn load_or_none(pool: &SqlitePool, scope: &str) -> Option<Value> {
                 event = "scope_config_load_failed",
                 scope = scope,
                 error = %format!("{e:#}"),
+                "could not load the scope's config record"
             );
             None
         }
@@ -139,6 +141,18 @@ pub enum FilterChange {
     WidenedToAll,
     /// These entries are newly in scope; the rest of the filter stands.
     Added(Vec<String>),
+}
+
+impl FilterChange {
+    /// The change as a word for a log line; what was added is its
+    /// own field where it matters.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FilterChange::Unchanged => "unchanged",
+            FilterChange::WidenedToAll => "widened_to_all",
+            FilterChange::Added(_) => "added",
+        }
+    }
 }
 
 pub fn filter_widened(prev: Option<&Value>, key: &str, cur: &[String]) -> FilterChange {
