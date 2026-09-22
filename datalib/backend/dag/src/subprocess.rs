@@ -5,6 +5,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::Context;
+use process_wrap::tokio::{CommandWrap, ProcessGroup};
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -206,16 +207,21 @@ pub(crate) async fn run_subprocess(
     // is gone. The cost is that a terminal's Ctrl-C no longer reaches
     // steps directly, which changes nothing: `interrupt_children` is
     // how the runner forwards it, and always was.
-    #[cfg(unix)]
-    cmd.process_group(0);
-    let mut child = cmd
+    //
+    // `ProcessGroup::leader()` makes the step its group's leader, so the
+    // group's id *is* the step's pid — which is what lets
+    // `signal_children` reach a whole step from a pid alone. Its child
+    // wrapper also reaps the rest of the group after the step exits,
+    // which a bare `setpgid` does not.
+    let mut child = CommandWrap::from(cmd)
+        .wrap(ProcessGroup::leader())
         .spawn()
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
 
-    let stdout = child.stdout.take().expect("stdout piped");
-    let stderr = child.stderr.take().expect("stderr piped");
+    let stdout = child.stdout().take().expect("stdout piped");
+    let stderr = child.stderr().take().expect("stderr piped");
 
     // Drain stderr concurrently: every line is forwarded onto the
     // event stream (so child chatter — tracing output, qmd noise — is
