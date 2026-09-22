@@ -60,9 +60,11 @@ versions. It comes from `datalib_runtime::build_id::git_hash`: the
 `DATALIB_GIT_HASH` environment variable (the dev launchers set it from
 the checkout), else a `git-hash` file beside the binaries (the release
 tarball and the .app carry one); a binary that can say neither records
-nothing, and the line inspector shows `file:line` as text instead of a
-link. Nothing is compiled in — a build stamp would rebuild everything
-downstream on every commit. A step attempt running the built-in step
+nothing, and the log's source links point at `main` instead of a
+commit. The link is built when the line is shown, never stored: the
+store keeps the path rustc saw and the commit, and the UI
+(`runLogSource.ts`) makes the URL. Nothing is compiled in — a build
+stamp would rebuild everything downstream on every commit. A step attempt running the built-in step
 program shares the runner's commit; a custom command has none; a page
 has the server's, since the bundle is embedded in the binary.
 

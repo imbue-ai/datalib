@@ -41,7 +41,13 @@ import {
   type RunInfo,
   type RunLogLine,
 } from "@/api";
-import { fieldsWithoutSource, sourceLabel, sourceOf, sourceUrl } from "./runLogSource";
+import {
+  fieldsWithoutSource,
+  SOURCE_DEFAULT_REF,
+  sourceLabel,
+  sourceOf,
+  sourceUrl,
+} from "./runLogSource";
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
 import { compareStamps, formatRelative, formatStamp, formatTimeOfDay } from "@/config/timeFormat";
@@ -431,24 +437,26 @@ const runIdShort: Formatter<RunLogLine> = (_r, _c, value) => ({
   toolTip: String(value ?? ""),
 });
 
-/// `file:line`, as a link to that line on GitHub at the right commit
-/// when one is known, else as text. Clipped from the left like Time:
-/// the file's name and the line tell the lines apart, the directories
-/// are the same for most.
+/// `file:line`, as a link to that line on GitHub at the process's
+/// commit when one is known, else at `main`; text only for a file
+/// outside the repo. Clipped from the left like Time: the file's name
+/// and the line tell the lines apart, the directories are the same for
+/// most.
 const source: Formatter<RunLogLine> = (_r, _c, _value, _col, line) => {
   const src = sourceOf(line?.fields);
   if (!src) return { text: "", toolTip: "", addClasses: levelClass(line) };
   const shown = sourceLabel(src);
   const commit = line?.git_hash ?? null;
-  const href = commit && sourceUrl(commit, src);
-  if (!commit || !href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
+  const href = sourceUrl(commit, src);
+  if (!href) return { text: shown, toolTip: shown, addClasses: levelClass(line) };
   const a = document.createElement("a");
   a.className = "rl-source";
   a.textContent = shown;
   a.href = href;
   a.target = "_blank";
   a.rel = "noopener";
-  return { html: a, toolTip: `${shown} at ${commit.slice(0, 10)}`, addClasses: levelClass(line) };
+  const at = commit ? commit.slice(0, 10) : `${SOURCE_DEFAULT_REF} (commit unknown)`;
+  return { html: a, toolTip: `${shown} at ${at}`, addClasses: levelClass(line) };
 };
 
 /// What a group row says: the column, its value and how many lines

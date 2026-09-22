@@ -45,7 +45,15 @@ describe("sourceUrl", () => {
     );
   });
 
-  it("does not link a third-party crate's file", () => {
+  it("links at main when the process could not say its commit", () => {
+    for (const commit of [null, undefined, ""]) {
+      expect(sourceUrl(commit, { file: "datalib/backend/etl/src/http.rs", line: 510 })).toBe(
+        "https://github.com/imbue-ai/datalib/blob/main/datalib/backend/etl/src/http.rs#L510",
+      );
+    }
+  });
+
+  it("does not link a third-party crate's file, with or without a commit", () => {
     expect(
       sourceUrl(COMMIT, {
         file: "external/datalib_crates+/sqlx-core-0.9.0/src/pool/mod.rs",
@@ -53,6 +61,7 @@ describe("sourceUrl", () => {
       }),
     ).toBeNull();
     expect(sourceUrl(COMMIT, { file: "/Users/x/.cargo/registry/src/y/z.rs", line: 1 })).toBeNull();
+    expect(sourceUrl(null, { file: "external/x/y.rs", line: 1 })).toBeNull();
   });
 
   it("escapes what a path could carry into a URL", () => {
