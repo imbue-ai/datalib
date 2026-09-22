@@ -9,6 +9,7 @@ mod gmail_failed_fetch_holds_cursor;
 mod gmail_label_union;
 mod gmail_widened_labels_backfill;
 mod jmap_mbox;
+mod jmap_progress_countdown;
 mod jmap_render;
 mod live;
 mod playback_roundtrip;

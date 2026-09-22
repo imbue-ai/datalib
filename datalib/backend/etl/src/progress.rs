@@ -1,5 +1,6 @@
 //! Progress reporting hook for long-running download / render work.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Object-safe progress sink. Implementors do whatever rendering they
@@ -94,6 +95,87 @@ impl std::fmt::Debug for Progress {
 
 struct NoopSink;
 impl ProgressSink for NoopSink {}
+
+/// One bar for a whole run, whose announced total only ever grows.
+///
+/// The DAG runner relabels every child bar's events back to the step
+/// that emitted them, then computes the step's `queued` metric — the
+/// "N queued" the Manage screen shows — as `total - done`, where `done`
+/// is the sum of *every* increment the step made and `total` is
+/// whichever length it announced last. So a step with two bars, each
+/// announcing its own size, pins `queued` at zero the moment the second
+/// one starts: `done` already carries the first bar's work.
+///
+/// A run therefore has one bar and one running total, and each phase
+/// adds what it has learned it will do. The total is shared and
+/// interior-mutable so the handle can be passed around by reference the
+/// way [`Progress`] is; a phase that fans out should tick from its
+/// tasks and announce from the one that plans them.
+///
+/// It wraps the step's own [`Progress`] rather than a [`Progress::child`]
+/// of it. A child buys a nested bar on a terminal and nothing else — the
+/// runner relabels a child's events back to the step regardless — and it
+/// costs correctness against any sink that does not override
+/// `ProgressSink::child`, whose default returns a sink that silently
+/// drops everything.
+#[derive(Clone)]
+pub struct RunBar {
+    bar: Progress,
+    announced: Arc<AtomicU64>,
+}
+
+impl RunBar {
+    /// `fixed` is work the run will certainly do and already knows the
+    /// size of — the coarse per-phase or per-unit ticks a bar starts
+    /// with, so it reads as something other than 0/0 before the first
+    /// response lands.
+    pub fn new(progress: &Progress, fixed: u64) -> Self {
+        progress.set_length(Some(fixed));
+        Self {
+            bar: progress.clone(),
+            announced: Arc::new(AtomicU64::new(fixed)),
+        }
+    }
+
+    /// Another `more` items this run has committed to handling.
+    pub fn expect(&self, more: u64) {
+        let total = self.announced.fetch_add(more, Ordering::SeqCst) + more;
+        self.bar.set_length(Some(total));
+    }
+
+    /// Raise the total to `at_least` if it is not already there. For a
+    /// phase whose size is one number repeated or refined as it goes,
+    /// where adding each reading would count the same work twice.
+    pub fn expect_at_least(&self, at_least: u64) {
+        if self
+            .announced
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                (at_least > cur).then_some(at_least)
+            })
+            .is_ok()
+        {
+            self.bar.set_length(Some(at_least));
+        }
+    }
+
+    /// What has been announced so far, so a phase can raise the total to
+    /// "everything before me, plus my own size".
+    pub fn announced(&self) -> u64 {
+        self.announced.load(Ordering::SeqCst)
+    }
+
+    pub fn did(&self, n: u64) {
+        self.bar.inc(n);
+    }
+
+    pub fn doing(&self, what: &str) {
+        self.bar.set_message(what);
+    }
+
+    pub fn finish(&self) {
+        self.bar.finish_and_clear();
+    }
+}
 
 /// Structured-event sink: each progress call becomes a `tracing::info!`
 /// event with a fixed `event = "progress.*"` field plus a `source`

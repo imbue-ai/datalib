@@ -7,7 +7,6 @@ pub mod envelope;
 pub mod gmail_api;
 pub mod labels;
 pub mod mbox;
-pub(crate) mod run_bar;
 pub mod schema_raw;
 pub mod session;
 
@@ -19,7 +18,7 @@ use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
-use datalib_etl::progress::Progress;
+use datalib_etl::progress::{Progress, RunBar};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -30,7 +29,6 @@ pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
 use db::refresh_email_joins;
-use run_bar::RunBar;
 use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
 
 async fn upsert_account(
@@ -245,7 +243,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // response. Without this, fastmail looks stuck at 0/0 in the
     // dashboard whether it's running or wedged on Session::discover.
     // Each phase below adds its own real total to this as it learns it.
-    let mut bar = RunBar::new(&opts.progress, "email", PHASES);
+    let bar = RunBar::new(&opts.progress, PHASES);
     bar.doing("session");
 
     let session = Session::discover(&opts.hostname, &opts.latchkey)
@@ -285,7 +283,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         &opts.only_mailbox_labels,
     );
 
-    let result = run_sync(&db, &session, &account_id, &opts, &label_change, &mut bar).await;
+    let result = run_sync(&db, &session, &account_id, &opts, &label_change, &bar).await;
     bar.finish();
     // Record the config only once the run satisfied it, so a failure —
     // or a run that stopped when asked, with mailboxes still unwalked —
@@ -317,7 +315,7 @@ async fn run_sync(
     // newly-admitted mailboxes — nothing in them *changed* — so a
     // widening needs its own enumeration.
     label_change: &datalib_etl::scope_config::FilterChange,
-    bar: &mut RunBar,
+    bar: &RunBar,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary {
         account_id: account_id.to_string(),
@@ -593,7 +591,7 @@ async fn sync_emails(
     opts: &FetchOptions,
     mailbox_filter: Option<&HashSet<String>>,
     #[allow(clippy::option_option)] backfill: Option<&Option<HashSet<String>>>,
-    bar: &mut RunBar,
+    bar: &RunBar,
     summary: &mut FetchSummary,
 ) -> Result<HashSet<String>> {
     let stored = if opts.full_resync {
@@ -670,7 +668,7 @@ async fn incremental_emails(
     account_id: &str,
     since: &str,
     mailbox_filter: Option<&HashSet<String>>,
-    bar: &mut RunBar,
+    bar: &RunBar,
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
@@ -760,7 +758,7 @@ async fn full_enumerate_emails(
     session: &Session,
     account_id: &str,
     mailbox_filter: Option<&HashSet<String>>,
-    bar: &mut RunBar,
+    bar: &RunBar,
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
@@ -964,7 +962,13 @@ async fn sync_threads(
     if touched.is_empty() {
         return Ok(());
     }
-    let ids: Vec<String> = touched.iter().cloned().collect();
+    // Sorted: `touched` is a hash set, so its iteration order differs
+    // between runs. That makes the same set of threads go out as a
+    // different request each time — which splits them across batch
+    // boundaries differently run to run, and gives a playback fixture
+    // recorded from one run no chance of matching the next.
+    let mut ids: Vec<String> = touched.iter().cloned().collect();
+    ids.sort_unstable();
     for batch in ids.chunks(THREAD_GET_BATCH) {
         let resp = call(
             session,
@@ -1008,7 +1012,7 @@ async fn sync_blobs(
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
-    bar: &mut RunBar,
+    bar: &RunBar,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let have_bytes = db.loaded_blob_ids().await?;

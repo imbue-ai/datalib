@@ -12,7 +12,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
-use datalib_etl::progress::Progress;
+use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::scope_config::{self, FilterChange};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -22,7 +22,6 @@ use tracing::{info, warn};
 use datalib_etl_email_config::EmailGmailApi;
 
 use super::db::RawDb;
-use super::run_bar::RunBar;
 use super::schema_raw::{EmlBlobRow, GmailMessageRow, ThreadRow};
 use super::K_ONLY_EXTRACT_LABELS;
 use api::{Client, QuotaThrottle};
@@ -333,7 +332,7 @@ async fn run_sync(
         // Nothing fixed to seed it with: unlike the JMAP path, this one
         // has no coarse phase ticks, so the bar stays at 0/0 until the
         // history replay or the first `messages.list` page names a size.
-        bar: RunBar::new(&opts.progress, "gmail", 0),
+        bar: RunBar::new(&opts.progress, 0),
         pending: Pending::default(),
     };
 

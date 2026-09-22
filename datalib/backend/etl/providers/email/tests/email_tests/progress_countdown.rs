@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 /// runner's `RunStoreSink` does. Children share one recorder because the
 /// runner relabels every child event back to the step that emitted it.
 #[derive(Default)]
-struct Recorder {
+pub(crate) struct Recorder {
     lengths: Arc<Mutex<Vec<Option<u64>>>>,
     done: Arc<Mutex<u64>>,
 }
@@ -52,19 +52,19 @@ impl ProgressSink for Recorder {
 }
 
 impl Recorder {
-    /// Every `queued` the runner would have published, in order.
-    fn queued_series(&self) -> Vec<i64> {
-        // Replaying rather than sampling: `done` is a running sum and
-        // the sink sees each announcement as it lands, so the series a
-        // reader would have seen is the one this test can assert on.
+    /// Every total the run announced, in order. `-1` stands for a
+    /// `set_length(None)`, which the runner treats as "no total" and so
+    /// publishes no `queued` for.
+    pub(crate) fn announcements(&self) -> Vec<u64> {
         self.lengths
             .lock()
             .unwrap()
             .iter()
-            .map(|t| t.map(|t| t as i64).unwrap_or(-1))
+            .filter_map(|t| *t)
             .collect()
     }
-    fn final_done(&self) -> u64 {
+
+    pub(crate) fn final_done(&self) -> u64 {
         *self.done.lock().unwrap()
     }
 }
@@ -93,11 +93,11 @@ async fn a_gmail_walk_announces_a_total_so_the_chip_can_count_down() {
     let summary = summary.expect("gmail fetch under playback");
     assert_eq!(summary.emails_upserted, IDS.len());
 
-    let announced = recorder.queued_series();
+    let announced = recorder.announcements();
     let last = *announced.last().expect("a total was announced");
     assert_eq!(
         last,
-        IDS.len() as i64,
+        IDS.len() as u64,
         "the last total announced was {last}, not the {} messages the \
          walk listed; the chip would not reach zero (series: {announced:?})",
         IDS.len(),
@@ -149,10 +149,10 @@ async fn a_walk_that_fetches_nothing_still_reaches_zero_queued() {
         IDS.len(),
         "the second run should have skipped every id: {summary:?}",
     );
-    let announced = recorder.queued_series();
+    let announced = recorder.announcements();
     let last = *announced.last().expect("a total was announced");
     assert_eq!(
-        recorder.final_done() as i64,
+        recorder.final_done(),
         last,
         "the bar stopped at {} of {last}: a skipped id never ticked it, \
          so \"N queued\" stays pinned near full for the whole run",
