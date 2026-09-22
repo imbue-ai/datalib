@@ -17,7 +17,7 @@
 // runner, or the server itself) asks for the lines after the last one
 // seen. A run that has finished is read once.
 //
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { SlickVanillaGridBundle } from "@slickgrid-universal/vanilla-bundle";
 import type {
   Column,
@@ -500,15 +500,6 @@ function groupable(name: string, field: keyof RunLogLine) {
   return { grouping: { getter: field, formatter: groupTitle(name), collapsed: false } };
 }
 
-/// One process is one step (or the runner) on one build; the columns
-/// that would say so on every line are shown only when the grid holds
-/// more than one.
-const oneProcess = computed(() => !!launchId.value || !!processId.value);
-
-watch([allRuns, oneProcess], () => {
-  if (bundle) bundle.columnDefinitions = buildColumns();
-});
-
 function buildColumns(): Column<RunLogLine>[] {
   // `col-id` on every header and cell, for a test to find a column by.
   return columnSet().map((c) => ({
@@ -518,6 +509,12 @@ function buildColumns(): Column<RunLogLine>[] {
   }));
 }
 
+/// Every column the log has, in the order they sit. The seven a reader
+/// wants on every line are shown; the rest — which run, which process,
+/// which commit, which thread, which module — say the same thing on
+/// line after line of one process's log, so they start hidden. The
+/// grid menu puts any of them back, and the line opened beside the
+/// grid carries them all whether or not their column is up.
 function columnSet(): Column<RunLogLine>[] {
   return [
     {
@@ -540,7 +537,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Run",
       field: "run_id",
       ...fixed(100),
-      hidden: !allRuns.value,
+      hidden: true,
       formatter: runIdShort,
       sortable: true,
       ...groupable("Run", "run_id"),
@@ -550,7 +547,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Process",
       field: "process",
       ...fixed(90),
-      hidden: oneProcess.value,
+      hidden: true,
       formatter: plain,
       sortable: true,
       ...groupable("Process", "process"),
@@ -560,7 +557,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Commit",
       field: "git_hash",
       ...fixed(100),
-      hidden: oneProcess.value,
+      hidden: true,
       formatter: commitShort,
       sortable: true,
       ...groupable("Commit", "git_hash"),
@@ -569,8 +566,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "step",
       name: "Step",
       field: "step",
-      ...fixed(180),
-      hidden: oneProcess.value,
+      ...fixed(100),
       formatter: plain,
       sortable: true,
       ...groupable("Step", "step"),
@@ -598,6 +594,7 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Thread",
       field: "thread",
       ...fixed(150),
+      hidden: true,
       formatter: plain,
       sortable: true,
       ...groupable("Thread", "thread"),
@@ -607,9 +604,21 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Target",
       field: "target",
       ...fixed(200),
+      hidden: true,
       formatter: plain,
       sortable: true,
       ...groupable("Target", "target"),
+    },
+    {
+      id: "source",
+      name: "Source",
+      // The value is read out of `fields`; the column has no field of its
+      // own, and the id is what the header and the test find it by.
+      field: "fields",
+      ...fixed(120),
+      cssClass: "rl-clip-left",
+      formatter: source,
+      sortable: false,
     },
     {
       id: "msg",
@@ -620,17 +629,6 @@ function columnSet(): Column<RunLogLine>[] {
       formatter: plain,
       sortable: true,
       ...groupable("Message", "msg"),
-    },
-    {
-      id: "source",
-      name: "Source",
-      // The value is read out of `fields`; the column has no field of its
-      // own, and the id is what the header and the test find it by.
-      field: "fields",
-      ...fixed(180),
-      cssClass: "rl-clip-left",
-      formatter: source,
-      sortable: false,
     },
     {
       id: "fields",
@@ -754,8 +752,7 @@ function gridOptions(): GridOption {
     showPreHeaderPanel: true,
     preHeaderPanelHeight: 30,
     draggableGrouping: {
-      dropPlaceHolderText:
-        "Drag a column here to group the lines by it — Run, Process, Level, Target",
+      dropPlaceHolderText: "Drag a column here to group the lines by it — Step, Level, Stream",
       hideToggleAllButton: false,
       toggleAllButtonText: "Expand / collapse all",
       // The theme ships these icons but draws nothing for the plugin's
@@ -767,6 +764,10 @@ function gridOptions(): GridOption {
         groupingPlugin = plugin;
       },
     },
+    // The five columns `columnSet` starts hidden are put back from
+    // here, the way the Explore grid's are.
+    enableGridMenu: true,
+    enableColumnPicker: true,
     enableContextMenu: true,
     contextMenu: {
       commandItems: menuSlots(4, menuEntries),
