@@ -68,7 +68,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — **read before touching `release.yml`**: the steps that assemble a release are scripts under `scripts/release/`, tested on every `bazel test //...` and on Linux from a mac by `bazelisk run //tools:release_steps_docker`; what stays release-only.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl and the router in front of it, fetched from `latchkey-curl-shims`; read before touching `latchkey.rs` or the pin.
 - [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd 2.8.3 (`embed -c` is scoped, `update` is not, and `embed` exits 0 when it did nothing); read before shelling `qmd embed`.
+- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd 2.8.3, and where its CLI and its SDK differ (the CLI cannot scope `update` and its SDK can; `embed` exits 0 when it did nothing); read before driving `qmd embed`.
 - [`docs/dev/runtime_fetch.md`](docs/dev/runtime_fetch.md) — where the Node runtime `qmd` and `latchkey` run from comes from: staged beside the binaries, or fetched sha256-pinned on first use. Read before touching `node_runtime.rs`, `stage_runtime.sh` or the release's runtime job.
 - [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
 - [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
