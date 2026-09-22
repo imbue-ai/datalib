@@ -82,6 +82,10 @@ pub async fn run(
         "docs (re)rendered"
     );
     progress.metric("documents_removed", &[], report.removed as i64);
+    // The last word on what the source holds, after the sweep: a run
+    // that deleted more than it wrote leaves the checkpoints' last
+    // number too high, and this is the one that stands between runs.
+    progress.metric(datalib_metrics::DOCUMENTS, &[], report.documents);
     if report.removed > 0 {
         progress.set_message(&format!(
             "{} document(s) dropped — their source is gone upstream",
@@ -161,6 +165,9 @@ pub struct RenderReport {
     /// Documents written.
     pub docs: usize,
     pub removed: usize,
+    /// Documents the store holds afterwards, storage report excluded —
+    /// what the source has, not what this run did.
+    pub documents: i64,
     /// Whole-store problem counts by severity.
     pub problems: HashMap<Severity, i64>,
     /// The store's HEAD after the final commit. `None` without doltlite.
@@ -229,6 +236,11 @@ pub fn render_source(
     let mut checkpointer = datalib_etl::checkpointer::Checkpointer::new(cadence);
     let mut docs = 0usize;
     let mut removed = 0usize;
+    // The storage report is datalib writing *about* the source, not a
+    // document out of it, so it is left out of every count of what the
+    // source holds. Taken now because `storage` itself moves into the
+    // seal below.
+    let storage_uuid = storage.as_ref().map(|m| m.doc.markdown_uuid.clone());
     // Every document this run emitted. On a full render it is what the
     // walk produced, and the sweep below keeps exactly this.
     let mut emitted: BTreeSet<String> = BTreeSet::new();
@@ -265,6 +277,17 @@ pub fn render_source(
             if let Some(hash) = sealed {
                 progress.checkpoint_rows(&hash, rows);
             }
+            // A seal is the one moment inside a run when everything
+            // written so far is committed and nothing is half-written,
+            // so it is where the whole-store count can be taken without
+            // reading a torn batch. This is what keeps the Manage
+            // screen's Documents column moving while a render runs;
+            // between seals it stands still, which is honest.
+            progress.metric(
+                datalib_metrics::DOCUMENTS,
+                &[],
+                store.document_count(storage_uuid.as_deref())?,
+            );
             store.begin_batch()?;
         }
         Ok(())
@@ -416,12 +439,14 @@ pub fn render_source(
     // consumes it.
     let versions = store.render_versions()?;
     let problems = store.problem_counts()?;
+    let documents = store.document_count(storage_uuid.as_deref())?;
     let head = store.head()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
         removed,
+        documents,
         problems,
         head,
         // What the final commit sealed beyond the last checkpoint.

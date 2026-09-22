@@ -86,6 +86,11 @@ Right-click inside a selection and the menu acts on all of it; outside one, on t
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
 and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
 often.</p>
+<p><b>Documents</b> is how many things this source holds — what <b>Browse</b> opens —
+counted over the whole store, not this run, by the render step: on its own row and on
+the group above it. It moves while a render runs, each time the step seals what it has
+written. A blank cell means nothing has counted yet; a source that renders no documents
+of its own, like a photo library, counts zero.</p>
 <p><b>Bytes on disk</b> is a directory walk over each row’s tree — a group’s is its
 whole folder, measured on the same walk — plotted over the last few minutes and drawn
 against the largest row, so a row’s height means its size, and its shape means what

@@ -897,6 +897,10 @@ export type ManageRow = {
   /// red and yellow chips, a green zero, or nothing when it has never
   /// counted. A group shows its last counting step's.
   problems: Chip[];
+  /// Documents the step's store holds, as of the run it last counted
+  /// in. Null — drawn blank — for every row but a render step and the
+  /// group above it.
+  documents: number | null;
   last_synced: string | null;
   disk: Timeseries;
   actions: Action[];
