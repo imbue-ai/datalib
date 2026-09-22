@@ -45,6 +45,9 @@ const CURSOR_WELLNESS: &str = "garmin:wellness";
 
 /// A metric that fails this many days in a row is abandoned for the
 /// run: a dead endpoint should not cost a request per day of history.
+/// Days of one metric written per transaction.
+const DAILY_BATCH_DAYS: usize = 31;
+
 const CONSECUTIVE_FAILURE_BUDGET: u32 = 10;
 /// `/weight-service/weight/range/<start>/<end>` per request.
 pub const WEIGHT_CHUNK_DAYS: i64 = 90;
@@ -261,7 +264,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let detail = format!("{e:#}");
                 s.errors += 1;
                 s.phases_failed += 1;
-                warn!(event = "garmin_phase_failed", phase = $name, error = %detail);
+                warn!(event = "garmin_phase_failed", phase = $name, error = %detail, "a phase of the download failed; continuing with the rest");
                 walk.problems.push(RunProblem::phase($name, detail));
             }
         };
@@ -573,7 +576,11 @@ impl Walk<'_> {
             let start = self.resume_from(&scope).await?;
             let mut day = start;
             let mut consecutive_failures = 0u32;
-            info!(event = "garmin_daily_begin", metric, start = %ymd(start), end = %ymd(self.today));
+            info!(event = "garmin_daily_begin", metric, start = %ymd(start), end = %ymd(self.today), "walking one daily metric");
+            // A day is one request; a month of them is one write and one
+            // cursor move, so a resume re-fetches at most a month.
+            let mut pending: Vec<DailyRow> = Vec::new();
+            let mut cursor_at: Option<String> = None;
             while day <= self.today {
                 let d = ymd(day);
                 self.progress.set_message(&format!("garmin: {metric} {d}"));
@@ -585,18 +592,13 @@ impl Walk<'_> {
                             Fetched::Some(v) if !is_empty_answer(&v) => v.to_string(),
                             _ => "null".to_string(),
                         };
-                        upsert(
-                            self.db,
-                            &[DailyRow {
-                                id_and_payload: WirePayload { id, payload },
-                                metric: metric.to_string(),
-                                calendar_date: d.clone(),
-                            }],
-                        )
-                        .await?;
+                        pending.push(DailyRow {
+                            id_and_payload: WirePayload { id, payload },
+                            metric: metric.to_string(),
+                            calendar_date: d.clone(),
+                        });
                         consecutive_failures = 0;
                         s.days += 1;
-                        self.wrote(1).await;
                     }
                     Err(e) => {
                         if is_auth(&e) {
@@ -604,23 +606,48 @@ impl Walk<'_> {
                         }
                         consecutive_failures += 1;
                         s.errors += 1;
-                        warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"));
+                        warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"), "a day could not be fetched");
                         record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
                         if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
                             warn!(
                                 event = "garmin_metric_abandoned",
                                 metric,
-                                after = consecutive_failures
+                                after = consecutive_failures,
+                                "too many days in a row failed; leaving this metric"
                             );
+                            cursor_at = Some(d);
                             break;
                         }
                     }
                 }
-                self.db.set_cursor(&scope, &d).await?;
+                cursor_at = Some(d);
+                if pending.len() >= DAILY_BATCH_DAYS {
+                    self.flush_daily(&scope, &mut pending, &mut cursor_at)
+                        .await?;
+                }
                 self.progress.inc(1);
                 day += Duration::days(1);
             }
+            self.flush_daily(&scope, &mut pending, &mut cursor_at)
+                .await?;
             s.metrics += 1;
+        }
+        Ok(())
+    }
+
+    async fn flush_daily(
+        &mut self,
+        scope: &str,
+        pending: &mut Vec<DailyRow>,
+        cursor_at: &mut Option<String>,
+    ) -> Result<()> {
+        if !pending.is_empty() {
+            upsert(self.db, pending).await?;
+            self.wrote(pending.len() as u64).await;
+            pending.clear();
+        }
+        if let Some(d) = cursor_at.take() {
+            self.db.set_cursor(scope, &d).await?;
         }
         Ok(())
     }

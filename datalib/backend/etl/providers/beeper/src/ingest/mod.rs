@@ -150,7 +150,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         Err(e) => {
             tracing::warn!(
                 event = "beeper_row_counts_failed",
-                error = %format!("{e:#}")
+                error = %format!("{e:#}"),
+                "could not count the store's rows for the summary"
             );
             db::RowCounts::default()
         }
@@ -173,6 +174,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         blob_errors = summary.blob_errors,
         events_enriched = summary.events_enriched,
         events_orphaned = summary.events_orphaned,
+        "the beeper fetch is done"
     );
     Ok(summary)
 }

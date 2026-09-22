@@ -262,7 +262,7 @@ async fn fetch_one(profile_url: &str) -> Outcome {
     let page = match latchkey_curl(&photo_request(profile_url)).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(event = "linkedin_photo_page_failed", url = profile_url, error = %e);
+            tracing::warn!(event = "linkedin_photo_page_failed", url = profile_url, error = %e, "a profile page could not be fetched for its photo");
             return Outcome::Transient;
         }
     };
@@ -279,7 +279,7 @@ async fn fetch_one(profile_url: &str) -> Outcome {
     let img = match latchkey_curl(&photo_request(&img_url)).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(event = "linkedin_photo_image_failed", url = %img_url, error = %e);
+            tracing::warn!(event = "linkedin_photo_image_failed", url = %img_url, error = %e, "a profile photo could not be downloaded");
             return Outcome::Transient;
         }
     };

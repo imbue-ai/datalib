@@ -402,6 +402,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         pages = pages.len(),
         threads = threads.len(),
         elapsed_ms = t0.elapsed().as_millis() as u64,
+        "gathered the documents to render"
     );
     Ok(DocumentRows { pages, threads })
 }

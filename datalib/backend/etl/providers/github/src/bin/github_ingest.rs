@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
         new_reviews = summary.new_reviews,
         new_review_comments = summary.new_review_comments,
         requests = summary.requests,
+        "the github download is done"
     );
     Ok(())
 }

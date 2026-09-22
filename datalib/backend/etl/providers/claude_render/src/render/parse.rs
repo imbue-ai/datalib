@@ -577,7 +577,7 @@ pub fn parse_loaded(raw: datalib_etl_claude::ingest::db::LoadedRaw) -> ParsedExp
             }),
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(event = "claude_build_conv_failed", error = %e);
+                tracing::warn!(event = "claude_build_conv_failed", error = %e, "a conversation could not be built from its rows");
             }
         }
     }

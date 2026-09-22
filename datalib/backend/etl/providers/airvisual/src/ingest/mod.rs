@@ -106,7 +106,7 @@ pub fn read_device_info(root: &Path) -> DeviceInfo {
     let v: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
-            warn!(event = "airvisual_latest_json_unreadable", path = %path.display(), error = %e);
+            warn!(event = "airvisual_latest_json_unreadable", path = %path.display(), error = %e, "could not read the device's latest.json");
             return DeviceInfo::default();
         }
     };
@@ -158,7 +158,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     for dev in &opts.devices {
         if let Err(e) = fetch_device(&db, dev, &opts.cache, &opts.progress, &mut s).await {
             s.errors += 1;
-            warn!(event = "airvisual_device_failed", path = %dev.path.display(), error = %format!("{e:#}"));
+            warn!(event = "airvisual_device_failed", path = %dev.path.display(), error = %format!("{e:#}"), "this device's directory could not be read");
         }
     }
     Ok(s)
@@ -191,10 +191,11 @@ async fn fetch_device(
         hashed = scan.stats.hashed,
         identified_ms,
         scan_ms = started.elapsed().as_millis() - identified_ms,
+        "scanned the export tree"
     );
     s.errors += scan.errors.len();
     for e in &scan.errors {
-        warn!(event = "airvisual_walk_error", path = %e.path.display(), error = %e.error);
+        warn!(event = "airvisual_walk_error", path = %e.path.display(), error = %e.error, "an entry could not be walked");
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
@@ -231,11 +232,12 @@ async fn fetch_device(
                     parse_ms = timing.parse_ms,
                     upsert_ms = timing.upsert_ms,
                     total_ms = file_started.elapsed().as_millis(),
+                    "ingested one measurement file"
                 );
             }
             Err(e) => {
                 s.errors += 1;
-                warn!(event = "airvisual_file_failed", device = %who.id, file = %f.rel, error = %format!("{e:#}"));
+                warn!(event = "airvisual_file_failed", device = %who.id, file = %f.rel, error = %format!("{e:#}"), "this measurement file could not be ingested");
             }
         }
     }

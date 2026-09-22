@@ -148,7 +148,7 @@ pub async fn ingest(
             .iter()
             .find(|n| matches_network(&account_id, n.as_str()));
         let Some(network) = matched else {
-            debug!(event = "beeper_thread_skip", account_id = %account_id);
+            debug!(event = "beeper_thread_skip", account_id = %account_id, "skipping a thread of an account not in scope");
             continue;
         };
         // sqlite3 -json gives us `thread` as either a JSON value (if
@@ -164,6 +164,7 @@ pub async fn ingest(
         event = "beeper_index_threads_matched",
         matched = target_rooms.len(),
         total = thread_rows.len(),
+        "matched the index's threads to rooms"
     );
     progress.set_length(Some(target_rooms.len() as u64));
 
@@ -454,7 +455,8 @@ async fn ingest_messages(
                         event = "beeper_attachment_failed",
                         event_id = %event_id,
                         slot = i,
-                        error = %e
+                        error = %e,
+                        "an attachment could not be stored"
                     );
                 }
             }
@@ -571,7 +573,7 @@ async fn ingest_attachment(
     let _ = (&src_url,);
 
     let Some((_scheme, _server, media_id, dir_name)) = parse_attachment_id(att_id) else {
-        debug!(event = "beeper_attachment_unknown_scheme", id = %att_id);
+        debug!(event = "beeper_attachment_unknown_scheme", id = %att_id, "an attachment's URL has a scheme this build does not fetch");
         return Ok(());
     };
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
@@ -600,6 +602,7 @@ async fn ingest_attachment(
                 event_uuid = %owning_event_uuid,
                 path = %path.display(),
                 error = %e,
+                "an attachment file could not be read"
             );
             // Still record the edge so a future re-run (with the
             // file present) can spot the gap and re-ingest.

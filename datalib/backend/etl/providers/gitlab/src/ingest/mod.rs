@@ -146,7 +146,7 @@ async fn discover_mrs(
     let mut failed_scopes = 0usize;
     for scope in scopes {
         let since = since_for_scope(state, scope, refresh_window_days, full, prior);
-        tracing::info!(scope, ?since, "searching MRs");
+        tracing::info!(scope, since, "searching MRs");
         let results = match search_mrs(client, scope, user_id, since.as_deref()).await {
             Ok(v) => v,
             Err(e) => {

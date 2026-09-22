@@ -454,6 +454,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 warn!(
                     event = "fsindex_skip_non_utf8_path",
                     path = %dir_path.join(&name_os).display(),
+                    "a path is not UTF-8; skipped it"
                 );
                 continue;
             };
@@ -496,6 +497,7 @@ fn cascade_for_dir(
                         event = "fsindex_options_parse_error",
                         dir = %d.display(),
                         error = %err,
+                        "a directory's options file did not parse"
                     );
                     None
                 }

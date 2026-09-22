@@ -274,7 +274,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .await
         {
             s.errors += 1;
-            warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"));
+            warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
         }
         opts.progress.inc(1);
     }
@@ -402,7 +402,7 @@ async fn fetch_device(
     }
     let mut cursor = cursor_start;
 
-    info!(event = "yolink_begin", device = %dev.name, cursor, now_ms);
+    info!(event = "yolink_begin", device = %dev.name, cursor, now_ms, "fetching one device");
 
     // Tolerate per-window failures (a single 4xx or transient curl error
     // shouldn't take out an entire device's backfill — common when the
@@ -438,6 +438,7 @@ async fn fetch_device(
                     cursor, end,
                     consecutive_failures,
                     error = %format!("{e:#}"),
+                    "a window of one device's history could not be fetched"
                 );
                 if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
                     return Err(e.context(format!(
@@ -450,7 +451,7 @@ async fn fetch_device(
             }
         };
         s.readings += upserted;
-        info!(event = "yolink_window", device = %dev.name, cursor, end, upserted);
+        info!(event = "yolink_window", device = %dev.name, cursor, end, upserted, "fetching one window of a device's history");
         cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
     }
 

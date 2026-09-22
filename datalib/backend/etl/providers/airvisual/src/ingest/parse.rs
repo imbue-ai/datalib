@@ -128,6 +128,7 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
                 file = file_label,
                 line = n + 2,
                 text = line,
+                "a line did not parse; skipped it"
             );
             continue;
         };
@@ -165,6 +166,7 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
                         line = n + 2,
                         column = headers[*idx],
                         value = raw,
+                        "a value did not parse; stored the row without it"
                     );
                 }
             }

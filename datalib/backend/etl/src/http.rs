@@ -356,7 +356,7 @@ fn playback_delay() -> Duration {
         Some(ms) => Duration::from_millis(ms),
         None => {
             tracing::warn!(
-                value = ?raw,
+                value = %raw.to_string_lossy(),
                 "{PLAYBACK_DELAY_ENV} is not a whole number of milliseconds; replaying with no delay"
             );
             Duration::ZERO

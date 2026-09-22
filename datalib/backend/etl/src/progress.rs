@@ -125,6 +125,7 @@ impl ProgressSink for TracingSink {
             event = "progress.length",
             source = %self.source,
             total = total.map(|t| t as i64).unwrap_or(-1),
+            "the progress bar learned its total"
         );
     }
     fn inc(&self, delta: u64) {
@@ -132,6 +133,7 @@ impl ProgressSink for TracingSink {
             event = "progress.inc",
             source = %self.source,
             delta = delta,
+            "the progress bar advanced"
         );
     }
     // Not TRACE, unlike its neighbours: a checkpoint is rare, and it is the
@@ -141,6 +143,7 @@ impl ProgressSink for TracingSink {
             event = "progress.checkpoint",
             source = %self.source,
             version = %version,
+            "sealed a checkpoint"
         );
     }
     fn checkpoint_rows(&self, version: &str, rows: u64) {
@@ -149,6 +152,7 @@ impl ProgressSink for TracingSink {
             source = %self.source,
             version = %version,
             rows = rows,
+            "sealed a checkpoint"
         );
     }
     fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
@@ -156,8 +160,9 @@ impl ProgressSink for TracingSink {
             event = "progress.metric",
             source = %self.source,
             name = name,
-            labels = ?labels,
+            labels = %labels.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(","),
             value = value,
+            "a metric was reported"
         );
     }
     fn set_message(&self, msg: &str) {
@@ -165,6 +170,7 @@ impl ProgressSink for TracingSink {
             event = "progress.message",
             source = %self.source,
             msg = msg,
+            "the progress bar's message changed"
         );
     }
     fn finish(&self, msg: &str) {
@@ -172,6 +178,7 @@ impl ProgressSink for TracingSink {
             event = "progress.finish",
             source = %self.source,
             msg = msg,
+            "the progress bar finished"
         );
     }
     fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {

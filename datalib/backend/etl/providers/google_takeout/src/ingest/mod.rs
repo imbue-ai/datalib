@@ -119,7 +119,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // later costs nothing extra because its files are already in the cache.
     let scan = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
     for e in &scan.errors {
-        warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error);
+        warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
     let scan = &scan;
 
@@ -127,7 +127,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match maps_reviews::ingest(&db, scan, progress).await {
             Ok(n) => summary.maps_reviews = n,
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "maps_reviews", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -136,7 +136,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match maps_saved_places::ingest(&db, scan, progress).await {
             Ok(n) => summary.maps_saved_places = n,
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "maps_saved_places", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -148,7 +148,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += blobs;
             }
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "maps_photos", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "maps_photos", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -157,7 +157,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match youtube_watch_history::ingest(&db, scan, progress).await {
             Ok(n) => summary.youtube_watch_history = n,
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "youtube_watch_history", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -166,7 +166,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match youtube_subscriptions::ingest(&db, scan, progress).await {
             Ok(n) => summary.youtube_subscriptions = n,
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "youtube_subscriptions", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -181,7 +181,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
             }
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_chat", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "google_chat", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -194,7 +194,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
             }
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }
@@ -209,7 +209,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 summary.blobs_stored += s.blobs_stored;
             }
             Err(e) => {
-                warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e);
+                warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e, "a feed of the export could not be ingested; continuing with the rest");
                 summary.parse_errors += 1;
             }
         }

@@ -223,6 +223,7 @@ async fn mirror_media_files(
             event = "wa_media_walk_error",
             path = %e.path.display(),
             error = %e.error,
+            "an entry of the media directory could not be walked"
         );
     }
 
@@ -275,6 +276,7 @@ async fn mirror_media_files(
                     event = "wa_media_unreadable",
                     path = %f.path.display(),
                     error = %e,
+                    "a media file could not be read"
                 );
                 continue;
             }

@@ -157,7 +157,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let xml = match std::fs::read_to_string(path) {
             Ok(x) => x,
             Err(e) => {
-                warn!(event = "sms_file_unreadable", path = %path.display(), error = %e);
+                warn!(event = "sms_file_unreadable", path = %path.display(), error = %e, "a backup file could not be read");
                 summary.parse_errors += 1;
                 continue;
             }
@@ -177,7 +177,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     summary.files += 1;
                 }
                 Err(e) => {
-                    warn!(event = "sms_parse_failed", path = %path.display(), error = %e);
+                    warn!(event = "sms_parse_failed", path = %path.display(), error = %e, "a backup file did not parse");
                     summary.parse_errors += 1;
                 }
             },
@@ -191,7 +191,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     summary.files += 1;
                 }
                 Err(e) => {
-                    warn!(event = "sms_calls_parse_failed", path = %path.display(), error = %e);
+                    warn!(event = "sms_calls_parse_failed", path = %path.display(), error = %e, "a calls file did not parse");
                     summary.parse_errors += 1;
                 }
             },

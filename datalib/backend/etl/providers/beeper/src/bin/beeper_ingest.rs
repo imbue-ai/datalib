@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     let span = info_span!(
         "beeper_ingest",
         out = %args.out.display(),
-        sources = ?opts.sources,
+        sources = %opts.sources.join(","),
         media = opts.media,
     );
     let summary = beeper::fetch(opts).instrument(span).await;
@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
         blob_errors = summary.blob_errors,
         events_enriched = summary.events_enriched,
         events_orphaned = summary.events_orphaned,
+        "the beeper download is done"
     );
     Ok(())
 }

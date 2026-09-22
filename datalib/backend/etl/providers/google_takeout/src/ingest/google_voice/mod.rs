@@ -79,7 +79,7 @@ pub async fn ingest(
             &mut n_attachments,
         )
         .unwrap_or_else(|e| {
-            warn!(event = "voice_record_failed", path = %path.display(), error = %e);
+            warn!(event = "voice_record_failed", path = %path.display(), error = %e, "a call record could not be parsed");
             false
         });
         if consumed {
@@ -111,7 +111,9 @@ pub async fn ingest(
                 }
                 done.push(f);
             }
-            Err(e) => warn!(event = "voice_bills_failed", error = %e),
+            Err(e) => {
+                warn!(event = "voice_bills_failed", error = %e, "the bills could not be parsed")
+            }
         }
     }
 
@@ -141,7 +143,7 @@ pub async fn ingest(
                 done.push(f);
             }
             Err(e) => {
-                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e)
+                warn!(event = "voice_greeting_failed", path = %path.display(), error = %e, "a greeting could not be ingested")
             }
         }
     }
@@ -296,12 +298,12 @@ fn ingest_text_thread(
                         attachment_refs.push(ref_name);
                     }
                     Err(e) => {
-                        warn!(event = "voice_attachment_unreadable", src = %src, error = %e);
+                        warn!(event = "voice_attachment_unreadable", src = %src, error = %e, "an attachment could not be read");
                         acc.add_failed(&id, &ref_name, "attachment unreadable");
                     }
                 }
             } else {
-                warn!(event = "voice_attachment_missing", src = %src);
+                warn!(event = "voice_attachment_missing", src = %src, "an attachment the record names is not in the export");
                 acc.add_failed(&id, src, "attachment not found on disk");
             }
         }
@@ -370,7 +372,7 @@ fn ingest_event(
                     audio_ref = Some(ref_name);
                 }
                 Err(e) => {
-                    warn!(event = "voice_audio_unreadable", src = %src, error = %e);
+                    warn!(event = "voice_audio_unreadable", src = %src, error = %e, "an audio file could not be read");
                     acc.add_failed(&id, &ref_name, "audio unreadable");
                 }
             }
@@ -439,7 +441,7 @@ fn ingest_orphan_audio(
             *n_attachments += 1;
         }
         Err(e) => {
-            warn!(event = "voice_orphan_audio_unreadable", path = %path.display(), error = %e);
+            warn!(event = "voice_orphan_audio_unreadable", path = %path.display(), error = %e, "an audio file no record names could not be read");
             acc.add_failed(&id, &ref_name, "audio unreadable");
         }
     }

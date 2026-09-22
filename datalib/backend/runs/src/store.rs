@@ -1062,7 +1062,7 @@ async fn begin_run(
     .bind(&run.tz_offset)
     .execute(&mut **tx)
     .await?;
-    let cutoff = age_cutoff(retention);
+    let cutoff = age_cutoff(retention, &run.started_at_utc);
     sqlx::query("DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?")
         .bind(&cutoff)
         .bind(&run.run_id)
@@ -1140,13 +1140,24 @@ async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sq
 
 /// The UTC stamp before which a run is older than retention keeps.
 /// Text order is instant order, so this is one comparison.
-fn age_cutoff(retention: Retention) -> String {
-    cutoff_days_ago(retention.max_age_days)
+///
+/// Measured from the run being begun, not from the wall clock: a run
+/// is stamped with the runner's now, which `--now` can pin, and a root
+/// run under a pinned clock would otherwise sweep its whole history on
+/// the next run. When the runner is not pinned the two clocks agree.
+/// The wall clock remains only for a start stamp that is not one.
+fn age_cutoff(retention: Retention, newest_started_at_utc: &str) -> String {
+    let newest = datalib_time::parse_strict(newest_started_at_utc)
+        .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local());
+    days_before(newest, retention.max_age_days)
 }
 
 fn cutoff_days_ago(days: u32) -> String {
-    datalib_time::IsoOffsetTimestamp::now_local()
-        .bump_micros(-(days as i64) * 86_400 * 1_000_000)
+    days_before(datalib_time::IsoOffsetTimestamp::now_local(), days)
+}
+
+fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
+    at.bump_micros(-(days as i64) * 86_400 * 1_000_000)
         .to_utc_and_offset()
         .0
 }

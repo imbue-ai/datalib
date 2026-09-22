@@ -596,7 +596,7 @@ fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
             tracing::warn!(
                 path = %abs.display(),
                 error = %e,
-                "render: could not delete the markdown of a document that went away",
+                "could not delete the markdown of a document that went away",
             );
             return;
         }

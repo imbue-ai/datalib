@@ -145,6 +145,7 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
                         href = %row.href,
                         block_index = idx,
                         error = %e,
+                        "a vCard block did not parse; skipped it"
                     );
                 }
             }

@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         new_mrs = summary.new_mrs,
         new_discussions = summary.new_discussions,
         requests = summary.requests,
+        "the gitlab download is done"
     );
     Ok(())
 }

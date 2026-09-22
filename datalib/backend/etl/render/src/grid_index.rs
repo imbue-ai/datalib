@@ -398,7 +398,7 @@ async fn reconcile_index_schema(pool: &SqlitePool) -> Result<()> {
 
     tracing::warn!(
         drift = %drift.join("; "),
-        "grid_index: index schema predates this build; dropping and rebuilding \
+        "index schema predates this build; dropping and rebuilding \
          every index table from the per-source render stores (no re-download, \
          no re-render)"
     );
@@ -679,6 +679,13 @@ pub async fn build_grid_index_for(
     // copy is wholesale per source: the pinned store is the complete
     // truth about that source's problems, so there is nothing to diff.
     let mut problems: Vec<(String, Vec<ProblemRow>)> = Vec::new();
+    // One line per pass says what the pass found; the per-source lines
+    // are `debug` unless a source moved, because a streaming pass runs
+    // on every producer checkpoint and most sources moved on none.
+    let mut not_yet_rendered = 0usize;
+    let mut read_whole = 0usize;
+    let mut sources_changed = 0usize;
+    let mut documents_changed = 0usize;
     {
         let mut stanzas: Vec<(String, PathBuf)> = Vec::new();
         for source in sources {
@@ -688,7 +695,8 @@ pub async fn build_grid_index_for(
             if crate::indexed_markdown::path_for(&rendered_root).is_file() {
                 stanzas.push((source.clone(), rendered_root));
             } else {
-                tracing::info!(source, "index: no render store yet; skipping it this run");
+                not_yet_rendered += 1;
+                tracing::debug!(source, "no render store yet; skipping it this pass");
             }
         }
         stanzas.sort();
@@ -707,8 +715,8 @@ pub async fn build_grid_index_for(
             else {
                 tracing::warn!(
                     source = %stanza,
-                    "index: this store names no commit, so there is nothing \
-                     committed to index; skipping it this run"
+                    "this render store names no commit, so there is nothing \
+                     committed to index; skipping it this pass"
                 );
                 continue;
             };
@@ -717,26 +725,41 @@ pub async fn build_grid_index_for(
             let scan = store
                 .changed_since(cursor, &pin)
                 .with_context(|| format!("diff render store for {stanza}"))?;
-            // Say which path was taken, every time: a cold start that fires
-            // silently on every run looks exactly like a fast one from the
-            // outside — it just does more work and still gets the right answer.
+            // Say which path was taken: a cold start that fires silently
+            // on every run looks exactly like a fast one from the outside
+            // — it just does more work and still gets the right answer.
             match (&scan.render, cursor) {
-                (None, None) => tracing::info!(
+                (None, None) => {
+                    read_whole += 1;
+                    tracing::info!(
+                        source = %stanza,
+                        "no cursor for this source; reading its whole render store"
+                    )
+                }
+                (None, Some(from)) => {
+                    read_whole += 1;
+                    tracing::warn!(
+                        source = %stanza,
+                        from,
+                        "cursor unusable against this render store (reset, rebuilt, or \
+                         no dolt_diff); falling back to reading it whole"
+                    )
+                }
+                (Some(changed), _) if changed.is_empty() => tracing::debug!(
                     source = %stanza,
-                    "index: no cursor for this source; reading its whole store"
-                ),
-                (None, Some(from)) => tracing::warn!(
-                    source = %stanza,
-                    from,
-                    "index: cursor unusable against this store (reset, rebuilt, or no \
-                     dolt_diff); falling back to reading it whole"
-                ),
-                (Some(changed), _) => tracing::info!(
-                    source = %stanza,
-                    changed = changed.len(),
                     scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
-                    "index: documents changed since the last index"
+                    "no documents changed since the last index"
                 ),
+                (Some(changed), _) => {
+                    sources_changed += 1;
+                    documents_changed += changed.len();
+                    tracing::info!(
+                        source = %stanza,
+                        changed = changed.len(),
+                        scan_ms = scan.scan_elapsed.map(|d| d.as_millis() as u64),
+                        "documents changed since the last index"
+                    )
+                }
             }
             let found = store
                 .documents_matching(out_dir, scan.render.as_ref(), &pin)
@@ -782,6 +805,14 @@ pub async fn build_grid_index_for(
             docs.extend(found.into_iter().map(|d| (stanza.clone(), d)));
         }
     }
+    tracing::info!(
+        sources = sources.len(),
+        not_yet_rendered,
+        read_whole,
+        sources_changed,
+        documents_changed,
+        "read the render stores"
+    );
 
     let mut summary = GridIndexSummary {
         markdowns_total: docs.len(),
@@ -1006,7 +1037,7 @@ async fn apply_markdown(
         delete_document_rows(conn, &md.markdown_uuid).await?;
         tracing::info!(
             document = %md.markdown_uuid,
-            "render: this document has no rows left; dropped it",
+            "this document has no rows left; dropped it",
         );
         return Ok(0);
     }

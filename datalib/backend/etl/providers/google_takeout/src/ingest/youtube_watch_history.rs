@@ -30,7 +30,7 @@ pub async fn ingest(db: &RawDb, scan: &fsscan::Scan, progress: &Progress) -> Res
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
             if video_id.is_empty() {
-                warn!(event = "youtube_watch_skip_no_video_id", url = %video_url);
+                warn!(event = "youtube_watch_skip_no_video_id", url = %video_url, "a watch-history entry has no video id; skipped it");
                 continue;
             }
             let (channel_url, channel_title) = anchors

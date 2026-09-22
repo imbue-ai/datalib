@@ -101,7 +101,8 @@ pub async fn enrich(
             warn!(
                 event = "beeper_megabridge_dir_read_failed",
                 dir = %beeper_data_dir.display(),
-                error = %e
+                error = %e,
+                "a megabridge directory could not be listed"
             );
             return Ok(enrich);
         }
@@ -114,7 +115,7 @@ pub async fn enrich(
             continue;
         };
         let Some(network) = network_for_local_bridge(suffix) else {
-            debug!(event = "beeper_megabridge_unknown_bridge", dir = %name_str);
+            debug!(event = "beeper_megabridge_unknown_bridge", dir = %name_str, "a directory names a bridge this build does not know");
             continue;
         };
         if !networks.iter().any(|n| n == network) {
@@ -122,13 +123,14 @@ pub async fn enrich(
             // though the megabridge.db exists.
             debug!(
                 event = "beeper_megabridge_network_disabled",
-                network = network
+                network = network,
+                "this network is disabled in the config; not enriching from it"
             );
             continue;
         }
         let mb_path: PathBuf = entry.path().join("megabridge.db");
         if !mb_path.is_file() {
-            debug!(event = "beeper_megabridge_no_db", dir = %name_str);
+            debug!(event = "beeper_megabridge_no_db", dir = %name_str, "this bridge directory has no database");
             continue;
         }
 
@@ -139,6 +141,7 @@ pub async fn enrich(
                     network = network,
                     enriched = per_bridge.events_enriched,
                     orphaned = per_bridge.events_orphaned,
+                    "enriched events from a bridge database"
                 );
                 enrich.events_enriched += per_bridge.events_enriched;
                 enrich.events_orphaned += per_bridge.events_orphaned;
@@ -148,7 +151,8 @@ pub async fn enrich(
                     event = "beeper_megabridge_failed",
                     network = network,
                     db = %mb_path.display(),
-                    error = %format!("{e:#}")
+                    error = %format!("{e:#}"),
+                    "a bridge database could not be read"
                 );
             }
         }
@@ -216,7 +220,8 @@ async fn enrich_one(mb_path: &Path, dst: &RawDb, network: &str) -> Result<Enrich
                 event = "beeper_megabridge_orphan",
                 kind = "message",
                 network = network,
-                mxid = %mxid
+                mxid = %mxid,
+                "a bridge row names an event the store does not have"
             );
         } else {
             out.events_enriched += affected as usize;
@@ -294,7 +299,8 @@ async fn enrich_one(mb_path: &Path, dst: &RawDb, network: &str) -> Result<Enrich
                 event = "beeper_megabridge_orphan",
                 kind = "reaction",
                 network = network,
-                mxid = %mxid
+                mxid = %mxid,
+                "a bridge row names an event the store does not have"
             );
         } else {
             out.events_enriched += affected as usize;

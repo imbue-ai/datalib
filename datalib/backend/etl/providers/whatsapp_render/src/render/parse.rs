@@ -261,7 +261,7 @@ async fn parse_async(
             event = "wa_media_unresolved",
             count = unresolved.len(),
             total_media = media_rows.len(),
-            examples = ?unresolved.iter().take(3).collect::<Vec<_>>(),
+            examples = %unresolved.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
             "message_media.file_path matched no wa_media_files row; \
              those attachments render as placeholders",
         );

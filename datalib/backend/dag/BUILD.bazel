@@ -172,6 +172,7 @@ rust_test(
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [
+        ":datalib_dag",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",

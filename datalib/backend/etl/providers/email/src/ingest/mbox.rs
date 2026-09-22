@@ -190,7 +190,7 @@ impl Adjustments {
                 out.reingest_files = true;
                 info!(
                     event = "mbox_labels_widened",
-                    added = ?added,
+                    added = %added.join(", "),
                     "re-reading mbox files for newly-in-scope labels",
                 );
             }
@@ -204,7 +204,7 @@ impl Adjustments {
             out.reingest_files = true;
             info!(
                 event = "mbox_blob_limit_relaxed",
-                limit = ?inputs.blob_size_limit_bytes,
+                limit = inputs.blob_size_limit_bytes,
                 "re-reading mbox files for previously-oversize attachments",
             );
         }
@@ -239,7 +239,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await?;
     for e in &scan.errors {
-        warn!(event = "mbox_walk_error", path = %e.path.display(), error = %e.error);
+        warn!(event = "mbox_walk_error", path = %e.path.display(), error = %e.error, "an entry of the mbox directory could not be walked");
     }
     if scan.files.is_empty() {
         return Ok(FetchSummary::default());
@@ -322,7 +322,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let (raw, bytes_consumed) = match raw {
                 Ok((bytes, consumed)) => (bytes, consumed),
                 Err(e) => {
-                    warn!(event = "mbox_read_failed", path = %f.path.display(), error = %e);
+                    warn!(event = "mbox_read_failed", path = %f.path.display(), error = %e, "an mbox file could not be read");
                     summary.parse_errors += 1;
                     continue;
                 }
@@ -338,7 +338,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 Ok(false) => {} // duplicate; skipped
                 Err(e) => {
-                    warn!(event = "mbox_message_failed", error = %e);
+                    warn!(event = "mbox_message_failed", error = %e, "a message in an mbox could not be parsed; skipped it");
                     summary.parse_errors += 1;
                 }
             }

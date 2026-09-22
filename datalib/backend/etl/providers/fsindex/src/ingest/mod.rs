@@ -175,7 +175,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         entry_rows = prev.len(),
         elapsed_ms = load_start.elapsed().as_millis() as u64,
         "loaded {} prior entries for this host from the fingerprint cache",
-        prev.len(),
+        prev.len()
     );
     let phase_load = load_start.elapsed();
 
@@ -225,6 +225,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 stamped = summary.stamped_directories,
                 message =
                     "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
+                "directory stamping is on: directories get a uuid file"
             );
         }
     }
@@ -297,7 +298,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // `read_errors`, `non_utf8_paths`), which is all the durable
     // evidence the scanner needs.
     for err in &walker_errors {
-        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message);
+        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message, "an entry could not be recorded");
     }
 
     // NB: the commit + gc happen in the ORCHESTRATOR (the standalone
@@ -347,6 +348,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         batches_emitted = counters.batches_emitted.load(Ordering::Relaxed),
         mb_per_s = mb_per_s,
         entries_per_s = entries_per_s,
+        "where the scan's time went"
     );
 
     Ok(FetchSummary {
@@ -466,7 +468,7 @@ async fn streaming_pipeline(
                     stat_errors = stat_errors,
                     read_errors = read_errors,
                     "fsindex: {errors} entr{} could not be read",
-                    if errors == 1 { "y" } else { "ies" },
+                    if errors == 1 { "y" } else { "ies" }
                 );
                 last_errors = errors;
             }
@@ -610,7 +612,7 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
                 });
                 options::write_breadcrumb(&dir, &yaml)
                     .with_context(|| format!("write breadcrumb {}", dir.display()))?;
-                info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid);
+                info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid, "stamped a directory with a uuid");
                 count += 1;
                 uuid
             }
