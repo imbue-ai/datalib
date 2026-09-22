@@ -199,6 +199,15 @@ pub(crate) async fn run_subprocess(
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
+    // Its own process group, so a signal aimed at the step reaches what
+    // the step spawned. A step is often a wrapper around something else
+    // — `qmd_index` runs `node qmd embed` — and a `kill(pid)` the step
+    // does not forward leaves that grandchild running after the runner
+    // is gone. The cost is that a terminal's Ctrl-C no longer reaches
+    // steps directly, which changes nothing: `interrupt_children` is
+    // how the runner forwards it, and always was.
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawn {prog:?}"))
@@ -537,15 +546,19 @@ impl Drop for RegisteredChild {
     }
 }
 
-/// SIGINT every running step, so each exits `stopped`.
+/// SIGINT every running step and what it spawned, so each exits
+/// `stopped`.
 pub fn interrupt_children() {
     #[cfg(unix)]
     signal_children(libc::SIGINT);
 }
 
-/// SIGKILL every running step. For the exits `std::process::exit` takes,
-/// where no `kill_on_drop` runs: a step that ignored its SIGINT must not
-/// outlive the runner, holding its store open.
+/// SIGKILL every running step and what it spawned. For the exits
+/// `std::process::exit` takes, where no `kill_on_drop` runs: a step that
+/// ignored its SIGINT must not outlive the runner, holding its store
+/// open. Nothing else ever signals a step, so whoever stops the runner
+/// has to reach this — a SIGKILL at the runner runs no Rust and leaves
+/// the steps behind.
 pub fn kill_children() {
     #[cfg(unix)]
     signal_children(libc::SIGKILL);
@@ -560,10 +573,13 @@ fn signal_children(signal: libc::c_int) {
         .map(|s| s.iter().copied().collect())
         .unwrap_or_default();
     for pid in pids {
+        // The step's process *group*, not the step: `spawn` gives each
+        // one a group of its own, so its id is the step's pid and this
+        // reaches whatever the step spawned as well as the step.
         // Safety: plain kill(2) with a valid signal; racing a
-        // just-exited pid is benign (ESRCH).
+        // just-exited group is benign (ESRCH).
         unsafe {
-            libc::kill(pid as libc::pid_t, signal);
+            libc::kill(-(pid as libc::pid_t), signal);
         }
     }
 }
@@ -591,6 +607,82 @@ mod tests {
             env: BTreeMap::new(),
             params: None,
         }
+    }
+
+    /// Whether a pid still names a live process. Signal 0 checks without
+    /// sending anything.
+    #[cfg(unix)]
+    fn alive(pid: libc::pid_t) -> bool {
+        // Safety: plain kill(2) with the null signal.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// Wait for what the next assertion is about, so a hang names what
+    /// never arrived instead of timing out silently.
+    #[cfg(unix)]
+    async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            if ready() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// A signal aimed at a step reaches what the step spawned, because
+    /// the runner gives each step a process group of its own and
+    /// `signal_children` signals the group. Without it a `qmd embed`
+    /// outlived the app that started it: the step never forwarded the
+    /// signal, and nothing else ever signals a step.
+    ///
+    /// The kill below is `signal_children`'s exact call. If a step were
+    /// left in the runner's own group there would be no group whose id
+    /// is the step's pid, the kill would be ESRCH, and the grandchild
+    /// would still be running when the deadline passed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_signal_to_a_step_reaches_what_the_step_spawned() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("g/out");
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                out="$DATALIB_DAG_DATA_ROOT/g/out"
+                mkdir -p "$out"
+                echo $$ > "$out/step.pid"
+                sleep 120 &
+                # Written last, so the test polling for it knows both are
+                # on disk.
+                echo $! > "$out/grandchild.pid"
+                while :; do sleep 0.2; done
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let data_root = root.path().to_path_buf();
+        let runner = tokio::spawn(async move { Runner::new(data_root).run(&g).await });
+
+        let pid = |name: &str| -> Option<libc::pid_t> {
+            std::fs::read_to_string(out.join(name))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        };
+        until("the step to spawn a child of its own", || {
+            pid("step.pid").is_some() && pid("grandchild.pid").is_some()
+        })
+        .await;
+        let step = pid("step.pid").unwrap();
+        let grandchild = pid("grandchild.pid").unwrap();
+        assert!(alive(grandchild), "the spawned child should be running");
+
+        // Safety: plain kill(2) on the group the runner just created.
+        unsafe { libc::kill(-step, libc::SIGKILL) };
+
+        until("the step's own child to go with it", || !alive(grandchild)).await;
+        let _ = runner.await;
     }
 
     /// Params reach the child as a file only its owner can read, named

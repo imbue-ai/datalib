@@ -16,4 +16,5 @@ mod pipeline_history;
 mod pipeline_storage;
 mod remote_media;
 mod runs_endpoints;
+mod worker_cancel;
 mod worker_failure_tail;

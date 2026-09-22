@@ -29,9 +29,10 @@ use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// After the parent is gone, how long the steps get to checkpoint on
-/// their SIGINT before they are killed. The same grace the app server's
-/// worker gives a cancel.
+/// After the parent is gone — or the terminal is — how long the steps
+/// get to checkpoint on their SIGINT before they are killed. The same
+/// grace the app server's worker gives a cancel. Used where no second
+/// signal is coming, so the runner has to escalate on its own.
 const PARENT_GONE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[tokio::main(flavor = "current_thread")]
@@ -249,14 +250,36 @@ async fn main() -> Result<()> {
     // there and exit `cancelled` (`step_protocol.md` § Signals); the
     // scheduler drains normally. A second
     // signal gives up waiting and exits hard, taking the steps with it.
+    //
+    // SIGHUP is not one of those two. It says the terminal is gone, so
+    // there is nobody left to send a second signal and waiting for one
+    // would wait forever — the runner escalates on its own timer, the
+    // same one it uses when its parent dies. It has to: a step is in a
+    // process group of its own, so the kernel's SIGHUP to the
+    // foreground group no longer reaches it.
     tokio::spawn(async {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
         let mut interrupts = 0u32;
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = sigterm.recv() => {}
+                _ = sighup.recv() => {
+                    datalib_parent_watch::report(
+                        "datalib-dag: terminal hung up; interrupting the steps",
+                    );
+                    subprocess::interrupt_children();
+                    // Async, so the runtime keeps draining what the
+                    // steps say while they stop.
+                    tokio::time::sleep(PARENT_GONE_GRACE).await;
+                    datalib_parent_watch::report(
+                        "datalib-dag: steps still running after the grace, exiting",
+                    );
+                    subprocess::kill_children();
+                    std::process::exit(130);
+                }
             }
             interrupts += 1;
             if interrupts >= 2 {

@@ -85,9 +85,13 @@ pub struct WorkerConfig {
 const POLL_IDLE: Duration = Duration::from_millis(1000);
 /// While a child is running, how often we re-check for a cancel request.
 const POLL_RUNNING: Duration = Duration::from_millis(400);
-/// After a cancel's SIGTERM, how long to let steps checkpoint before
-/// SIGKILL.
+/// After a cancel's first SIGTERM, how long to let the steps checkpoint
+/// before the second one tells the runner to give up on them.
 const CANCEL_GRACE: Duration = Duration::from_secs(15);
+/// After that second SIGTERM, how long the runner gets to kill its steps
+/// and go before it is killed itself. It only has to signal them, so
+/// this is short.
+const CANCEL_KILL_GRACE: Duration = Duration::from_secs(5);
 
 /// Resolve a worker-spawned binary: `$<ENV>` first (how `dev.sh` /
 /// `serve_dev.sh` wire it from Bazel runfiles), then a sibling of the
@@ -389,6 +393,34 @@ fn terminate(pid: u32) {
     }
 }
 
+/// How far a cancel has climbed. Three rungs, not two: `datalib-dag`
+/// forwards the first signal to its steps as SIGINT and only kills what
+/// ignored it on the **second**, so a SIGKILL straight after the grace
+/// leaves a step that did not stop with nobody left to signal it — and
+/// SIGKILL at the runner runs no Rust, so nothing cleans up after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CancelStage {
+    /// SIGTERM sent; the runner is asking its steps to checkpoint.
+    Asked,
+    /// Second SIGTERM; the runner kills the steps that would not stop.
+    GaveUp,
+    /// SIGKILL; the runner itself is out of time.
+    Killed,
+}
+
+/// The rung a cancel is due next, or `None` while the one it is on
+/// still has time. Pure so the ladder's arithmetic is testable without
+/// a clock or a child process.
+fn next_stage(since_term: Duration, stage: CancelStage) -> Option<CancelStage> {
+    match stage {
+        CancelStage::Asked if since_term > CANCEL_GRACE => Some(CancelStage::GaveUp),
+        CancelStage::GaveUp if since_term > CANCEL_GRACE + CANCEL_KILL_GRACE => {
+            Some(CancelStage::Killed)
+        }
+        _ => None,
+    }
+}
+
 pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow::Result<()> {
     let Some(dag_bin) = cfg.dag_bin.as_ref() else {
         anyhow::bail!("datalib-dag binary not found — set $DATALIB_DAG_BIN to its path");
@@ -471,26 +503,46 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
         readers.push(std::thread::spawn(move || pump(stream, &tail)));
     }
 
-    let mut term_sent: Option<Instant> = None;
+    let mut cancel: Option<(Instant, CancelStage)> = None;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
         // Cooperative cancel: the HTTP handler flips state to
-        // `canceled`; we send SIGTERM (graceful — steps checkpoint),
-        // escalating to SIGKILL after a grace period.
-        match term_sent {
+        // `canceled`; we walk the rungs of `CancelStage` from there.
+        match &mut cancel {
             None => {
                 if let Ok(Some(row)) = repo.get_job(&job.id).await {
                     if row.job_state() == Some(JobState::Canceled) {
                         terminate(pid);
-                        term_sent = Some(Instant::now());
+                        tracing::info!(
+                            job = %job.id, pid,
+                            "cancel requested; asking the runner to stop its steps"
+                        );
+                        cancel = Some((Instant::now(), CancelStage::Asked));
                     }
                 }
             }
-            Some(t0) => {
-                if t0.elapsed() > CANCEL_GRACE {
-                    let _ = child.kill();
+            Some((at, stage)) => {
+                if let Some(next) = next_stage(at.elapsed(), *stage) {
+                    match next {
+                        CancelStage::GaveUp => {
+                            terminate(pid);
+                            tracing::warn!(
+                                job = %job.id, pid, waited_s = CANCEL_GRACE.as_secs(),
+                                "the steps have not stopped; telling the runner to kill them"
+                            );
+                        }
+                        CancelStage::Killed => {
+                            let _ = child.kill();
+                            tracing::warn!(
+                                job = %job.id, pid,
+                                "the runner did not exit after being told to give up; killing it"
+                            );
+                        }
+                        CancelStage::Asked => unreachable!("the ladder only climbs"),
+                    }
+                    *stage = next;
                 }
             }
         }
@@ -502,7 +554,7 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     for h in readers {
         let _ = h.join();
     }
-    if term_sent.is_some() {
+    if cancel.is_some() {
         repo.finish_job(&job.id, JobState::Canceled, Some("canceled by user"))
             .await?;
         emit(
@@ -610,6 +662,36 @@ mod tests {
             updated_at_utc: "2026-09-17T10:00:00Z".into(),
             ..Default::default()
         }
+    }
+
+    /// The cancel ladder climbs one rung at a time and stops at the
+    /// top, so each signal is sent once rather than on every poll. The
+    /// middle rung is the one that matters: skipping straight from the
+    /// grace to SIGKILL is what left a step running with nobody to
+    /// signal it, because the runner only kills its steps on a *second*
+    /// SIGTERM.
+    #[test]
+    fn a_cancel_asks_then_tells_the_runner_to_give_up_then_kills_it() {
+        use CancelStage::*;
+        // Every deadline is read off the constants, so tuning one moves
+        // the test with it rather than breaking it.
+        let tick = Duration::from_millis(1);
+        let gave_up_at = CANCEL_GRACE;
+        let killed_at = CANCEL_GRACE + CANCEL_KILL_GRACE;
+
+        assert_eq!(next_stage(Duration::ZERO, Asked), None, "let it work");
+        assert_eq!(next_stage(gave_up_at, Asked), None, "the grace is not up");
+        assert_eq!(next_stage(gave_up_at + tick, Asked), Some(GaveUp));
+        // Still `GaveUp` just after that second SIGTERM: the runner is
+        // killing its steps and is not out of time yet.
+        assert_eq!(next_stage(gave_up_at + tick, GaveUp), None);
+        assert_eq!(next_stage(killed_at, GaveUp), None);
+        assert_eq!(next_stage(killed_at + tick, GaveUp), Some(Killed));
+        assert_eq!(
+            next_stage(killed_at * 100, Killed),
+            None,
+            "nothing above SIGKILL"
+        );
     }
 
     /// A sync names each seed on its own `--sync`; a reset hands the
