@@ -1,0 +1,6 @@
+# Maps the placeholder identities agent sandboxes committed under to the
+# people who ran them. `git shortlog`, `git log --use-mailmap` and `git
+# blame` read this file; history itself is untouched. docs/dev/history.md
+# has the story behind each line.
+Thad Hughes <thad@imbue.com> Test <test@example.com>
+Qi Xiao <qi@imbue.com> x <x@y.z>
