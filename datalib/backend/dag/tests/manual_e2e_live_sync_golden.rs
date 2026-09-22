@@ -279,8 +279,9 @@ const ROW_COUNT_ONLY_STANZAS: &[&str] = &["apple_photos", "lightroom", "whatsapp
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
 ///   what it made of them.
-/// - `render_inputs` and claude_code's `records` repeat, row by row,
-///   what the `.md` files and `grid_rows` beside them already show.
+/// - `render_inputs` and the agent transcripts' `records` repeat, row
+///   by row, what the `.md` files and `grid_rows` beside them already
+///   show.
 const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels"),
     ("tiny-slack", "channels_bookkeeping"),
@@ -290,6 +291,7 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
     ("claude_code", "records"),
+    ("codex", "records"),
     ("*", "render_inputs"),
 ];
 

@@ -75,12 +75,12 @@ id = "unified_index"
 [[steps]]
 group = "unified_index"
 function = "grid_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
-inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
+inputs = ["claude-api/render_markdown", "claude-export/render_markdown", "claude-code/render_markdown", "codex/render_markdown", "chatgpt/render_markdown", "slack/render_markdown", "github/render_markdown", "gitlab/render_markdown", "notion/render_markdown", "fastmail/render_markdown", "gmail/render_markdown", "gmail-takeout/render_markdown", "icloud-contacts/render_markdown", "vcard-contacts/render_markdown", "beeper/render_markdown", "perseus/render_markdown", "yolink/render_markdown", "garmin/render_markdown", "signal/render_markdown", "whatsapp/render_markdown", "linkedin/render_markdown", "facebook/render_markdown", "google-takeout/render_markdown", "sms-backup-restore/render_markdown", "pdfs/render_markdown", "ship-air/render_markdown", "messages/render_markdown"]
 
 # --- Claude / Anthropic -------------------------------------------------
 
@@ -168,6 +168,34 @@ inputs = ["claude-code/ingest"]
 # How much of one tool result reaches the page. The raw store keeps all
 # of it; a tool result that echoes a whole file is cut here, with a
 # marker saying so.
+[steps.params]
+max_tool_result_bytes = 16384
+
+# --- Codex --------------------------------------------------------------
+
+# Codex CLI threads, read off the store Codex itself keeps on this
+# machine. No API, no credentials. An empty `sessions` table reads the
+# standard home, `~/.codex`; give it a `path` for a copy of that folder
+# from another machine. Every line of every rollout becomes a raw row;
+# render emits one document per thread, and one per sub-agent thread,
+# with tool calls and outputs folded away. A thread Codex later deletes
+# stays in the mirror.
+[[groups]]
+id = "codex"
+type = "codex"
+
+[[steps]]
+group = "codex"
+function = "ingest"
+[steps.params.sessions]
+
+[[steps]]
+group = "codex"
+function = "render_markdown"
+inputs = ["codex/ingest"]
+# How much of one tool output reaches the page. The raw store keeps all
+# of it; an output that echoes a whole file is cut here, with a marker
+# saying so.
 [steps.params]
 max_tool_result_bytes = 16384
 

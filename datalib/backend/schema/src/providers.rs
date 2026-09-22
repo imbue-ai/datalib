@@ -38,6 +38,8 @@ pub enum Provider {
     Claude,
     /// Claude Code sessions — the terminal, desktop and IDE transcripts.
     ClaudeCode,
+    /// Codex CLI sessions — the terminal and IDE rollouts.
+    Codex,
     /// CardDAV address books.
     Contacts,
     /// Not an upstream provider: datalib describing a source's own

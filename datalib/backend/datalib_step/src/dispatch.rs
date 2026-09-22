@@ -333,6 +333,12 @@ pub fn plan(
             datalib_etl_claude_code,
             datalib_etl_claude_code_render
         ),
+        SourceType::Codex => arm!(
+            datalib_etl_codex_config::CodexConfig,
+            datalib_etl_codex_config::CodexRenderConfig,
+            datalib_etl_codex,
+            datalib_etl_codex_render
+        ),
         SourceType::SmsBackupRestore => arm!(
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
             datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig,

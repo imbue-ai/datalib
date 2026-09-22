@@ -105,7 +105,7 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 
 The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed, and the sidecar churn stays out of any cross-stage fingerprint.
 
-**Sanctioned divergence: no sidecar for a snapshot input read whole every run.** `facebook`, `claude_code` and `airvisual` read a local export or tree from the start every run; there is no per-row fetch to record, so a sidecar would only churn `last_attempt_at_utc` on every row for nothing. Those tables have no `<t>_bookkeeping`. A provider that fetches records one at a time from a service keeps the sidecar — it is what makes a partial run resumable and a failed row visible.
+**Sanctioned divergence: no sidecar for a snapshot input read whole every run.** `facebook`, `claude_code`, `codex` and `airvisual` read a local export or tree from the start every run; there is no per-row fetch to record, so a sidecar would only churn `last_attempt_at_utc` on every row for nothing. Those tables have no `<t>_bookkeeping`. A provider that fetches records one at a time from a service keeps the sidecar — it is what makes a partial run resumable and a failed row visible.
 
 ### Blobs and the CAS split
 Attachment bytes are split out of the entity database into a sibling content-addressable store. We do this because:

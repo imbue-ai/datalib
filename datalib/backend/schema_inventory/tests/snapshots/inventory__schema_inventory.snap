@@ -1257,6 +1257,30 @@ transcripts
     updated_at
     rel_path
 
+== codex/raw ==
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+records
+    id
+    payload
+    transcript_id
+    line_no
+transcripts
+    id
+    payload
+    parent_thread_id
+    cwd
+    git_branch
+    title
+    started_at
+    updated_at
+    rel_path
+
 == whatsapp/raw ==
 wa_media_files
     blake3

@@ -300,6 +300,7 @@ fixture is UUID-shaped.
 |---|---|---|
 | claude | ported | `ProviderGlobal` |
 | claude_code | ported | `ProviderGlobal` — session ids, record uuids and tool-use ids are all Claude Code's own, unique across machines |
+| codex | ported | `ProviderGlobal` — thread ids are Codex's own (UUIDv7); a line is keyed by its number within the thread, a tool call by the id the model API gave it |
 | chatgpt | ported | `ProviderGlobal` |
 | slack | ported | `Upstream(team_id)` |
 | github, gitlab | pending | `Upstream(repo)` — recipe already carries it |

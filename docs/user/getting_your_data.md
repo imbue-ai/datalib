@@ -215,6 +215,18 @@ the standard store, `~/.claude/projects`. Give it a `path` for a copy
 of that folder from another machine. A session Claude Code later
 deletes stays in the mirror.
 
+## Codex
+
+`type = "codex"` — reads the rollouts Codex CLI keeps on this machine
+(`sessions`). Mirrors every thread run in the terminal or an IDE, one
+document per thread and one per sub-agent thread, with tool calls and
+outputs folded away.
+
+No credentials and nothing to export: an empty `sessions` table reads
+the standard home, `~/.codex`. Give it a `path` for a copy of that
+folder from another machine. A thread Codex later deletes stays in the
+mirror.
+
 ## Contacts
 
 `type = "contacts"` — a CardDAV server through latchkey (`carddav`),

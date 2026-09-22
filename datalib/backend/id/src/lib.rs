@@ -58,6 +58,9 @@ pub enum IdNamespace {
     /// Claude Code sessions: every key is one Claude Code minted (a
     /// session id, a record uuid, a tool-use id).
     ClaudeCode,
+    /// Codex sessions: a thread id Codex minted, a line's number within
+    /// it, a tool call's id from the model API.
+    Codex,
     Chatgpt,
     Slack,
     /// Not a provider: datalib's own measurements of a source's mirror,
