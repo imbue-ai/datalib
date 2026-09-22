@@ -201,7 +201,7 @@ the whole stack — doltlite's C included — statically, in opt mode
 The rlibs underneath are cache hits; that last step is not, and a
 shared-crate edit repeats it once per test target. So one binary per
 `tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
-it 17 times for one crate before #660 made `tests/http_tests/` (one
+it 17 times for one crate before #664 made `tests/http_tests/` (one
 `main.rs` of `mod` lines, the files unchanged) and `tests/applet_tests/`.
 Split a crate's integration tests into binaries only along a line the
 process forces — a test that installs the global tracing subscriber
