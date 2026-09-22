@@ -1537,12 +1537,19 @@ async fn sync_enqueue(
     // Validate the discriminator server-side; the DB column is a
     // VARCHAR with no enum constraint so we'd otherwise accept
     // anything. `All` (one DAG run, `source_ids` optionally selecting
-    // a subset) is the only live kind — the legacy fixed-phase kinds
-    // died with the fixed-phase orchestrator and are rejected, though
-    // historical rows keep whatever kind they were written with.
+    // a subset) and `Reset` (which needs its targets) are the live
+    // kinds — the legacy fixed-phase kinds died with the fixed-phase
+    // orchestrator and are rejected, though historical rows keep
+    // whatever kind they were written with.
     let kind = JobKind::parse(&req.kind).ok_or(StatusCode::BAD_REQUEST)?;
-    if kind != JobKind::All {
-        return Err(StatusCode::BAD_REQUEST);
+    let targets = req
+        .source_ids
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    match kind {
+        JobKind::All => {}
+        JobKind::Reset if targets => {}
+        _ => return Err(StatusCode::BAD_REQUEST),
     }
     let row = s
         .app

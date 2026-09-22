@@ -138,8 +138,13 @@ failed step blocks only its downstream subtree. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
 
-Via the server instead: `POST /api/sync/jobs` enqueues and
-`/api/sync/jobs/{id}/cancel` cancels; `GET /api/sync/stream` pushes a
+Via the server instead: `POST /api/sync/jobs` enqueues —
+`{"kind":"all"}` with an optional comma-separated `source_ids`, or
+`{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
+for `datalib-dag --reset` of those steps (`:blobs` on an ingest step
+names its attachments), which the Manage screen offers as "Reset…"
+on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
+cancels; `GET /api/sync/stream` pushes a
 frame when a job starts or ends and whenever the run store moves. The
 run store is what to read for what happened: `GET /api/runs` lists
 runs (a job's id is its run id), `/api/runs/{run}/steps` gives every

@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use app_schema::sync_jobs::SyncJobRow;
+use app_schema::sync_jobs::{JobKind, SyncJobRow};
 use datalib_dag::{Diagnostic, Severity};
 
 use crate::{DagRunInfo, DagStepRun};
@@ -305,16 +305,27 @@ pub fn waiting_on(
 }
 
 /// The worker splits `source_ids` on commas and passes each as its own
-/// `--sync`; empty means the whole config.
+/// `--sync`, or all of them as one `--reset`; empty means the whole
+/// config. A reset's `:blobs` suffix names a part of a step's tree,
+/// so the step is what it claims.
 pub fn job_seeds(job: &SyncJobRow) -> Vec<String> {
     job.source_ids
         .as_deref()
         .unwrap_or("")
         .split(',')
-        .map(str::trim)
+        .map(|s| s.trim().split(':').next().unwrap_or(""))
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// "sync" or "reset": what a job's rows are waiting on.
+pub fn job_verb(job: &SyncJobRow) -> &'static str {
+    if job.kind == JobKind::Reset.as_str() {
+        "reset"
+    } else {
+        "sync"
+    }
 }
 
 /// step id → the queued-or-running job that has claimed it.
@@ -429,10 +440,11 @@ pub fn step_status(args: StatusArgs<'_>) -> StatusView {
         // is the row most likely to be read. Name the sync only when it
         // is some *other* row's.
         let seeds = job_seeds(claim);
+        let verb = job_verb(claim);
         let sync = match claim.source_ids.as_deref().filter(|s| !s.is_empty()) {
             None => "a sync of everything".to_string(),
-            Some(_) if seeds.len() == 1 && seeds[0] == args.id => "this sync".to_string(),
-            Some(ids) => format!("the sync of {ids}"),
+            Some(_) if seeds.len() == 1 && seeds[0] == args.id => format!("this {verb}"),
+            Some(ids) => format!("the {verb} of {ids}"),
         };
         // Upstream steps first, because that is the specific answer;
         // the job itself is the fallback.

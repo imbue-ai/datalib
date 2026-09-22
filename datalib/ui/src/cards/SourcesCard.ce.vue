@@ -575,7 +575,7 @@ function contextMenuItems(anchor: Row, targets: Row[], column: string): MenuEntr
       : {
           name: entry.name,
           disabled: entry.disabled,
-          danger: entry.action === "remove",
+          danger: ["remove", "reset", "reset_blobs"].includes(entry.action),
           action: () => void runMenuAction(entry.action, targets, anchor),
         },
   );
@@ -634,6 +634,12 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       return;
     case "reveal":
       for (const t of targets) await reveal(t.key);
+      return;
+    case "reset":
+      await resetRows(targets, false);
+      return;
+    case "reset_blobs":
+      await resetRows(targets, true);
       return;
     case "remove":
       await deleteRows(targets);
@@ -1250,6 +1256,50 @@ async function runRows(targets: Row[]) {
     // the whole complaint this answers is that pressing play looked
     // like nothing happened. The job frame will refetch too; this is
     // for a page whose stream is down.
+    await Promise.all([loadJobs(), loadRows()]);
+  } catch (e) {
+    banner.value = { ok: false, text: (e as Error).message };
+  } finally {
+    busy.value = false;
+  }
+}
+
+/// The steps a reset of these rows empties: a step is itself, a group
+/// is every step under it that keeps a store; with `blobs`, only the
+/// download steps, and their blob store rather than their rows
+/// (`docs/dev/step_protocol.md` § Reset).
+function resetTargets(targets: Row[], blobs: boolean): string[] {
+  const keeps = (r: Row) =>
+    r.kind === "step" &&
+    (blobs ? r.function === "ingest" : r.function !== "grid_index" && r.function !== "qmd_index");
+  const steps = targets.flatMap((t) =>
+    t.kind === "step" ? [t] : rows.value.filter((r) => keeps(r) && r.id.startsWith(`${t.id}/`)),
+  );
+  return [...new Set(steps.filter(keeps).map((r) => (blobs ? `${r.id}:blobs` : r.id)))];
+}
+
+/// Empty what these rows wrote, keeping the history: a job the worker
+/// turns into `datalib-dag --reset`. Nothing syncs until someone asks.
+async function resetRows(targets: Row[], blobs: boolean) {
+  const ids = resetTargets(targets, blobs);
+  const shown = targets.map((t) => t.name.label).join(", ");
+  if (ids.length === 0) {
+    say(false, `Nothing under ${shown} keeps ${blobs ? "attachments" : "a store"} to reset.`);
+    return;
+  }
+  const what = blobs
+    ? `Delete the attachments downloaded for ${shown}?\n\n` +
+      `The next sync fetches them again. Everything else stays.`
+    : `Reset ${shown}?\n\n` +
+      `Its stores are emptied and the next sync starts from scratch. The rows stay ` +
+      `in the doltlite history, and attachments already downloaded are kept.`;
+  if (!window.confirm(what)) return;
+  busy.value = true;
+  clearBanner();
+  try {
+    const job = await enqueueJob({ kind: "reset", source_ids: ids.join(",") });
+    adoptJob(job);
+    say(true, `Queued a reset of ${shown}. Sync it when you are ready.`, job.id);
     await Promise.all([loadJobs(), loadRows()]);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };

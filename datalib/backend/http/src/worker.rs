@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use app_schema::sync_jobs::{JobState, SyncJobRow};
+use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -358,6 +358,29 @@ fn alive(pid: u32) -> bool {
     }
 }
 
+fn is_reset(job: &SyncJobRow) -> bool {
+    job.kind == JobKind::Reset.as_str()
+}
+
+/// What a job's `source_ids` become on `datalib-dag`'s command line.
+/// A sync names each seed as its own `--sync` (fringe steps, by id;
+/// everything downstream follows normal change propagation) and empty
+/// means the whole config; a reset hands the whole list to one
+/// `--reset`. Ids with commas aren't supported, so the separator is
+/// unambiguous.
+fn selection_args(job: &SyncJobRow) -> Vec<String> {
+    let Some(ids) = job.source_ids.as_deref().filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    if is_reset(job) {
+        return vec!["--reset".into(), ids.into()];
+    }
+    ids.split(',')
+        .filter(|s| !s.is_empty())
+        .flat_map(|id| ["--sync".to_string(), id.to_string()])
+        .collect()
+}
+
 fn terminate(pid: u32) {
     #[cfg(unix)]
     // Safety: plain kill(2); racing a just-exited pid is benign (ESRCH).
@@ -388,20 +411,7 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     if let Some(binary_dir) = cfg.binary_dir.as_ref() {
         command.arg("--binary-dir").arg(binary_dir);
     }
-    // Per-source "Sync now": subset-sync the selected source steps
-    // (fringe steps, by id); everything downstream follows normal
-    // change propagation. `source_ids` may carry several
-    // comma-separated step ids (the UI's "Sync selected" checkboxes) —
-    // ids with commas aren't supported, so the separator is
-    // unambiguous. (The old `ingest`/`render` kinds had a
-    // `--skip-extract` shortcut; the DAG runner has no equivalent —
-    // downloads re-poll and everything unchanged skips, which is the
-    // same outcome a little slower.)
-    if let Some(srcs) = job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-        for src in srcs.split(',').filter(|s| !s.is_empty()) {
-            command.arg("--sync").arg(src);
-        }
-    }
+    command.args(selection_args(&job));
     // Make ~/.datalib/bin resolvable from the config's `command:` lines
     // (step processes inherit the runner's env). Prepended even when
     // the dir doesn't exist yet — an agent may create it between runs,
@@ -426,7 +436,12 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
         .stderr(Stdio::piped());
 
     let label = job.source_ids.as_deref().unwrap_or("all sources");
-    let starting = format!("syncing {label}…");
+    let verb = if is_reset(&job) {
+        "resetting"
+    } else {
+        "syncing"
+    };
+    let starting = format!("{verb} {label}…");
     repo.update_job_progress(&job.id, None, Some(&starting))
         .await
         .ok();
@@ -571,7 +586,6 @@ fn push_segment(seg: &[u8], tail: &Mutex<VecDeque<String>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_schema::sync_jobs::JobKind;
     use datalib_core::app_store::AppStore;
     use datalib_runs::{Retention, RunWriter, StepRunRow};
 
@@ -596,6 +610,39 @@ mod tests {
             updated_at_utc: "2026-09-17T10:00:00Z".into(),
             ..Default::default()
         }
+    }
+
+    /// A sync names each seed on its own `--sync`; a reset hands the
+    /// list, `:blobs` suffixes and all, to one `--reset`.
+    #[test]
+    fn a_job_selects_steps_by_sync_or_by_reset() {
+        let job = |kind: JobKind, ids: Option<&str>| SyncJobRow {
+            id: "j".into(),
+            kind: kind.as_str().into(),
+            source_ids: ids.map(str::to_string),
+            parent_job_id: None,
+            state: "pending".into(),
+            created_at_utc: "2026-09-22T00:00:00Z".into(),
+            started_at_utc: None,
+            finished_at_utc: None,
+            tz_offset: None,
+            error: None,
+            pid: None,
+            progress_pct: None,
+            progress_msg: None,
+        };
+        assert_eq!(
+            selection_args(&job(JobKind::All, Some("a/ingest,b/ingest"))),
+            ["--sync", "a/ingest", "--sync", "b/ingest"]
+        );
+        assert_eq!(
+            selection_args(&job(
+                JobKind::Reset,
+                Some("a/ingest:blobs,a/render_markdown")
+            )),
+            ["--reset", "a/ingest:blobs,a/render_markdown"]
+        );
+        assert!(selection_args(&job(JobKind::All, None)).is_empty());
     }
 
     /// A job the backend died while stopping — `canceled` on request,

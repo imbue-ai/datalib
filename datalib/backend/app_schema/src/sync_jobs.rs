@@ -17,9 +17,13 @@ use serde::{Deserialize, Serialize};
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum JobKind {
-    /// One `datalib-dag` run over the config. The only kind enqueued
-    /// today.
+    /// One `datalib-dag` run over the config, narrowed to `source_ids`
+    /// when they are given.
     All,
+    /// `datalib-dag --reset` of the steps `source_ids` names (a
+    /// `:blobs` suffix names an ingest step's blob store); nothing
+    /// syncs until someone asks.
+    Reset,
     /// Historical: the fixed download/ingest/render phases, from before
     /// the DAG runner. Named here so an old row still renders.
     Download,
