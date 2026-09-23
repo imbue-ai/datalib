@@ -19,6 +19,10 @@
 # cache and no main-branch warmup run. Tag pushes read the RELEASE
 # group's cache — populated only by `test.yml` runs of commits on
 # main, never by contributor laptops or PR runs — and write nothing.
+#
+# Read docs/dev/release_steps.md before changing this file: the steps
+# that assemble a release are scripts under `scripts/release/`, tested on
+# every `bazel test //...`, and a new one goes there rather than inline.
 name: release
 
 on:

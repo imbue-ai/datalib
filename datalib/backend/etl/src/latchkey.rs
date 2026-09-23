@@ -1,4 +1,8 @@
 //! Single entrypoint for spawning the `latchkey` CLI.
+//!
+//! The curl it points latchkey at — `latchkey-curl-router` in front of
+//! `curl-impersonate` — and how that pair is pinned and bumped:
+//! `docs/dev/curl_impersonate.md`.
 
 use std::ffi::OsStr;
 use std::path::PathBuf;

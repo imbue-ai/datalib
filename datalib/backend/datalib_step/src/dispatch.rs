@@ -1,4 +1,7 @@
 //! `(source type, phase)` → provider dispatch.
+//!
+//! What a source type, a group, a function and an ingest method are, and
+//! how a step id is made from them: `docs/dev/config_model.md`.
 
 use std::path::PathBuf;
 

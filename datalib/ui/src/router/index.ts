@@ -9,6 +9,10 @@ import { createRouter, createWebHistory } from "vue-router";
 // component is `CardsView`, which hosts MillerView plus the
 // URL-independent tree layout behind a toggle.
 //
+// The browser's history is the only history the app keeps. Read
+// docs/dev/cards.md § "The miller layout and the browser" before adding
+// another.
+//
 // The catchall MUST come after the explicit routes (`/sources` and the
 // legacy redirects); Vue Router does prefer specific over param routes by
 // path-rank, but order is the simpler invariant.

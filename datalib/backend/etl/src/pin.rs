@@ -18,7 +18,10 @@
 //! than a quiet wrong answer. It also leaves writes through the real names
 //! working, so a pool that reads and writes is unaffected.
 //!
-//! See `docs/dev/plans/streaming_steps_plan.md`.
+//! See `docs/dev/plans/streaming_steps_plan.md`, and its §"The sink contract"
+//! before a consumer treats an empty read as an empty store: "I could not
+//! read this" and "there is nothing here" must stay different answers, or
+//! render deletes every document the source used to have.
 
 use anyhow::Result;
 

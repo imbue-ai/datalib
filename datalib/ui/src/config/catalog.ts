@@ -1,5 +1,7 @@
 // The source catalog the "+ Data Source" picker renders, and the form
-// descriptors the wizard fills in.
+// descriptors the wizard fills in. Before adding a source here, read
+// docs/dev/config_model.md (what the form writes) and
+// docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`api.channels` → `[steps.params.api] channels`).

@@ -148,7 +148,9 @@ test  --disk_cache=~/Library/Caches/bazel-disk-cache
 build --experimental_disk_cache_gc_max_size=150G
 test  --experimental_disk_cache_gc_max_size=150G
 
-# BuildBuddy remote cache + build event service. Opt-in via
+# BuildBuddy remote cache + build event service. Everything from here to
+# the `ci` configs is what CI runs with; read docs/dev/ci.md before
+# changing any of it. Opt-in via
 # `--config=buildbuddy` on `build` / `test`; the API key lives in
 # `.bazelrc.user` (gitignored) — see the `try-import` at the bottom of
 # this file. Without the user file the config is inert; with it,
