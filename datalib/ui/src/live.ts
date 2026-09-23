@@ -16,16 +16,32 @@ import type { JobProgressEvent } from "@/api";
 /// refetches on those; a change to anything else never reaches it.
 export type LiveTable = "dag" | "manage.rows" | "runs" | "log" | "storage";
 
-/// One `root` frame. Mirrors `watch::RootEvent`; see that module for
+/// One `root` frame. Mirrors `watch::RootFrame`; see that module for
 /// what each kind covers and why the frame carries no payload (every
 /// consumer already diffs what it fetches, so the event only has to say
-/// "ask again").
-export type RootEvent =
+/// "ask again"). `chain` is set when a request's own effect moved: a
+/// fetch made while the frame is handled echoes it (`CAUSE_HEADER`), which
+/// is how the server counts a page refetching on its own echo
+/// (`loop_guard.rs`).
+export type RootEvent = (
   | { kind: "config_changed" }
   | { kind: "table_changed"; table: LiveTable }
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
-  | { kind: "heartbeat" };
+  | { kind: "heartbeat" }
+) & { chain?: number };
+
+export const CAUSE_HEADER = "X-Datalib-Cause";
+
+/// The chain of the frame being handled right now, for the fetch
+/// wrapper in `telemetry.ts`. Only a fetch started synchronously inside
+/// a handler sees it; one started after an await or a timer does not,
+/// and counts as nobody's echo.
+let handlingChain: number | undefined;
+
+export function chainOfFrameBeingHandled(): number | undefined {
+  return handlingChain;
+}
 
 /// Whether a frame says `table` should be fetched again.
 export function changed(e: RootEvent, table: LiveTable): boolean {
@@ -121,7 +137,12 @@ function connect() {
     }
     // The heartbeat's whole job was rearming the watchdog above.
     if (ev.kind === "heartbeat") return;
-    fanOut((h) => h.root?.(ev));
+    handlingChain = ev.chain;
+    try {
+      fanOut((h) => h.root?.(ev));
+    } finally {
+      handlingChain = undefined;
+    }
   });
 
   es.onerror = () => {

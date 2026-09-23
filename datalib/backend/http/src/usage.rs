@@ -30,7 +30,7 @@ use datalib_core::repo::DynAppRepo;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-use crate::watch::{RootEvent, Table};
+use crate::watch::{RootEvent, RootFrame, Table};
 
 /// How often the root is walked *while a run is in flight*. Between
 /// runs it isn't walked at all — see the module docs.
@@ -468,9 +468,12 @@ pub async fn sample_once(
         tracing::warn!("usage: could not record {} sample(s): {e}", rows.len());
     }
     // `Err` means nobody is subscribed. The Manage rows carry each
-    // tree's bytes, so they moved too.
+    // tree's bytes, so they moved too. A walk a request asked for is
+    // that request's echo, and the frames say so.
+    let chain = crate::loop_guard::from_this_request();
     for table in [Table::Storage, Table::ManageRows] {
-        let _ = events.send(RootEvent::TableChanged { table });
+        let event = RootEvent::TableChanged { table };
+        let _ = events.send(RootFrame { event, chain });
     }
     true
 }

@@ -103,9 +103,27 @@ pub enum RootEvent {
     Heartbeat,
 }
 
-/// Fan-out channel for [`RootEvent`]s. Subscribed by
+/// A [`RootEvent`] as it goes out on the stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct RootFrame {
+    #[serde(flatten)]
+    pub event: RootEvent,
+    /// Set when a request's own effect is what moved: how many requests
+    /// in a row have each caused the next. A page echoes it on the
+    /// refetch it makes (`loop_guard`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<u32>,
+}
+
+impl From<RootEvent> for RootFrame {
+    fn from(event: RootEvent) -> Self {
+        RootFrame { event, chain: None }
+    }
+}
+
+/// Fan-out channel for [`RootFrame`]s. Subscribed by
 /// `GET /api/sync/stream` alongside the job channel.
-pub type RootTx = broadcast::Sender<RootEvent>;
+pub type RootTx = broadcast::Sender<RootFrame>;
 
 /// A file the watcher reports on. What the filesystem can say; the
 /// datasets it feeds are `expand`'s business.
@@ -188,6 +206,8 @@ struct Seen {
     runs: BTreeMap<StorePart, i64>,
     /// The grid index's HEAD as of the last burst.
     index_head: Option<String>,
+    /// The last log line read for its chain.
+    log_seq: i64,
 }
 
 impl Seen {
@@ -195,8 +215,48 @@ impl Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
             index_head: index_head(root).await,
+            log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
+}
+
+/// More server lines than this in one burst is not a page echoing
+/// itself, and not worth reading to find out.
+const CHAIN_READ_LIMIT: i64 = 500;
+
+/// The chain the server's own new lines continue, and the cursor moved
+/// past them.
+async fn server_log_chain(root: &Path, seen: &mut Seen) -> Option<u32> {
+    let lines = datalib_runs::process_log_after(root, seen.log_seq, CHAIN_READ_LIMIT).await;
+    if lines.len() as i64 >= CHAIN_READ_LIMIT {
+        seen.log_seq = datalib_runs::last_log_seq(root).await;
+        return None;
+    }
+    if let Some(last) = lines.last() {
+        seen.log_seq = last.seq;
+    }
+    crate::loop_guard::burst_chain(&lines)
+}
+
+/// A burst's frames. What moved outside the server's own log goes out
+/// plain. What only the server's log moved goes out carrying `chain` —
+/// a frame some other write would have sent anyway was not caused by
+/// any request, so it starts nothing.
+fn frames(
+    elsewhere: HashSet<RootEvent>,
+    server_log_only: HashSet<RootEvent>,
+    chain: Option<u32>,
+) -> HashSet<RootFrame> {
+    let caused: Vec<RootFrame> = server_log_only
+        .into_iter()
+        .filter(|e| !elsewhere.contains(e))
+        .map(|event| RootFrame { event, chain })
+        .collect();
+    elsewhere
+        .into_iter()
+        .map(RootFrame::from)
+        .chain(caused)
+        .collect()
 }
 
 /// The grid index's HEAD, or `None` when there is no store or nothing
@@ -213,8 +273,9 @@ async fn index_head(root: &Path) -> Option<String> {
 }
 
 /// The frames one debounced burst of file moves becomes.
-async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet<RootEvent> {
+async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet<RootFrame> {
     let mut out = HashSet::new();
+    let mut server_log = HashSet::new();
     let table = |t: Table| RootEvent::TableChanged { table: t };
     for m in moved {
         match m {
@@ -229,7 +290,12 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
             }
             Moved::RunStore => {
                 for part in moved_parts(&datalib_runs::versions(root).await, &mut seen.runs) {
-                    out.extend(tables_of(part).iter().map(|t| table(*t)));
+                    let into = if part == StorePart::ProcessLog {
+                        &mut server_log
+                    } else {
+                        &mut out
+                    };
+                    into.extend(tables_of(part).iter().map(|t| table(*t)));
                 }
             }
             Moved::Frontend => {
@@ -244,7 +310,12 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
             }
         }
     }
-    out
+    let chain = if server_log.is_empty() {
+        None
+    } else {
+        server_log_chain(root, seen).await
+    };
+    frames(out, server_log, chain)
 }
 
 pub fn spawn(root: PathBuf, tx: RootTx) {
@@ -258,7 +329,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             tick.tick().await;
             // `Err` means nobody is subscribed, which is the normal
             // state of a server with no browser attached.
-            let _ = heartbeat_tx.send(RootEvent::Heartbeat);
+            let _ = heartbeat_tx.send(RootEvent::Heartbeat.into());
         }
     });
 
@@ -409,6 +480,47 @@ mod tests {
         );
     }
 
+    /// A frame the server's own lines alone moved carries the chain; one
+    /// a sync's write would have sent anyway carries none, or every live
+    /// card would count as looping for as long as a sync runs.
+    #[test]
+    fn only_a_frame_the_server_log_alone_moved_carries_a_chain() {
+        let log = RootEvent::TableChanged { table: Table::Log };
+        let runs = RootEvent::TableChanged { table: Table::Runs };
+        let alone = frames(HashSet::new(), HashSet::from([log]), Some(3));
+        assert_eq!(
+            alone,
+            HashSet::from([RootFrame {
+                event: log,
+                chain: Some(3)
+            }])
+        );
+        let with_a_run = frames(HashSet::from([log, runs]), HashSet::from([log]), Some(3));
+        assert_eq!(
+            with_a_run,
+            HashSet::from([RootFrame::from(log), RootFrame::from(runs)])
+        );
+    }
+
+    /// `ui/src/live.ts` reads `chain` beside `kind`, and a frame with
+    /// none looks as it always did.
+    #[test]
+    fn a_frame_is_its_event_plus_an_optional_chain() {
+        let log = RootEvent::TableChanged { table: Table::Log };
+        assert_eq!(
+            serde_json::to_string(&RootFrame::from(log)).unwrap(),
+            r#"{"kind":"table_changed","table":"log"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&RootFrame {
+                event: log,
+                chain: Some(2)
+            })
+            .unwrap(),
+            r#"{"kind":"table_changed","table":"log","chain":2}"#
+        );
+    }
+
     /// The wire spelling is what `ui/src/live.ts` switches on.
     #[test]
     fn table_names_agree_between_strum_and_serde() {
@@ -486,7 +598,7 @@ mod tests {
     }
 
     async fn heard(
-        rx: &mut broadcast::Receiver<RootEvent>,
+        rx: &mut broadcast::Receiver<RootFrame>,
         want: RootEvent,
         mut stimulus: impl FnMut(),
     ) {
@@ -494,7 +606,7 @@ mod tests {
         loop {
             stimulus();
             match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
-                Ok(Ok(got)) if got == want => return,
+                Ok(Ok(got)) if got.event == want => return,
                 // Some other kind, or a lagged receiver: keep listening.
                 Ok(_) => continue,
                 Err(_) if tokio::time::Instant::now() < deadline => continue,
@@ -638,7 +750,7 @@ mod tests {
         while let Ok(got) = rx.try_recv() {
             assert!(
                 !matches!(
-                    got,
+                    got.event,
                     RootEvent::TableChanged {
                         table: Table::ManageRows
                     }
@@ -687,10 +799,13 @@ mod tests {
             }
             writer.close().await;
         }
-        async fn index_changed(rx: &mut broadcast::Receiver<RootEvent>) -> bool {
+        async fn index_changed(rx: &mut broadcast::Receiver<RootFrame>) -> bool {
             matches!(
                 tokio::time::timeout(Duration::from_millis(500), rx.recv()).await,
-                Ok(Ok(RootEvent::IndexChanged))
+                Ok(Ok(RootFrame {
+                    event: RootEvent::IndexChanged,
+                    ..
+                }))
             )
         }
 
@@ -723,7 +838,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1_500)).await;
         while let Ok(got) = rx.try_recv() {
             assert_ne!(
-                got,
+                got.event,
                 RootEvent::IndexChanged,
                 "a write the step has not committed was reported as an index change"
             );
