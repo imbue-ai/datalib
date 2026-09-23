@@ -207,6 +207,16 @@ commits nothing, so an untouched store stays byte-identical.
 `dolt_checkout('-b', …)` is still what creates the branch, once per
 file.
 
+**Then it asks the connection back which branch it is on, and a wrong
+answer fails the open.** A selection that quietly did nothing is the one
+failure this construction cannot survive: the writer stays on the
+default branch and every row it writes is visible to every reader the
+moment it lands rather than when it is sealed — and nothing else would
+notice, because the rows are all there and the commits all happen. The
+silent failure below is measured, not hypothetical, and
+`fsindex::checkout_branch` reads back for the same reason.
+`a_writers_pool_is_on_the_writer_branch` is the guard.
+
 **The seal is the commit *and* its publication.** `commit_run` does
 `dolt_commit` on the branch and then `dolt_branch('-f', 'main', …)`.
 A force-move rather than a `dolt_merge`, because one writer per file

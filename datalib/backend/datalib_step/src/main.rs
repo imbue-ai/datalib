@@ -8,6 +8,7 @@
 
 mod dispatch;
 mod events;
+mod exit_watchdog;
 mod function;
 mod grid_index;
 mod hints;
@@ -318,6 +319,7 @@ async fn main() {
         }
         Ok(outputs) => {
             emitter.outcome(&outputs, None);
+            exit_watchdog::arm(exit_watchdog::GRACE);
         }
         Err(e) => {
             let kind = hints::classify(&e);

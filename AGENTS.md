@@ -332,6 +332,11 @@ The rules, none optional; the reasons and measurements are in
   `grid_index` step owns the index; `datalib-http`
   owns feedback, jobs and usage; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **A writer works on `datalib_writer`, never on `main`**, and
+  fast-forwards `main` when it seals, so a reader never sees a
+  half-written batch or a half-built schema. `commit_run` is the seal —
+  a bare `dolt_commit` publishes nothing and reaches no reader; use
+  `commit_all` for a handle that carries a blob CAS.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
@@ -465,13 +470,23 @@ makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
 names what never arrived rather than a timeout with no message.
 
-Two neighbours of the same mistake:
+Three neighbours of the same mistake:
 
 - **A fixed timestamp in a test is a bomb** wherever anything is
   measured from `now` — a retention window, a "recent" filter. Either
   derive the stamp from `now`, or set the window in the test so wide
   that the calendar cannot reach it (`process_log_days: 36500`, #567),
   and say which in a comment.
+- **A test binary runs its tests as threads of one process**, so
+  anything keyed on the process is shared between them. A temp path
+  built from `std::process::id()` is the common case: two tests get the
+  same file and one's cleanup deletes the other's. Take a
+  `tempfile::tempdir()`; in code that cannot reach for a dependency,
+  add a process-local counter to the pid. An environment variable is
+  the same trap — one test's `set_var` is every test's, and outlives
+  it. Prefer passing the value in (`models_dir_under` in
+  `qmd_indexer`); where the variable itself is what's under test, take
+  a lock and restore on drop (`EnvGuard` in `node_runtime.rs`).
 - **A test that takes more than a third of its timeout on CI is a
   flake waiting to happen** once the runner is busy. Tag it `cpu:N`
   or `exclusive` so bazel schedules it alone, or raise the timeout and

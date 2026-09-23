@@ -31,11 +31,13 @@ exactly the shipped code.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tomllib
@@ -58,6 +60,98 @@ _SPAWN_TIMEOUT_SECS = 120
 # hangs came back with nothing in them. Below the deadline, so the child
 # fails by name and we get to read it.
 _POOL_ACQUIRE_SECS = 45
+
+
+# What `datalib-step` writes when its exit stalls after it has printed
+# its outcome, above a list of its threads (`exit_watchdog.rs`).
+_EXIT_STALLED = "exit stalled after the outcome"
+
+
+def _descendants(pid: int) -> list[int]:
+    """`pid` and every process below it, from /proc; `[pid]` without one."""
+    children: dict[int, list[int]] = {}
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            # The command name sits in parentheses and may hold spaces.
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        children.setdefault(int(fields[1]), []).append(int(stat.parent.name))
+    tree, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        tree.append(p)
+        todo += children.get(p, [])
+    return tree
+
+
+def _thread_states(pid: int) -> str:
+    """Every thread of `pid`'s process tree: its name, the kernel function
+    it sleeps in, the syscall it is inside, and its kernel stack where
+    that is readable. Empty where there is no /proc (macOS)."""
+
+    def read(path: Path) -> str:
+        try:
+            return path.read_text(errors="replace").strip()
+        except OSError as e:
+            return f"<{e.strerror}>"
+
+    out = []
+    for p in _descendants(pid):
+        proc = Path(f"/proc/{p}")
+        argv0 = read(proc / "cmdline").split("\0", 1)[0]
+        out.append(f"  process {p} {Path(argv0).name}\n")
+        for task in sorted(proc.glob("task/*")):
+            out.append(
+                f"    {task.name} {read(task / 'comm')} wchan={read(task / 'wchan')} "
+                f"syscall={read(task / 'syscall')}\n"
+            )
+            stack = read(task / "stack")
+            if not stack.startswith("<"):
+                out += [f"      {frame}\n" for frame in stack.splitlines()]
+    return "".join(out) if Path("/proc").is_dir() else ""
+
+
+class _Hung(subprocess.TimeoutExpired):
+    def __init__(
+        self, cmd: list[str], timeout: float, out: str, err: str, threads: str
+    ):
+        super().__init__(cmd, timeout, output=out, stderr=err)
+        self.threads = threads
+
+
+def _run(argv: list[str], *, timeout: float, **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run(capture_output=True, text=True)`, except that a spawn
+    that outlives `timeout` has its threads read before it is killed, as
+    `_Hung.threads`: once it is gone, nothing else can say what it was
+    waiting on. The kill reaches its children too — the runner puts each
+    step in a group of its own — which would otherwise hold the pipes
+    open."""
+    with subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        **kwargs,
+    ) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as hung:
+            threads = _thread_states(proc.pid)
+            for pid in _descendants(proc.pid):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            out, err = proc.communicate()
+            raise _Hung(argv, timeout, out, err, threads) from hung
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _threads(hung: subprocess.TimeoutExpired) -> str:
+    threads = hung.threads if isinstance(hung, _Hung) else ""
+    return f"  threads when it was killed:\n{threads}" if threads else ""
 
 
 def _tail(output: str | bytes | None, lines: int = 40) -> str:
@@ -175,21 +269,14 @@ class RenderContractTest(unittest.TestCase):
             *cls.fixture_paths,
         ]
         try:
-            result = subprocess.run(
-                argv,
-                check=False,
-                cwd=str(cls.cwd),
-                capture_output=True,
-                text=True,
-                timeout=_SPAWN_TIMEOUT_SECS * 5,
-            )
+            result = _run(argv, cwd=str(cls.cwd), timeout=_SPAWN_TIMEOUT_SECS * 5)
         except subprocess.TimeoutExpired as hung:
             # Whatever it managed to say before the deadline is the only
             # evidence there will be: the process is gone, and the driver
             # prints a line per step.
             raise AssertionError(
                 f"the baseline pipeline hung for {_SPAWN_TIMEOUT_SECS * 5}s in "
-                f"{cls.workspace}\n{_tail(hung.stdout)}{_tail(hung.stderr)}"
+                f"{cls.workspace}\n{_tail(hung.stdout)}{_tail(hung.stderr)}{_threads(hung)}"
             ) from hung
         if result.returncode != 0:
             sys.stdout.write(result.stdout)
@@ -202,17 +289,14 @@ class RenderContractTest(unittest.TestCase):
         """One statement (or a `;`-joined few) against a store; the rows,
         or `None` when it failed and the caller said that may happen."""
         try:
-            result = subprocess.run(
+            result = _run(
                 [str(self.cwd / self.doltlite_bin), str(db), sql],
-                check=False,
-                capture_output=True,
-                text=True,
                 timeout=_SPAWN_TIMEOUT_SECS,
             )
         except subprocess.TimeoutExpired as hung:
             self.fail(
                 f"doltlite hung for {_SPAWN_TIMEOUT_SECS}s on {db}:\n  {sql[:300]}\n"
-                f"{_tail(hung.stdout)}{_tail(hung.stderr)}"
+                f"{_tail(hung.stdout)}{_tail(hung.stderr)}{_threads(hung)}"
             )
         if result.returncode != 0:
             if not must_succeed:
@@ -256,20 +340,20 @@ class RenderContractTest(unittest.TestCase):
             params_file.write_text(json.dumps(step["params"]))
             argv += ["--params-file", str(params_file)]
         try:
-            result = subprocess.run(
-                argv,
-                check=False,
-                cwd=str(self.cwd),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=_SPAWN_TIMEOUT_SECS,
-            )
+            result = _run(argv, cwd=str(self.cwd), env=env, timeout=_SPAWN_TIMEOUT_SECS)
         except subprocess.TimeoutExpired as hung:
             self.fail(
                 f"datalib-step render_markdown for {group} hung for "
                 f"{_SPAWN_TIMEOUT_SECS}s in {data_root}\n"
-                f"{_tail(hung.stdout)}{_tail(hung.stderr)}"
+                f"{_tail(hung.stdout)}{_tail(hung.stderr)}{_threads(hung)}"
+            )
+        # The step finished and then could not exit. Its watchdog ended it
+        # and listed its threads; that list is the lead, so it fails here
+        # rather than passing quietly.
+        if (stalled := result.stderr.find(_EXIT_STALLED)) >= 0:
+            self.fail(
+                f"datalib-step render_markdown for {group} in {data_root}:\n"
+                f"{result.stderr[stalled:]}"
             )
         if result.returncode == 0:
             return None

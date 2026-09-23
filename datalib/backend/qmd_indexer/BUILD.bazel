@@ -49,6 +49,9 @@ rust_library(
 rust_test(
     name = "qmd_indexer_unittests",
     crate = ":datalib_qmd_indexer",
+    # A test dep, and so free of the digest tax the note above describes:
+    # `:qmd_indexer_bin` links the library, not this target.
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 rust_binary(

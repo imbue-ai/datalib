@@ -1,10 +1,12 @@
-//! The hermetic endpoint tests of `datalib-http`, one binary: each
-//! module is one endpoint or one contract, and they share a link
-//! because linking the server stack is most of what a test here costs.
-//! A test that installs the process's tracing subscriber cannot live
-//! here (`server_log.rs`, `request_log.rs`, `ui_events.rs`), nor one
-//! that cannot be sandboxed (`applet_tests/`).
+//! The endpoint tests of `datalib-http`, one binary: each module is one
+//! endpoint or one contract, and they share a link because linking the
+//! server stack is most of what a test here costs. A module that has to
+//! run in a process of its own — it installs the process's only tracing
+//! subscriber, or it cannot be sandboxed — is a test slice in
+//! BUILD.bazel: the package's test skips it, and its own target runs it
+//! alone from this same binary.
 
+mod applet;
 mod auth_endpoint;
 mod config_init;
 mod dactal_csp;
@@ -15,6 +17,9 @@ mod manage_rows;
 mod pipeline_history;
 mod pipeline_storage;
 mod remote_media;
+mod request_log;
 mod runs_endpoints;
+mod server_log;
+mod ui_events;
 mod worker_cancel;
 mod worker_failure_tail;
