@@ -241,9 +241,13 @@ type Row = ManageRow & {
 
 /// The tree the grid shows, as the server assembled it, with the
 /// wizard's knowledge added per row.
-const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
+const rows = computed<Row[]>(() => {
+  const all = manage.value?.rows ?? [];
+  const groups = new Map(all.filter((r) => r.kind === "group").map((g) => [g.id, g]));
+  return all.map((r) => decorate(r, groups));
+});
 
-function decorate(r: ManageRow): Row {
+function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   // `system/` is not a config entry: nothing to edit, and Browse is
   // the run log over every run.
   if (r.kind === "system") {
@@ -282,6 +286,7 @@ function decorate(r: ManageRow): Row {
   }
   // "Download" or "Import", read off the step's params against what its
   // provider declares; the server's "Ingest" only when they name no method.
+  const group = r.group ? groups.get(r.group) : undefined;
   const ingestLabelled =
     r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
   return {
@@ -289,7 +294,8 @@ function decorate(r: ManageRow): Row {
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
-    browseSource: null,
+    // A step's rows are its source's: Browse opens the group's view.
+    browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
   };
 }
 
@@ -690,7 +696,6 @@ const historyColumns: ColumnSpec[] = [
 const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
   label: {
     width: 360,
-    minWidth: 320,
     params: {
       innerFormatter: (_r: number, _c: number, _v: unknown, _col: unknown, row: HistoryRow) => {
         const wrap = document.createElement("span");
@@ -708,7 +713,6 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
   },
   date: {
     width: 170,
-    minWidth: 170,
     formatter: (_r, _c, value) => {
       const wrap = document.createElement("span");
       if (!value) return wrap;
@@ -724,27 +728,22 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
   },
   rows: {
     width: 100,
-    minWidth: 100,
     formatter: (_r, _c, value) => formatCount(value as number | null),
   },
   added: {
     width: 90,
-    minWidth: 90,
     formatter: (_r, _c, value) => formatDelta(value as number | null, "+"),
   },
   deleted: {
     width: 90,
-    minWidth: 90,
     formatter: (_r, _c, value) => formatDelta(value as number | null, "−"),
   },
   modified: {
     width: 96,
-    minWidth: 96,
     formatter: (_r, _c, value) => formatDelta(value as number | null, "~"),
   },
   run: {
     width: 120,
-    minWidth: 120,
     formatter: (_r, _c, _v, _col, row) => {
       const wrap = document.createElement("span");
       if (!row?.run) return wrap;
@@ -760,7 +759,6 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
   },
   hash: {
     width: 130,
-    minWidth: 130,
     formatter: (_r, _c, value, _col, row) => {
       const wrap = document.createElement("span");
       if (row?.level !== "commit" || !value) return { html: wrap, toolTip: "" };

@@ -29,6 +29,7 @@ import type {
   SlickGrid,
 } from "@slickgrid-universal/common";
 import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
+import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
@@ -517,14 +518,6 @@ function groupTitle(name: string) {
   };
 }
 
-/// A column that keeps its width when the grid fits itself to the
-/// panel: the fit pass shrinks a column down to `minWidth`, and these
-/// are already as narrow as they read. Message, the one flexible
-/// column, is the one that gives.
-function fixed(width: number) {
-  return { width, minWidth: width };
-}
-
 /// A column the drag-to-group bar accepts. Only a column carrying
 /// `grouping` can be dropped there, which is how Time and Fields (one of
 /// a kind per line: a group per row) stay out of it.
@@ -553,7 +546,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "ts_utc",
       name: "Time",
       field: "ts_utc",
-      ...fixed(120),
+      width: 120,
       // The whole stamp to the millisecond, in the viewer's zone (a
       // step's own lines are stamped in UTC, the runner's in local time).
       // Clipped from the left, and 120px shows the time of day: the
@@ -568,7 +561,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "run_id",
       name: "Run",
       field: "run_id",
-      ...fixed(100),
+      width: 100,
       hidden: true,
       formatter: runIdShort,
       sortable: true,
@@ -578,7 +571,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "process",
       name: "Process",
       field: "process",
-      ...fixed(90),
+      width: 90,
       hidden: true,
       formatter: plain,
       sortable: true,
@@ -588,7 +581,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "git_hash",
       name: "Commit",
       field: "git_hash",
-      ...fixed(100),
+      width: 100,
       hidden: true,
       formatter: commitShort,
       sortable: true,
@@ -598,7 +591,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "step",
       name: "Step",
       field: "step",
-      ...fixed(100),
+      width: 100,
       formatter: plain,
       sortable: true,
       ...groupable("Step", "step"),
@@ -607,7 +600,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "level",
       name: "Level",
       field: "level",
-      ...fixed(80),
+      width: 80,
       formatter: plain,
       sortable: true,
       ...groupable("Level", "level"),
@@ -616,7 +609,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "stream",
       name: "Stream",
       field: "stream",
-      ...fixed(84),
+      width: 84,
       formatter: plain,
       sortable: true,
       ...groupable("Stream", "stream"),
@@ -625,7 +618,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "thread",
       name: "Thread",
       field: "thread",
-      ...fixed(150),
+      width: 150,
       hidden: true,
       formatter: plain,
       sortable: true,
@@ -635,7 +628,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "target",
       name: "Target",
       field: "target",
-      ...fixed(200),
+      width: 200,
       hidden: true,
       formatter: plain,
       sortable: true,
@@ -647,7 +640,7 @@ function columnSet(): Column<RunLogLine>[] {
       // The value is read out of `fields`; the column has no field of its
       // own, and the id is what the header and the test find it by.
       field: "fields",
-      ...fixed(120),
+      width: 120,
       cssClass: "rl-clip-left",
       formatter: source,
       sortable: false,
@@ -657,7 +650,6 @@ function columnSet(): Column<RunLogLine>[] {
       name: "Message",
       field: "msg",
       width: 600,
-      minWidth: 320,
       formatter: plain,
       sortable: true,
       ...groupable("Message", "msg"),
@@ -666,7 +658,7 @@ function columnSet(): Column<RunLogLine>[] {
       id: "fields",
       name: "Fields",
       field: "fields",
-      ...fixed(220),
+      width: 220,
       formatter: otherFields,
       sortable: true,
     },
@@ -763,6 +755,7 @@ function gridOptions(): GridOption {
     // The grid fills its container, whatever the panel's size, rather
     // than measuring the window: the panel is a dialog over the page.
     enableAutoResize: true,
+    ...KEEP_COLUMN_WIDTHS,
     autoResize: {
       // The frame around the box, not the box: the resizer sizes the box
       // to what it measures, and a box it also measured would then stop

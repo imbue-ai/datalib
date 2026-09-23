@@ -45,6 +45,7 @@ import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager }
 import { openExternal } from "@/externalLinks";
 import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
+import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import type { CardCtx } from "./types";
 
@@ -770,14 +771,13 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   // Default sort is applied programmatically on row updates (see
   // applyDefaultSort) — not baked into the definition so a user re-sort
   // sticks across query changes.
-  provider_ref: { width: 110, minWidth: 110 },
-  source_ref: { width: 130, minWidth: 130 },
-  kind: { width: 110, minWidth: 110 },
-  conversation_name: { width: 200, minWidth: 200 },
-  channel: { width: 130, minWidth: 130 },
+  provider_ref: { width: 110 },
+  source_ref: { width: 130 },
+  kind: { width: 110 },
+  conversation_name: { width: 200 },
+  channel: { width: 130 },
   snippet: {
     width: 600,
-    minWidth: 200,
     // Two-line clamp via our own <div>, so the clamp styles land on the
     // direct text container. The row height is fixed at 52px to fit
     // two lines; per-row measurement was the dominant render cost on
@@ -791,7 +791,6 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   },
   author: {
     width: 130,
-    minWidth: 130,
     formatter: accountFormatter,
     grouping: {
       getter: (row: SearchRow) => accountLabel(row.author ?? ""),
@@ -812,7 +811,6 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   // stable opaque key.
   org_name: {
     width: 130,
-    minWidth: 130,
     formatter: (_r, _c, value, _col, row) => ({
       text: value == null ? "" : String(value),
       toolTip: row?.org_uuid ?? "",
@@ -836,7 +834,6 @@ const extraColumns: Column<SearchRow>[] = [
     toolTip:
       "Whether this row's rendered document is in the qmd keyword index, at its current content",
     width: 100,
-    minWidth: 100,
     cssClass: "tg-center",
     cellAttrs: { "col-id": "qmd_indexed" },
     headerCellAttrs: { "col-id": "qmd_indexed" },
@@ -851,7 +848,6 @@ const extraColumns: Column<SearchRow>[] = [
     toolTip:
       "Whether this document has a complete set of embedding vectors — semantic search cannot reach it until it does",
     width: 110,
-    minWidth: 110,
     cssClass: "tg-center",
     cellAttrs: { "col-id": "qmd_embedded" },
     headerCellAttrs: { "col-id": "qmd_embedded" },
@@ -1146,6 +1142,7 @@ function gridOptions(): GridOption {
     enableEmptyDataWarningMessage: false,
     darkMode: isDark(),
     enableAutoResize: true,
+    ...KEEP_COLUMN_WIDTHS,
     autoResize: {
       // The frame around the box, not the box: the resizer sizes the
       // box to what it measures, and a box it also measured would then

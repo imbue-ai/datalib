@@ -153,9 +153,13 @@ export async function selectRowByUuid(page: Page, uuid: string): Promise<Locator
 // Right-click a row located by uuid. Same virtualization dance as
 // `clickRowByUuid` — a row scrolled out of the viewport has no DOM
 // node to dispatch at — but opens the context menu instead of
-// selecting.
+// selecting. The click is near the row's left end, not its middle: the
+// columns keep their widths, so a row can be wider than the grid, and
+// its middle scrolled out of sight.
 export async function contextMenuRowByUuid(page: Page, uuid: string) {
-  await actOnRowByUuid(page, uuid, (row) => row.click({ button: "right", timeout: 3_000 }));
+  await actOnRowByUuid(page, uuid, (row) =>
+    row.click({ button: "right", position: { x: 40, y: 10 }, timeout: 3_000 }),
+  );
   await expect(page.locator(SEARCH_MENU)).toBeVisible({ timeout: 5_000 });
 }
 
