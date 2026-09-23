@@ -20,6 +20,9 @@
                                                   (plain SQLite; any sqlite3 opens it).
                                                   Its own directory, so the WAL beside
                                                   it counts with it on the Manage screen
+<data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
+                                                  and how it ended) and pauses: the
+                                                  mailbox the loop reads (plain SQLite)
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
 ```

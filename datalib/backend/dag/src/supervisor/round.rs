@@ -9,9 +9,10 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::store::{RequestOutcome, Store};
 use super::tick::{
-    tick, Attempt, Class, Consumed, Facts, Intent, Request, Running, Seq, Shape, StepFacts,
-    StepShape, StepState as Row,
+    tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
+    StepFacts, StepShape, StepState as Row,
 };
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, StepProgress};
@@ -39,8 +40,42 @@ struct Ended {
 
 type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
 
+/// Where the loop's requests and pauses come from.
+enum Mailbox<'a> {
+    /// One request rooted at the runner's sources, opened by the loop and
+    /// closed by it: a round, as `datalib-dag` without a store runs it.
+    Fixed { opened: bool },
+    /// Whatever `system/supervisor.sqlite` holds, read again whenever
+    /// another process writes to it.
+    Store { store: &'a Store, seen: Option<i64> },
+}
+
+/// An open request as the loop holds it: its row's id (`None` for the
+/// fixed one) and the tick's view of it.
+struct Open {
+    id: Option<String>,
+    request: Request,
+}
+
+/// How often a loop with steps running looks for new rows. A loop with
+/// nothing running is not waiting on anything else, so it looks at the
+/// same pace.
+const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
 impl Runner {
+    /// One request rooted at the runner's sources, run until it closes.
     pub async fn run(&self, graph: &Graph) -> Result<RunReport> {
+        self.run_loop(graph, Mailbox::Fixed { opened: false }).await
+    }
+
+    /// Every request open in the store, and any opened while this runs,
+    /// until none is left. The caller holds `runner-lock`.
+    pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
+        self.run_loop(graph, Mailbox::Store { store, seen: None })
+            .await
+    }
+
+    async fn run_loop(&self, graph: &Graph, mut mailbox: Mailbox<'_>) -> Result<RunReport> {
         let plan: Vec<String> = graph
             .topo
             .iter()
@@ -75,15 +110,9 @@ impl Runner {
         let n = graph.steps.len();
         let shape = shape_of(graph);
         let mut facts = facts_of(graph, &state);
-        let roots = self.roots(graph);
-        let in_scope = downstream_of(graph, &roots);
-        let mut intent = Intent {
-            requests: vec![Request {
-                roots,
-                opened: Seq(0),
-            }],
-            paused: BTreeSet::new(),
-        };
+        let mut open: Vec<Open> = Vec::new();
+        let mut paused: BTreeSet<usize> = BTreeSet::new();
+        let mut ever_in_scope = vec![false; n];
         let mut seq = 0u64;
 
         let mut status: Vec<Option<StepStatus>> = vec![None; n];
@@ -98,7 +127,16 @@ impl Runner {
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
-        for i in (0..n).filter(|&i| !in_scope[i]) {
+        self.refresh(
+            graph,
+            &mut mailbox,
+            &mut open,
+            &mut paused,
+            &mut seq,
+            &mut ever_in_scope,
+        )
+        .await?;
+        for i in (0..n).filter(|&i| !ever_in_scope[i]) {
             self.finish(
                 graph,
                 &mut state,
@@ -116,6 +154,21 @@ impl Runner {
         let mut set: JoinSet<Done> = JoinSet::new();
 
         loop {
+            if !cancelled {
+                self.refresh(
+                    graph,
+                    &mut mailbox,
+                    &mut open,
+                    &mut paused,
+                    &mut seq,
+                    &mut ever_in_scope,
+                )
+                .await?;
+            }
+            let intent = Intent {
+                requests: open.iter().map(|o| o.request.clone()).collect(),
+                paused: paused.clone(),
+            };
             let t = tick(&shape, &intent, &facts, &self.budgets);
             if !intent.requests.is_empty() {
                 last_states = t.states.clone();
@@ -187,12 +240,24 @@ impl Runner {
             }
             state.save(&self.data_root).context("save dag state")?;
 
-            let closed = !t.closed.is_empty() || intent.requests.is_empty();
-            if closed && set.is_empty() {
+            for &(r, outcome) in t.closed.iter().rev() {
+                let closed = open.remove(r);
+                if let (Some(id), Mailbox::Store { store, .. }) = (&closed.id, &mailbox) {
+                    let (outcome, step) = match outcome {
+                        Outcome::Done => (RequestOutcome::Done, None),
+                        Outcome::Failed { step } => {
+                            (RequestOutcome::Failed, Some(graph.steps[step].id.as_str()))
+                        }
+                    };
+                    store.close_request(id, outcome, step).await?;
+                }
+            }
+            if open.is_empty() && set.is_empty() {
                 break;
             }
+            let polling = matches!(mailbox, Mailbox::Store { .. }) && !cancelled;
             anyhow::ensure!(
-                !set.is_empty(),
+                !set.is_empty() || polling,
                 "the round is open with nothing running and nothing to start: {:?}",
                 t.states
             );
@@ -206,9 +271,13 @@ impl Runner {
                         &mut queue, &mut warned_not_streaming).await;
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
+                    // The host is going: stop what runs and take nothing
+                    // new. The store's requests stay open, for whoever runs
+                    // the loop next.
                     cancelled = true;
-                    intent.requests.clear();
+                    open.clear();
                 }
+                _ = tokio::time::sleep(MAILBOX_POLL), if polling => {}
                 joined = set.join_next() => {
                     let (i, attempts, res, consumed) = joined
                         .expect("a live task implies a joinable one")
@@ -291,6 +360,96 @@ impl Runner {
             steps: report.steps.iter().map(step_summary).collect(),
         });
         Ok(report)
+    }
+
+    /// Bring `open` and `paused` up to what the mailbox says. A request
+    /// the loop has not seen before is opened now, so only an invocation
+    /// started after this counts as serving it.
+    #[allow(clippy::too_many_arguments)]
+    async fn refresh(
+        &self,
+        graph: &Graph,
+        mailbox: &mut Mailbox<'_>,
+        open: &mut Vec<Open>,
+        paused: &mut BTreeSet<usize>,
+        seq: &mut u64,
+        ever_in_scope: &mut [bool],
+    ) -> Result<()> {
+        let mut admit = |id: Option<String>, roots: Vec<usize>, open: &mut Vec<Open>| {
+            for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
+                ever_in_scope[i] |= reached;
+            }
+            *seq += 1;
+            open.push(Open {
+                id,
+                request: Request {
+                    roots,
+                    opened: Seq(*seq),
+                },
+            });
+        };
+        match mailbox {
+            Mailbox::Fixed { opened } => {
+                if !*opened {
+                    *opened = true;
+                    admit(None, self.roots(graph), open);
+                }
+            }
+            Mailbox::Store { store, seen } => {
+                let version = store.data_version().await?;
+                if *seen == Some(version) {
+                    return Ok(());
+                }
+                *seen = Some(version);
+                let rows = store.open_requests().await?;
+                let still_open: BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+                open.retain(|o| o.id.as_deref().is_none_or(|id| still_open.contains(id)));
+                for row in rows {
+                    let known = open.iter().position(|o| o.id.as_deref() == Some(&row.id));
+                    if row.stop_requested_by.is_some() {
+                        if let Some(k) = known {
+                            open.remove(k);
+                        }
+                        store
+                            .close_request(&row.id, RequestOutcome::Stopped, None)
+                            .await?;
+                        continue;
+                    }
+                    if known.is_some() {
+                        continue;
+                    }
+                    let unknown = row.roots.iter().find(|r| !graph.by_id.contains_key(*r));
+                    if let Some(unknown) = unknown {
+                        self.sink.emit(&Event::Log {
+                            step: unknown.clone(),
+                            level: crate::events::LogLevel::Warn,
+                            msg: format!(
+                                "request {} names a step this config does not have; closing it",
+                                row.id
+                            ),
+                            ts: None,
+                            stream: None,
+                            target: None,
+                            thread: None,
+                            fields: None,
+                        });
+                        store
+                            .close_request(&row.id, RequestOutcome::Failed, Some(unknown))
+                            .await?;
+                        continue;
+                    }
+                    let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
+                    admit(Some(row.id), roots, open);
+                }
+                *paused = store
+                    .paused()
+                    .await?
+                    .into_keys()
+                    .filter_map(|id| graph.by_id.get(&id).copied())
+                    .collect();
+            }
+        }
+        Ok(())
     }
 
     fn roots(&self, graph: &Graph) -> Vec<usize> {
@@ -688,5 +847,203 @@ impl Graph {
         self.resolved_inputs[i]
             .iter()
             .map(|a| self.by_id[a.as_str()])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::step::{StepRun, StepSpec};
+
+    /// Wait for what the next assertion is about, with a deadline that
+    /// names what never came.
+    async fn until(what: &str, ready: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// A source that counts its runs, and holds each run until `go` is set
+    /// — or until it is asked to stop, when it reports a cancel.
+    fn source(id: &str, runs: Arc<AtomicU32>, go: Arc<AtomicBool>) -> StepSpec {
+        StepSpec::new(
+            id,
+            StepRun::in_process(move |ctx: StepCtx| {
+                let (runs, go) = (runs.clone(), go.clone());
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let mut stop = ctx.stop.clone();
+                    loop {
+                        if go.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        if ctx.stop.is_requested() {
+                            stop.requested().await;
+                            return Err(StepError::new(
+                                FailureKind::Cancelled,
+                                anyhow::anyhow!("stopped"),
+                            ));
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    let dir = ctx.path_str(&ctx.step_id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join("f"), "x").unwrap();
+                    Ok(StepOutcome::default())
+                }
+            }),
+        )
+    }
+
+    struct Fixture {
+        root: tempfile::TempDir,
+        runs: [Arc<AtomicU32>; 2],
+        go: Arc<AtomicBool>,
+        graph: Arc<Graph>,
+    }
+
+    fn fixture() -> Fixture {
+        let root = tempfile::tempdir().unwrap();
+        let runs = [Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0))];
+        let go = Arc::new(AtomicBool::new(false));
+        let graph = Graph::build(vec![
+            source("a/raw", runs[0].clone(), go.clone()),
+            source("b/raw", runs[1].clone(), go.clone()),
+        ])
+        .unwrap();
+        Fixture {
+            root,
+            runs,
+            go,
+            graph: Arc::new(graph),
+        }
+    }
+
+    fn serve(f: &Fixture) -> tokio::task::JoinHandle<Result<RunReport>> {
+        let (root, graph) = (f.root.path().to_path_buf(), f.graph.clone());
+        tokio::spawn(async move {
+            let store = Store::open(&root).await?;
+            let report = Runner::new(&root).serve(&graph, &store).await;
+            store.close().await;
+            report
+        })
+    }
+
+    async fn outcome(store: &Store, id: &str) -> Option<Option<RequestOutcome>> {
+        store.request(id).await.unwrap().unwrap().closed
+    }
+
+    /// The mailbox: a request another process writes while the loop runs is
+    /// served by that loop, beside the one it was already running.
+    #[tokio::test]
+    async fn a_request_written_while_the_loop_runs_is_served_beside_the_first() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "cli").await.unwrap();
+        let running = serve(&f);
+        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
+
+        let second = other.open_request(&["b/raw".into()], "ui").await.unwrap();
+        until("b to start beside a", || {
+            f.runs[1].load(Ordering::SeqCst) == 1
+        })
+        .await;
+        f.go.store(true, Ordering::SeqCst);
+
+        running.await.unwrap().unwrap();
+        for id in [&first, &second] {
+            assert_eq!(outcome(&other, id).await, Some(Some(RequestOutcome::Done)));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_written_to_the_store_stops_that_request_and_no_other() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        let a = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let b = other.open_request(&["b/raw".into()], "cli").await.unwrap();
+        let running = serve(&f);
+        until("both to start", || {
+            f.runs[0].load(Ordering::SeqCst) == 1 && f.runs[1].load(Ordering::SeqCst) == 1
+        })
+        .await;
+
+        other.request_stop(&a, "claude").await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while outcome(&other, &a).await.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a's request never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        f.go.store(true, Ordering::SeqCst);
+
+        let report = running.await.unwrap().unwrap();
+        assert_eq!(
+            outcome(&other, &a).await,
+            Some(Some(RequestOutcome::Stopped))
+        );
+        assert_eq!(outcome(&other, &b).await, Some(Some(RequestOutcome::Done)));
+        assert_eq!(
+            report.step("a/raw").status,
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled
+            }
+        );
+        assert!(matches!(
+            report.step("b/raw").status,
+            StepStatus::Succeeded { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_paused_step_is_not_started_and_its_request_closes() {
+        let f = fixture();
+        f.go.store(true, Ordering::SeqCst);
+        let other = Store::open(f.root.path()).await.unwrap();
+        other.pause("a/raw", "claude").await.unwrap();
+        let id = other
+            .open_request(&["a/raw".into(), "b/raw".into()], "ui")
+            .await
+            .unwrap();
+        serve(&f).await.unwrap().unwrap();
+        assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
+        assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
+        assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
+    }
+
+    #[tokio::test]
+    async fn a_request_naming_a_step_the_config_lacks_is_closed_failed() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        let id = other
+            .open_request(&["gone/raw".into()], "cli")
+            .await
+            .unwrap();
+        serve(&f).await.unwrap().unwrap();
+        let row = other.request(&id).await.unwrap().unwrap();
+        assert_eq!(row.closed, Some(Some(RequestOutcome::Failed)));
+        assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
+    }
+
+    #[tokio::test]
+    async fn a_loop_with_no_open_request_ends_at_once() {
+        let f = fixture();
+        tokio::time::timeout(Duration::from_secs(5), serve(&f))
+            .await
+            .expect("returns")
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
     }
 }

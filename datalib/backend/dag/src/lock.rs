@@ -25,6 +25,11 @@ pub fn acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
     acquire_runner_within(data_root, PROBE_GRACE)
 }
 
+/// One attempt, no grace: for a client that retries on its own schedule.
+pub fn try_acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
+    acquire_runner_within(data_root, Duration::ZERO)
+}
+
 fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<FileLock, LockError> {
     let path = data_root.join(RUNNER_LOCK_REL_PATH);
     let deadline = Instant::now() + grace;

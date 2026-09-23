@@ -30,6 +30,8 @@ rust_library(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
@@ -38,6 +40,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -53,7 +56,6 @@ rust_test(
     crate = ":datalib_dag",
     edition = "2021",
     deps = [
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )
@@ -111,6 +113,7 @@ rust_test(
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

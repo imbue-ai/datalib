@@ -47,12 +47,16 @@ pub const REMOTE_MEDIA_DIR: &str = "remote_media";
 /// measures disk, and one watch to whatever watches it.
 pub const RUNS_DIR: &str = "runs";
 /// The run store — every run's step states, log lines and metrics, and
-/// the app's own log — relative to [`RUNS_DIR`]. The one plain-SQLite
-/// store.
+/// the app's own log — relative to [`RUNS_DIR`]. Plain SQLite.
 pub const RUNS_DB: &str = "runs.sqlite";
 /// [`RUNS_DIR`] relative to the data root, for whatever keys trees by
 /// that string — the usage walker, the Manage rows.
 pub const RUNS_DIR_REL: &str = "system/runs";
+/// The supervisor's store, relative to `system/`: open requests, pauses,
+/// and what the loop decided about them. Plain SQLite, and the mailbox
+/// through which the UI and the CLI steer one root at once
+/// (`docs/dev/plans/supervisor.md` §2.8).
+pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are
 /// advisory, naming the holder so a refused server can say where the
@@ -118,6 +122,10 @@ pub fn remote_media_dir(data_root: &Path) -> PathBuf {
 
 pub fn lock_file(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(LOCK_FILE)
+}
+
+pub fn supervisor_db(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(SUPERVISOR_DB)
 }
 
 pub fn runs_dir(data_root: &Path) -> PathBuf {
