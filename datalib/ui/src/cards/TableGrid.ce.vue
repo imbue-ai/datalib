@@ -23,6 +23,7 @@ import type {
 } from "@slickgrid-universal/common";
 import type { ColumnSpec } from "@/api";
 import { formatRelative } from "@/config/timeFormat";
+import { carryLayout, MIN_COLUMN_WIDTH } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
@@ -111,13 +112,18 @@ function annotate(rows: T[]): T[] {
 /// repaints the rows that changed: the grid rebuilds a row's cells on
 /// an update, and the action buttons live in those cells.
 const painted = new Map<string, string>();
+/// The keys of the rows last handed over, in the host's order. Not the
+/// grid's own order, which a sort changes: compared against that, every
+/// update after a header click would read as a new set of rows and
+/// reset the sort.
+let handed: string[] = [];
 
 function syncRows(rows: T[]) {
   if (!bundle) return;
   const { dataView } = bundle;
   const keys = rows.map(keyOf);
-  const current = dataView.getItems().map(keyOf);
-  const sameShape = keys.length === current.length && keys.every((k, i) => k === current[i]);
+  const sameShape = keys.length === handed.length && keys.every((k, i) => k === handed[i]);
+  handed = keys;
   if (!sameShape) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
@@ -192,6 +198,8 @@ const api: TableGridApi<T> = { startEditing, selectedRows, refreshCells };
 defineExpose({ refreshCells, api: () => api });
 
 function buildColumns(): Column<T>[] {
+  // The typed floor is a column's declared width, there to stop a fit
+  // squeezing it; this grid never fits, so a person may go narrower.
   const typed = typedColumns<T>(props.columns, {
     rows: () => props.rows,
     tree: props.tree,
@@ -199,7 +207,7 @@ function buildColumns(): Column<T>[] {
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
-  });
+  }).map((c) => ({ ...c, minWidth: MIN_COLUMN_WIDTH }));
   if (!props.tree) return typed;
   return [
     ...typed,
@@ -238,6 +246,11 @@ function options(): GridOption {
     enableEmptyDataWarningMessage: false,
     darkMode: isDark(),
     enableAutoResize: true,
+    // The grid follows its box; its columns do not. A fit would run on
+    // every resize and every column update, undoing any width a person
+    // dragged.
+    enableAutoSizeColumns: false,
+    autoFitColumnsOnFirstLoad: false,
     autoResize: {
       container: boxEl.value!.parentElement!,
       calculateAvailableSizeBy: "container",
@@ -354,9 +367,13 @@ function onTreeToggled(change: TreeToggleStateChange) {
 /// columns and, for a tree, the first rows are in — whichever comes
 /// last. A grid built with no columns stays a 2px strip, and a tree
 /// built with no rows is refused outright.
+/// The column specs the grid was last given, as JSON.
+let declared = "";
+
 function createGrid() {
   if (bundle || !boxEl.value || props.columns.length === 0) return;
   if (props.tree && props.rows.length === 0) return;
+  declared = JSON.stringify(props.columns);
   const opts = options();
   const root = boxEl.value.getRootNode();
   if (root instanceof ShadowRoot) opts.shadowRoot = root;
@@ -385,6 +402,7 @@ function createGrid() {
     };
   }
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
+  handed = props.rows.map(keyOf);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
@@ -440,8 +458,15 @@ watch(
 );
 watch(
   () => props.columns,
-  () => {
-    if (bundle) bundle.columnDefinitions = buildColumns();
+  (columns) => {
+    // A host may hand over an equal array on every poll. Only a real
+    // change reaches the grid, and it keeps the widths and order a
+    // person set.
+    const next = JSON.stringify(columns);
+    if (next === declared) return;
+    declared = next;
+    if (bundle)
+      bundle.columnDefinitions = carryLayout(buildColumns(), bundle.slickGrid.getColumns());
     else createGrid();
   },
 );

@@ -206,10 +206,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
 
     let render = &rows["slack/render_markdown"];
     assert_eq!(render["name"]["label"], "Render markdown");
-    assert!(render["actions"][0]["disabled_reason"]
-        .as_str()
-        .unwrap()
-        .contains("from its group's row"));
+    // A step's Browse is its group's: the same button, just as enabled.
+    assert_eq!(render["actions"][0], slack["actions"][0]);
+    assert_eq!(ingest["actions"][0], slack["actions"][0]);
     assert_eq!(render["actions"][1]["enabled"], false);
     assert!(render["actions"][1]["disabled_reason"]
         .as_str()
@@ -449,6 +448,8 @@ function = \"ingest\"
         .as_str()
         .unwrap()
         .contains("no render step"));
+    // Its step says the same, not something of its own.
+    assert_eq!(rows["photos/ingest"]["actions"][0], photos["actions"][0]);
 }
 
 #[tokio::test]

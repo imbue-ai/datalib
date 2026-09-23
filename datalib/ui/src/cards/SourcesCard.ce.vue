@@ -242,9 +242,13 @@ type Row = ManageRow & {
 
 /// The tree the grid shows, as the server assembled it, with the
 /// wizard's knowledge added per row.
-const rows = computed<Row[]>(() => (manage.value?.rows ?? []).map(decorate));
+const rows = computed<Row[]>(() => {
+  const all = manage.value?.rows ?? [];
+  const groups = new Map(all.filter((r) => r.kind === "group").map((g) => [g.id, g]));
+  return all.map((r) => decorate(r, groups));
+});
 
-function decorate(r: ManageRow): Row {
+function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   // `system/` is not a config entry: nothing to edit, and Browse is
   // the run log over every run.
   if (r.kind === "system") {
@@ -283,6 +287,7 @@ function decorate(r: ManageRow): Row {
   }
   // "Download" or "Import", read off the step's params against what its
   // provider declares; the server's "Ingest" only when they name no method.
+  const group = r.group ? groups.get(r.group) : undefined;
   const ingestLabelled =
     r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
   return {
@@ -290,7 +295,8 @@ function decorate(r: ManageRow): Row {
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
-    browseSource: null,
+    // A step's rows are its source's: Browse opens the group's view.
+    browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
   };
 }
 
