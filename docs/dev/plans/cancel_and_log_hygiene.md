@@ -471,11 +471,29 @@ which its existing handler answers by sealing and exiting 130.
 This is strictly wider than the ladder's rung 3, which only ever fires
 after twenty seconds of a wedged runner. `subprocess.rs` used to say
 "a SIGKILL at the runner runs no Rust and leaves the steps behind";
-that sentence is now gone, and
-`parent_gone::a_step_exits_when_the_runner_itself_is_sigkilled` fails
-with *"the step outlived the runner that was SIGKILLed"* if the pipe is
-taken away again. Stdin is now part of the step protocol, documented
-there: steps are handed a pipe and must not read it for input.
+that sentence is now gone.
+
+**Only `datalib-step` gets the pipe. A `command` step keeps
+`/dev/null`.** The first cut of this gave every step the pipe and called
+stdin part of the protocol, which was wrong in a way worth recording:
+the protection needs the child to *watch* the pipe, so an arbitrary
+program gains nothing from holding one — while a program that reads
+stdin expecting the immediate EOF `/dev/null` gives would block on a
+pipe nobody writes to. That is a hung step holding its store open: the
+disease, not the cure. Measured — forcing every step onto the pipe turns
+`an_arbitrary_step_keeps_dev_null_on_stdin` into a 90-second timeout on
+its `cat`.
+
+So the trade is only made where cooperation is guaranteed. The cost is
+that a custom step is not cleaned up after a SIGKILLed runner;
+`step_protocol.md` says so plainly, and a flag can be added when
+something needs one.
+
+Two guards, each watched failing against the behaviour it forbids:
+`parent_gone::a_builtin_step_exits_when_the_runner_itself_is_sigkilled`
+(fails with *"the step outlived the runner that was SIGKILLed"* without
+the pipe) and `an_arbitrary_step_keeps_dev_null_on_stdin` (hangs if the
+pipe is handed out too widely).
 
 ### Decided, no PR — Gmail's quota ceiling
 

@@ -189,22 +189,31 @@ pub(crate) async fn run_subprocess(
         // own `env:` entries win on key collision.
         .envs(extra_env)
         .envs(env)
-        // Stdin is the step's own parent pipe. A step that links
-        // `datalib_parent_watch` sees EOF on it and stops itself when the
-        // runner dies without running any code — a SIGKILL, a panic that
-        // aborts, the OOM killer — which is the one case `kill_children`
-        // cannot reach. Nothing reads stdin for input; the step protocol
-        // claims it for this. The write end stays on the child handle
-        // below: take it and every step exits at once, reading EOF as a
-        // dead runner.
-        .env(datalib_parent_watch::ENV_VAR, "1")
         .current_dir(&ctx.data_root)
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
+
+    // Only `datalib-step` is handed a parent pipe. Reading EOF on it is
+    // how a step notices a runner that died without running any code — a
+    // SIGKILL, an abort, the OOM killer — which is the one case
+    // `kill_children` cannot reach. It is deliberately not given to an
+    // arbitrary `command` step: the protection needs the child to watch
+    // the pipe, so a program that does not cooperate gains nothing from
+    // holding one, and a program that reads stdin expecting the `/dev/null`
+    // it used to get would block on it forever instead.
+    //
+    // The write end stays on the child handle: take it and the step reads
+    // EOF at once and exits, believing the runner is already gone.
+    if crate::config::is_datalib_step(prog) {
+        cmd.env(datalib_parent_watch::ENV_VAR, "1")
+            .stdin(Stdio::piped());
+    } else {
+        cmd.env_remove(datalib_parent_watch::ENV_VAR)
+            .stdin(Stdio::null());
+    }
     // Its own process group, so a signal aimed at the step reaches what
     // the step spawned. A step is often a wrapper around something else
     // — `qmd_index` runs `node qmd embed` — and a `kill(pid)` the step
@@ -657,6 +666,42 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// An arbitrary `command` step keeps `/dev/null` on stdin. Only
+    /// `datalib-step` is handed the runner's parent pipe: a program that
+    /// does not watch the pipe gains nothing from holding one, and a
+    /// program that reads stdin — expecting the immediate EOF
+    /// `/dev/null` gives — would block forever on a pipe nobody writes
+    /// to, which is a hung step holding its store open.
+    ///
+    /// The `cat` is the real assertion. If stdin were a pipe it never
+    /// returns, the step never finishes, and this times out rather than
+    /// failing on the recorded line.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_arbitrary_step_keeps_dev_null_on_stdin() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                out="$DATALIB_DAG_DATA_ROOT/g/out"
+                mkdir -p "$out"
+                cat > /dev/null
+                if [ -p /dev/fd/0 ]; then kind=pipe; else kind=not-a-pipe; fi
+                echo "$kind ${DATALIB_PARENT_PIPE:-unset}" > "$out/stdin"
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let data_root = root.path().to_path_buf();
+        Runner::new(data_root).run(&g).await.expect("the run");
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("g/out/stdin"))
+                .expect("the step wrote what it saw")
+                .trim(),
+            "not-a-pipe unset",
+        );
     }
 
     /// A signal aimed at a step reaches what the step spawned, because

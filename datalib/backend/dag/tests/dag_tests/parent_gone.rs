@@ -97,35 +97,44 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
 
 /// A step stops itself when the *runner* is SIGKILLed, which runs no
 /// runner code at all: `kill_children` never gets a chance, and nothing
-/// else ever signals a step. Each step therefore holds a pipe from the
-/// runner and stops when it reads EOF on it.
+/// else ever signals a step. `datalib-step` therefore holds a pipe from
+/// the runner and stops when it reads EOF on it.
 ///
-/// The step is the parent-watch probe, which is what a custom step that
-/// links the crate looks like. `sh` records the pid and then `exec`s the
-/// probe over itself, so the pid on disk is the probe's and the runner's
-/// pipe survives the exec. With the runner unsetting the variable and
-/// handing the step `/dev/null` — what it did before — the probe does
-/// not watch anything, sleeps for an hour, and this times out.
+/// Only a step whose program is `datalib-step` is given that pipe, so
+/// the stand-in here is the parent-watch probe copied to that name —
+/// which is exactly the rule the runner applies. A `command` step is
+/// still handed `/dev/null`, because a program that does not watch the
+/// pipe gains nothing from holding one and one that reads stdin would
+/// block on it.
+///
+/// Without the pipe the probe watches nothing, sleeps for an hour, and
+/// this times out.
 #[test]
-fn a_step_exits_when_the_runner_itself_is_sigkilled() {
+fn a_builtin_step_exits_when_the_runner_itself_is_sigkilled() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().canonicalize().unwrap();
+
+    // `is_datalib_step` matches on the program's name, so a copy under
+    // that name is a built-in step as far as the runner is concerned.
+    let step_bin = root.join("datalib-step");
+    std::fs::copy(env_path("PARENT_WATCH_PROBE"), &step_bin).expect("copy the probe");
+    let pid_file = root.join("step.pid");
     std::fs::write(
         root.join("config.toml"),
-        "[[steps]]\nid = \"watched/step\"\n\
-         command = \"sh -c 'mkdir -p watched/step; echo $$ > watched/step/pid; \
-         exec \\\"$PARENT_WATCH_PROBE_ABS\\\" child'\"\n",
+        format!(
+            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n",
+            step_bin.display()
+        ),
     )
     .unwrap();
 
     let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
         .args(["exec", &env_path("DATALIB_DAG_BIN")])
         .arg(root.join("config.toml"))
-        // The step resolves the probe through the environment: its
-        // working directory is the data root, so the rootpath bazel
-        // hands the test would not resolve, and an absolute path
-        // interpolated into the command would not survive a space in it.
-        .env("PARENT_WATCH_PROBE_ABS", env_path("PARENT_WATCH_PROBE"))
+        // Inherited down through the runner to the step: the runner
+        // reports the step's pid to nobody, and its stdout is the event
+        // stream rather than something this test can read a pid off.
+        .env("PARENT_WATCH_PID_FILE", &pid_file)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn the probe parent");
@@ -134,7 +143,7 @@ fn a_step_exits_when_the_runner_itself_is_sigkilled() {
         .read_line(&mut line)
         .expect("read the runner's pid");
     let runner: u32 = line.trim().parse().expect("runner pid");
-    let step: u32 = wait_for_file(&root.join("watched/step/pid"), Duration::from_secs(60))
+    let step: u32 = wait_for_file(&pid_file, Duration::from_secs(60))
         .parse()
         .unwrap();
     assert!(alive(runner) && alive(step), "runner {runner}, step {step}");

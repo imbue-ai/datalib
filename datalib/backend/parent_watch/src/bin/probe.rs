@@ -4,6 +4,10 @@
 //! sleeps until the test kills it. `exec` is the same parent for any
 //! program, so another crate's test can SIGKILL the parent of its own
 //! binary.
+//!
+//! `child` writes its pid to `$PARENT_WATCH_PID_FILE` when that is set,
+//! for a test that cannot read the pid off stdout because something else
+//! started the process — the DAG runner starting it as a step.
 
 // A test fixture with no progress display: stdout is how it reports the
 // child's pid, and the parent never reaps because being SIGKILLed is
@@ -28,6 +32,9 @@ fn main() {
 }
 
 fn child() {
+    if let Ok(path) = std::env::var("PARENT_WATCH_PID_FILE") {
+        std::fs::write(path, std::process::id().to_string()).expect("write the pid file");
+    }
     if let Err(e) = datalib_parent_watch::exit_with_parent(|| std::process::exit(0)) {
         eprintln!("probe child: {e}");
         std::process::exit(2);

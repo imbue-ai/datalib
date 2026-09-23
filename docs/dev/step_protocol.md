@@ -315,34 +315,42 @@ The scheduler models the same distinction: an artifact that doesn't
 exist hashes to the distinguished version `absent`
 (`datalib_dag::version::ABSENT`) rather than being an error state.
 
-## stdin: the runner's pipe, not input
+## stdin: nothing to read
 
-**A step is never given anything to read on stdin, and should not read
-it.** Stdin is a pipe the runner holds the other end of, and it exists
-so a step can tell when the runner is gone.
+**Your step is given `/dev/null` on stdin.** Read it and you get an
+immediate end-of-file; there is no input channel, and adding one is not
+planned. Everything a step is told arrives as environment variables, the
+`--params-file`, and its declared inputs.
 
-The runner normally stops its steps itself: on a cancel it sends each
-one SIGINT, and on its way out it sends SIGKILL to anything left. Both
-need the runner to be alive to run that code. A runner that is itself
-SIGKILLed — or that aborts, or is taken by the OOM killer — runs
-nothing, and since nothing else ever signals a step, a step that waits
-to be told would keep going with its store open and nobody recording
-how the run ended.
+The one exception is `datalib-step` itself, and it is worth knowing why
+the exception is not offered to you by default.
+
+The runner normally stops its steps by signalling them: SIGINT on a
+cancel, SIGKILL for anything still running as it exits. Both need the
+runner to be alive to run that code. A runner that is itself SIGKILLed —
+or that aborts, or is taken by the OOM killer — runs nothing, and since
+nothing else ever signals a step, a step that waits to be told would
+carry on with its store open and nobody recording how the run ended.
 
 What survives a SIGKILL is the kernel closing the dead process' file
-descriptors. So the runner sets `DATALIB_PARENT_PIPE=1` and gives every
-step a pipe on stdin; when the step reads EOF on it, the runner is gone.
-A step written in Rust gets this by calling
-`datalib_parent_watch::exit_with_parent` once at startup — that is all
-`datalib-step` does. A step in any other language can watch fd 0 for EOF
-itself, or ignore the whole thing: an unread pipe costs nothing, and a
-step that ignores it is simply one the runner cannot clean up after a
-SIGKILL.
+descriptors. So for a built-in step the runner sets
+`DATALIB_PARENT_PIPE=1` and puts a pipe on stdin instead; `datalib-step`
+watches it, and treats end-of-file as "the runner is gone".
 
-Whatever a step does on EOF, it should also take down what *it*
-spawned. The runner starts each step as its own process-group leader
-(so that a signal aimed at the step reaches a `node` the step wrapped),
-which makes `kill(0, SIGINT)` exactly "me and my children".
+**A `command` step is deliberately left on `/dev/null`.** The protection
+only works if the program watches the pipe, so handing one to a program
+that does not watch it buys nothing — and it would cost something real:
+a program that reads stdin expecting the immediate end-of-file
+`/dev/null` gives would block on a pipe nobody ever writes to, which is
+a hung step holding its store open. That is a worse failure than the one
+being prevented, so the trade is only worth making where the program is
+known to cooperate.
+
+The consequence, stated plainly: **a custom step is not cleaned up after
+a runner that was SIGKILLed.** It keeps running until something else
+stops it. If that matters for a step you are writing, say so — the
+runner can hand the pipe to a step that asks for it, and the reason
+there is no flag for it yet is that nothing has needed one.
 
 ## stderr: logging
 
