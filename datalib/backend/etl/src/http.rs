@@ -311,7 +311,26 @@ pub const PLAYBACK_DELAY_ENV: &str = "DATALIB_HTTP_PLAYBACK_DELAY_MS";
 /// slow runner. A stop ends the wait as `Interrupted`, like a backoff.
 pub const PLAYBACK_HOLD_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD";
 
+/// Like [`PLAYBACK_HOLD_ENV`], but a request waits only once its process
+/// has sealed a checkpoint. A download runs freely to its first seal and
+/// then parks, so a test sees it in flight with something already
+/// published downstream, for as long as the file exists.
+pub const PLAYBACK_HOLD_SEALED_ENV: &str = "DATALIB_HTTP_PLAYBACK_HOLD_SEALED";
+
 const HOLD_POLL: Duration = Duration::from_millis(50);
+
+static SEALED_A_CHECKPOINT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Called by the raw store each time a checkpoint commit lands; only
+/// [`PLAYBACK_HOLD_SEALED_ENV`] reads it.
+pub(crate) fn record_seal() {
+    SEALED_A_CHECKPOINT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn has_sealed() -> bool {
+    SEALED_A_CHECKPOINT.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 enum Mode {
     Live,
@@ -319,18 +338,23 @@ enum Mode {
         root: PathBuf,
         delay: Duration,
         hold: Option<PathBuf>,
+        hold_sealed: Option<PathBuf>,
     },
 }
 
 impl Mode {
     fn current() -> Self {
+        let path_in = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
         match std::env::var_os(PLAYBACK_ENV) {
             Some(v) if !v.is_empty() => Mode::Playback {
                 root: PathBuf::from(v),
                 delay: playback_delay(),
-                hold: std::env::var_os(PLAYBACK_HOLD_ENV)
-                    .filter(|v| !v.is_empty())
-                    .map(PathBuf::from),
+                hold: path_in(PLAYBACK_HOLD_ENV),
+                hold_sealed: path_in(PLAYBACK_HOLD_SEALED_ENV),
             },
             _ => Mode::Live,
         }
@@ -494,10 +518,16 @@ where
         crate::download_metrics::record_api_request();
         let outcome = match Mode::current() {
             Mode::Live => live::send(req).await,
-            Mode::Playback { root, delay, hold } => {
+            Mode::Playback {
+                root,
+                delay,
+                hold,
+                hold_sealed,
+            } => {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
+                let hold = hold.or(hold_sealed.filter(|_| has_sealed()));
                 if let Some(hold) = hold {
                     if held(guard.stop(), &hold).await {
                         return Err(HttpError::Interrupted {
@@ -1273,6 +1303,49 @@ mod tests {
         assert!(
             hold.exists(),
             "the hold was never released; only the stop ended the wait"
+        );
+    }
+
+    /// Once the process has sealed, the after-seal hold parks a request
+    /// exactly like the plain one. The streaming e2e relies on it to keep
+    /// a download in flight after its first checkpoint.
+    #[tokio::test]
+    async fn a_sealed_hold_parks_a_request_once_a_checkpoint_has_landed() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let hold = dir.path().join("hold");
+        std::fs::write(&hold, b"").unwrap();
+        record_seal();
+
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            fast,
+            fast,
+            crate::stop::StopFlag::default(),
+        );
+        let releaser = hold.clone();
+        let released_at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stamp = released_at.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *stamp.lock().unwrap() = Some(std::time::Instant::now());
+            std::fs::remove_file(&releaser).unwrap();
+        });
+        let resp = with_playback(dir.path(), async {
+            std::env::set_var(PLAYBACK_HOLD_SEALED_ENV, &hold);
+            let out = crate::retry::scope(guard, async { latchkey_curl(&req).await }).await;
+            std::env::remove_var(PLAYBACK_HOLD_SEALED_ENV);
+            out
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, 200);
+        assert!(
+            released_at.lock().unwrap().is_some(),
+            "answered while the hold file was still there"
         );
     }
 

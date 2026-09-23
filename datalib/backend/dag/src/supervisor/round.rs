@@ -122,12 +122,20 @@ impl Runner {
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
 
+            // A step between passes has not settled either, so the index
+            // behind a render that is waiting on its download's next seal
+            // keeps reading Running too, not just the render.
+            let mut unsettled = vec![false; n];
+            for &i in &graph.topo {
+                let upstream = graph.deps_in_order(i).any(|p| unsettled[p]);
+                unsettled[i] = matches!(t.states[i], Row::Running | Row::Waiting(_))
+                    || (ended[i].is_some() && upstream);
+            }
+
             for (i, slot) in ended.iter_mut().enumerate() {
                 let Some(e) = slot.as_mut() else { continue };
                 let again = starting.contains(&i);
-                let upstream_busy = graph
-                    .deps_in_order(i)
-                    .any(|p| matches!(t.states[p], Row::Running | Row::Waiting(_)));
+                let upstream_busy = graph.deps_in_order(i).any(|p| unsettled[p]);
                 if (again || upstream_busy) && !e.pass_ended {
                     e.pass_ended = true;
                     self.sink.emit(&Event::PassEnd {

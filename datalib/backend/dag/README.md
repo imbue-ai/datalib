@@ -119,7 +119,9 @@ A producer waiting on its own upstream holds nobody back, so a fan-in
 never waits for its slowest source.
 
 Until everything a step reads has settled, its row reads Running between
-passes: the step is not finished, it is waiting for the next seal. Each
+passes: the step is not finished, it is waiting for the next seal. A
+producer that is itself between passes has not settled, so the index
+behind a render reads Running for as long as the download does. Each
 pass's process is closed with a `PassEnd`; the `StepFinish` comes once
 its producers are done.
 

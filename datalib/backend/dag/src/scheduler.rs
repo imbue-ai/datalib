@@ -1140,6 +1140,104 @@ mod tests {
         );
     }
 
+    /// A chain of three, the last step two hops from a producer still
+    /// running. Its early pass must end as a pass, not a finish: the middle
+    /// step is waiting on the next seal, so nothing the last one reads has
+    /// settled. Finishing it showed the index Succeeded under a render and
+    /// a download that both still read Running.
+    #[tokio::test]
+    async fn the_end_of_a_chain_stays_running_while_its_first_step_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let sink_passes = Arc::new(AtomicU32::new(0));
+        let finished_early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ended = |events: &[Event]| {
+            events.iter().any(|e| {
+                matches!(e, Event::PassEnd { step, .. } | Event::StepFinish { step, .. }
+                    if step == "unified_index/grid")
+            })
+        };
+
+        let producer = {
+            let (rec, sink_passes, finished_early) =
+                (rec.clone(), sink_passes.clone(), finished_early.clone());
+            StepSpec::new(
+                "slack/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, sink_passes, finished_early) =
+                        (rec.clone(), sink_passes.clone(), finished_early.clone());
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.txt"), "batch0").unwrap();
+                        // Bounded, so a regression fails rather than hangs.
+                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        let sink_ran = || {
+                            let events = rec.0.lock().unwrap();
+                            sink_passes.load(Ordering::SeqCst) >= 1 && ended(events.as_slice())
+                        };
+                        while !sink_ran() && std::time::Instant::now() < deadline {
+                            ctx.checkpoint("v0");
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        let finished = {
+                            let events = rec.0.lock().unwrap();
+                            events.iter().any(|e| {
+                                matches!(e, Event::StepFinish { step, .. }
+                                    if step == "unified_index/grid")
+                            })
+                        };
+                        finished_early.store(finished, Ordering::SeqCst);
+                        std::fs::write(dir.join("data.txt"), "final").unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+        let middle = StepSpec::new(
+            "slack/rendered",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
+                    .unwrap_or_default();
+                std::fs::write(dir.join("out.txt"), &read).unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, version)],
+                    exit: None,
+                })
+            }),
+        )
+        .input("slack/raw")
+        .streams_output();
+        let graph = Graph::build(vec![
+            producer,
+            middle,
+            counting_consumer("unified_index/grid", "slack/rendered", sink_passes.clone()),
+        ])
+        .unwrap();
+
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            ended(rec.0.lock().unwrap().as_slice()),
+            "the last step never ran while the first was running"
+        );
+        assert!(
+            !finished_early.load(Ordering::SeqCst),
+            "the last step finished while the first was still running"
+        );
+    }
+
     /// Without the capability nothing streams, and the consumer runs once.
     /// This is the guard that keeps a sink which cannot be read mid-write
     /// from being read mid-write.
