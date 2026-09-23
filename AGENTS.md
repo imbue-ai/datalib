@@ -461,7 +461,7 @@ makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
 names what never arrived rather than a timeout with no message.
 
-Two neighbours of the same mistake:
+Three neighbours of the same mistake:
 
 - **A fixed timestamp in a test is a bomb** wherever anything is
   measured from `now` — a retention window, a "recent" filter. Either
