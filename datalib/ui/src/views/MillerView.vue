@@ -34,6 +34,15 @@ import {
 } from "@/views/millerStack";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
+const props = withDefaults(
+  defineProps<{
+    // Whether this layout is on screen. Only the layout on screen owns
+    // the URL; this one keeps its stack while another does.
+    active?: boolean;
+  }>(),
+  { active: true },
+);
+
 const route = useRoute();
 const router = useRouter();
 const bus = createBus();
@@ -87,7 +96,7 @@ let queue: Promise<unknown> = Promise.resolve();
 let inFlight = 0;
 
 function writeUrl(mode: "push" | "replace", specs: ColumnSpec[]) {
-  if (sameSpecs(specs, written)) return;
+  if (!props.active || sameSpecs(specs, written)) return;
   written = specs;
   const target = pathFor(specs);
   inFlight++;
@@ -133,17 +142,29 @@ watch(
     // Our own writes settle through the queue's tail, which adopts
     // the route once; a foreign navigation in between is picked up
     // there too.
-    if (inFlight === 0) adoptRoute(path);
+    if (inFlight === 0 && props.active) adoptRoute(path);
+  },
+);
+
+// Back on screen: the URL says what another layout showed, so put this
+// stack back in it.
+watch(
+  () => props.active,
+  (on) => {
+    if (!on) return;
+    written = effectiveSpecs(route.path);
+    writeUrl("replace", specsOf(slots.value));
   },
 );
 
 // The browser's name for the page — its tab, its history menu, a
 // bookmark of it.
 watchEffect(() => {
+  if (!props.active) return;
   document.title = pageTitle(slots.value.map((s) => displayTitle(s.source, s.title)));
 });
 onBeforeUnmount(() => {
-  document.title = pageTitle([]);
+  if (props.active) document.title = pageTitle([]);
 });
 
 // ---- host commands ----

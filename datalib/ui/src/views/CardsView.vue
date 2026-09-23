@@ -4,31 +4,58 @@
 // size, the log, then the dev and layout toggles flush right — and
 // keeps each layout host alive across toggles (v-show, not v-if) so
 // switching back doesn't lose its cards. A grid card carries its own
-// row count.
+// row count. Which layout is showing is remembered in this browser.
 import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
+import TabsView from "@/views/TabsView.vue";
 import RootStorageBar from "@/components/RootStorageBar.vue";
 import { devMode } from "@/devMode";
 import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 
-type Layout = "columns" | "tree" | "tiling";
+const LAYOUTS = ["columns", "tabs", "tree", "tiling"] as const;
+type Layout = (typeof LAYOUTS)[number];
+const LAYOUT_KEY = "datalib-layout";
+
+function storedLayout(): Layout {
+  try {
+    const s = localStorage.getItem(LAYOUT_KEY);
+    return LAYOUTS.find((l) => l === s) ?? "columns";
+  } catch {
+    return "columns";
+  }
+}
+
 const layout = ref<Layout>("columns");
+const tabsMounted = ref(false);
 const treeMounted = ref(false);
 const tilingMounted = ref(false);
 
 function setLayout(next: Layout) {
   layout.value = next;
+  if (next === "tabs") tabsMounted.value = true;
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
+  try {
+    localStorage.setItem(LAYOUT_KEY, next);
+  } catch {
+    // Blocked storage: the choice lasts as long as the page.
+  }
 }
+
+// The tabs layout opens the URL it loads on; mounted later, it keeps
+// the URL the columns layout wrote out of its tabs.
+const initialLayout = storedLayout();
+setLayout(initialLayout);
 
 // The toolbar's commands go to whichever layout is showing.
 const miller = useTemplateRef<SurfaceCommands>("miller");
+const tabs = useTemplateRef<SurfaceCommands>("tabs");
 const tree = useTemplateRef<SurfaceCommands>("tree");
 const tiling = useTemplateRef<SurfaceCommands>("tiling");
 function active(): SurfaceCommands | null {
+  if (layout.value === "tabs") return tabs.value;
   if (layout.value === "tree") return tree.value;
   if (layout.value === "tiling") return tiling.value;
   return miller.value;
@@ -46,7 +73,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="cards-root">
-    <MillerView ref="miller" v-show="layout === 'columns'" />
+    <MillerView ref="miller" v-show="layout === 'columns'" :active="layout === 'columns'" />
+    <TabsView
+      v-if="tabsMounted"
+      ref="tabs"
+      v-show="layout === 'tabs'"
+      :active="layout === 'tabs'"
+      :open-url-on-mount="initialLayout === 'tabs'"
+    />
     <TreeView v-if="treeMounted" ref="tree" v-show="layout === 'tree'" />
     <TilingView v-if="tilingMounted" ref="tiling" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
@@ -77,6 +111,13 @@ onBeforeUnmount(() => {
           @click="setLayout('columns')"
         >
           columns
+        </button>
+        <button
+          :class="{ 'is-active': layout === 'tabs' }"
+          title="one card at a time, with a tree of every open card beside it, each under the card that opened it (kept in this browser)"
+          @click="setLayout('tabs')"
+        >
+          tabs
         </button>
         <button
           :class="{ 'is-active': layout === 'tree' }"
