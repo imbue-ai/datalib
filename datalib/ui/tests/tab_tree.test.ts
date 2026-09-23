@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   closeTab,
+  makeTopLevel,
   newTab,
   nextCounter,
   openChain,
@@ -89,6 +90,27 @@ describe("openStack", () => {
       ["t100", null, "q=a"],
       ["t101", "t100", ""],
     ]);
+  });
+});
+
+describe("makeTopLevel", () => {
+  it("detaches a tab with its subtree, listed right after the root it came from", () => {
+    const a = { ...newTab("t2", "a()", "t1"), preview: true };
+    const b = newTab("t3", "b()", "t2");
+    const other = newTab("t4", "other()", null);
+    const next = makeTopLevel([grid, a, b, other], "t2");
+    expect(rows(next).map((r) => [r.tab.id, r.depth])).toEqual([
+      ["t1", 0],
+      ["t2", 0],
+      ["t3", 1],
+      ["t4", 0],
+    ]);
+    expect(next.find((t) => t.id === "t2")?.preview).toBe(false);
+  });
+
+  it("leaves a root where it is", () => {
+    const tabs = [grid, newTab("t2", "a()", "t1")];
+    expect(makeTopLevel(tabs, "t1")).toBe(tabs);
   });
 });
 

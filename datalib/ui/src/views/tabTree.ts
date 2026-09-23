@@ -115,6 +115,21 @@ export function openStack(
   return { tabs: [...tabs, ...chain], lastId: chain[chain.length - 1].id };
 }
 
+// Detach a tab, with everything under it, and make it a root, listed
+// right after the top-level tab it came from. A tab the person moved
+// is one they mean to keep, so it is no longer a preview.
+export function makeTopLevel(tabs: Tab[], id: string): Tab[] {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab || tab.parentId === null) return tabs;
+  const byId = new Map(tabs.map((t) => [t.id, t]));
+  let root = tab;
+  while (root.parentId !== null && byId.has(root.parentId)) root = byId.get(root.parentId)!;
+  const moved = { ...tab, parentId: null, preview: false };
+  const rest = tabs.filter((t) => t.id !== id);
+  const at = rest.findIndex((t) => t.id === root.id) + 1;
+  return [...rest.slice(0, at), moved, ...rest.slice(at)];
+}
+
 // Close one tab. A collapsed tab takes its hidden subtree with it; an
 // expanded one hands its children up to its own parent, in its place.
 // Returns the new list and the ids that went.

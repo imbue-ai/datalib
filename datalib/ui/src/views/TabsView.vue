@@ -19,6 +19,7 @@ import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns"
 import { DEFAULT_SPECS, pageTitle, pathFor, sameSpecs } from "@/views/millerStack";
 import {
   closeTab,
+  makeTopLevel,
   newTab,
   nextCounter,
   openChain,
@@ -230,6 +231,10 @@ function close(id: string) {
   }
 }
 
+function promote(id: string) {
+  tabs.value = makeTopLevel(tabs.value, id);
+}
+
 function toggle(tab: Tab) {
   tab.collapsed = !tab.collapsed;
   // Folding away the selected tab selects the branch it went into.
@@ -408,8 +413,16 @@ function resetSidebarWidth() {
           </button>
           <span v-else class="tabs-twisty" />
           <span class="tabs-label">{{ titleOf(row.tab) }}</span>
+          <button
+            v-if="row.tab.parentId !== null"
+            class="tabs-action"
+            title="make top-level: move this tab, and everything under it, out of its opener"
+            @click.stop="promote(row.tab.id)"
+          >
+            ⤒
+          </button>
           <a
-            class="tabs-popout"
+            class="tabs-action tabs-popout"
             :href="popOutHref(row.tab)"
             target="_blank"
             rel="noopener"
@@ -418,7 +431,7 @@ function resetSidebarWidth() {
             >↗</a
           >
           <button
-            class="tabs-close"
+            class="tabs-action tabs-close"
             :title="row.tab.collapsed && row.hasChildren ? 'close this branch' : 'close'"
             @click.stop="close(row.tab.id)"
           >
@@ -562,8 +575,9 @@ function resetSidebarWidth() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tabs-popout,
-.tabs-close {
+/* The row's buttons — make top-level, pop out, close — show on hover
+   and on the selected row. */
+.tabs-action {
   flex: 0 0 auto;
   visibility: hidden;
   padding: 0 0.2rem;
@@ -579,14 +593,11 @@ function resetSidebarWidth() {
   text-decoration: none;
   font-size: 12px;
 }
-.tabs-row:hover .tabs-popout,
-.tabs-row:hover .tabs-close,
-.tabs-row.is-selected .tabs-popout,
-.tabs-row.is-selected .tabs-close {
+.tabs-row:hover .tabs-action,
+.tabs-row.is-selected .tabs-action {
   visibility: visible;
 }
-.tabs-popout:hover,
-.tabs-close:hover {
+.tabs-action:hover {
   background: var(--datalib-hover);
 }
 .tabs-main {
