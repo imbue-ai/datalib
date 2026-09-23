@@ -282,6 +282,97 @@ def _argv():
 # (garmin's window) agrees between the runs.
 FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
 
+# ── What a run leaves in the test log ───────────────────────────────
+#
+# A run's full output — every log, metric and progress event the runner
+# relays — is several hundred KB, and the test makes about ten of them.
+# Written to the log whole it came to 3.4 MB on a pass, and bazel prints
+# nothing of a failing test's log over 1 MB, so a CI failure showed no
+# reason at all. The full streams go to a file under the test's
+# undeclared outputs (`outputs.zip`, uploaded by CI when the run is
+# red); the log gets `run_digest`.
+
+# A line longer than this is cut: one event can carry a 12 KB command.
+DIGEST_LINE_CHARS = 400
+# The stderr tail a failed run adds to its digest.
+DIGEST_TAIL_LINES = 60
+
+
+def _level(line: str) -> str | None:
+    if not line.startswith("{"):
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    level = event.get("level") if isinstance(event, dict) else None
+    return level.lower() if isinstance(level, str) else None
+
+
+def run_digest(label: str, returncode: int, stdout: str, stderr: str) -> list[str]:
+    """The lines a run leaves in the test log.
+
+    Every line that is not a runner event (the step outcome table, the
+    driver's own notes), every event at warn or error, and, for a run
+    that failed, the tail of its stderr as it came.
+    """
+    err = stderr.splitlines()
+    tail = err[-DIGEST_TAIL_LINES:] if returncode != 0 else []
+    kept = []
+    for line in [*stdout.splitlines(), *err[: len(err) - len(tail)]]:
+        if line.startswith("[run_sync_pipeline] $ "):
+            continue
+        if line.startswith("{") and _level(line) not in ("warn", "error"):
+            continue
+        kept.append(line)
+    out = [f"── {label}: exit {returncode} ──", *kept]
+    if tail:
+        out.append(f"── {label}: the last {len(tail)} lines of stderr ──")
+        out.extend(tail)
+    return [
+        ln if len(ln) <= DIGEST_LINE_CHARS else ln[:DIGEST_LINE_CHARS] + " …[cut]"
+        for ln in out
+    ]
+
+
+def _outputs_dir() -> Path:
+    return Path(
+        os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR") or os.environ["TEST_TMPDIR"]
+    )
+
+
+class RunDigestTest(unittest.TestCase):
+    """`run_digest` itself: what a failure would show is what it keeps."""
+
+    def test_keeps_the_outcome_table_and_warnings_and_drops_the_rest(self) -> None:
+        lines = [
+            "[run_sync_pipeline] $ /bin/datalib-dag --a --very --long --line",
+            '{"event":"metric","name":"documents","value":1}',
+            '{"event":"log","level":"info","msg":"fine"}',
+            '{"event":"log","level":"warn","msg":"cold-starting"}',
+            "slack/ingest                     Succeeded { changed: 1 }",
+        ]
+        stdout = "\n".join(lines)
+        stderr = '{"level":"ERROR","fields":{"message":"boom"}}'
+        self.assertEqual(
+            run_digest("run 1", 0, stdout, stderr),
+            [
+                "── run 1: exit 0 ──",
+                '{"event":"log","level":"warn","msg":"cold-starting"}',
+                "slack/ingest                     Succeeded { changed: 1 }",
+                '{"level":"ERROR","fields":{"message":"boom"}}',
+            ],
+        )
+
+    def test_a_failed_run_adds_its_stderr_tail_and_long_lines_are_cut(self) -> None:
+        stderr = "\n".join(f"line {i}" for i in range(100)) + "\n" + "x" * 1000
+        digest = run_digest("run 2", 1, "", stderr)
+        self.assertIn("── run 2: the last 60 lines of stderr ──", digest)
+        self.assertEqual(digest.count("line 99"), 1)
+        self.assertEqual(digest[-2], "line 99")
+        self.assertTrue(digest[-1].endswith(" …[cut]"))
+        self.assertLessEqual(len(digest[-1]), DIGEST_LINE_CHARS + 7)
+
 
 class IngestedTngPipelineTest(unittest.TestCase):
     @classmethod
@@ -825,19 +916,26 @@ class IngestedTngPipelineTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        # Print the captured streams so a test failure leaves the
-        # orchestrator's output in the test's own log for debugging.
-        #
-        # `check=False` plus an explicit raise below, rather than
-        # `check=True`: raising inside `subprocess.run` skipped these two
-        # writes entirely, so the one case this printing exists for — the
-        # pipeline exiting non-zero — was the one case that printed
-        # nothing, and the failure reached the log as a bare
-        # `CalledProcessError` naming a 25-argument command line.
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        # `check=False` plus an explicit raise, rather than `check=True`:
+        # raising inside `subprocess.run` would skip the report, so the
+        # one case it exists for — the pipeline exiting non-zero — would
+        # reach the log as a bare `CalledProcessError`.
+        self._report("pipeline (reset)" if reset else "pipeline", result)
         result.check_returncode()
         return result
+
+    _runs = 0
+
+    def _report(self, what: str, result: subprocess.CompletedProcess) -> None:
+        """Keep a run's full streams in a file and put its digest in the log."""
+        type(self)._runs += 1
+        label = f"run {self._runs}, {what}"
+        stem = _outputs_dir() / f"run_{self._runs:02d}"
+        stem.with_suffix(".stdout.txt").write_text(result.stdout)
+        stem.with_suffix(".stderr.txt").write_text(result.stderr)
+        digest = run_digest(label, result.returncode, result.stdout, result.stderr)
+        digest.append(f"── {label}: full output in {stem.name}.std{{out,err}}.txt ──")
+        print("\n".join(digest), file=sys.stderr, flush=True)
 
     def _run_step(
         self,
@@ -875,8 +973,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        self._report(f"step {group}/{function}", result)
         result.check_returncode()
         return result
 

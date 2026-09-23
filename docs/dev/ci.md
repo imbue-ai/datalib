@@ -293,6 +293,16 @@ so a commit with both a failure and a success flaked.
 the targets. It only sees flakes somebody re-ran, and GitHub deletes
 logs after 90 days.
 
+**A test log over 1 MB is not printed.** Bazel prints a failing
+test's log into the job's console only when it is under 1 MB
+(`--experimental_ui_max_stdouterr_bytes`); over that, the console says
+`exceeds maximum size … skipping` and nothing else. So a test that
+runs a pipeline keeps the full output in a file under its undeclared
+outputs, and puts only a digest in its log. `ingested_tng_test` does
+this: each pipeline run's outcomes, warnings and, if it failed, its
+stderr tail. When the run is red, CI uploads the test's `outputs.zip`
+as `ingested-tng-outputs`.
+
 ## What has been measured
 
 Warm runs unless noted; the `bazel test //...` invocation of the test
