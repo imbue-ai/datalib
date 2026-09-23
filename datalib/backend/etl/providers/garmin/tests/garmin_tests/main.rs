@@ -5,6 +5,6 @@
 //! by a process-global environment variable that each test points
 //! at its own fixture tree; one process means one such variable.
 
-mod daily_resume;
 mod playback_roundtrip;
 mod prune_gate;
+mod retry_and_stop;

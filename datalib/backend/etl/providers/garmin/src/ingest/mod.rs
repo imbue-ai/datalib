@@ -487,6 +487,49 @@ fn days_to_retry(
     days
 }
 
+/// One activity's share of the fetch loop.
+#[derive(Debug, PartialEq, Eq)]
+struct ActivityWork {
+    id: String,
+    detail: bool,
+    file: bool,
+}
+
+/// What the activity loop fetches, listed activities first. A detail is
+/// fetched when the listing changed or no detail is stored — failed,
+/// interrupted, or never asked — including for an activity older than
+/// this run's listing window. A FIT file is only sought for a listed
+/// activity: a manual one has none and answers 404 every time.
+fn activity_work(
+    listed: &[&str],
+    changed: &HashSet<String>,
+    without_detail: &[String],
+    wants_file: impl Fn(&str) -> bool,
+) -> Vec<ActivityWork> {
+    let missing: HashSet<&str> = without_detail.iter().map(String::as_str).collect();
+    let mut work: Vec<ActivityWork> = listed
+        .iter()
+        .map(|id| ActivityWork {
+            id: id.to_string(),
+            detail: changed.contains(*id) || missing.contains(id),
+            file: wants_file(id),
+        })
+        .filter(|w| w.detail || w.file)
+        .collect();
+    let listed: HashSet<&str> = listed.iter().copied().collect();
+    work.extend(
+        without_detail
+            .iter()
+            .filter(|id| !listed.contains(id.as_str()))
+            .map(|id| ActivityWork {
+                id: id.clone(),
+                detail: true,
+                file: false,
+            }),
+    );
+    work
+}
+
 impl Walk<'_> {
     /// Where a date walk resumes: `since`, or the cursor less the refresh
     /// window, whichever is later — unless `since` moved earlier.
@@ -868,16 +911,14 @@ impl Walk<'_> {
         let stored_files = self.db.stored_activity_files().await?;
 
         let mut rows = Vec::with_capacity(listed.len());
-        let mut to_fetch: Vec<(String, Value)> = Vec::new();
+        let mut changed: HashSet<String> = HashSet::new();
         for a in listed {
             let Some(id) = id_of(&a, &["activityId"]) else {
                 continue;
             };
             let payload = a.to_string();
-            let changed = stored.get(&id).is_none_or(|old| old != &payload);
-            let wants_file = self.api.activity_files() && !stored_files.contains_key(&id);
-            if changed || wants_file {
-                to_fetch.push((id.clone(), a.clone()));
+            if stored.get(&id).is_none_or(|old| old != &payload) {
+                changed.insert(id.clone());
             }
             rows.push(ActivityRow {
                 id_and_payload: WirePayload { id, payload },
@@ -890,15 +931,20 @@ impl Walk<'_> {
         upsert(self.db, &rows).await?;
         self.wrote(rows.len() as u64).await;
 
+        let listed_ids: Vec<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
+        let without_detail = self.db.activities_without_detail().await?;
+        let to_fetch = activity_work(&listed_ids, &changed, &without_detail, |id| {
+            self.api.activity_files() && !stored_files.contains_key(id)
+        });
         self.progress.set_length(Some(to_fetch.len() as u64));
         let mut edges = CasEdgeAccumulator::new();
-        for (id, listing) in &to_fetch {
+        for work in &to_fetch {
             if self.stopping() {
                 break;
             }
+            let id = &work.id;
             self.progress.set_message(&format!("garmin: activity {id}"));
-            let changed = stored.get(id).is_none_or(|old| old != &listing.to_string());
-            if changed {
+            if work.detail {
                 match self
                     .client
                     .get_json(&format!("/activity-service/activity/{id}"))
@@ -917,7 +963,21 @@ impl Walk<'_> {
                         .await?;
                         s.activities_fetched += 1;
                     }
-                    Ok(Fetched::Nothing) => {}
+                    // Stored as `null` so that "no detail yet" stays
+                    // distinct from "Garmin has none", and only the
+                    // first is asked for again.
+                    Ok(Fetched::Nothing) => {
+                        upsert(
+                            self.db,
+                            &[ActivityDetailRow {
+                                id_and_payload: WirePayload {
+                                    id: id.clone(),
+                                    payload: "null".to_string(),
+                                },
+                            }],
+                        )
+                        .await?;
+                    }
                     Err(e) if is_auth(&e) => return Err(e),
                     Err(_) if self.stopping() => break,
                     Err(e) => {
@@ -927,7 +987,7 @@ impl Walk<'_> {
                     }
                 }
             }
-            if self.api.activity_files() && !stored_files.contains_key(id) {
+            if work.file {
                 match self
                     .client
                     .get_bytes(&format!("/download-service/files/activity/{id}"))
@@ -1285,6 +1345,32 @@ mod tests {
         );
         assert!(
             days_to_retry(&failed, "body_battery", d("2026-08-15"), d("2026-08-15")).is_empty()
+        );
+    }
+
+    /// A listed activity whose detail is missing is fetched even when
+    /// its listing did not change; an older one outside the listing gets
+    /// its detail and no FIT file; one with both in place is left alone.
+    #[test]
+    fn activity_work_fetches_every_missing_detail_and_only_listed_files() {
+        let changed: HashSet<String> = ["2".to_string()].into();
+        let without_detail = ["1".to_string(), "9".to_string()];
+        let work = activity_work(&["1", "2", "3", "4"], &changed, &without_detail, |id| {
+            id == "4"
+        });
+        let w = |id: &str, detail, file| ActivityWork {
+            id: id.into(),
+            detail,
+            file,
+        };
+        assert_eq!(
+            work,
+            [
+                w("1", true, false),
+                w("2", true, false),
+                w("4", false, true),
+                w("9", true, false)
+            ]
         );
     }
 

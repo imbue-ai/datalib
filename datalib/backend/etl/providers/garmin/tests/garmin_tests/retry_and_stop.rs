@@ -1,7 +1,8 @@
-//! Where the per-day walk picks up. A day that failed is asked for
-//! again on the next run even once the walk has resumed past it, and
-//! the days between the failed ones are not; a stop is not a failure
-//! of the day it interrupted and leaves the cursor before it.
+//! What the next run asks for again. A day that failed is fetched again
+//! even once the walk has resumed past it, and the days between the
+//! failed ones are not; an activity detail that failed is fetched again
+//! though its listing did not change; a stop is not a failure of the
+//! day it interrupted and leaves the cursor before it.
 
 use std::sync::Arc;
 
@@ -48,6 +49,37 @@ async fn a_failed_day_behind_the_resume_point_is_fetched_again_and_only_it() {
         s3.requests + 1,
         "the retry costs the failed day and no other: {} vs {}",
         s2.line(),
+        s3.line()
+    );
+}
+
+/// An activity's detail was fetched only when its listing entry
+/// changed, and a failed fetch leaves the listing stored as it came, so
+/// the detail was never asked for again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_activity_detail_is_fetched_again_though_the_listing_did_not_change() {
+    let _serial = PLAYBACK.lock().await;
+    let a = Account::tng();
+    let detail = "/activity-service/activity/17010413001";
+    a.answer(detail, status(500, "upstream fell over"));
+    let s1 = a.run().await;
+    assert_eq!(s1.errors, 1, "{}", s1.line());
+    assert_eq!(
+        a.problems().await.keys().collect::<Vec<_>>(),
+        ["garmin_activity_details:17010413001"]
+    );
+
+    a.resynthesize();
+    let s2 = a.run().await;
+    assert_eq!(s2.errors, 0, "{}", s2.line());
+    assert_eq!(s2.activities_fetched, 1, "{}", s2.line());
+    assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
+
+    let s3 = a.run().await;
+    assert_eq!(
+        s3.activities_fetched,
+        0,
+        "a stored detail is left alone: {}",
         s3.line()
     );
 }
