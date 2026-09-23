@@ -110,11 +110,24 @@ with four clauses:
 - its own fingerprint — argv, env, declared inputs — differs from the one
   recorded then.
 
-A failed step blocks its dependents *this run*, but any partial output
-versions it reported are recorded: steps are incremental, so the next run
-resumes from the committed partial state. Failure kinds map to a retry
-policy in the scheduler; the step only classifies. Retries simply re-invoke
-the step, which is safe because steps promise idempotency.
+A stale step still waits while a step it reads is running or about to
+run, unless that producer declares `streams_output` and is already
+running: then it starts on each seal as it lands, and staleness keeps it
+from running when nothing new has.
+
+A failed step does not stop its dependents. Whatever it committed and
+reported is a version like any other, and a dependent reads it; a fan-in
+reads every source that worked. A step whose inputs have *never* been
+published — a first download that failed — has nothing to read and is
+`Blocked`. Failure kinds map to a retry policy; the step only classifies.
+Retries re-invoke the step inside one invocation, which is safe because
+steps promise idempotency, and once they run out the step is not started
+again this run unless something it reads moves.
+
+Which step starts when is one pure function, `supervisor/tick.rs`; a run
+is `supervisor/round.rs` calling it until the run's request closes. The
+design, and what comes next, is
+[`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
 
 ## Versions are reported by the step, not measured by the runner
 

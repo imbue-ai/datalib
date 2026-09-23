@@ -271,8 +271,8 @@ kind* of failure this is, which drives retry policy:
 | `cancelled` | you were interrupted | fail fast, exit code 130 convention |
 
 `outputs` on a failure outcome reports partial progress you *did*
-commit — the scheduler records those versions so the next run resumes
-from them, while dependents stay blocked this run.
+commit. The scheduler records those versions, the next run resumes from
+them, and your dependents read them now: a commit is a correct state.
 
 ### Rendering a source with no data
 
@@ -282,10 +282,9 @@ exit 0 — an empty output tree, not `failure: data`.
 
 This is the normal state of every source in a freshly scaffolded
 config: the user adds ten sources, authenticates one, and syncs it.
-Failing there is wrong twice over. `data` means "a human must look at
-this", and it poisons the subtree — the shared `grid_index` / `qmd_index`
-fan-in depends on *every* source's `render_markdown`, so one un-downloaded
-source blocks the index for the sources that did sync.
+Failing there is wrong: `data` means "a human must look at this", and
+the Manage row turns red for a source that has simply not been synced
+yet.
 
 An empty render is safe for the index: `grid_index` deletes per
 document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by

@@ -1,26 +1,28 @@
-//! The runner: executes a [`Graph`] with bounded parallelism,
-//! skipping steps whose inputs are unchanged, retrying failures by
-//! kind, and poisoning the subtree below a failure.
+//! The runner's settings and the pieces of a round that are not the
+//! decision: retries, recording an outcome in `dag_state.json`, the
+//! consumers' queue depth, reset. The round itself is
+//! `supervisor/round.rs`; what starts when is `supervisor/tick.rs`.
 //!
 //! The scheduling rules — what a run selects, what makes a step stale, and
 //! why a version is reported rather than measured — are in the crate README.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::task::JoinSet;
 
 use crate::events::{Event, EventSink, NoopSink, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
-use crate::state::{CurrentRun, DagState, LastRun, StepState};
+use crate::state::{DagState, LastRun};
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
+    StopSignal,
 };
-use crate::version::{tree_version, UNKNOWN};
+use crate::supervisor::tick::Budgets;
+use crate::version::tree_version;
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -55,7 +57,9 @@ impl RetryPolicy {
 
 pub struct Runner {
     pub data_root: PathBuf,
-    pub parallelism: usize,
+    /// How many invocations of each class may run at once. Separate
+    /// budgets are what keep four downloads from starving the index.
+    pub budgets: Budgets,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
     /// Subset-sync mode: the source steps (those with no declared
@@ -69,30 +73,27 @@ pub struct Runner {
     /// pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win
     /// on key collision.
     pub child_env: Arc<BTreeMap<String, String>>,
-    /// How many *streaming* passes may run at once, on top of
-    /// [`parallelism`](Self::parallelism).
-    ///
-    /// Its own budget rather than a share of `parallelism`, and the reason
-    /// is the case this feature exists for: with `parallelism` at 4 and
-    /// four downloads running, a streaming pass competing for the same
-    /// slots never runs, and nothing reaches the UI until every download
-    /// finishes. `parallelism` bounds long network-bound fetches; a
-    /// streaming pass is bounded incremental work over a delta, already
-    /// capped at one instance per step.
-    pub streaming_parallelism: usize,
+    /// Flipped to `true` to stop the round: running steps get SIGINT on
+    /// their process group and nothing new starts.
+    pub stop: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 impl Runner {
     pub fn new(data_root: impl Into<PathBuf>) -> Self {
         Self {
             data_root: data_root.into(),
-            parallelism: 4,
-            streaming_parallelism: 1,
+            budgets: Budgets::from_parallelism(4),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             only_fringe: None,
             child_env: Arc::new(BTreeMap::new()),
+            stop: None,
         }
+    }
+
+    pub fn stop_on(mut self, rx: tokio::sync::watch::Receiver<bool>) -> Self {
+        self.stop = Some(rx);
+        self
     }
 
     pub fn sink(mut self, sink: Arc<dyn EventSink>) -> Self {
@@ -166,6 +167,7 @@ impl Runner {
                 changed_inputs: vec![],
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
                 checkpoint: crate::step::CheckpointSink::disconnected(),
+                stop: StopSignal::never(),
             };
             let mut child_env = (*self.child_env).clone();
             child_env.insert(
@@ -279,808 +281,9 @@ impl RunReport {
     }
 }
 
-/// What the dispatcher decided for a ready step.
-enum Decision {
-    Run {
-        ctx: StepCtx,
-    },
-    /// Up to date, or outside the runnable subgraph. Either way the
-    /// step's output keeps the version recorded for it, so consumers
-    /// compare against the right thing — or, with nothing recorded,
-    /// [`crate::version::UNKNOWN`]. The runner does not read the tree
-    /// to invent one.
-    Skip {
-        status: StepStatus,
-    },
-    Block {
-        on: String,
-    },
-}
-
 impl Runner {
-    pub async fn run(&self, graph: &Graph) -> Result<RunReport> {
-        // Announce the full plan first, so consumers can draw every
-        // task (pending included) before anything runs.
-        self.sink.emit(&Event::RunPlan {
-            steps: graph
-                .topo
-                .iter()
-                .map(|&i| graph.steps[i].id.clone())
-                .collect(),
-        });
-        let mut state = DagState::load(&self.data_root).context("load dag state")?;
-
-        // Open the run record before anything runs, so a UI polling
-        // mid-plan sees "started, nothing finished" rather than an empty
-        // file. One clock for the whole run — the same value the steps
-        // get in `DATALIB_DAG_NOW`, so a run's timestamps agree with
-        // what its steps stamped into their own stores — and one id, the
-        // one the steps get in `DATALIB_DAG_RUN_ID` and the run store is
-        // keyed by. A library caller that set neither gets both minted.
-        let started_at = self
-            .child_env
-            .get(crate::subprocess::ENV_NOW)
-            .cloned()
-            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-        let run_id = self
-            .child_env
-            .get(crate::subprocess::ENV_RUN_ID)
-            .cloned()
-            .unwrap_or_else(new_run_id);
-        state.current_run = Some(CurrentRun {
-            run_id,
-            started_at: started_at.clone(),
-            finished_at: None,
-            plan: graph
-                .topo
-                .iter()
-                .map(|&i| graph.steps[i].id.clone())
-                .collect(),
-            states: Default::default(),
-        });
-        state.save(&self.data_root).context("save dag state")?;
-
-        let n = graph.steps.len();
-        // Current version of every concrete artifact, filled in as
-        // producers reach a terminal state. Every artifact has exactly
-        // one producer — `Graph::build` rejects an input that names no
-        // declared step — and a version is that producer's to report,
-        // so the scheduler never hashes a tree on its own behalf.
-        let mut versions: HashMap<String, String> = HashMap::new();
-        // Whether each artifact's version moved this run (drives the
-        // per-output `changed` flag in the report).
-        let mut changed_now: HashMap<String, bool> = HashMap::new();
-
-        let mut status: Vec<Option<StepStatus>> = vec![None; n];
-        let runnable = self.runnable_subgraph(graph);
-        let mut attempts_taken: Vec<u32> = vec![0; n];
-        let mut errors: Vec<Option<String>> = vec![None; n];
-        let mut remaining_deps: Vec<usize> = graph.deps.iter().map(|d| d.len()).collect();
-        let mut ready: VecDeque<usize> = (0..n).filter(|&i| remaining_deps[i] == 0).collect();
-        let mut running = 0usize;
-        // The task carries the input versions it was dispatched against, so
-        // the completion handler receives them rather than re-reading a map
-        // that has moved on. See `snapshot_inputs`.
-        type Done = (
-            usize,
-            u32,
-            Result<StepOutcome, StepError>,
-            HashMap<String, String>,
-        );
-        let mut set: JoinSet<Done> = JoinSet::new();
-
-        // ── streaming dispatch ────────────────────────────────────────
-        // A producer that seals partial output announces it here; a
-        // consumer of a streaming edge is then dispatched against that
-        // partial output rather than waiting for the producer to finish.
-        let (cp_tx, mut checkpoints) = tokio::sync::mpsc::unbounded_channel();
-        let checkpoint = crate::step::CheckpointSink::new(cp_tx);
-        // At most one instance of a step in flight, ever. Single-writer-
-        // per-file is load-bearing throughout this repo, and a fan-in like
-        // `grid_index` is poked by every source, so a second poke arriving
-        // mid-pass is the common case rather than the rare one.
-        let mut in_flight: Vec<bool> = vec![false; n];
-        // Set when a step's deps all finished while an early pass of it was
-        // still running: its final pass is owed, and is queued when that
-        // pass lands. Without this the step would be dropped from `ready`
-        // and the run would never terminate it.
-        let mut final_pass_owed: Vec<bool> = vec![false; n];
-        // Set when a seal reached a consumer while a pass of it was in
-        // flight. One more pass follows when that one lands -- one,
-        // however many seals arrived, since the next pass reads everything
-        // sealed so far. Without it the rows waited for the next seal from
-        // anyone, or for the end of the run.
-        let mut streaming_pass_owed: Vec<bool> = vec![false; n];
-        let mut early: Vec<bool> = vec![false; n];
-        let mut warned_not_streaming: Vec<bool> = vec![false; n];
-        let mut queue = QueueLedger::new(n);
-        // Seeded from the spec (how an in-process step declares it) and
-        // overwritten by a `Capabilities` signal (how a subprocess does).
-        let mut streams: Vec<bool> = graph.steps.iter().map(|s| s.streams_output).collect();
-        let mut streaming_ready: VecDeque<usize> = VecDeque::new();
-        let mut streaming_running = 0usize;
-
-        loop {
-            // Dispatch as many ready steps as parallelism allows.
-            // Skip/block decisions are made inline (no slot consumed);
-            // real work is spawned.
-            let mut dispatched = false;
-            while running < self.parallelism {
-                let Some(i) = ready.pop_front() else { break };
-                // An early pass of this same step is still running. Hold
-                // the final pass until it lands rather than starting a
-                // second writer against one tree.
-                if in_flight[i] {
-                    final_pass_owed[i] = true;
-                    continue;
-                }
-                match self.decide(
-                    graph,
-                    &state,
-                    &status,
-                    &runnable,
-                    &versions,
-                    i,
-                    &checkpoint,
-                    false,
-                ) {
-                    Decision::Skip { status: st } => {
-                        queue.cleared(graph, i, &*self.sink);
-                        // The output keeps its last-recorded version,
-                        // and if there isn't one we say so. There is
-                        // deliberately no fallback here: hashing a tree
-                        // the run was told not to touch is how a
-                        // `--sync` of one small source came to spend
-                        // forty seconds reading 3.4 GB of somebody
-                        // else's Slack (#225). The cost was invisible
-                        // because the fallback *succeeded* — a correct
-                        // version, arrived at the slowest possible way,
-                        // for a step nobody was going to run.
-                        let out = graph.steps[i].output();
-                        let v = state
-                            .steps
-                            .get(&graph.steps[i].id)
-                            .and_then(|s| s.output_versions.get(out.as_str()))
-                            .cloned()
-                            .unwrap_or_else(|| UNKNOWN.to_string());
-                        versions.insert(out.as_str().to_string(), v);
-                        changed_now.insert(out.as_str().to_string(), false);
-                        self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
-                        release_dependents(graph, &mut remaining_deps, &mut ready, i);
-                    }
-                    Decision::Block { on } => {
-                        self.finish(
-                            graph,
-                            &mut state,
-                            &mut status,
-                            i,
-                            StepStatus::Blocked { on },
-                            None,
-                            None,
-                            0,
-                        );
-                        release_dependents(graph, &mut remaining_deps, &mut ready, i);
-                    }
-                    Decision::Run { ctx } => {
-                        running += 1;
-                        in_flight[i] = true;
-                        dispatched = true;
-                        let consumed = snapshot_inputs(graph, &versions, i);
-
-                        mark_running(&mut state, &graph.steps[i].id, &now_stamp());
-                        let run = graph.steps[i].run.clone();
-                        let retry = self.retry.clone();
-                        let sink = self.sink.clone();
-                        let child_env = self.child_env.clone();
-                        set.spawn(async move {
-                            let (attempts, res) =
-                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
-                            (i, attempts, res, consumed)
-                        });
-                    }
-                }
-            }
-
-            // Streaming passes get their own budget rather than competing
-            // for `parallelism` — see `Runner::streaming_parallelism`.
-            while streaming_running < self.streaming_parallelism {
-                let Some(i) = streaming_ready.pop_front() else {
-                    break;
-                };
-                if in_flight[i] || status[i].is_some() {
-                    continue;
-                }
-                match self.decide(
-                    graph,
-                    &state,
-                    &status,
-                    &runnable,
-                    &versions,
-                    i,
-                    &checkpoint,
-                    true,
-                ) {
-                    Decision::Run { ctx } => {
-                        streaming_running += 1;
-                        in_flight[i] = true;
-                        early[i] = true;
-                        dispatched = true;
-                        let consumed = snapshot_inputs(graph, &versions, i);
-
-                        mark_running(&mut state, &graph.steps[i].id, &now_stamp());
-                        let run = graph.steps[i].run.clone();
-                        let retry = self.retry.clone();
-                        let sink = self.sink.clone();
-                        let child_env = self.child_env.clone();
-                        set.spawn(async move {
-                            let (attempts, res) =
-                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
-                            (i, attempts, res, consumed)
-                        });
-                    }
-                    // Nothing moved for this consumer yet, or the run did
-                    // not ask for it. Either way an early pass has nothing
-                    // to do and the decision is not terminal — the final
-                    // pass will ask again when the deps are actually done.
-                    Decision::Skip { .. } | Decision::Block { .. } => {}
-                }
-            }
-
-            // Persist the dispatch before waiting on it. `mark_running`
-            // only mutates memory, and until this landed the *only*
-            // writes were on terminal states — so a step's "running"
-            // never reached the file, and the record went straight from
-            // "not reached yet" to "succeeded". A reader polling
-            // `dag_state.json` (which is every reader: `GET /api/dag`,
-            // and so the Manage grid) could therefore never see a step
-            // running, no matter how long it ran. Pressing Sync looked
-            // like nothing had happened, which is exactly what it was
-            // reported as.
-            if dispatched {
-                state.save(&self.data_root).context("save dag state")?;
-            }
-
-            if running == 0 && streaming_running == 0 {
-                break;
-            }
-            // A checkpoint sends us back to the dispatch phase rather
-            // than back to waiting. Staying here was a deadlock: with
-            // every ordinary slot busy, the consumer a checkpoint just
-            // made ready could not be dispatched until some *other* step
-            // finished -- which is exactly the situation streaming exists
-            // to fix.
-            // Seals before joins: a step sends its seal before its task
-            // can finish, so a queued seal predates a queued join. Taken
-            // the other way round, the loop breaks (or reads the seal as
-            // stale) before it reaches the stream.
-            let completed = tokio::select! {
-                biased;
-                Some(signal) = checkpoints.recv() => {
-                    'checkpoint: {
-                        let (step, version, rows) = match signal {
-                            crate::step::StepSignal::Capabilities {
-                                step,
-                                streams_output,
-                            } => {
-                                if let Some(p) =
-                                    graph.steps.iter().position(|st| st.id == step)
-                                {
-                                    streams[p] = streams_output;
-                                }
-                                break 'checkpoint;
-                            }
-                            crate::step::StepSignal::Checkpoint {
-                                step,
-                                version,
-                                rows,
-                            } => (step, version, rows),
-                        };
-                        let Some(p) = graph.steps.iter().position(|st| st.id == step) else {
-                            break 'checkpoint;
-                        };
-                        // A seal announced by a step that has since
-                        // finished is stale: its stdout was still being
-                        // drained when its outcome landed. Applying it
-                        // would rewind the output's version to before
-                        // the outcome and re-queue rows already read.
-                        if status[p].is_some() {
-                            break 'checkpoint;
-                        }
-                        // The producer's output is readable up to here.
-                        // Recorded exactly the way a completed pass records
-                        // it, which is what lets the consumer's ordinary
-                        // staleness check do the rest.
-                        let out = graph.steps[p].output().as_str().to_string();
-                        // Qualified with the producer's fingerprint, exactly
-                        // as `resolve_outputs` does for a completed pass.
-                        // Recording the bare version instead puts checkpoints
-                        // in a different namespace from outcomes, so the
-                        // consumer's final pass always sees its input as
-                        // moved and re-runs -- which loses the property that
-                        // makes this design cheap: streaming is the ordinary
-                        // staleness rules evaluated earlier, and they only
-                        // work if both kinds of version are comparable.
-                        let qualified = format!("{}:{}", graph.fingerprints[p], version);
-                        let moved = versions.get(&out) != Some(&qualified);
-                        versions.insert(out.clone(), qualified.clone());
-                        changed_now.insert(out, moved);
-                        queue.sealed(graph, p, &qualified, rows, &*self.sink);
-                        // The event carries what the step said, not the
-                        // qualified form: the qualification is the runner's
-                        // bookkeeping, and a reader of the stream should see
-                        // the version the step vouched for. Once per seal:
-                        // a producer re-announces one until its consumer
-                        // has run, and the repeat is not news.
-                        if moved {
-                            self.sink.emit(&Event::Checkpoint {
-                                step: step.clone(),
-                                version,
-                                rows,
-                            });
-                        }
-                        if !streams[p] {
-                            // Sealed a sink it says nobody may read early.
-                            // Not fatal -- the version is still good and
-                            // worth recording -- but the step contradicts
-                            // its own declaration, and ignoring that
-                            // silently would hide why streaming never
-                            // happens.
-                            if !warned_not_streaming[p] {
-                                warned_not_streaming[p] = true;
-                                self.sink.emit(&Event::Log {
-                                    step: step.clone(),
-                                    level: crate::events::LogLevel::Warn,
-                                    msg: "checkpointed but does not declare \
-                                          streams_output; no consumer will be \
-                                          dispatched early"
-                                        .to_string(),
-                                    ts: None,
-                                    stream: None,
-                                    target: None,
-                                    thread: None,
-                                    fields: None,
-                                });
-                            }
-                            break 'checkpoint;
-                        }
-                        enqueue_streaming_consumers(
-                            graph,
-                            p,
-                            &remaining_deps,
-                            &in_flight,
-                            &status,
-                            &mut streaming_ready,
-                            &mut streaming_pass_owed,
-                        );
-                    }
-                    None
-                }
-                joined = set.join_next() => {
-                    Some(joined
-                        .expect("a live task implies a joinable one")
-                        .context("step task panicked")?)
-                }
-            };
-            let Some((i, attempts, res, consumed)) = completed else {
-                continue;
-            };
-            in_flight[i] = false;
-            let was_early = early[i];
-            if was_early {
-                early[i] = false;
-                streaming_running -= 1;
-            } else {
-                running -= 1;
-            }
-            attempts_taken[i] = attempts;
-
-            let spec = &graph.steps[i];
-            let prior_outs = state
-                .steps
-                .get(&spec.id)
-                .map(|s| s.output_versions.clone())
-                .unwrap_or_default();
-            let exit = match &res {
-                Ok(outcome) => outcome.exit,
-                Err(step_err) => step_err.exit,
-            };
-            let st = match res {
-                Ok(outcome) => {
-                    match resolve_outputs(
-                        &self.data_root,
-                        spec,
-                        &graph.fingerprints[i],
-                        &outcome.outputs,
-                        &*self.sink,
-                    ) {
-                        Ok(resolved) => {
-                            let mut changed = 0usize;
-                            for (path, v) in &resolved {
-                                let moved = prior_outs.get(path) != Some(v);
-                                changed += moved as usize;
-                                versions.insert(path.clone(), v.clone());
-                                changed_now.insert(path.clone(), moved);
-                                // Finishing is the last seal: whatever
-                                // the outcome says this segment added
-                                // goes on the consumers' queues.
-                                let rows = outcome
-                                    .outputs
-                                    .iter()
-                                    .find(|o| o.path.as_str() == path)
-                                    .and_then(|o| o.rows);
-                                queue.sealed(graph, i, v, rows, &*self.sink);
-                            }
-                            // This pass read its inputs as of `consumed`,
-                            // so everything sealed up to there is off
-                            // this step's queue.
-                            queue.consumed(graph, i, &consumed, &status, &*self.sink);
-                            // What this pass was dispatched against, not what
-                            // is current now -- see `consumed`.
-                            let input_versions = consumed.clone().into_iter().collect();
-                            state.steps.insert(
-                                spec.id.clone(),
-                                StepState {
-                                    input_versions,
-                                    output_versions: resolved.into_iter().collect(),
-                                    succeeded: true,
-                                    fingerprint: graph.fingerprints[i].clone(),
-                                    // Carried over rather than defaulted:
-                                    // this replaces the whole entry, and
-                                    // `started_at` was recorded when the
-                                    // step was dispatched. `finish` fills
-                                    // in the rest a moment from now.
-                                    last_run: state
-                                        .steps
-                                        .get(&spec.id)
-                                        .and_then(|s| s.last_run.clone()),
-                                    last_success_at: state
-                                        .steps
-                                        .get(&spec.id)
-                                        .and_then(|s| s.last_success_at.clone()),
-                                },
-                            );
-                            StepStatus::Succeeded { changed }
-                        }
-                        Err(e) => {
-                            // Contract violation (reported on an
-                            // undeclared output, or hashing failed).
-                            errors[i] = Some(format!("{e:#}"));
-                            StepStatus::Failed {
-                                kind: FailureKind::Data,
-                            }
-                        }
-                    }
-                }
-                Err(step_err) => {
-                    // A failed incremental step may still have
-                    // committed partial output; record what it vouched
-                    // for so the next run sees the movement. (Only the
-                    // explicitly reported artifacts — unreported ones
-                    // may be mid-write and get re-hashed next run.)
-                    if !step_err.outputs.is_empty() {
-                        if let Ok(resolved) = resolve_outputs(
-                            &self.data_root,
-                            spec,
-                            &graph.fingerprints[i],
-                            &step_err.outputs,
-                            &*self.sink,
-                        ) {
-                            let entry = state.steps.entry(spec.id.clone()).or_default();
-                            for (path, v) in resolved {
-                                entry.output_versions.insert(path, v);
-                            }
-                        }
-                    }
-                    errors[i] = Some(format!("{:#}", step_err.error));
-                    StepStatus::Failed {
-                        kind: step_err.kind,
-                    }
-                }
-            };
-            // An early pass is not terminal. It has recorded its output
-            // versions and its `input_versions` above, exactly as a normal
-            // pass does — which is the whole trick: the final pass, when
-            // the deps really are done, meets the ordinary staleness
-            // predicate and is *skipped* if nothing moved after the last
-            // checkpoint. Streaming is the existing rules evaluated
-            // earlier, not a second set of them.
-            if was_early {
-                self.sink.emit(&Event::PassEnd {
-                    step: graph.steps[i].id.clone(),
-                    exit_code: exit.and_then(|e| e.code),
-                    signal: exit.and_then(|e| e.signal),
-                });
-                if let StepStatus::Failed { .. } = st {
-                    // Not fatal here. The final pass will run the step
-                    // again and report properly; failing the run on a
-                    // partial read would make streaming strictly worse
-                    // than not streaming.
-                    self.sink.emit(&Event::Log {
-                        step: graph.steps[i].id.clone(),
-                        level: crate::events::LogLevel::Warn,
-                        msg: format!(
-                            "streaming pass failed, deferring to the final pass: {}",
-                            errors[i].as_deref().unwrap_or("")
-                        ),
-                        ts: None,
-                        stream: None,
-                        target: None,
-                        thread: None,
-                        fields: None,
-                    });
-                    errors[i] = None;
-                } else if streams[i]
-                    && matches!(st, StepStatus::Succeeded { changed } if changed > 0)
-                {
-                    // An early pass that wrote something new is a seal for
-                    // the next hop, the same as a checkpoint: `versions`
-                    // already carries what it produced, and its consumers
-                    // may start on it now. Without this a chain streams one
-                    // hop only -- `render` ran on every `ingest` checkpoint,
-                    // but `grid_index` heard nothing until `render` went
-                    // terminal, after the download was over.
-                    enqueue_streaming_consumers(
-                        graph,
-                        i,
-                        &remaining_deps,
-                        &in_flight,
-                        &status,
-                        &mut streaming_ready,
-                        &mut streaming_pass_owed,
-                    );
-                }
-                // Its deps finished while it was running, so the final
-                // pass it is owed was held back rather than dispatched.
-                // That pass reads everything, so it settles any streaming
-                // pass owed as well.
-                if final_pass_owed[i] {
-                    final_pass_owed[i] = false;
-                    streaming_pass_owed[i] = false;
-                    ready.push_back(i);
-                } else if streaming_pass_owed[i] {
-                    streaming_pass_owed[i] = false;
-                    streaming_ready.push_back(i);
-                }
-                state.save(&self.data_root).context("save dag state")?;
-                continue;
-            }
-            let st_was_ok = st.is_ok();
-            self.finish(
-                graph,
-                &mut state,
-                &mut status,
-                i,
-                st,
-                errors[i].clone(),
-                exit,
-                attempts,
-            );
-            release_dependents(graph, &mut remaining_deps, &mut ready, i);
-            // **Finishing is the last checkpoint.** A producer that goes
-            // terminal has published everything it will, so a consumer of a
-            // streaming edge can start on it now rather than waiting for the
-            // producer's slowest sibling. Without this, several renders
-            // feeding `grid_index` means none of the fast ones reach the
-            // grid until the slowest is done -- which for a mirror with one
-            // big source is nearly the whole run. It also matters more than
-            // the checkpoint path does, because a render that finishes
-            // inside the cadence never checkpoints at all.
-            if streams[i] && st_was_ok {
-                enqueue_streaming_consumers(
-                    graph,
-                    i,
-                    &remaining_deps,
-                    &in_flight,
-                    &status,
-                    &mut streaming_ready,
-                    &mut streaming_pass_owed,
-                );
-            }
-            // Persist after every terminal step so a crash mid-run
-            // keeps the completed steps' bookkeeping.
-            state.save(&self.data_root).context("save dag state")?;
-        }
-
-        // Close the run: a reader distinguishes "finished" from "still
-        // going" by this field alone, so it has to land before the last
-        // save rather than after it.
-        if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(now_stamp());
-        }
-        state.save(&self.data_root).context("save dag state")?;
-
-        let steps = graph
-            .topo
-            .iter()
-            .map(|&i| {
-                let spec = &graph.steps[i];
-                StepReport {
-                    id: spec.id.clone(),
-                    status: status[i]
-                        .clone()
-                        .expect("all steps reached a terminal state"),
-                    attempts: attempts_taken[i],
-                    error: errors[i].clone(),
-                    outputs: std::iter::once(spec.output())
-                        .map(|o| {
-                            let path = o.as_str().to_string();
-                            let now = versions
-                                .get(&path)
-                                .cloned()
-                                .or_else(|| {
-                                    state
-                                        .steps
-                                        .get(&spec.id)
-                                        .and_then(|s| s.output_versions.get(&path).cloned())
-                                })
-                                .unwrap_or_else(|| UNKNOWN.to_string());
-                            let changed = changed_now.get(&path).copied().unwrap_or(false);
-                            (path, now, changed)
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        let report = RunReport { steps };
-        // Terminal machine-readable record of the whole run — the
-        // stream-side replacement for the old summary JSON file.
-        self.sink.emit(&Event::RunSummary {
-            steps: report.steps.iter().map(step_summary).collect(),
-        });
-        Ok(report)
-    }
-
-    fn runnable_subgraph(&self, graph: &Graph) -> Vec<bool> {
-        let n = graph.steps.len();
-        let Some(only) = &self.only_fringe else {
-            return vec![true; n];
-        };
-        let mut scope = vec![false; n];
-        let mut queue: VecDeque<usize> = (0..n)
-            .filter(|&i| only.contains(&graph.steps[i].id))
-            .collect();
-        for &i in &queue {
-            scope[i] = true;
-        }
-        while let Some(i) = queue.pop_front() {
-            for &d in &graph.dependents[i] {
-                if !scope[d] {
-                    scope[d] = true;
-                    queue.push_back(d);
-                }
-            }
-        }
-        scope
-    }
-
     #[allow(clippy::too_many_arguments)]
-    fn decide(
-        &self,
-        graph: &Graph,
-        state: &DagState,
-        status: &[Option<StepStatus>],
-        runnable: &[bool],
-        versions: &HashMap<String, String>,
-        i: usize,
-        checkpoint: &crate::step::CheckpointSink,
-        early: bool,
-    ) -> Decision {
-        // Subtree poisoning: any non-ok dependency blocks this step.
-        for &d in &graph.deps[i] {
-            // An early pass is dispatched *because* a dependency is still
-            // running, so "no status yet" is the normal case here rather
-            // than the impossible one. A dependency that has already
-            // finished badly still blocks: a checkpoint from one producer
-            // is no reason to read another producer's failed output.
-            let Some(dep_status) = status[d].as_ref() else {
-                debug_assert!(early, "a ready step implies all deps terminal");
-                continue;
-            };
-            if !dep_status.is_ok() {
-                return Decision::Block {
-                    on: graph.steps[d].id.clone(),
-                };
-            }
-        }
-
-        // Outside the runnable subgraph: this run didn't ask for it, so
-        // it is not considered at all — not its state, not its inputs.
-        // "Sync yolink" means run yolink and leave the rest of the graph
-        // alone, including work that is genuinely pending elsewhere (a
-        // source downloaded yesterday whose render failed). Its outputs
-        // keep their recorded versions, so nothing downstream is
-        // spuriously dirtied, and the next full run picks it back up.
-        if !runnable[i] {
-            return Decision::Skip {
-                status: StepStatus::NotSelected,
-            };
-        }
-
-        let spec = &graph.steps[i];
-        let prev = state.steps.get(&spec.id);
-
-        // Clause 1: no declared inputs. Its real input is outside the
-        // graph — a remote service for a download, a hand-staged
-        // directory named by `params.common.input_path` — so the
-        // scheduler cannot version it and always runs the step.
-        // Internal incrementality is what makes that cheap.
-        let no_inputs = spec.inputs.is_empty();
-        // Clause 2: never completed. Aborted last run, failed last run,
-        // or added to the config since — all the same fact, and all
-        // reasons to run. This overlaps clause 4 today (a step with no
-        // recorded success has no recorded fingerprint either, and the
-        // empty string differs from every real hash), but it is the
-        // honest statement of the rule and shouldn't lean on that
-        // coincidence.
-        let never_succeeded = !prev.map(|s| s.succeeded).unwrap_or(false);
-        // Clause 4: the step itself changed. Editing `params` in the
-        // config changes what the runner would hand the child, so the
-        // fingerprint moves and the step is stale even though nothing
-        // it reads did. State written before fingerprints existed has
-        // an empty string here, which differs from any real hash and
-        // costs one re-run.
-        let fingerprint_changed = prev
-            .map(|s| s.fingerprint != graph.fingerprints[i])
-            .unwrap_or(true);
-
-        // Clause 3: an input moved. Only meaningful against a recorded
-        // success — with no baseline there is nothing to compare, which
-        // is what clause 2 is for.
-        let mut changed_inputs = Vec::new();
-        if let Some(prev) = prev.filter(|p| p.succeeded) {
-            for a in &graph.resolved_inputs[i] {
-                let now = versions.get(a.as_str());
-                let before = prev.input_versions.get(a.as_str());
-                match (now, before) {
-                    (Some(nv), Some(bv)) if nv == bv => {}
-                    // An early pass runs *because* some producers are still
-                    // going, so their inputs have no version yet. That means
-                    // "has not reported", not "moved" — and calling it moved
-                    // makes every early dispatch look stale, so a
-                    // steady-state run where nothing changed would still run
-                    // the consumer once per producer, each pass reading
-                    // nothing. For the ordinary pass the same shape really is
-                    // suspicious, and stays treated as changed.
-                    (None, Some(_)) if early => {}
-                    // Newly declared input, version moved, or (defensively)
-                    // no current version — treat as changed.
-                    _ => changed_inputs.push(a.clone()),
-                }
-            }
-        }
-
-        let stale =
-            no_inputs || never_succeeded || fingerprint_changed || !changed_inputs.is_empty();
-        if !stale {
-            return Decision::Skip {
-                status: StepStatus::SkippedUpToDate,
-            };
-        }
-        Decision::Run {
-            ctx: StepCtx {
-                step_id: spec.id.clone(),
-                group: spec.group.clone(),
-                group_type: spec.group_type.clone(),
-                function: spec.function.clone(),
-                data_root: self.data_root.clone(),
-                inputs: graph.resolved_inputs[i].clone(),
-                // "What moved" only means something when the step is
-                // running *because* something moved. If it never
-                // succeeded, or its own definition changed, it should
-                // redo all of its work.
-                changed_inputs: if never_succeeded || fingerprint_changed {
-                    vec![]
-                } else {
-                    changed_inputs
-                },
-                checkpoint: checkpoint.clone(),
-                progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-            },
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn finish(
+    pub(crate) fn finish(
         &self,
         graph: &Graph,
         state: &mut DagState,
@@ -1136,13 +339,13 @@ impl Runner {
     }
 }
 
-fn now_stamp() -> String {
+pub(crate) fn now_stamp() -> String {
     datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs()
 }
 
 /// Open a step's run record when the scheduler dispatches it, so a
 /// reader can tell "running" from "not reached yet".
-fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
+pub(crate) fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
     if let Some(run) = state.current_run.as_mut() {
         run.states
             .insert(id.clone(), RunState::Running.as_str().to_string());
@@ -1162,7 +365,7 @@ fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
     });
 }
 
-fn step_summary(r: &StepReport) -> crate::events::StepSummary {
+pub(crate) fn step_summary(r: &StepReport) -> crate::events::StepSummary {
     let failure = match &r.status {
         StepStatus::Failed { kind } => Some(*kind),
         _ => None,
@@ -1193,7 +396,7 @@ fn step_summary(r: &StepReport) -> crate::events::StepSummary {
 /// reports on its content and cannot know its own definition changed, so
 /// without this a bumped `code_version` re-runs the step while leaving the
 /// reported version identical — the tree is rebuilt and consumers skip it.
-fn resolve_outputs(
+pub(crate) fn resolve_outputs(
     data_root: &std::path::Path,
     spec: &StepSpec,
     fingerprint: &str,
@@ -1246,7 +449,7 @@ fn resolve_outputs(
 /// consumer's `queued{from=<producer>}` metric — the S of USE, kept by
 /// the runner from what producers say, so no store is opened to measure
 /// it.
-struct QueueLedger {
+pub(crate) struct QueueLedger {
     /// Per consumer, per producer index: seals not yet consumed.
     pending: Vec<BTreeMap<usize, Vec<Seal>>>,
     /// Per consumer, per producer: the version last put on the queue,
@@ -1261,14 +464,14 @@ struct QueueLedger {
 type Seal = (String, Option<u64>);
 
 impl QueueLedger {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         Self {
             pending: vec![BTreeMap::new(); n],
             last_seen: vec![BTreeMap::new(); n],
         }
     }
 
-    fn sealed(
+    pub(crate) fn sealed(
         &mut self,
         graph: &Graph,
         producer: usize,
@@ -1295,12 +498,12 @@ impl QueueLedger {
     /// began (a previous run's), or a producer that finished without a
     /// row count; either way, if the producer is done there is nothing
     /// more to come.
-    fn consumed(
+    pub(crate) fn consumed(
         &mut self,
         graph: &Graph,
         consumer: usize,
         consumed: &HashMap<String, String>,
-        status: &[Option<StepStatus>],
+        producer_done: impl Fn(usize) -> bool,
         sink: &dyn EventSink,
     ) {
         let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
@@ -1314,7 +517,7 @@ impl QueueLedger {
                 Some(idx) => {
                     seals.drain(..=idx);
                 }
-                None if status[p].is_some() => seals.clear(),
+                None if producer_done(p) => seals.clear(),
                 None => {}
             }
             self.publish(graph, consumer, p, sink);
@@ -1322,7 +525,7 @@ impl QueueLedger {
     }
 
     /// A consumer found up to date read everything there was.
-    fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
+    pub(crate) fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
         let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
         for p in producers {
             self.pending[consumer].insert(p, Vec::new());
@@ -1344,91 +547,6 @@ impl QueueLedger {
     }
 }
 
-/// Queue a producer's consumers for an *early* pass.
-///
-/// Called from the two places a producer can make one worth running: it
-/// checkpointed, or it finished while a sibling is still going.
-///
-/// Three guards, all of them load-bearing:
-///
-/// - `remaining_deps == 0` means the consumer is already headed for its
-///   ordinary dispatch, and an early pass would only make that one redundant.
-///   Defensive rather than load-bearing: removing it does not fail any test,
-///   because the ordinary dispatch runs first in the same iteration and the
-///   in-flight guard then swallows the early one. Kept because relying on
-///   that ordering is not something the next reader should have to work out.
-/// - already in flight: a second instance is a second writer on one tree, so
-///   the notification is **not queued** -- it is folded into one owed pass,
-///   dispatched when the current one lands. One pass, however many seals
-///   arrived meanwhile: the next pass reads everything sealed so far, and a
-///   queue would be a backlog of passes over data that has already moved on.
-/// - already terminal: nothing left to tell it.
-fn enqueue_streaming_consumers(
-    graph: &Graph,
-    producer: usize,
-    remaining_deps: &[usize],
-    in_flight: &[bool],
-    status: &[Option<StepStatus>],
-    streaming_ready: &mut VecDeque<usize>,
-    streaming_pass_owed: &mut [bool],
-) {
-    for &c in &graph.dependents[producer] {
-        if remaining_deps[c] == 0 || status[c].is_some() {
-            continue;
-        }
-        if in_flight[c] {
-            streaming_pass_owed[c] = true;
-            continue;
-        }
-        if !streaming_ready.contains(&c) {
-            streaming_ready.push_back(c);
-        }
-    }
-}
-
-/// The versions of a step's inputs *right now*, taken as it is dispatched.
-///
-/// Sampled here and carried with the task, never re-read when the task
-/// lands. A streaming pass runs while its producers are still going, so by
-/// the time it finishes the live map may name versions it never saw --
-/// and recording those makes the step claim it consumed a producer whose
-/// output it read before that producer had written anything. The final pass
-/// then finds nothing changed, is skipped up to date, and that producer's
-/// documents never reach the consumer at all.
-///
-/// The general rule, worth keeping anywhere incrementality is recorded:
-/// sample what you consumed *before* you consume it. Recording it afterwards
-/// from live state can only over-claim, and over-claiming is the direction
-/// that loses data — under-claiming costs a redundant pass.
-fn snapshot_inputs(
-    graph: &Graph,
-    versions: &HashMap<String, String>,
-    i: usize,
-) -> HashMap<String, String> {
-    graph.resolved_inputs[i]
-        .iter()
-        .filter_map(|a| {
-            versions
-                .get(a.as_str())
-                .map(|v| (a.as_str().to_string(), v.clone()))
-        })
-        .collect()
-}
-
-fn release_dependents(
-    graph: &Graph,
-    remaining_deps: &mut [usize],
-    ready: &mut VecDeque<usize>,
-    i: usize,
-) {
-    for &j in &graph.dependents[i] {
-        remaining_deps[j] -= 1;
-        if remaining_deps[j] == 0 {
-            ready.push_back(j);
-        }
-    }
-}
-
 /// A fresh run id. UUID v7, so ids sort in the order the runs started
 /// while still being unique by construction — two runs pinned to the
 /// same `--now` (the tests do this) get different ids.
@@ -1436,7 +554,7 @@ pub fn new_run_id() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-async fn invoke_with_retry(
+pub(crate) async fn invoke_with_retry(
     run: &StepRun,
     ctx: StepCtx,
     retry: &RetryPolicy,
@@ -1494,6 +612,7 @@ mod tests {
 
     use super::*;
     use crate::step::StepOutcome;
+    use crate::version::UNKNOWN;
 
     /// Records every event for assertions.
     #[derive(Default)]
@@ -2437,7 +1556,7 @@ mod tests {
         let graph = Graph::build(specs).unwrap();
 
         let mut r = runner(root.path());
-        r.parallelism = 4; // exactly the number of producers
+        r.budgets = Budgets::from_parallelism(4); // exactly the number of producers
         let report = tokio::time::timeout(Duration::from_secs(10), r.run(&graph))
             .await
             .expect("a streaming pass competing for ordinary slots would deadlock here")
@@ -2927,8 +2046,8 @@ mod tests {
             .find(|s| s.id == "unified_index/grid")
             .unwrap();
         assert!(
-            matches!(consumer.status, StepStatus::SkippedUpToDate),
-            "the final pass should be skipped by the ordinary staleness rule, got {:?}",
+            matches!(consumer.status, StepStatus::Succeeded { .. }),
+            "its one pass is its outcome, got {:?}",
             consumer.status
         );
     }
@@ -3878,8 +2997,10 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 
+    /// One source's broken render must not keep the others out of the
+    /// grid: the index reads what every render has committed.
     #[tokio::test]
-    async fn failure_poisons_subtree_but_not_siblings() {
+    async fn a_failed_render_leaves_the_index_to_the_sources_that_worked() {
         let fx = Fixture::new();
         // Break slack.render by removing its input mid-way: simplest is
         // a fresh graph where slack.render always fails.
@@ -3928,14 +3049,15 @@ mod tests {
             rep.step("email/rendered_md").status,
             StepStatus::Succeeded { .. }
         ));
-        // ...but the fan-in below the failure is blocked, not run.
-        assert_eq!(
-            rep.step("unified_index/grid").status,
-            StepStatus::Blocked {
-                on: "slack/rendered_md".to_string()
-            }
+        // ...and so did the fan-in, over what email committed.
+        assert!(
+            matches!(
+                rep.step("unified_index/grid").status,
+                StepStatus::Succeeded { .. }
+            ),
+            "{rep:#?}"
         );
-        assert_eq!(fx.run_count("unified_index/grid"), 0);
+        assert_eq!(fx.run_count("unified_index/grid"), 1);
     }
 
     #[tokio::test]
@@ -4013,11 +3135,18 @@ mod tests {
         );
         // Auth doesn't retry.
         assert_eq!(rep1.step("src/raw").attempts, 1);
+        // What the failed download committed, it vouched for, so the
+        // render reads it (plans/supervisor.md §2.5).
+        assert!(
+            matches!(
+                rep1.step("src/rendered_md").status,
+                StepStatus::Succeeded { .. }
+            ),
+            "{rep1:#?}"
+        );
         assert_eq!(
-            rep1.step("src/rendered_md").status,
-            StepStatus::Blocked {
-                on: "src/raw".to_string()
-            }
+            std::fs::read_to_string(root.path().join("src/rendered_md/data.md")).unwrap(),
+            "PARTIAL"
         );
 
         // "Fix the credentials" and rerun: everything completes.
@@ -4025,7 +3154,7 @@ mod tests {
         let rep2 = r.run(&g).await.unwrap();
         assert!(rep2.all_ok(), "{rep2:#?}");
         assert_eq!(runs.load(Ordering::SeqCst), 2);
-        assert_eq!(render_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(render_runs.load(Ordering::SeqCst), 2);
         assert_eq!(
             std::fs::read_to_string(root.path().join("src/rendered_md/data.md")).unwrap(),
             "COMPLETE"

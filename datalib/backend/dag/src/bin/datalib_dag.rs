@@ -25,6 +25,7 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::events::FanOutSink;
 use datalib_dag::runs_sink::RunStoreSink;
 use datalib_dag::step::FailureKind;
+use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -245,10 +246,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Cancellation: forward the first SIGINT/SIGTERM to running steps
-    // as SIGINT so each can stop at its next consistent point, commit
-    // there and exit `cancelled` (`step_protocol.md` § Signals); the
-    // scheduler drains normally. A second
+    // Cancellation: the first SIGINT/SIGTERM stops the round — each
+    // running step gets SIGINT on its own process group, so it can stop
+    // at its next consistent point, commit there and exit `cancelled`
+    // (`step_protocol.md` § Signals), and nothing new starts. A second
     // signal gives up waiting and exits hard, taking the steps with it.
     //
     // SIGHUP is not one of those two. It says the terminal is gone, so
@@ -257,7 +258,8 @@ async fn main() -> Result<()> {
     // same one it uses when its parent dies. It has to: a step is in a
     // process group of its own, so the kernel's SIGHUP to the
     // foreground group no longer reaches it.
-    tokio::spawn(async {
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
         let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
@@ -286,7 +288,7 @@ async fn main() -> Result<()> {
                 subprocess::kill_children();
                 std::process::exit(130);
             }
-            subprocess::interrupt_children();
+            let _ = stop_tx.send(true);
         }
     });
 
@@ -338,9 +340,10 @@ async fn main() -> Result<()> {
         }
         let mut runner = Runner::new(&data_root)
             .sink(Arc::new(FanOutSink(sinks)))
-            .child_env(child_env);
+            .child_env(child_env)
+            .stop_on(stop_rx);
         if let Some(p) = parallelism {
-            runner.parallelism = p;
+            runner.budgets = Budgets::from_parallelism(p);
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
