@@ -1,0 +1,13 @@
+[package]
+name = "datalib-status-line"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "datalib_status_line"
+path = "src/lib.rs"
+
+[dependencies]
+indicatif = "0.18"

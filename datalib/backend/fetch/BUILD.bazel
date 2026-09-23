@@ -7,8 +7,8 @@ exports_files(["Cargo.toml"])
 # GGUF models (`datalib_qmd_models`) and the Node runtime a release
 # tarball names in its manifest (`RuntimeFetcher` here, the manifest and
 # the hook in `datalib_runtime`). Linked by the step, the applet and the
-# app server — NOT by //datalib/backend/qmd_indexer, which is a tool
-# input to the fixture's ~90s embed action and must stay tiny.
+# app server — NOT by //datalib/backend/qmd_indexer, which is an
+# input to the fixture's embed action and must stay tiny.
 rust_library(
     name = "datalib_fetch",
     srcs = glob(["src/**/*.rs"]),

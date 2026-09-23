@@ -195,9 +195,10 @@ datalib/
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
-                   pins. Has NO dependencies, deliberately: it is a
-                   `tools=` input to the fixture's ~90s embedding action,
-                   so anything it links re-runs that embed on CI.
+                   pins. Has NO dependencies, deliberately: the qmd
+                   indexer links it, and is an input to the fixture's
+                   embedding action, so anything it links re-runs that
+                   embed on CI.
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
                    and the applet, never by the indexer (see above).

@@ -15,8 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-datalib-obs = { path = "../obs" }
 datalib-runtime = { path = "../runtime" }
+datalib-status-line = { path = "../status_line" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

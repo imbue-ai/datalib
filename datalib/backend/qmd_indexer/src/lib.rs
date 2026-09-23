@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use datalib_obs::status_line;
+use datalib_status_line::status_line;
 
 /// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
 /// re-export rather than a literal so this crate *cannot* drift from the
@@ -678,7 +678,7 @@ fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     // then redrawn. No-op (plain run) when no bars are live, e.g. the
     // standalone CLI or tests, where `shared_multi()` returns `None`.
     let mut run = || cmd.status();
-    let status = match datalib_obs::shared_multi() {
+    let status = match datalib_status_line::shared_multi() {
         Some(mp) => mp.suspend(run),
         None => run(),
     }

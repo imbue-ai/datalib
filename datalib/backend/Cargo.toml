@@ -13,6 +13,7 @@ members = [
     "dirtree_diff",
     "http",
     "obs",
+    "status_line",
     "time",
     "id",
     "etl",

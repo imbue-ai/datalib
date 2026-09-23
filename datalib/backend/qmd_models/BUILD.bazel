@@ -4,8 +4,8 @@ exports_files(["Cargo.toml"])
 
 # Puts qmd's pinned GGUF models in place and verifies them, so qmd never
 # reaches HuggingFace on its own. Linked by the `qmd_index` step and the
-# search applet — NOT by //datalib/backend/qmd_indexer, which is a tool
-# input to the fixture's ~90s embed action and must stay tiny.
+# search applet — NOT by //datalib/backend/qmd_indexer, which is an
+# input to the fixture's embed action and must stay tiny.
 rust_library(
     name = "datalib_qmd_models",
     srcs = glob(["src/**/*.rs"]),

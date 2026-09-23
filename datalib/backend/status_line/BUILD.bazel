@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# `status_line!` and the process-wide `MultiProgress` it writes above.
+# Its own crate so the qmd indexer can print a status line without
+# linking `datalib_obs` (tokio, OpenTelemetry, tonic): the indexer is an
+# input to //tests/fixtures:ingested_tng_qmd, so everything it links is
+# something whose next edit re-runs that embed on CI. Keep `deps` to
+# indicatif.
+rust_library(
+    name = "datalib_status_line",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_status_line",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:indicatif"],
+)
+
+rust_test(
+    name = "status_line_unittests",
+    size = "small",
+    crate = ":datalib_status_line",
+    edition = "2021",
+)

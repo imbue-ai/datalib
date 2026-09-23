@@ -448,10 +448,13 @@ genrule(
         # it is fetched by bazel rather than by qmd, and why its filename
         # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
         "//third-party/qmd_models:embeddinggemma",
+        # A `srcs`, not a `tools`, for the reason `:ingested_tng` gives:
+        # as a tool it and every crate under it build a second time in
+        # the exec configuration.
+        "//datalib/backend/qmd_indexer:qmd_indexer_bin",
     ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
-        "//datalib/backend/qmd_indexer:qmd_indexer_bin",
         "build_qmd_index.py",
         "quiet.sh",
         # Node itself plus the Bazel-managed qmd package tree. The
