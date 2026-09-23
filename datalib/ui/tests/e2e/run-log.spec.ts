@@ -8,7 +8,7 @@
 // cards' grids; this is the one place its menu, grouping bar and query
 // round-trip are exercised end to end.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { menuEntry } from "./grid-helpers";
 
 // The commit playwright.config.ts handed the backends. Node's globals
@@ -43,6 +43,19 @@ const lineCount = (page: Page) =>
     .locator(".rl-count")
     .evaluate((el) => Number(/(\d+) line/.exec(el.textContent ?? "")?.[1] ?? NaN));
 
+/// Right-clicks `target` once the grid has heard any scroll that
+/// brings it into view. The Message cell sits partly past the grid's
+/// right edge, and a click scrolls it in first; the scroll event is
+/// delivered at the next frame, after the press has opened the menu, and
+/// the grid's context menu closes on any scroll of the grid. Scroll
+/// events are dispatched before a frame's animation callbacks, so one
+/// frame is enough.
+async function rightClick(target: Locator) {
+  await target.scrollIntoViewIfNeeded();
+  await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+  await target.click({ button: "right" });
+}
+
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
   const dialog = await openServerLog(page);
   // Opened on this server's launch — a process, picked like a run.
@@ -65,7 +78,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   expect(msg.trim(), "the first line should have a message").not.toBe("");
   // One right-click is enough: the panel holds the tail back while a
   // button is down on the grid, so the row is not re-rendered under it.
-  await msgCell.click({ button: "right" });
+  await rightClick(msgCell);
   const keepOnly = menuEntry(page, `Keep only Message=${msg}`);
   await expect(keepOnly).toBeVisible();
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
@@ -87,7 +100,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
     })
     .toEqual([msg]);
 
-  await dialog.locator(ROWS).first().click({ button: "right" });
+  await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'));
   await menuEntry(page, "Clear the query").click();
   await expect(query).toHaveValue("");
   // With no query at all, every line this launch wrote.
