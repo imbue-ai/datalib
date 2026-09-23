@@ -283,6 +283,30 @@ def _argv():
 FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
 
 
+# A full pipeline run prints ~0.5 MB of runner events, and bazel drops a
+# failing test's log from the CI output once it passes 1 MB — assertion
+# message included. So the full streams go to the test's outputs.zip and
+# the log gets only the end of stderr.
+_KEPT_TAIL_LINES = 40
+_kept_runs = 0
+
+
+def _keep_output(label: str, result: subprocess.CompletedProcess) -> None:
+    global _kept_runs
+    _kept_runs += 1
+    out_dir = Path(
+        os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR") or os.environ["TEST_TMPDIR"]
+    )
+    stem = out_dir / f"{_kept_runs:02d}-{label.replace('/', '-')}"
+    Path(f"{stem}.stdout").write_text(result.stdout)
+    Path(f"{stem}.stderr").write_text(result.stderr)
+    tail = result.stderr.splitlines()[-_KEPT_TAIL_LINES:]
+    print(
+        f"--- {stem.name}: exit {result.returncode}, full output in {stem}.std{{out,err}}"
+    )
+    print("\n".join(tail), flush=True)
+
+
 class IngestedTngPipelineTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -825,17 +849,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        # Print the captured streams so a test failure leaves the
-        # orchestrator's output in the test's own log for debugging.
-        #
-        # `check=False` plus an explicit raise below, rather than
-        # `check=True`: raising inside `subprocess.run` skipped these two
-        # writes entirely, so the one case this printing exists for — the
-        # pipeline exiting non-zero — was the one case that printed
-        # nothing, and the failure reached the log as a bare
-        # `CalledProcessError` naming a 25-argument command line.
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        # `check=False` plus an explicit raise, rather than `check=True`:
+        # raising inside `subprocess.run` skipped the keep below, so a
+        # pipeline exiting non-zero left none of its output behind.
+        _keep_output("pipeline", result)
         result.check_returncode()
         return result
 
@@ -875,8 +892,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        _keep_output(f"{group}-{function}", result)
         result.check_returncode()
         return result
 
