@@ -242,10 +242,12 @@ integration tests are one binary" is the reference.
 **A `[for tool]` suffix on a `Compiling Rust …` line is a second
 copy** — the crate built in the exec configuration as well as the
 target one, nothing shared. A `genrule` puts its `tools` there, so a
-pipeline binary a genrule runs goes in `srcs`; `aquery
-'mnemonic("Rustc", //...)'` grouped by `Configuration:` is the check,
-and the only exec-config Rustc actions left should be the
-dependency-free `qmd_indexer` chain (#484).
+Rust binary a genrule runs goes in `srcs` (`:ingested_tng` and
+`:ingested_tng_qmd` are the examples). Proc-macros and build scripts
+run at build time by nature, so the crates they reach are the one
+legitimate exec-config set. CI's "No crate built a second time for a
+tool" step fails on anything else (`tools/check_tool_crates.py`, which
+names the tool that pulled each crate in).
 
 **Per-action detail** lives in the profile every invocation uploads
 and in BuildBuddy's cache scorecard, both behind internal RPCs that

@@ -10,6 +10,7 @@ name = "datalib_obs"
 path = "src/lib.rs"
 
 [dependencies]
+datalib-status-line = { path = "../status_line" }
 anyhow = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"

@@ -182,6 +182,18 @@ py_test(
     main = "check_version_pins.py",
 )
 
+# The rule behind CI's "No crate built a second time for a tool" step.
+py_test(
+    name = "check_tool_crates_test",
+    size = "small",
+    srcs = [
+        "check_tool_crates.py",
+        "check_tool_crates_test.py",
+    ],
+    imports = ["."],
+    main = "check_tool_crates_test.py",
+)
+
 # The qmd model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(

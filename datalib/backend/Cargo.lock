@@ -2336,6 +2336,7 @@ version = "0.36.1"
 dependencies = [
  "anyhow",
  "clap",
+ "datalib-status-line",
  "indicatif 0.18.6",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2352,8 +2353,9 @@ name = "datalib-qmd-indexer"
 version = "0.36.1"
 dependencies = [
  "anyhow",
- "datalib-obs",
  "datalib-runtime",
+ "datalib-status-line",
+ "serde_json",
  "tempfile",
 ]
 
@@ -2411,6 +2413,13 @@ dependencies = [
  "subtle",
  "tempfile",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "datalib-status-line"
+version = "0.36.1"
+dependencies = [
+ "indicatif 0.18.6",
 ]
 
 [[package]]
