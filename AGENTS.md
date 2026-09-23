@@ -324,9 +324,11 @@ the map of which store lives where and who owns it.
 The rules, none optional; the reasons and measurements are in
 `datalib/backend/etl/README.md` §"Connection pools":
 
-- **One writer per file.** Doltlite's working set lives in the *file*
-  and is shared across processes, so a second writer commits the first's
-  in-flight rows. The `grid_index` step owns the index; `datalib-http`
+- **One writer per file.** Doltlite's working set lives in the *file*,
+  per branch, shared across processes; every store's writer is on
+  `main`, so a second writer commits the first's in-flight rows. Giving
+  it a branch of its own does not help — the two then contend for the
+  file instead (measured; `etl/README.md`). The `grid_index` step owns the index; `datalib-http`
   owns feedback, jobs and usage; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
 - **Every pool is `max_connections(1)`** with recycling off, and there is

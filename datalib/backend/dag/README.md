@@ -202,8 +202,8 @@ naming no step) looks exactly like one it did.
 
 - **One runner per data root.** The scheduler rewrites a single JSON state
   file after every terminal step, and the steps it spawns write raw stores
-  whose doltlite working set is shared across processes. Two runners on one
-  root interleave both.
+  whose doltlite working set is shared across every connection on the
+  branch, in any process. Two runners on one root interleave both.
 - **One server per data root**, which `datalib-http` takes for its own
   reasons (the API token, the job and feedback stores).
 
