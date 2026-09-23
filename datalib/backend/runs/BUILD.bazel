@@ -39,20 +39,14 @@ rust_test(
     edition = "2021",
 )
 
-# Every hermetic run store test in one binary; the modules are listed in
-# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
-# link of the provider stack and that is most of what a test here costs.
-# One writer of the store, as its own process, for the concurrency test
-# below: the runner's or a server's. A binary rather than a second
-# writer inside the test, because what is under test is two *processes*
-# contending for SQLite's write lock on one file — writers in one
-# process would share a library, a page cache and a set of POSIX locks.
-# `testonly` and under `tests/`: nothing shipped may link it, and cargo
-# does not pick it up as a bin of this crate.
+# One writer of the store, as its own process, for the test below; its
+# own file says why it is a process and not a thread. `testonly` and
+# under `tests/`: nothing shipped may link it, and cargo does not pick
+# it up as a bin of this crate.
 rust_binary(
-    name = "runs_two_process",
+    name = "runs_two_process_writer",
     testonly = True,
-    srcs = ["tests/bin/runs_two_process.rs"],
+    srcs = ["tests/bin/runs_two_process_writer.rs"],
     edition = "2021",
     deps = [
         ":datalib_runs",
@@ -60,17 +54,16 @@ rust_binary(
     ],
 )
 
-# Does every line four processes publish at once reach the store?
-# Hermetic: the data root is a tempdir and the only program it runs is
+# Hermetic: the data root is a tempdir, and the only program it runs is
 # the writer above, from runfiles.
 rust_test(
     name = "runs_two_process_test",
     size = "medium",
-    srcs = ["tests/runs_two_process.rs"],
-    data = [":runs_two_process"],
+    srcs = ["tests/runs_two_process_test.rs"],
+    data = [":runs_two_process_writer"],
     edition = "2021",
     env = {
-        "HELPER_BIN": "$(rootpath :runs_two_process)",
+        "HELPER_BIN": "$(rootpath :runs_two_process_writer)",
     },
     deps = [
         ":datalib_runs",
@@ -81,6 +74,9 @@ rust_test(
     ],
 )
 
+# Every hermetic run store test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
 rust_test(
     name = "runs_tests",
     srcs = glob(["tests/runs_tests/*.rs"]),

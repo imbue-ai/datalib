@@ -1,22 +1,20 @@
 //! Four processes writing one `runs.sqlite` at once: does a line
 //! published to the store always reach it?
 //!
-//! The store is the one place in the tree where two processes write the
-//! same file on purpose — the runner writes its runs, `datalib-http`
-//! writes its own log — and the reason that is allowed is that this is
-//! plain SQLite rather than doltlite, which serializes writers with a
-//! lock on the file instead of sharing a working set between them
-//! (`docs/dev/app_stores.md`). That is an argument; this is the
-//! measurement. Four writers is more than a data root ever really has,
-//! so a green run here is a bound rather than a coincidence.
+//! Two processes write this file on purpose — the runner writes its
+//! runs, `datalib-http` writes its own log — and until this test the
+//! reason that was safe had only ever been an argument. Four writers is
+//! more than a data root ever really has, so a green run here is a
+//! bound rather than a coincidence.
 //!
-//! What it would catch: a writer handed `SQLITE_BUSY` and dropping the
-//! batch it was holding. Each flush is one transaction over a few
-//! hundred buffered lines, so one lost flush is hundreds of missing
-//! lines — and nothing but a `warn!` would say so.
+//! What it catches: a writer losing the batch it was holding, whether
+//! to a `SQLITE_BUSY` it could not wait out or to another process
+//! deleting the file underneath it. A flush is one transaction over a
+//! few hundred buffered lines, so one lost flush is hundreds of missing
+//! lines, and nothing but a `warn!` would say so.
 //!
-//! Each writer runs as `//datalib/backend/runs:runs_two_process`. This
-//! process only reads, and opens nothing until the children are spawned.
+//! Each writer is `//datalib/backend/runs:runs_two_process_writer`,
+//! whose own file says why they are processes rather than threads.
 
 use std::path::PathBuf;
 use std::process::{Child, Command};

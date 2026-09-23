@@ -38,11 +38,11 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// How long a writer waits for the other process's write lock before
-/// SQLite hands it `SQLITE_BUSY`. Set here rather than left to sqlx's
-/// default, because the number is a decision: a batch holds the lock
-/// for milliseconds, so ten seconds is far past any honest wait and a
-/// writer that has spent them is better off saying so than growing its
-/// buffer behind a silent one.
+/// SQLite hands it `SQLITE_BUSY` and its batch is lost. Set here rather
+/// than left to sqlx's default, because the number is a decision: a
+/// batch holds the lock for milliseconds, so ten seconds is far past
+/// any honest wait, and a writer that has spent them is better off
+/// saying so than growing its buffer behind a silent one.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a failed flush waits before its one retry.
@@ -87,10 +87,6 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
         // file torn by a power cut is deleted and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
-        // Two processes write this file, the runner and the server, and
-        // SQLite serializes them with a lock on it. Without a timeout
-        // the loser of a race is handed `SQLITE_BUSY` at once and its
-        // batch is lost.
         .busy_timeout(BUSY_TIMEOUT)
 }
 
@@ -233,11 +229,11 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 /// One transaction, because another process deciding what to do with
-/// this file decides by what it can see. Tables without the version
-/// stamp read as a store from some other build, which
-/// [`open_or_recreate`] answers by deleting the file — so a half-built
-/// store must never be visible. The DDL is all `IF NOT EXISTS`, so two
-/// processes installing at once is the second one finding it done.
+/// this file decides by what it can see: tables without the version
+/// stamp read as a store from some other build, and
+/// [`open_or_recreate`] answers one of those by deleting it. The DDL is
+/// all `IF NOT EXISTS`, so two processes installing at once is the
+/// second one finding it already done.
 async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     for ddl in app_schema::runs::ddl()

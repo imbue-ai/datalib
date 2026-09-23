@@ -1,6 +1,6 @@
 //! One writer of the run store, as its own process: the runner's, or a
-//! server's. Driven by `tests/runs_two_process.rs`, which is where the
-//! scenario and the assertions live.
+//! server's. Driven by `tests/runs_two_process_test.rs`, which is where
+//! the scenario and the assertions live.
 //!
 //! It is a separate binary because the question under test is what
 //! several *processes* do to one `runs.sqlite`. Writers inside one
