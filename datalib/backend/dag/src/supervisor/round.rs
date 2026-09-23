@@ -14,7 +14,6 @@ use super::tick::{
     tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row,
 };
-use super::RequestEvent;
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, StepProgress};
 use crate::graph::Graph;
@@ -48,13 +47,7 @@ enum Mailbox<'a> {
     Fixed { opened: bool },
     /// Whatever `system/supervisor.sqlite` holds, read again whenever
     /// another process writes to it.
-    Store {
-        store: &'a Store,
-        seen: Option<i64>,
-        /// Requests naming a step this loop's graph lacks, left for the
-        /// next loop: it loads the config again, and may know them.
-        deferred: BTreeSet<String>,
-    },
+    Store { store: &'a Store, seen: Option<i64> },
 }
 
 /// An open request as the loop holds it: its row's id (`None` for the
@@ -62,29 +55,6 @@ enum Mailbox<'a> {
 struct Open {
     id: Option<String>,
     request: Request,
-    /// Whether the host has been told the loop took it on. Only once the
-    /// record has been saved with its steps in it: told sooner, a job
-    /// reads as running while the record still says its steps were not
-    /// selected.
-    told: bool,
-}
-
-/// A stopped request whose steps are still winding down.
-struct Winding {
-    id: String,
-    by: String,
-    scope: Vec<bool>,
-}
-
-impl Winding {
-    fn over(&self) -> RequestEvent {
-        RequestEvent::Closed {
-            id: self.id.clone(),
-            outcome: RequestOutcome::Stopped,
-            failed_step: None,
-            stopped_by: Some(self.by.clone()),
-        }
-    }
 }
 
 /// How often a loop with steps running looks for new rows. A loop with
@@ -101,12 +71,8 @@ impl Runner {
     /// Every request open in the store, and any opened while this runs,
     /// until none is left. The caller holds `runner-lock`.
     pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
-        let mailbox = Mailbox::Store {
-            store,
-            seen: None,
-            deferred: BTreeSet::new(),
-        };
-        self.run_loop(graph, mailbox).await
+        self.run_loop(graph, Mailbox::Store { store, seen: None })
+            .await
     }
 
     async fn run_loop(&self, graph: &Graph, mut mailbox: Mailbox<'_>) -> Result<RunReport> {
@@ -157,10 +123,7 @@ impl Runner {
         let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
         let mut warned_not_streaming = vec![false; n];
         let mut queue = QueueLedger::new(n);
-        // Each step's state the last time a request wanted it, which is
-        // what its row settles on once none does.
         let mut last_states: Vec<Row> = vec![Row::Idle; n];
-        let mut winding: Vec<Winding> = Vec::new();
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
@@ -171,7 +134,6 @@ impl Runner {
             &mut paused,
             &mut seq,
             &mut ever_in_scope,
-            &mut winding,
         )
         .await?;
         for i in (0..n).filter(|&i| !ever_in_scope[i]) {
@@ -200,29 +162,16 @@ impl Runner {
                     &mut paused,
                     &mut seq,
                     &mut ever_in_scope,
-                    &mut winding,
                 )
                 .await?;
-                // A step a later request reaches was not "not selected"
-                // after all: it settles like any other.
-                for i in 0..n {
-                    if ever_in_scope[i] && status[i] == Some(StepStatus::NotSelected) {
-                        status[i] = None;
-                        if let Some(run) = state.current_run.as_mut() {
-                            run.states.remove(&graph.steps[i].id);
-                        }
-                    }
-                }
             }
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
                 paused: paused.clone(),
             };
             let t = tick(&shape, &intent, &facts, &self.budgets);
-            for (i, st) in t.states.iter().enumerate() {
-                if !matches!(st, Row::Idle | Row::Stale) {
-                    last_states[i] = *st;
-                }
+            if !intent.requests.is_empty() {
+                last_states = t.states.clone();
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
 
@@ -265,29 +214,6 @@ impl Runner {
                 }
             }
 
-            // A step no open request wants any more, and with nothing of
-            // its own left to finish, says so now rather than when the
-            // loop ends, which may be a long sync of some other source
-            // away.
-            for i in 0..n {
-                let unwanted = matches!(t.states[i], Row::Idle | Row::Stale);
-                if ever_in_scope[i] && status[i].is_none() && ended[i].is_none() && unwanted {
-                    let st = settled(graph, &last_states, i, cancelled);
-                    if st == StepStatus::SkippedUpToDate {
-                        queue.cleared(graph, i, &*self.sink);
-                    }
-                    self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
-                }
-            }
-
-            winding.retain(|w| {
-                let still_stopping = t.stops.iter().any(|&i| w.scope[i]);
-                if !still_stopping {
-                    self.tell(w.over());
-                }
-                still_stopping
-            });
-
             for start in t.starts {
                 let i = start.step;
                 seq += 1;
@@ -313,12 +239,6 @@ impl Runner {
                 }
             }
             state.save(&self.data_root).context("save dag state")?;
-            for o in open.iter_mut().filter(|o| !o.told) {
-                o.told = true;
-                if let Some(id) = &o.id {
-                    self.tell(RequestEvent::Admitted { id: id.clone() });
-                }
-            }
 
             for &(r, outcome) in t.closed.iter().rev() {
                 let closed = open.remove(r);
@@ -330,12 +250,6 @@ impl Runner {
                         }
                     };
                     store.close_request(id, outcome, step).await?;
-                    self.tell(RequestEvent::Closed {
-                        id: id.clone(),
-                        outcome,
-                        failed_step: step.map(str::to_string),
-                        stopped_by: None,
-                    });
                 }
             }
             if open.is_empty() && set.is_empty() {
@@ -403,14 +317,19 @@ impl Runner {
             if status[i].is_some() {
                 continue;
             }
-            let st = settled(graph, &last_states, i, cancelled);
-            if st == StepStatus::SkippedUpToDate {
-                queue.cleared(graph, i, &*self.sink);
-            }
+            let st = match last_states[i] {
+                Row::Waiting(_) if cancelled => StepStatus::Failed {
+                    kind: FailureKind::Cancelled,
+                },
+                Row::Blocked(on) => StepStatus::Blocked {
+                    on: graph.steps[on].id.clone(),
+                },
+                _ => {
+                    queue.cleared(graph, i, &*self.sink);
+                    StepStatus::SkippedUpToDate
+                }
+            };
             self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
-        }
-        for w in winding {
-            self.tell(w.over());
         }
 
         if let Some(run) = state.current_run.as_mut() {
@@ -455,7 +374,6 @@ impl Runner {
         paused: &mut BTreeSet<usize>,
         seq: &mut u64,
         ever_in_scope: &mut [bool],
-        winding: &mut Vec<Winding>,
     ) -> Result<()> {
         let mut admit = |id: Option<String>, roots: Vec<usize>, open: &mut Vec<Open>| {
             for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
@@ -463,7 +381,6 @@ impl Runner {
             }
             *seq += 1;
             open.push(Open {
-                told: false,
                 id,
                 request: Request {
                     roots,
@@ -478,38 +395,24 @@ impl Runner {
                     admit(None, self.roots(graph), open);
                 }
             }
-            Mailbox::Store {
-                store,
-                seen,
-                deferred,
-            } => {
+            Mailbox::Store { store, seen } => {
                 let version = store.data_version().await?;
                 if *seen == Some(version) {
                     return Ok(());
                 }
-                // Open before this loop loaded its graph, or so near it
-                // that the config it names cannot be newer than the one
-                // loaded.
-                let first = seen.is_none();
                 *seen = Some(version);
                 let rows = store.open_requests().await?;
                 let still_open: BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
                 open.retain(|o| o.id.as_deref().is_none_or(|id| still_open.contains(id)));
                 for row in rows {
                     let known = open.iter().position(|o| o.id.as_deref() == Some(&row.id));
-                    if let Some(by) = row.stop_requested_by {
+                    if row.stop_requested_by.is_some() {
+                        if let Some(k) = known {
+                            open.remove(k);
+                        }
                         store
                             .close_request(&row.id, RequestOutcome::Stopped, None)
                             .await?;
-                        let stopped = Winding {
-                            id: row.id,
-                            by,
-                            scope: match known {
-                                Some(k) => downstream_of(graph, &open.remove(k).request.roots),
-                                None => vec![false; graph.steps.len()],
-                            },
-                        };
-                        winding.push(stopped);
                         continue;
                     }
                     if known.is_some() {
@@ -517,25 +420,6 @@ impl Runner {
                     }
                     let unknown = row.roots.iter().find(|r| !graph.by_id.contains_key(*r));
                     if let Some(unknown) = unknown {
-                        if !first {
-                            if deferred.insert(row.id.clone()) {
-                                self.sink.emit(&Event::Log {
-                                    step: unknown.clone(),
-                                    level: crate::events::LogLevel::Info,
-                                    msg: format!(
-                                        "request {} names a step the config this loop loaded \
-                                         does not have; leaving it for the next loop",
-                                        row.id
-                                    ),
-                                    ts: None,
-                                    stream: None,
-                                    target: None,
-                                    thread: None,
-                                    fields: None,
-                                });
-                            }
-                            continue;
-                        }
                         self.sink.emit(&Event::Log {
                             step: unknown.clone(),
                             level: crate::events::LogLevel::Warn,
@@ -552,12 +436,6 @@ impl Runner {
                         store
                             .close_request(&row.id, RequestOutcome::Failed, Some(unknown))
                             .await?;
-                        self.tell(RequestEvent::Closed {
-                            id: row.id,
-                            outcome: RequestOutcome::Failed,
-                            failed_step: Some(unknown.clone()),
-                            stopped_by: None,
-                        });
                         continue;
                     }
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
@@ -572,12 +450,6 @@ impl Runner {
             }
         }
         Ok(())
-    }
-
-    fn tell(&self, event: RequestEvent) {
-        if let Some(tx) = &self.requests {
-            let _ = tx.send(event);
-        }
     }
 
     fn roots(&self, graph: &Graph) -> Vec<usize> {
@@ -622,7 +494,7 @@ impl Runner {
             reads: paths_of(graph, consumed).into_iter().collect(),
             checkpoint: checkpoint.clone(),
             progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-            stop: StopSignal::new(stop).with_grace(self.stop_grace),
+            stop: StopSignal::new(stop),
         }
     }
 
@@ -871,20 +743,6 @@ fn check_reported(
         );
     }
     Ok(())
-}
-
-/// What a step's row settles on once no open request wants it and it has
-/// nothing of its own left to finish.
-fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> StepStatus {
-    match last_states[i] {
-        Row::Waiting(_) if cancelled => StepStatus::Failed {
-            kind: FailureKind::Cancelled,
-        },
-        Row::Blocked(on) => StepStatus::Blocked {
-            on: graph.steps[on].id.clone(),
-        },
-        _ => StepStatus::SkippedUpToDate,
-    }
 }
 
 /// Resolves when a stop has been asked for; never, with no stop wired.
@@ -1185,246 +1043,6 @@ mod tests {
         let row = other.request(&id).await.unwrap().unwrap();
         assert_eq!(row.closed, Some(Some(RequestOutcome::Failed)));
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
-    }
-
-    fn serve_telling(
-        f: &Fixture,
-    ) -> (
-        tokio::task::JoinHandle<Result<RunReport>>,
-        tokio::sync::mpsc::UnboundedReceiver<RequestEvent>,
-    ) {
-        let (root, graph) = (f.root.path().to_path_buf(), f.graph.clone());
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let running = tokio::spawn(async move {
-            let store = Store::open(&root).await?;
-            let mut runner = Runner::new(&root);
-            runner.requests = Some(tx);
-            let report = runner.serve(&graph, &store).await;
-            store.close().await;
-            report
-        });
-        (running, rx)
-    }
-
-    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<RequestEvent>) -> Vec<RequestEvent> {
-        std::iter::from_fn(|| rx.try_recv().ok()).collect()
-    }
-
-    /// The server keeps a job row per request; these two events are all
-    /// it has to keep it in step with.
-    #[tokio::test]
-    async fn the_host_is_told_when_a_request_is_taken_on_and_when_it_is_over() {
-        let f = fixture();
-        f.go.store(true, Ordering::SeqCst);
-        let other = Store::open(f.root.path()).await.unwrap();
-        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
-        running.await.unwrap().unwrap();
-        assert_eq!(
-            drain(&mut rx),
-            [
-                RequestEvent::Admitted { id: id.clone() },
-                RequestEvent::Closed {
-                    id,
-                    outcome: RequestOutcome::Done,
-                    failed_step: None,
-                    stopped_by: None
-                }
-            ]
-        );
-    }
-
-    /// The host flips its job to running when it hears a request was taken
-    /// on, and the Manage row then reads the record. Told before the
-    /// record was saved, the row read the step as not selected by its own
-    /// job's run, and painted last week's status instead of Running.
-    #[tokio::test]
-    async fn the_host_hears_of_a_request_only_once_the_record_names_its_steps() {
-        let f = fixture();
-        let other = Store::open(f.root.path()).await.unwrap();
-        other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
-        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
-
-        let b = other.open_request(&["b/raw".into()], "ui").await.unwrap();
-        loop {
-            let event = tokio::time::timeout(Duration::from_secs(10), rx.recv())
-                .await
-                .expect("b to be taken on")
-                .unwrap();
-            if event == (RequestEvent::Admitted { id: b.clone() }) {
-                break;
-            }
-        }
-        let recorded = DagState::load(f.root.path())
-            .unwrap()
-            .current_run
-            .and_then(|r| r.states.get("b/raw").cloned());
-        assert_eq!(recorded.as_deref(), Some("running"));
-
-        f.go.store(true, Ordering::SeqCst);
-        running.await.unwrap().unwrap();
-    }
-
-    /// A stop closes the request's row at once, but its host hears it is
-    /// over only when the step it stopped has exited: until then the Stop
-    /// button says Stopping, and a second one would be a lie.
-    #[tokio::test]
-    async fn a_stopped_request_is_over_for_its_host_once_its_step_has_exited() {
-        let root = tempfile::tempdir().unwrap();
-        let heard_stop = Arc::new(AtomicBool::new(false));
-        let let_go = Arc::new(AtomicBool::new(false));
-        let (heard, go) = (heard_stop.clone(), let_go.clone());
-        let lingering = StepSpec::new(
-            "a/raw",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let (heard, go) = (heard.clone(), go.clone());
-                async move {
-                    let mut stop = ctx.stop.clone();
-                    stop.requested().await;
-                    heard.store(true, Ordering::SeqCst);
-                    while !go.load(Ordering::SeqCst) {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                    Err(StepError::new(
-                        FailureKind::Cancelled,
-                        anyhow::anyhow!("stopped"),
-                    ))
-                }
-            }),
-        );
-        let graph = Arc::new(Graph::build(vec![lingering]).unwrap());
-        let other = Store::open(root.path()).await.unwrap();
-        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let running = {
-            let (root, graph) = (root.path().to_path_buf(), graph.clone());
-            tokio::spawn(async move {
-                let store = Store::open(&root).await?;
-                let mut runner = Runner::new(&root);
-                runner.requests = Some(tx);
-                let report = runner.serve(&graph, &store).await;
-                store.close().await;
-                report
-            })
-        };
-
-        until("the loop to take the request on", || !rx.is_empty()).await;
-        other.request_stop(&id, "ui").await.unwrap();
-        until("the stop to reach the step", || {
-            heard_stop.load(Ordering::SeqCst)
-        })
-        .await;
-        assert_eq!(
-            outcome(&other, &id).await,
-            Some(Some(RequestOutcome::Stopped))
-        );
-        assert_eq!(
-            drain(&mut rx),
-            [RequestEvent::Admitted { id: id.clone() }],
-            "over while its step still runs"
-        );
-
-        let_go.store(true, Ordering::SeqCst);
-        running.await.unwrap().unwrap();
-        assert_eq!(
-            drain(&mut rx),
-            [RequestEvent::Closed {
-                id,
-                outcome: RequestOutcome::Stopped,
-                failed_step: None,
-                stopped_by: Some("ui".into())
-            }]
-        );
-    }
-
-    /// A source added to the config while a loop runs is not in the graph
-    /// that loop loaded. Its request waits for the next loop, which loads
-    /// the config again, rather than failing as a step that does not exist.
-    #[tokio::test]
-    async fn a_request_the_loop_cannot_place_mid_loop_is_left_for_the_next() {
-        let f = fixture();
-        let other = Store::open(f.root.path()).await.unwrap();
-        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
-        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
-
-        let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
-        // Written after the new request, so seeing it taken on means the
-        // loop has read past the new one too.
-        let marker = other.open_request(&["b/raw".into()], "ui").await.unwrap();
-        until("the loop to read past the new request", || {
-            f.runs[1].load(Ordering::SeqCst) == 1
-        })
-        .await;
-        f.go.store(true, Ordering::SeqCst);
-        running.await.unwrap().unwrap();
-
-        assert_eq!(outcome(&other, &later).await, None, "still open");
-        let told: Vec<String> = drain(&mut rx)
-            .into_iter()
-            .map(|e| match e {
-                RequestEvent::Admitted { id } | RequestEvent::Closed { id, .. } => id,
-            })
-            .collect();
-        assert!(!told.contains(&later), "{told:?}");
-        assert!(told.contains(&first) && told.contains(&marker), "{told:?}");
-    }
-
-    /// A step a stopped request wanted, and nothing else does, reads as
-    /// settled while the loop goes on with another source's sync. It used
-    /// to keep its last record until the whole loop ended.
-    #[tokio::test]
-    async fn a_step_no_request_wants_any_more_settles_while_the_loop_goes_on() {
-        let f = fixture();
-        let render = StepSpec::new(
-            "a/rendered",
-            StepRun::in_process(|_| async { Ok(StepOutcome::default()) }),
-        )
-        .input("a/raw");
-        let graph = Arc::new(
-            Graph::build(vec![
-                source(
-                    "a/raw",
-                    f.runs[0].clone(),
-                    f.go.clone(),
-                    f.stopped[0].clone(),
-                ),
-                source(
-                    "b/raw",
-                    f.runs[1].clone(),
-                    f.go.clone(),
-                    f.stopped[1].clone(),
-                ),
-                render,
-            ])
-            .unwrap(),
-        );
-        let f = Fixture { graph, ..f };
-        let other = Store::open(f.root.path()).await.unwrap();
-        let a = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        other.open_request(&["b/raw".into()], "ui").await.unwrap();
-        let running = serve(&f);
-        until("both to start", || {
-            f.runs[0].load(Ordering::SeqCst) == 1 && f.runs[1].load(Ordering::SeqCst) == 1
-        })
-        .await;
-
-        other.request_stop(&a, "ui").await.unwrap();
-        let state_of = |step: &str| {
-            DagState::load(f.root.path())
-                .unwrap()
-                .current_run
-                .and_then(|r| r.states.get(step).cloned())
-        };
-        until("a's render to settle while b still runs", || {
-            state_of("a/rendered").as_deref() == Some("skipped_up_to_date")
-        })
-        .await;
-        assert_eq!(state_of("b/raw").as_deref(), Some("running"));
-
-        f.go.store(true, Ordering::SeqCst);
-        running.await.unwrap().unwrap();
     }
 
     #[tokio::test]

@@ -142,17 +142,14 @@ Syncs are incremental and idempotent — re-running is always safe.
 
 **You can sync while the app, or another `datalib-dag`, is syncing the
 same root.** A sync is a request in `<data_root>/system/supervisor.sqlite`.
-While the app is open it runs every sync, yours included; otherwise, if
-nothing else is running the root, your `datalib-dag` runs it. Either way,
-if something else is running it, yours hands it the request, says
-`following request <id>`, and waits for it — your source runs beside
-theirs, not after. Either way
+If nothing else is running the root, your `datalib-dag` runs it; if
+something is, yours hands it the request, says `following request <id>`,
+and waits for it — your source runs beside theirs, not after. Either way
 it exits with *your* request's outcome: 0 done, 2 failed, 130 stopped,
 and Ctrl-C stops your request only. Pass `--by <name>` so the request
 says who asked (`sqlite3 system/supervisor.sqlite 'select * from
 requests'`). `--reset` is the exception: it empties stores, so it
-refuses while anything else runs the loop — always, while the app is
-open; reset from the app then (below).
+refuses while anything else is syncing.
 
 To steer what is running — yours, the app's, anyone's — without SQL:
 
@@ -178,17 +175,14 @@ takes its attachments with it), which the Manage screen offers as "Reset (preser
 "Reset (drop attachments)…"
 on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
 cancels; `GET /api/sync/stream` pushes a
-frame when a job starts or ends and whenever the run store moves. A
-job's id is its request's id, so `datalib-dag status` and `stop` work on
-it too. The
+frame when a job starts or ends and whenever the run store moves. The
 run store is what to read for what happened: `GET /api/runs` lists
-runs (a job's `parent_job_id` is its run: the app runs every sync that
-arrives while one is going in the same run), `/api/runs/{run}/steps` gives every
+runs (a job's id is its run id), `/api/runs/{run}/steps` gives every
 step's state and metrics, and `/api/runs/{run}/log?step=&after_seq=`
 is the log, tailable by `seq`. `GET /api/log?q=` is the same log
 across every run, in the search bar's grammar — `level:warn
 -target:sqlx "history"` — and `process:http` narrows it to what the
-server itself said (its sync loop, the applets, requests that failed),
+server itself said (the worker, the applets, requests that failed),
 which the app's **Logs** shows when you pick this server's launch. All of it is
 `system/runs/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
 too.

@@ -27,7 +27,6 @@ rust_library(
     srcs = [
         "src/applets.rs",
         "src/auth.rs",
-        "src/binaries.rs",
         "src/boot.rs",
         "src/connect.rs",
         "src/frontend.rs",
@@ -45,10 +44,10 @@ rust_library(
         "src/manage/status.rs",
         "src/remote_media.rs",
         "src/request_log.rs",
-        "src/supervisor.rs",
         "src/ui_events.rs",
         "src/usage.rs",
         "src/watch.rs",
+        "src/worker.rs",
     ],
     crate_name = "datalib_http",
     edition = "2021",
@@ -99,6 +98,7 @@ rust_library(
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",
         "@datalib_crates//:futures",
+        "@datalib_crates//:libc",
         "@datalib_crates//:mime_guess",
         "@datalib_crates//:notify",
         "@datalib_crates//:reqwest",
@@ -138,7 +138,8 @@ rust_test(
 # process of its own is a slice (tools/test_slice.bzl): `http_tests`
 # skips it, and its target below runs it alone from this binary.
 # `remote_media` reaches a stand-in host on loopback (issue #648), hence
-# the env that lifts the private-address guard.
+# the env that lifts the private-address guard; `worker_failure_tail`
+# and `worker_cancel` run the real runner, hence the data.
 _SLICES = {
     # Starts real applet processes and binds loopback ports, so it
     # cannot be sandboxed.
@@ -155,13 +156,12 @@ rust_test(
     srcs = glob(["tests/http_tests/**/*.rs"]),
     args = skip_slices(_SLICES),
     crate_root = "tests/http_tests/main.rs",
+    data = ["//datalib/backend/dag:datalib_dag_bin"],
     edition = "2021",
     env = {
+        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE": "1",
     },
-    proc_macro_deps = [
-        "@datalib_crates//:async-trait",
-    ],
     deps = [
         ":datalib_http",
         "//datalib/backend/app_schema:app_schema",

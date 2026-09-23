@@ -489,6 +489,10 @@ pub async fn sample_on_demand(
     sample_once(monitor, repo, root, Some(arrived), events).await;
 }
 
+pub fn pipeline_is_running(root: &Path) -> bool {
+    datalib_dag::lock::runner_is_held(root)
+}
+
 fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
     let started = running && !was_running;
     let ended = !running && was_running;
@@ -501,7 +505,6 @@ pub async fn run(
     repo: DynAppRepo,
     root: Arc<PathBuf>,
     events: crate::watch::RootTx,
-    sync: crate::supervisor::SyncControl,
 ) {
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
@@ -529,7 +532,7 @@ pub async fn run(
         // it costs one pass through `should_walk`, which a frame never
         // satisfies on its own — a walk needs a run to have started,
         // ended, or been going for the interval.
-        let running = sync.running();
+        let running = pipeline_is_running(&root);
         if should_walk(running, was_running, last_walk.elapsed()) {
             sample_once(&monitor, &repo, root.clone(), None, &events).await;
             last_walk = Instant::now();
@@ -754,6 +757,31 @@ command = "my-step"
         // A run that began and ended inside one interval still gets
         // both its edges — which is the pair a short sync depends on.
         assert!(should_walk(false, true, idle));
+    }
+
+    /// The sampler runs while a run holds the root, and not otherwise.
+    #[test]
+    fn the_sampler_runs_only_while_a_runner_holds_the_root() {
+        let td = tempfile::tempdir().unwrap();
+        assert!(!pipeline_is_running(td.path()), "idle root");
+
+        let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
+        assert!(pipeline_is_running(td.path()), "a runner holds it");
+
+        drop(held);
+        assert!(!pipeline_is_running(td.path()), "the run let go");
+    }
+
+    /// Asking must not leave a trace. A probe on a timer that created
+    /// the lock file would make every never-synced root sprout one, and
+    /// one that rewrote it would erase what a live holder said about
+    /// itself — which is the only thing a refused runner has to go on.
+    #[test]
+    fn asking_whether_a_run_is_in_flight_leaves_no_trace() {
+        let td = tempfile::tempdir().unwrap();
+        let lock = td.path().join(datalib_dag::lock::RUNNER_LOCK_REL_PATH);
+        assert!(!pipeline_is_running(td.path()));
+        assert!(!lock.exists(), "the probe created {}", lock.display());
     }
 
     /// Refreshes coalesce on *finished* walks, not on recent ones.

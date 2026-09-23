@@ -31,6 +31,7 @@ import type {
 import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
+import { redrawChanged } from "@/grid/redrawChanged";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import {
@@ -177,12 +178,11 @@ let inflight = false;
 /// back — runs once that one is done, instead of being lost.
 let freshPending = false;
 let tailPending = false;
-/// Set from a press on the grid until just after its release. Any
-/// change in the row count makes the bundle re-render every row
-/// (`grid.invalidate()`), and a release that lands on a re-rendered row
-/// fires no click on the old one: on a busy log, a click selected
-/// nothing and a right-click opened no menu. So the grid is not
-/// touched while a button is down.
+/// Set from a press on the grid until just after its release. New
+/// lines redraw the rows they move, and a release that lands on a
+/// redrawn row fires no click on the old one: on a busy log, a click
+/// selected nothing and a right-click opened no menu. So the grid is
+/// not touched while a button is down.
 let pressed: Promise<void> | null = null;
 let release: (() => void) | null = null;
 
@@ -202,6 +202,45 @@ function onPointerUp() {
   // been handled before the rows are rebuilt.
   setTimeout(done);
 }
+/// This grid's right-click menu while it is open. The menu library puts
+/// it on `document.body`, named by the grid's uid.
+function openMenu(): Element | null {
+  const uid = bundle?.slickGrid.getUID();
+  return uid ? document.body.querySelector(`.slick-context-menu.${uid}`) : null;
+}
+
+/// Resolves once `el` has left the page. Watched rather than heard
+/// from: the menu library removes a menu by more than one path, and not
+/// every one of them calls the close hook.
+function gone(el: Element): Promise<void> {
+  return new Promise((done) => {
+    const watch = new MutationObserver(() => {
+      if (el.isConnected) return;
+      watch.disconnect();
+      done();
+    });
+    watch.observe(document.body, { childList: true });
+    if (!el.isConnected) {
+      watch.disconnect();
+      done();
+    }
+  });
+}
+
+/// Wait while someone is using the grid: a button down on it, or a menu
+/// open on one of its lines, which acts on the line it was opened on.
+async function untilLetAlone() {
+  for (;;) {
+    if (pressed) {
+      await pressed;
+      continue;
+    }
+    const menu = openMenu();
+    if (!menu) return;
+    await gone(menu);
+  }
+}
+
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
@@ -233,7 +272,7 @@ async function load(fresh: boolean) {
       q: query.value,
       afterSeq: lastSeq,
     });
-    while (pressed) await pressed;
+    await untilLetAlone();
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lineCount.value += got.length;
@@ -246,14 +285,15 @@ async function load(fresh: boolean) {
       } else if (fresh) {
         bundle.dataset = got;
       } else {
-        // Appended through the grid rather than as a new dataset, which
-        // would re-render every row and lose the scroll.
-        bundle.gridService.addItems(got, {
-          position: "bottom",
-          highlightRow: false,
-          scrollRowIntoView: false,
-          resortGrid: true,
-          triggerEvent: false,
+        // Appended rather than handed over as a new dataset, which would
+        // redraw every row and lose the scroll; only the rows the new
+        // lines move are redrawn.
+        const { slickGrid, dataView } = bundle;
+        redrawChanged(slickGrid, dataView, () => {
+          dataView.beginUpdate();
+          dataView.addItems(got);
+          dataView.reSort();
+          dataView.endUpdate();
         });
         // Follow the tail only while the reader is already at it: a
         // scroll up to read something must not be yanked back down.
@@ -795,6 +835,9 @@ function gridOptions(): GridOption {
     enableColumnPicker: true,
     enableContextMenu: true,
     contextMenu: {
+      // Following the tail scrolls, and a menu open on a line stays
+      // open until the reader is done with it.
+      hideMenuOnScroll: false,
       commandItems: menuSlots(4, menuEntries),
     },
   };

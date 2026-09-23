@@ -153,6 +153,7 @@ fn child_path(
     if let Some(dir) = user_bin {
         // Prepended even when the dir does not exist yet: an agent may
         // create it between runs, and a missing PATH entry is harmless.
+        // Same reasoning as the worker's.
         if Some(dir.as_path()) != binary_dir {
             paths.push(dir);
         }
