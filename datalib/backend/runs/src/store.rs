@@ -660,6 +660,49 @@ async fn log_where(
     rows.iter().map(log_line_from).collect()
 }
 
+/// Lines written outside any run after `after_seq`, oldest first, at
+/// most `limit`: what the server's watcher reads to learn which of its
+/// own requests moved the log.
+pub async fn process_log_after(data_root: &Path, after_seq: i64, limit: i64) -> Vec<LogRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    // Audited: the column list is this module's own constant.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+         WHERE l.run_id IS NULL AND l.seq > ? ORDER BY l.seq LIMIT ?"
+    )))
+    .bind(after_seq)
+    .bind(limit)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter().map(|r| log_line_from(r).row).collect()
+}
+
+/// The newest line's `seq`, or 0 for an empty or absent store.
+pub async fn last_log_seq(data_root: &Path) -> i64 {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return 0;
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return 0;
+    };
+    let seq: Option<i64> = sqlx::query_scalar("SELECT MAX(seq) FROM log")
+        .fetch_one(&pool)
+        .await
+        .ok()
+        .flatten();
+    pool.close().await;
+    seq.unwrap_or(0)
+}
+
 /// A log line as a reader sees it: the row, with what its process says
 /// about it — which program wrote it and from which commit. Both
 /// `None` for a line whose process the store no longer has.

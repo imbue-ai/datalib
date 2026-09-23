@@ -7,6 +7,10 @@
 //! wake it into a loop against its own store. And the bundle's
 //! content-hashed assets and the component modules, unless they failed:
 //! a page load is dozens of them and the browser caches them forever.
+//!
+//! A request a `root` frame caused carries that frame's chain; the line
+//! stores it, and a chain long enough to be a loop is warned about here
+//! (`loop_guard`).
 
 use std::time::Instant;
 
@@ -29,8 +33,13 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         .get(crate::ui_events::PAGE_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    let chain = crate::loop_guard::request_chain(
+        req.headers()
+            .get(crate::loop_guard::CAUSE_HEADER)
+            .and_then(|v| v.to_str().ok()),
+    );
     let started = Instant::now();
-    let resp = next.run(req).await;
+    let resp = crate::loop_guard::scope(chain, next.run(req)).await;
     let status = resp.status();
     if !is_logged(&path, status) {
         return resp;
@@ -42,18 +51,30 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
     let code = status.as_u16();
+    // Zero is every request nothing caused; leaving it off keeps the
+    // line as it was for them.
+    let chain = (chain > 0).then_some(chain);
+    if let Some(c) = chain.filter(|&c| crate::loop_guard::warns_at(c)) {
+        tracing::warn!(
+            target: crate::loop_guard::TARGET,
+            method = %method, path = %path, query = query.as_deref(), chain = c,
+            page = page.as_deref(),
+            "{method} {path} is refetching on its own echo: {c} requests in a row, \
+             each caused by the frame the one before it caused"
+        );
+    }
     if status.is_server_error() {
         tracing::warn!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(),
+            page = page.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
         );
     } else {
         tracing::info!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(),
+            page = page.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
         );
     }
