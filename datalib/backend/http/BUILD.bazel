@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:test_slice.bzl", "rust_test_slice", "skip_slices")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
@@ -130,16 +131,28 @@ rust_test(
     ],
 )
 
-# The hermetic endpoint tests, one binary: each `tests/http_tests/*.rs`
-# is one endpoint or one contract. Linking the server stack is most of
-# what a test here costs, so they share the link; a test that installs
-# the process's tracing subscriber stays its own target below.
+# The endpoint tests, one binary: each `tests/http_tests/*.rs` is one
+# endpoint or one contract. Linking the server stack is most of what a
+# test here costs, so they share the link. A module that needs a
+# process of its own is a slice (tools/test_slice.bzl): `http_tests`
+# skips it, and its target below runs it alone from this binary.
 # `remote_media` reaches a stand-in host on loopback (issue #648), hence
 # the env that lifts the private-address guard; `worker_failure_tail`
 # and `worker_cancel` run the real runner, hence the data.
+_SLICES = {
+    # Starts real applet processes and binds loopback ports, so it
+    # cannot be sandboxed.
+    "applet_tests": "applet::",
+    # Each installs the process's only tracing subscriber.
+    "request_log_test": "request_log::",
+    "server_log_test": "server_log::",
+    "ui_events_test": "ui_events::",
+}
+
 rust_test(
     name = "http_tests",
-    srcs = glob(["tests/http_tests/*.rs"]),
+    srcs = glob(["tests/http_tests/**/*.rs"]),
+    args = skip_slices(_SLICES),
     crate_root = "tests/http_tests/main.rs",
     data = ["//datalib/backend/dag:datalib_dag_bin"],
     edition = "2021",
@@ -152,9 +165,11 @@ rust_test(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/schema:datalib_schema",
         "@datalib_crates//:axum",
         "@datalib_crates//:futures",
         "@datalib_crates//:libc",
@@ -163,93 +178,42 @@ rust_test(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tower",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:url",
     ],
 )
 
-# Both start real applet processes and bind loopback ports (python3 for
-# the proxy's fixture server), so neither can be sandboxed — same
-# treatment as //datalib/ui:e2e_test. Pure store semantics stay
-# hermetic as unit tests in src/frontend.rs.
-rust_test(
+rust_test_slice(
     name = "applet_tests",
-    srcs = glob(["tests/applet_tests/*.rs"]),
-    crate_root = "tests/applet_tests/main.rs",
     data = ["//datalib/backend/applets:datalib_applet"],
-    edition = "2021",
     env = {
         "APPLET_BIN": "$(rootpath //datalib/backend/applets:datalib_applet)",
     },
+    filter = _SLICES["applet_tests"],
     tags = [
         "no-remote-exec",
         "no-sandbox",
         "requires-network",
     ],
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/schema:datalib_schema",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
+    test = ":http_tests",
 )
 
-# The server's own log: a `tracing` event in this process reaches the
-# store and comes back through `GET /api/log` as `process:http`.
-rust_test(
-    name = "server_log_test",
-    srcs = ["tests/server_log.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "//datalib/backend/runs:datalib_runs",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-        "@datalib_crates//:tracing",
-    ],
-)
-
-# One line per request in the server's log, and none for a read of the
-# log itself (the log panel would refetch on its own line forever).
-rust_test(
+rust_test_slice(
     name = "request_log_test",
-    srcs = ["tests/request_log.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
+    filter = _SLICES["request_log_test"],
+    test = ":http_tests",
 )
 
-# A page of the app is a `ui` process; what it posts to
-# `/api/ui/events` are its lines.
-rust_test(
+rust_test_slice(
+    name = "server_log_test",
+    filter = _SLICES["server_log_test"],
+    test = ":http_tests",
+)
+
+rust_test_slice(
     name = "ui_events_test",
-    srcs = ["tests/ui_events.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_http",
-        "//datalib/backend/core:datalib_core",
-        "@datalib_crates//:axum",
-        "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tower",
-    ],
+    filter = _SLICES["ui_events_test"],
+    test = ":http_tests",
 )
 
 # Ctrl-C against the real binary while a client holds the SSE stream

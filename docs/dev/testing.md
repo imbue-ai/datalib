@@ -92,7 +92,7 @@ Two things follow from sharing a process:
   tree, so the provider binaries set `RUST_TEST_THREADS = "1"` and say
   so in `main.rs`. A tracing subscriber is the same story from the
   other side: `datalib/backend/http`'s three log tests each install the
-  process's only one, so they stay separate targets.
+  process's only one, so each runs as a slice (below).
 * **insta names a snapshot after the module path.** The goldens live in
   `tests/<name>/snapshots/` and are called
   `<name>__<module>__<snapshot>.snap`. Keep the target name equal to
@@ -100,8 +100,34 @@ Two things follow from sharing a process:
   under that name too and the two must agree on the path.
 
 A test that cannot share — a different `tags` (`no-sandbox`,
-`external`, `manual`), or a process-global it must own — is its own
-target, and its header says which of the two it is.
+`requires-network`), or a process-global it must own — still compiles
+into the binary, as a module run by a slice.
+
+### Slices: one binary, a process per module
+
+`tools/test_slice.bzl`. The package's `rust_test` skips the module by
+name, and `rust_test_slice` is a test target of its own that runs
+exactly that module from the same binary, in its own process, with its
+own `tags`, `data` and `env`. One dict in the BUILD file feeds both
+halves, so the skip and the slice cannot drift apart:
+
+```starlark
+_SLICES = {"server_log_test": "server_log::"}
+
+rust_test(name = "http_tests", args = skip_slices(_SLICES), ...)
+
+rust_test_slice(
+    name = "server_log_test",
+    filter = _SLICES["server_log_test"],
+    test = ":http_tests",
+)
+```
+
+A slice fails when its filter matches no test, so renaming the module
+cannot leave it green and empty. `datalib/backend/http` is the example:
+four slices over one binary where there were five links. Only a test
+that needs a different `manual` or `external` tag, or a binary of its
+own on purpose, stays a separate `rust_test`.
 
 ### The `live` module
 
