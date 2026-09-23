@@ -75,7 +75,7 @@ async fn what_the_server_logs_is_served_as_its_own_process() {
     assert_eq!(l["level"], "warn");
     assert!(l["run_id"].is_null(), "no run: {l}");
     assert!(l["step"].is_null());
-    assert!(l["target"].as_str().unwrap().starts_with("server_log"));
+    assert_eq!(l["target"], module_path!());
     let fields: serde_json::Value = serde_json::from_str(l["fields"].as_str().unwrap()).unwrap();
     assert_eq!(fields["job"], "j-1");
 
