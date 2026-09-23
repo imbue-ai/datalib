@@ -107,10 +107,21 @@ being greppable.
 
 ## Connection pools: one writer per file, readers pinned
 
-Doltlite's HEAD pointer, working set and active branch are **per
-connection**, and the working set is also **per file**, shared across
-processes. Two facts, two rules, both built into `doltlite_raw` rather
-than left to convention.
+Doltlite's HEAD pointer, active branch and working set are **per
+connection**, and the working set is also **per file and branch**,
+shared across every connection on that branch in any process. Two
+facts, two rules, both built into `doltlite_raw` rather than left to
+convention.
+
+"Per file *and branch*" is the whole of the qualifier, and it is worth
+saying because leaving it off makes the rules below sound wrong.
+Measured on doltlite 0.50.3: a connection that checks out `alt` and
+inserts without committing leaves `main`'s `dolt_status` clean and its
+rows invisible to the next connection, which opens on `main` — the
+active branch is not written down in the file. Two long-lived writers
+on one file, each pinned to its own branch, do keep their content
+apart. **They still must not share a file**, for the reason in the next
+paragraph but one: they contend.
 
 ### Every pool is size 1 and never recycled
 
@@ -133,9 +144,21 @@ and each takes the file's writer lock — `flock(2)` on the sibling
 connection, which holds it until it closes. A second writer on the same
 file, in another process or in this one, is refused at open with the
 holder named (`<program> (pid N)`) instead of sharing the first's
-working set: an `-Am` commit through either pool sweeps up whatever the
-other has in flight, and two mid-write pools contend for a lock
-`dolt_commit` takes without waiting. The kernel releases the lock when
+working set: every store's writer is on `main`, so an `-Am` commit
+through either pool sweeps up whatever the other has in flight, and two
+mid-write pools contend for a lock `dolt_commit` takes without waiting.
+
+Putting the second writer on its own branch does not rescue this, which
+is worth knowing before anyone proposes it. Measured the same day, two
+processes each holding one connection on its own branch, 60 commits
+each: the content did stay apart (`main` ended with all of the first
+writer's rows and none of the second's, `alt` the reverse), and about
+three quarters of the operations failed — `database is locked by
+another connection` from doltlite's own lock on the file, and `commit
+conflict: another connection committed to this branch. Please retry
+your transaction`. A writer that reconnects per operation fares worse
+still: a fresh connection opens on `main`, a failed `dolt_checkout` is
+silent, and the rows land on the wrong branch. The kernel releases the lock when
 the holder dies, so a killed run leaves no stale claim; the next `open`
 finds its dirty rows and **discards them** (`dolt_reset --hard`, then
 any table the dead writer created and never committed), so the store
@@ -163,8 +186,13 @@ store, and nothing about the others.
 `datalib-fsindex` and the provider `*_ingest` binaries write through
 `RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
 stores it is given through `datalib_pin::open_reader` and writes only
-its own scratch. `datalib-doltlite` is the raw shell and takes no lock:
-run it `-readonly` against a store a sync may be writing.
+its own scratch. `datalib-doltlite` is the raw shell and takes no lock
+of *ours*: run it `-readonly` against a store a sync may be writing.
+Doltlite keeps a lock of its own besides — a dotfile sibling,
+`.<name>.doltlite_db-lock`, taken by every writable open including the
+CLI's — and that one is where `database is locked by another
+connection` comes from. It is not a substitute for ours: it serializes
+statements, it does not refuse a second writer.
 
 ### A download takes the store; it never opens one
 

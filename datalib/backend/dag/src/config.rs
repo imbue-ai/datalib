@@ -910,8 +910,8 @@ fn diff_source_problem(
 /// JSON-able.
 ///
 /// The nesting rule is the load-bearing one: two steps under one tree is two
-/// writers on one `.doltlite_db`, whose working set is shared across
-/// processes, so they commit each other's in-flight rows.
+/// writers on one `.doltlite_db`, sharing the working set of the branch they
+/// both open on, so they commit each other's in-flight rows.
 ///
 /// Later entries lose to earlier ones. Inputs are checked in
 /// [`crate::Graph::build_graded`], the first place the full id set exists.

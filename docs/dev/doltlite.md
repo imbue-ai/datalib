@@ -32,10 +32,13 @@ surface. The recipes below are written with the `doltlite` name for
 brevity; type `datalib-doltlite` if that is what you installed.
 
 > **Always pass `-readonly`** when you're just exploring. A second
-> writer against a doltlite file commits onto its own branch and can
-> wedge later ETL runs with `commit conflict` (the same scenario the
-> `max_connections = 1` rule in `datalib_etl::doltlite_raw` exists
-> to prevent on the Rust side).
+> connection does **not** get a branch of its own — it opens on `main`,
+> the same branch the pipeline writes, and shares that branch's
+> uncommitted working set. Its `dolt_commit -Am` therefore sweeps up
+> whatever a live run has in flight, and two writers committing at once
+> fail each other with `commit conflict` and `database is locked`. This
+> is the scenario the writer lock in `datalib_etl::doltlite_raw` exists
+> to prevent on the Rust side.
 
 ## Getting the data out: export to plain SQLite
 
@@ -131,6 +134,14 @@ doltlite -readonly slack/ingest/entities.doltlite_db "SELECT active_branch();"
 doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_branches;"
 ```
 
+Every connection opens on `main`, whatever a previous one checked out —
+the active branch is per connection and is not written down in the
+file. **To look at any other branch you have to give up `-readonly`**:
+`dolt_checkout` on a non-default branch needs a writable connection and
+otherwise fails with `checkout failed`. Since a writable open is the
+thing this page keeps telling you not to do against a live store, copy
+the file first and check the branch out in the copy.
+
 ### Uncommitted changes (`git status`)
 
 ```sh
@@ -164,9 +175,17 @@ doltlite -readonly slack/ingest/entities.doltlite_db \
 `HEAD`, `HEAD^1`, `HEAD~N`, branch names, and full commit hashes all
 work as refs. The cheapest "git status between commits" view.
 
-**Per-table row counts** — has to be one table at a time, invoked as a
-table-valued function (the `dolt_diff_stat` vtab form errors out — use
-this 3-arg call):
+**Per-table row counts.** Two forms, and the vtab is usually the one
+you want — it covers every table that changed in one query:
+
+```sh
+doltlite -readonly slack/ingest/entities.doltlite_db \
+  "SELECT table_name, rows_added, rows_deleted, rows_modified
+     FROM dolt_diff_stat
+    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD';"
+```
+
+The table-valued form answers for one named table:
 
 ```sh
 doltlite -readonly slack/ingest/entities.doltlite_db \
@@ -305,7 +324,7 @@ The common-use subset:
 | `dolt_branches` | vtab | all branches with their head commit. |
 | `dolt_status` | vtab | uncommitted-changes summary. |
 | `dolt_schemas` | vtab | per-branch schema diff. |
-| `dolt_diff_stat(from, to, table)` | table-valued fn | per-table row/cell counts. Call with 3 args; the vtab form doesn't accept WHERE filters. |
+| `dolt_diff_stat` | vtab + table-valued fn | per-table row/cell counts. As a vtab, filter with `from_ref` / `to_ref` and get every changed table; as a 3-arg call, one named table. |
 | `dolt_diff` | vtab | which tables each commit on the branch changed. |
 | `dolt_diff_summary` | vtab | which tables differ, data vs schema. Filter with `from_ref` / `to_ref`. |
 | `dolt_diff_<table>` | vtab | row-level diff for one table. Filter with `from_ref` / `to_ref`, or leave both off for every adjacent pair on the branch. |
@@ -349,9 +368,11 @@ attribute.
 
 `doltlite_raw::open` checks `dolt_status` at every open and, if
 non-empty, runs `dolt_reset --hard` and drops any table still reported
-as `new table` (reset leaves untracked tables alone, like `git reset
---hard` leaves untracked files, and there is no `dolt_clean`) before
-applying any DDL. Every commit is `-Am`, so anything left dirty here
+as `new table`, before applying any DDL. The second half is needed
+because reset leaves untracked tables alone, the way `git reset --hard`
+leaves untracked files. Doltlite 0.50.3 has a `dolt_clean()` that does
+that half itself; we still drop the tables by hand, which is a
+simplification waiting to be taken. Every commit is `-Am`, so anything left dirty here
 would ride into the schema commit a moment later; that is why the
 untracked tables go too.
 
@@ -370,10 +391,13 @@ cause (network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 
-- **During a live ETL run.** The Rust pool is at `max_connections = 1`
-  to keep doltlite's per-connection HEAD coherent (see the long doc
-  comment at the top of `datalib/backend/etl/src/doltlite_raw.rs`).
-  Adding a second writer through the CLI defeats that.
+- **During a live ETL run.** Every writable open on the Rust side
+  takes the store's writer lock and pins its pool at
+  `max_connections = 1`, so doltlite's per-connection HEAD stays
+  coherent and no second writer gets in
+  ([`etl/README.md`](/datalib/backend/etl/README.md) §"Connection
+  pools"). The CLI takes no such lock, so a writable CLI session is
+  exactly the second writer that rule exists to keep out.
 - **For routine reads from app code.** Open the file via `sqlx` like
   everything else in the backend; the CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the

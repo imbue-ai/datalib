@@ -330,9 +330,10 @@ Filter the diff vtabs with `from_ref` / `to_ref` (branch names,
 `from_commit` / `to_commit`, even though the result columns are
 `from_*` / `to_*`. Related:
 
-- `SELECT * FROM dolt_diff_stat('HEAD^1', 'HEAD', 'files');` — per-table
-  added/modified/removed counts (call it with 3 args; the vtab form
-  rejects `WHERE`).
+- `SELECT * FROM dolt_diff_stat WHERE from_ref = 'HEAD^1' AND to_ref =
+  'HEAD';` — added/modified/removed counts for every table that changed.
+  The 3-arg form, `dolt_diff_stat('HEAD^1', 'HEAD', 'files')`, answers
+  for one named table.
 - `SELECT * FROM dolt_log();` — the commit history (one row per scan).
 
 See [`docs/dev/doltlite.md`](/docs/dev/doltlite.md) for the full set
