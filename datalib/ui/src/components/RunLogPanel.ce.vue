@@ -881,7 +881,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="rl-panel">
+  <div class="rl-panel" :aria-busy="busy">
     <div class="rl-bar">
       <input
         class="rl-search"

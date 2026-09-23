@@ -1,5 +1,5 @@
-// The run-log card: the Manage screen's "Server log" opens the lines
-// of the server launch serving the page in a column beside it, a
+// The run-log card: opened on the server launch serving the page, it
+// shows that launch's lines in a column beside Manage, a
 // right-click on a cell narrows the query to that cell's value (and
 // clears it again), the bar above the grid groups the lines by a
 // column, and a selected line opens in full in the next column.
@@ -26,13 +26,26 @@ const quoted = (v: string) =>
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
-/// The log opens as the column after the Manage card, titled for
-/// what it shows.
+/// The status bar's "Logs" opens the log as the column after the
+/// Manage card; picking this server's launch retitles it. The lines
+/// already shown stay until the launch's replace them, so this waits
+/// for that load to finish before anything reads a row.
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
-  await page.getByRole("button", { name: "Server log" }).click();
+  await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
   const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
+  const scope = dialog.getByLabel("Which run or launch");
+  const mine = scope.locator("option", { hasText: /this server$/ });
+  await expect(mine).toHaveCount(1);
+  const value = (await mine.getAttribute("value"))!;
+  const launch = value.replace(/^launch:/, "");
+  const loaded = page.waitForResponse(
+    (r) => r.url().includes("/api/log?") && r.url().includes(`process=${launch}`),
+  );
+  await scope.selectOption(value);
+  await loaded;
+  await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
   await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
@@ -49,11 +62,15 @@ const lineCount = (page: Page) =>
 /// delivered at the next frame, after the press has opened the menu, and
 /// the grid's context menu closes on any scroll of the grid. Scroll
 /// events are dispatched before a frame's animation callbacks, so one
-/// frame is enough.
-async function rightClick(target: Locator) {
-  await target.scrollIntoViewIfNeeded();
-  await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
-  await target.click({ button: "right" });
+/// frame is enough. Retried until `entry` shows, because a new line can
+/// re-render the row and detach the cell before the press.
+async function rightClick(target: Locator, entry: Locator) {
+  await expect(async () => {
+    await target.scrollIntoViewIfNeeded({ timeout: 1_000 });
+    await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+    await target.click({ button: "right", timeout: 1_000 });
+    await expect(entry).toBeVisible({ timeout: 1_000 });
+  }).toPass();
 }
 
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
@@ -78,9 +95,8 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   expect(msg.trim(), "the first line should have a message").not.toBe("");
   // One right-click is enough: the panel holds the tail back while a
   // button is down on the grid, so the row is not re-rendered under it.
-  await rightClick(msgCell);
   const keepOnly = menuEntry(page, `Keep only Message=${msg}`);
-  await expect(keepOnly).toBeVisible();
+  await rightClick(msgCell, keepOnly);
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
@@ -100,8 +116,9 @@ test("a cell's right-click keeps only its value, and the query clears again", as
     })
     .toEqual([msg]);
 
-  await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'));
-  await menuEntry(page, "Clear the query").click();
+  const clear = menuEntry(page, "Clear the query");
+  await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
+  await clear.click();
   await expect(query).toHaveValue("");
   // With no query at all, every line this launch wrote.
   await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);

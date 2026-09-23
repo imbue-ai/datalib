@@ -141,10 +141,11 @@ so a store with only a server launch in it is all `info` and `warn`.
 ## Reading it
 
 **In the app.** The log is a card, `logView({ run, step, launch })`,
-so it sits in the URL like any other. Manage opens it: **Server log**
-on the header (this server's launch, with earlier launches, the pages
-of the app and the runs in the picker), **Show log** on a step's menu
-(its newest attempt), a double-click on a Failed row. Selecting a line
+so it sits in the URL like any other. **Logs** in the status bar opens
+it on everything (the picker holds the runs, this server's launch and
+earlier ones, and the pages of the app); Manage opens it through
+**Show log** on a step's menu (its newest attempt) and a double-click
+on a Failed row. Selecting a line
 opens `logLineView(seq)` beside it: the whole message, the fields as a
 tree with copy and keep / exclude, the source link at the process's
 commit, both clocks. The grid shows Time, Step, Level, Stream, Source,

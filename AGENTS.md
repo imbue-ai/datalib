@@ -80,6 +80,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
 - [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
 - [`docs/dev/audit_2026-09-21_fcis.md`](docs/dev/audit_2026-09-21_fcis.md) — the tree read against `style.md`'s functional-core rule: where the split exists, where it doesn't, and the todo list. A record, not reference.
+- [`docs/dev/audit_2026-09-23_live_updates.md`](docs/dev/audit_2026-09-23_live_updates.md) — where the UI redraws, rescrolls or remounts what is under the pointer while a sync runs, and the three rules that would stop it. A record, not reference.
 
 **User-facing**
 
