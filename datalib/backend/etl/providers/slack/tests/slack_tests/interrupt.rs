@@ -87,8 +87,11 @@ fn write_fixture(api: &Path, channels: &[&str]) {
     }
 }
 
-/// Raises the stop on the first per-channel tick — what the SIGINT handler
-/// does, at a point the test controls.
+/// Raises the stop on the download's first progress tick — what the SIGINT
+/// handler does, at a point the test controls. The first tick now lands
+/// part-way through the first channel rather than at its end, so this
+/// asserts the stronger thing: the channel already in flight still
+/// finishes, and none after it starts.
 struct StopOnFirstChannel(StopFlag);
 
 impl ProgressSink for StopOnFirstChannel {

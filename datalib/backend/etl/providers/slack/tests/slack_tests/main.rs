@@ -11,5 +11,6 @@ mod history_prune;
 mod interrupt;
 mod playback_roundtrip;
 mod probe;
+mod progress_countdown;
 mod slack_render;
 mod slack_translate;

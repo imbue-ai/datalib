@@ -246,6 +246,26 @@ still carries a delta, `Event::ProgressInc`, is summed per step in
 lossless, which is what makes the coalescing correct rather than merely
 cheap.
 
+### One bar per step, and why a download must use `RunBar`
+
+From those two events the sink derives the pair a reader actually wants:
+`done`, the increments so far, and `queued`, what the announced total
+leaves. `queued` is the "N queued" the Manage screen shows.
+
+The trap is that `done` accumulates across **everything** the step
+reported, while `total` is simply whichever length it announced last —
+and the runner relabels every event to the step that emitted it, so a
+step cannot have two independent bars even if its code looks like it
+does. Two bars each announcing their own size therefore pin `queued` at
+zero from the second one onward: `done` already carries the first bar's
+work, and the subtraction saturates.
+
+So a download reports through one `datalib_etl::progress::RunBar` for
+the whole run, whose total only ever grows — each phase adding what it
+has learned it will do. Announcing no total at all is fine and means
+"size unknown"; the sink then publishes no `queued`, which is not the
+same as publishing zero, because zero means finished.
+
 ## The run record
 
 `system/dag_state.json` must carry the plan before anything runs, a terminal

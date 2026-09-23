@@ -19,6 +19,7 @@ use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::{latchkey_curl, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl::progress::RunBar;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -192,6 +193,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // downloads insert into it.
     let mut blake3_by_file = db.load_attachment_blake3s().await?;
 
+    // Nothing is known before the org listing returns, so the bar
+    // starts with no total rather than a guess.
+    let bar = RunBar::new(&opts.progress, 0);
+
     let work = async {
         // The org listing goes first on purpose: it doubles as an
         // explicit credential preflight, so a missing latchkey service
@@ -308,7 +313,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &orgs,
                 &only,
                 &mut summary,
-                &opts.progress,
+                &bar,
                 &now,
                 &mut forbidden_orgs,
             )
@@ -316,10 +321,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
 
         if !opts.conv_uuids.is_empty() {
-            opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
+            bar.expect(opts.conv_uuids.len() as u64);
             for raw in &opts.conv_uuids {
-                opts.progress.inc(1);
-                opts.progress.set_message(raw);
+                bar.did(1);
+                bar.doing(raw);
                 let target = datalib_etl::ids::normalize_id_token(raw);
                 let outcome = fetch_single(
                     &mut client,
@@ -507,18 +512,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             summary.pruned += db.prune_org_conversations(org_uuid, &listed).await?;
         }
 
-        // Pass 2: fetch. The outer bar's length is the sum across all
-        // orgs and advances once per chat — so a quick glance answers
-        // "how close is the whole sync to done?". Each org also gets
-        // its own inner bar (mirroring the per-channel pattern in
-        // slack) so the current-org context stays visible.
+        // Pass 2: fetch. The sum across all orgs, ticking once per chat,
+        // so a glance answers "how close is the whole sync to done?".
+        // The org is the bar's message, not a bar of its own — that is
+        // the backwards jump Pass 1 above is written to avoid.
         let total: usize = plans.iter().map(|p| p.ordered.len()).sum();
-        opts.progress.set_length(Some(total as u64));
+        bar.expect(total as u64);
         'orgs: for plan in &plans {
-            let inner = opts
-                .progress
-                .child(&format!("claude org: {}", plan.org_name));
-            inner.set_length(Some(plan.ordered.len() as u64));
             for item in &plan.ordered {
                 // Asked to stop: the conversation that just landed sealed
                 // with its blobs, so end here.
@@ -529,11 +529,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
-                inner.inc(1);
-                inner.set_message(uuid);
-                opts.progress.inc(1);
-                opts.progress
-                    .set_message(&format!("{} {uuid}", plan.org_name));
+                bar.did(1);
+                bar.doing(&format!("{} {uuid}", plan.org_name));
                 match get_conversation_with_403_retry(&mut client, &plan.org_uuid, uuid).await {
                     Ok(outcome) => {
                         summary.forbidden_retry_attempts += outcome.retries as u64;
@@ -578,13 +575,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
             }
-            inner.finish_and_clear();
         }
         report_forbidden_orgs(db.pool(), &forbidden_orgs).await;
         Ok(())
     };
 
     let result = work.await;
+    bar.finish();
     summary.total = summary.fetched + summary.skipped;
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
@@ -600,7 +597,7 @@ async fn sync_projects(
     orgs: &[Value],
     only: &HashSet<String>,
     summary: &mut FetchSummary,
-    progress: &datalib_etl::progress::Progress,
+    bar: &RunBar,
     now: &IsoOffsetTimestamp,
     forbidden_orgs: &mut BTreeMap<String, String>,
 ) {
@@ -681,14 +678,15 @@ async fn sync_projects(
             }
         };
 
-        let inner = progress.child(&format!("claude projects: {org_name}"));
-        inner.set_length(Some(listing.len() as u64));
+        // `Projects/list` is what first says how many there are, so the
+        // number arrives one org at a time.
+        bar.expect(listing.len() as u64);
         for project in &listing {
             let Some(uuid) = project.get("uuid").and_then(|v| v.as_str()) else {
                 continue;
             };
-            inner.inc(1);
-            inner.set_message(project.get("name").and_then(|v| v.as_str()).unwrap_or(uuid));
+            bar.did(1);
+            bar.doing(project.get("name").and_then(|v| v.as_str()).unwrap_or(uuid));
 
             let api_updated = project
                 .get("updated_at")
@@ -742,7 +740,6 @@ async fn sync_projects(
             }
             sleep(SLEEP_BETWEEN).await;
         }
-        inner.finish_and_clear();
     }
 
     // A UUID in `sync.project_uuids` that matched nothing is almost

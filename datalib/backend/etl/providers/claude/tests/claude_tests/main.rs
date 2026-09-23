@@ -11,4 +11,5 @@ mod claude_render;
 mod claude_translate;
 mod live;
 mod playback_roundtrip;
+mod progress_countdown;
 mod reset_and_resync;
