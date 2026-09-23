@@ -373,12 +373,11 @@ attribute.
 ### A writer's open discards the working set
 
 `doltlite_raw::open` checks `dolt_status` at every open and, if
-non-empty, runs `dolt_reset --hard` and drops any table still reported
-as `new table`, before applying any DDL. The second half is needed
-because reset leaves untracked tables alone, the way `git reset --hard`
-leaves untracked files. Doltlite 0.50.3 has a `dolt_clean()` that does
-that half itself; we still drop the tables by hand, which is a
-simplification waiting to be taken. Every commit is `-Am`, so anything left dirty here
+non-empty, runs `dolt_reset --hard` and then `dolt_clean()`, before
+applying any DDL. Both halves are needed, and they split the way git's
+do: reset restores the tracked tables and leaves an untracked one
+alone, clean takes the untracked one. A writer that died after a
+`CREATE TABLE` and before its first commit leaves exactly that. Every commit is `-Am`, so anything left dirty here
 would ride into the schema commit a moment later; that is why the
 untracked tables go too.
 
