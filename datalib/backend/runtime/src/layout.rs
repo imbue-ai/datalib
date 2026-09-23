@@ -35,9 +35,8 @@ pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 pub const JOBS_DB: &str = "jobs.doltlite_db";
 /// The bytes-on-disk timeseries, relative to `system/`. Its own file
 /// for the reason every store here has one: doltlite's working set is
-/// per file and branch, and every store here is written on `main`, so a
-/// sample landing between two job transitions would be swept into
-/// whichever commit came next. Nothing commits this one at
+/// per file and branch, so a sample landing between two job transitions
+/// would be swept into whichever commit came next. Nothing commits this one at
 /// all — the rows are the history.
 pub const USAGE_DB: &str = "usage.doltlite_db";
 pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";

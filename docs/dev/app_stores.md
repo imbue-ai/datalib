@@ -35,9 +35,8 @@ wrote (`datalib_store_meta::guard`; the app server then boots only to
 show the screen that says so, and `datalib-dag` refuses the root).
 
 One writer per file, and it is load-bearing: doltlite's working set is
-per *file and branch* and shared across processes, and every store's
-writer is on `main`, so two writers on one file commit each other's
-in-flight rows. The `ingest` step owns its group's
+per *file and branch* and shared across processes, so two writers that
+land on one branch commit each other's in-flight rows. The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
 the index; `datalib-http` owns feedback, jobs, usage and remote media;
 the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every

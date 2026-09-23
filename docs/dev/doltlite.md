@@ -31,14 +31,15 @@ Whichever you run, the argv is identical to `sqlite3`:
 surface. The recipes below are written with the `doltlite` name for
 brevity; type `datalib-doltlite` if that is what you installed.
 
-> **Always pass `-readonly`** when you're just exploring. A second
-> connection does **not** get a branch of its own — it opens on `main`,
-> the same branch the pipeline writes, and shares that branch's
-> uncommitted working set. Its `dolt_commit -Am` therefore sweeps up
-> whatever a live run has in flight, and two writers committing at once
-> fail each other with `commit conflict` and `database is locked`. This
-> is the scenario the writer lock in `datalib_etl::doltlite_raw` exists
-> to prevent on the Rust side.
+> **Always pass `-readonly`** when you're just exploring. A writable
+> CLI session does **not** get a branch of its own — it lands on the
+> file's default branch, `main`, which is the one every reader reads
+> and the one a sync fast-forwards when it seals. Its `dolt_commit -Am`
+> sweeps up whatever is in that branch's working set, and it contends
+> with a live run for the file: `commit conflict` and `database is
+> locked`, on both sides. The writer lock in
+> `datalib_etl::doltlite_raw` keeps a second *Rust* writer out; nothing
+> keeps the CLI out but you.
 
 ## Getting the data out: export to plain SQLite
 
@@ -134,9 +135,14 @@ doltlite -readonly slack/ingest/entities.doltlite_db "SELECT active_branch();"
 doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_branches;"
 ```
 
-Every connection opens on `main`, whatever a previous one checked out —
-the active branch is per connection and is not written down in the
-file. **To look at any other branch you have to give up `-readonly`**:
+Every connection lands on the file's stored default branch, `main`,
+whatever a previous one was on — a connection's branch is per
+connection and is not written into the file. So `dolt_log()` and a
+plain `SELECT` show you `main`: sealed state, not whatever a run has in
+flight on `datalib_writer` (`etl/README.md` §"A writer works on its own
+branch" for why that branch exists).
+
+**To look at any other branch you have to give up `-readonly`**:
 `dolt_checkout` on a non-default branch needs a writable connection and
 otherwise fails with `checkout failed`. Since a writable open is the
 thing this page keeps telling you not to do against a live store, copy
