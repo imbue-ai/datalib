@@ -119,4 +119,29 @@ async fn a_cancel_takes_a_step_that_will_not_stop_and_its_child_with_it() {
     // It is reparented and reaped rather than killed instantly, hence a
     // wait rather than a bare assertion.
     until("the step's child to go with the run", || !alive(child_pid)).await;
+
+    // And the run store's sentence is finished. The runner here was
+    // killed rather than allowed to drain, so it recorded none of this
+    // itself — without the server closing up after it, the Manage screen
+    // reads `running` for a run whose processes are all gone.
+    let run = datalib_runs::runs(&root, None, 10)
+        .await
+        .into_iter()
+        .find(|r| r.run_id == queued.id)
+        .expect("the runner recorded a run");
+    assert!(
+        run.finished_at_utc.is_some(),
+        "a cancelled run must not be left open"
+    );
+    let snapshot = datalib_runs::snapshot_of(&root, Some(&queued.id)).await;
+    let live: Vec<&str> = snapshot
+        .steps
+        .iter()
+        .filter(|s| !datalib_runs::is_terminal(&s.state))
+        .map(|s| s.step.as_str())
+        .collect();
+    assert!(
+        live.is_empty(),
+        "steps still reading live after the run closed: {live:?}"
+    );
 }

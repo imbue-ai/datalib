@@ -10,7 +10,7 @@ use datalib_flock::FileLock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::{is_terminal, runs_path, Retention, INDEXES, SCHEMA_VERSION};
+use crate::{is_terminal, runs_path, LiveState, Retention, INDEXES, SCHEMA_VERSION};
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow, StorePart,
 };
@@ -1157,6 +1157,118 @@ async fn begin_run(
         .await?;
     }
     bump(tx, StorePart::Runs).await
+}
+
+/// What [`close_abandoned_run`] found to close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClosedRun {
+    /// Whether the run itself was still open. False when the runner
+    /// closed its own books, which is the ordinary case.
+    pub run_was_open: bool,
+    /// Steps that were still `pending` or `running`.
+    pub steps_closed: u64,
+}
+
+impl ClosedRun {
+    pub fn changed_anything(self) -> bool {
+        self.run_was_open || self.steps_closed > 0
+    }
+}
+
+/// Close a run whose runner is gone, so nothing reads `running` for ever.
+///
+/// A runner normally closes its own books. One that was SIGKILLed ran no
+/// code to do it with, and the row it leaves behind is what the Manage
+/// screen joins against — so whoever outlives the runner has to finish
+/// the sentence. Idempotent: a run already closed is left alone and
+/// reported as such.
+///
+/// `step_state` is the caller's word for what a step that never reported
+/// became, because the scheduler's vocabulary is not this crate's
+/// business (see [`crate::LiveState`]). `why` goes on each step's
+/// `error`, so a person can tell a step that stopped itself from one the
+/// server gave up on.
+///
+/// Processes are deliberately untouched. This crate would have to invent
+/// an exit code or a signal for them, and it does not know one: the
+/// runner records how a step ended when it gets to wait for it, and when
+/// it does not, "we never found out" is the honest answer.
+pub async fn close_abandoned_run(
+    data_root: &Path,
+    run_id: &str,
+    step_state: &str,
+    why: &str,
+) -> Result<ClosedRun, sqlx::Error> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Ok(ClosedRun::default());
+    }
+    let pool = open_existing(&path).await?;
+    let out = close_abandoned_run_in(&pool, run_id, step_state, why).await;
+    pool.close().await;
+    out
+}
+
+async fn close_abandoned_run_in(
+    pool: &SqlitePool,
+    run_id: &str,
+    step_state: &str,
+    why: &str,
+) -> Result<ClosedRun, sqlx::Error> {
+    let (at, tz_offset) = now_split();
+    let mut tx = pool.begin().await?;
+
+    let run_was_open = sqlx::query(
+        "UPDATE runs SET finished_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
+         WHERE run_id = ? AND finished_at_utc IS NULL",
+    )
+    .bind(&at)
+    .bind(&tz_offset)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+
+    // The non-terminal states, from the one place that names them, so a
+    // new `LiveState` variant is covered without editing this.
+    let live: Vec<&'static str> = <LiveState as strum::VariantArray>::VARIANTS
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let holes = std::iter::repeat_n("?", live.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Audited: the only interpolation is `holes`, which is placeholders
+    // built from a count; every value below is bound.
+    let sql = format!(
+        "UPDATE step_runs SET state = ?, finished_at_utc = coalesce(finished_at_utc, ?), \
+           error = coalesce(error, ?), updated_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
+         WHERE run_id = ? AND state IN ({holes})"
+    );
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(step_state)
+        .bind(&at)
+        .bind(why)
+        .bind(&at)
+        .bind(&tz_offset)
+        .bind(run_id);
+    for state in &live {
+        q = q.bind(*state);
+    }
+    let steps_closed = q.execute(&mut *tx).await?.rows_affected();
+
+    if run_was_open {
+        bump(&mut tx, StorePart::Runs).await?;
+    }
+    if steps_closed > 0 {
+        bump(&mut tx, StorePart::StepRuns).await?;
+    }
+    tx.commit().await?;
+    Ok(ClosedRun {
+        run_was_open,
+        steps_closed,
+    })
 }
 
 /// Count one write to `what`, inside the transaction that made it.

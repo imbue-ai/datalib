@@ -229,6 +229,37 @@ where
     }
 }
 
+/// Finish the run store's sentence when the runner could not.
+///
+/// A runner that exits closes its own run; one that was SIGKILLed —
+/// the last rung of a cancel, or a server that went down with it — ran
+/// no code to do it with, and leaves `runs.finished_at_utc` NULL and
+/// its steps reading `running` for ever. The Manage screen joins
+/// against exactly those rows, so the server closes them on the
+/// runner's behalf once it knows the runner is gone.
+///
+/// A no-op in the ordinary case, and silent in it: only a run that was
+/// genuinely left open says anything.
+async fn close_the_books(root: &std::path::Path, run_id: &str, why: &str) {
+    match datalib_runs::close_abandoned_run(
+        root,
+        run_id,
+        datalib_dag::run_state::RunState::Stopped.as_str(),
+        why,
+    )
+    .await
+    {
+        Ok(closed) if closed.changed_anything() => tracing::warn!(
+            run = %run_id,
+            run_was_open = closed.run_was_open,
+            steps_closed = closed.steps_closed,
+            "the runner left its run open; closing it here"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::error!(run = %run_id, "could not close the run store's run: {e}"),
+    }
+}
+
 async fn finish(repo: &DynAppRepo, job_id: &str, state: JobState, msg: Option<&str>) {
     must_write("finish_job", job_id, || repo.finish_job(job_id, state, msg)).await;
 }
@@ -255,6 +286,7 @@ async fn recover(repo: &DynAppRepo, cfg: &WorkerConfig) {
         .filter(|j| j.job_state() != Some(JobState::Pending))
     {
         let (state, why) = what_became_of(&cfg.root, job).await;
+        close_the_books(&cfg.root, &job.id, &why).await;
         tracing::warn!(
             "worker: job {} recovered as {}: {why}",
             job.id,
@@ -554,6 +586,14 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     for h in readers {
         let _ = h.join();
     }
+    // Before the job's own row, so a reader woken by the job's terminal
+    // event does not find the run still open.
+    close_the_books(
+        &cfg.root,
+        &job.id,
+        "the runner exited without closing this run; the server closed it",
+    )
+    .await;
     if cancel.is_some() {
         repo.finish_job(&job.id, JobState::Canceled, Some("canceled by user"))
             .await?;

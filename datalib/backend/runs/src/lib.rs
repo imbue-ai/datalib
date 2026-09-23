@@ -18,9 +18,9 @@ pub use datalib_runtime::build_id::{
 };
 pub use query::{log_query, LogQuery, QueryError};
 pub use store::{
-    canonical_labels, latest_metric, log_after, log_line, new_process_id, open_or_create, process,
-    processes, runs, snapshot, snapshot_of, versions, LogLine, LogSink, ProcessLogWriter,
-    RunWriter, Snapshot,
+    canonical_labels, close_abandoned_run, latest_metric, log_after, log_line, new_process_id,
+    open_or_create, process, processes, runs, snapshot, snapshot_of, versions, ClosedRun, LogLine,
+    LogSink, ProcessLogWriter, RunWriter, Snapshot,
 };
 pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 
