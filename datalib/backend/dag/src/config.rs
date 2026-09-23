@@ -1203,6 +1203,19 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
 /// other bare name: `binary_dir`, then `PATH`.
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
+/// Built-in steps that read their inputs off disk rather than at a pinned
+/// commit: the qmd index globs each render tree's `.md` files, and
+/// perseus renders straight from its ingest's TEI files. `(group type,
+/// function)`, `None` matching any type.
+const UNPINNED_BUILTINS: &[(Option<&str>, &str)] =
+    &[(None, "qmd_index"), (Some("perseus"), "render_markdown")];
+
+fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
+    UNPINNED_BUILTINS
+        .iter()
+        .any(|&(t, f)| function == Some(f) && (t.is_none() || t == group_type))
+}
+
 /// The one function a diff group's step performs: the tree the fan-ins
 /// read a group's documents from is `<group>/render_markdown`, whoever
 /// wrote it.
@@ -1251,6 +1264,7 @@ fn spec_of(
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
+    spec.reads_pinned = e.command.is_some() || !reads_unpinned(group_type, e.function.as_deref());
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -1879,6 +1893,71 @@ mod tests {
                 described[i].fingerprint_material()
             );
         }
+    }
+
+    /// The built-in steps that read files off disk are the ones the runner
+    /// keeps apart from their writers; everything else reads pinned. A
+    /// custom command is taken at its word, which is to say pinned.
+    #[test]
+    fn the_built_in_steps_that_read_off_disk_are_marked_unpinned() {
+        let cfg: DagConfig = toml::from_str(
+            r#"
+            [[groups]]
+            id = "iliad"
+            type = "perseus"
+
+            [[groups]]
+            id = "mail"
+            type = "email"
+
+            [[groups]]
+            id = "unified_index"
+
+            [[steps]]
+            group = "iliad"
+            function = "ingest"
+
+            [[steps]]
+            group = "iliad"
+            function = "render_markdown"
+            inputs = ["iliad/ingest"]
+
+            [[steps]]
+            group = "mail"
+            function = "ingest"
+
+            [[steps]]
+            group = "mail"
+            function = "render_markdown"
+            inputs = ["mail/ingest"]
+
+            [[steps]]
+            group = "unified_index"
+            function = "grid_index"
+            inputs = ["iliad/render_markdown", "mail/render_markdown"]
+
+            [[steps]]
+            group = "unified_index"
+            function = "qmd_index"
+            inputs = ["iliad/render_markdown", "mail/render_markdown"]
+
+            [[steps]]
+            id = "custom/qmd"
+            command = "my-indexer"
+            inputs = ["mail/render_markdown"]
+            "#,
+        )
+        .expect("parse");
+        let unpinned: Vec<String> = to_specs(&cfg)
+            .expect("to_specs")
+            .into_iter()
+            .filter(|s| !s.reads_pinned)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(
+            unpinned,
+            ["iliad/render_markdown", "unified_index/qmd_index"]
+        );
     }
 
     #[test]

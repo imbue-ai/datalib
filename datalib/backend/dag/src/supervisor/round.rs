@@ -324,6 +324,7 @@ impl Runner {
             data_root: self.data_root.clone(),
             inputs: graph.resolved_inputs[i].clone(),
             changed_inputs,
+            reads: paths_of(graph, consumed).into_iter().collect(),
             checkpoint: checkpoint.clone(),
             progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
             stop: StopSignal::new(stop),
@@ -600,6 +601,7 @@ fn shape_of(graph: &Graph) -> Shape {
             writes: i,
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
+            pins_reads: spec.reads_pinned,
             class: if spec.inputs.is_empty() {
                 Class::Network
             } else if spec.group_type.is_none() {

@@ -165,6 +165,7 @@ impl Runner {
                 data_root: self.data_root.clone(),
                 inputs: vec![],
                 changed_inputs: vec![],
+                reads: BTreeMap::new(),
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
                 checkpoint: crate::step::CheckpointSink::disconnected(),
                 stop: StopSignal::never(),
