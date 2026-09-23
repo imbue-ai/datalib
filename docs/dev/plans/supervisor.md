@@ -813,18 +813,79 @@ last.
    is its parent's". Startup closes the invocations a dead loop left
    open.
 
-   **4b. The server runs the loop.** `datalib-http` takes `runner-lock`
-   for its life and runs the loop in-process in place of `worker.rs`; a
-   Sync click writes a request row. Because the lock is held for good,
-   "the runner lock is held" stops meaning "a sync is running":
-   `DagRunInfo.live`, `usage::pipeline_is_running` and the e2e
-   `settleRunner` read "a request is open" instead. Each step is spawned
-   with the parent-watch pipe to the server (`datalib_parent_watch`,
-   which `datalib-step` honours), so a SIGKILLed server leaves no step
-   running; `CHILD_PIDS` and the `exit` paths become the host's
-   shutdown, not a process-wide "kill all". `sync_jobs` and its
-   endpoints become a view over `requests`; `dag_state.json` goes, and
-   `watch.rs` gains the store's parts.
+   **4b. The server runs the loop** (agreed 2026-09-23; this is the
+   brief for whoever builds it). What the user sees: Sync on a second
+   source starts at once beside the first, instead of reading Queued
+   until the first is done. What the Manage screen shows is otherwise
+   unchanged — that is 4c.
+
+   - *The server holds `runner-lock` for its life and runs the loop in
+     busy periods.* Idle, it polls the store's `data_version`; when a
+     request is open it loads the config (once per busy period, as a job
+     does today), mints a run id, starts a `RunStoreSink` and a
+     `current_run`, and calls `Runner::serve` until no request is open.
+     One busy period is one run. The step environment the binary builds
+     today (`PATH` with the binary dir, `DATALIB_DAG_NOW`,
+     `DATALIB_DAG_RUN_ID`, `RUST_LOG`, the checkpoint cadence) moves
+     into the library so the binary and the server build it the same
+     way. With the server up, every CLI sync is a client of it.
+   - *`sync_jobs` stays as the UI's record, mirrored from requests.*
+     `POST /api/sync/jobs` writes a request row and a job row with the
+     same id. The host keeps the job row in step: `running` when the
+     request is admitted, then `done` / `failed` / `canceled` from its
+     outcome, and `parent_job_id` set to the busy period's run id. So
+     the pill, Stop, banners and the job SSE frames keep working; the
+     host sends the frames the worker used to. Cancel is
+     `request_stop`. `status.rs` learns one thing: a job belongs to a
+     run if its id **or its `parent_job_id`** is that run
+     (`effective_run`, `spoken_for`), and `dag_record`'s progress gate
+     keeps comparing run ids, which are now busy periods.
+   - *Reset jobs run between busy periods.* They need the root to
+     themselves and the server holds the lock, so the host runs a
+     pending reset job when idle (`Runner::reset`).
+   - *The cancel ladder moves into the library, per invocation.* The
+     worker's three rungs (`worker.rs::next_stage`, aimed at the
+     `datalib-dag` process) become: a stop sends SIGINT to the step's
+     group, and SIGKILL after the grace if it is still there — in
+     `run_subprocess`'s stop task, so the CLI gets it too.
+     `http_tests::worker_cancel` is the test to keep green.
+   - *"A sync is running" comes from the host, not the lock.*
+     `DagRunInfo.live` (`http/src/lib.rs` ~1271),
+     `usage::pipeline_is_running` (`usage.rs` ~489) and the e2e
+     `settleRunner` (`ui/tests/e2e/grid-helpers.ts` ~524) read the
+     host's "in a busy period"; with no server, they fall back to "the
+     lock is held", which is a CLI run.
+   - *`worker.rs` goes.* Its startup recovery is replaced by a better
+     property: a request a dead server left open is still a row, and
+     the next boot runs it. A job row still `running` from a dead server
+     is set back to match its request.
+   - *Steps die with the server already* (#710): each step watches the
+     process that spawned it and stops itself if it dies, even by
+     SIGKILL. Nothing to add, but `CHILD_PIDS` / `kill_children` become
+     the host's shutdown path, not a process-wide "kill all".
+
+   What the 2026-09-23 map of the server's sync path found, which a
+   naive version would break silently:
+   - Three places read "`runner-lock` is held" as "a sync is running"
+     (above). A server holding it for good makes them always true.
+   - "Job id = run id" is load-bearing in `status.rs`
+     (`effective_run`, `spoken_for`, `claimed_by`), `dag_record`'s
+     progress gate (`lib.rs` ~1287: activity chips and `fraction`
+     silently go empty if it never matches), `live_run_id` /
+     `last_run_id`, and the `run=` stamp in store commits.
+   - The UI has two change signals: unnamed SSE job frames (the worker
+     sends them; `live.ts`, `SyncProgressChrome.vue`,
+     `SourcesCard.ce.vue`'s `mergeJob`) and `watch.rs`'s
+     `table_changed` for `dag_state.json` and `runs.sqlite`. Rows stop
+     updating live if either goes quiet.
+   - The legacy `/sources` page (`SourcesView.vue`,
+     `sources-view.spec.ts`) is a second job-driven UI.
+   - `data-sources-control.spec.ts`'s `test.fail()` on "a source started
+     during another's sync runs beside it" starts passing, which
+     Playwright reports as a failure: take the marker off.
+   - The Playwright suite only runs in an unfiltered `bazelisk test
+     //...` or `bazelisk test //datalib/ui:e2e_test`; the hermetic line's
+     `-external` filter drops it. Run it before pushing.
 
    **4c. Rows read the supervisor.** `steps.state` is what a Manage row
    says; `status.rs`'s inference (`reached_since`, `spoken_for`,
