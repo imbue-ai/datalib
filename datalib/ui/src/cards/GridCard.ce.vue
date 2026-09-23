@@ -47,6 +47,8 @@ import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import { redrawChanged } from "@/grid/redrawChanged";
+import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
 import type { CardCtx } from "./types";
 
 const props = defineProps<{
@@ -163,10 +165,17 @@ const qmdSummaryTitle = computed(() => {
     : "Every indexed document has embeddings.";
 });
 
-// Repaint the rows: the two index columns' formatters read `qmdState`,
-// which the grid has no way to observe on its own.
+// Repaint the two index columns, which read `qmdState`, a map the grid
+// has no way to observe on its own. Only those cells: a row rebuilt
+// under the pointer loses the click aimed at it.
 function refreshIndexCells() {
-  vueGrid?.slickGrid.invalidate();
+  const grid = vueGrid?.slickGrid;
+  if (!grid) return;
+  const cells = ["qmd_indexed", "qmd_embedded"]
+    .map((id) => grid.getColumnIndex(id))
+    .filter((i): i is number => i != null && i >= 0);
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) for (const c of cells) grid.updateCell(row, c);
 }
 
 // Tri-state cell: true → ✅, false → ❌, null/unknown → an em dash. The
@@ -707,18 +716,55 @@ function applyPresetColumns() {
   applyColumns([...ordered, ...rest]);
 }
 
-// Hand the grid the new rows, then shape the columns and the sort
-// around them.
+/// The rows last handed to the grid, and the query they answer. A new
+/// answer to the same query is a refresh: the index moved under a view
+/// the person is still looking at.
+let handed: Handed = new Map();
+let handedQuery: string | null = null;
+
+// A new query replaces the rows and shapes the columns, the sort and
+// the scroll around them. A refresh of the one shown changes only the
+// rows that changed, and leaves the rest to the person.
 watch(rows, (r) => {
   if (!vueGrid) return;
-  vueGrid.dataset = r;
-  applyAdaptiveVisibility();
-  applyDefaultSort();
+  const refresh = handedQuery !== null && handedQuery === shownQuery.value;
+  handedQuery = shownQuery.value;
+  if (refresh) {
+    const next = patchRows(handed, r, rowKey);
+    handed = next.handed;
+    applyPatch(next.patch);
+  } else {
+    handed = handedOf(r, rowKey);
+    vueGrid.dataset = r;
+    applyAdaptiveVisibility();
+    applyDefaultSort();
+  }
   tryRestoreSelection();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
   refreshQmdState();
 });
+
+/// Apply a refresh in place. Rows inserted above the viewport would
+/// push what the person is reading down, so the row at the top is held
+/// at the top.
+function applyPatch(patch: RowPatch<SearchRow>) {
+  if (!vueGrid || isEmpty(patch)) return;
+  const { dataView, slickGrid: grid } = vueGrid;
+  const top = grid.getViewport().top;
+  const anchor = rowData(top)?.uuid ?? null;
+  redrawChanged(grid, dataView, () => {
+    dataView.beginUpdate();
+    for (const id of patch.removed) dataView.deleteItem(id);
+    for (const row of patch.changed) dataView.updateItem(row.uuid, row);
+    for (const row of patch.added) dataView.addItem(row);
+    // A new or changed row takes its place in whatever order is showing.
+    dataView.reSort();
+    dataView.endUpdate();
+  });
+  const moved = anchor ? dataView.getRowById(anchor) : undefined;
+  if (moved != null && moved !== top) grid.scrollRowToTop(moved);
+}
 
 onMounted(async () => {
   try {
@@ -1299,6 +1345,8 @@ function createGrid() {
   // The rows may already be loaded by the time the grid exists — the
   // columns arrive with the first results — so this is the moment the
   // `rows` watcher would otherwise have.
+  handed = handedOf(rows.value, rowKey);
+  handedQuery = shownQuery.value;
   applyAdaptiveVisibility();
   applyDefaultSort();
   tryRestoreSelection();

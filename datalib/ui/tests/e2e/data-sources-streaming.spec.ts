@@ -17,6 +17,9 @@
 //   3. **The Pipeline table redraws only the rows that changed.** Its
 //      rows are refetched several times a second while a run goes, and
 //      a row redrawn under the pointer loses the click aimed at it.
+//   4. **A refresh changes only what changed.** A column the person
+//      showed stays shown, and a row the index did not touch keeps its
+//      element while new ones arrive.
 //
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
@@ -38,6 +41,8 @@ import {
   statusOf,
   MANAGE_WITH_CONFIG,
   TABLE_ROWS,
+  SEARCH_ROWS,
+  type GridApi,
 } from "./grid-helpers";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -117,6 +122,9 @@ async function rowsKeptAcross(page: Page, frames: number): Promise<string[]> {
     els.filter((el) => el.hasAttribute("data-probe")).map((el) => el.dataset.key ?? ""),
   );
 }
+/// The Explore grid's hidden columns.
+const hiddenColumns = (grid: Page) =>
+  grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.hiddenColumns());
 
 /// What the runner says each step is doing right now.
 async function currentStates(page: Page): Promise<Record<string, string | null>> {
@@ -239,6 +247,19 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
         `(runner: ${JSON.stringify(when)})`,
     ).toBe("running");
 
+    // ── 4. the person's columns outlive a refresh ───────────────────
+    // Every row is from one account, so the grid hides Account on its
+    // own. Show it the way the column picker does, and mark the rows'
+    // elements to see which ones the refreshes below redraw.
+    expect(await hiddenColumns(grid)).toContain("account");
+    await grid.evaluate(() =>
+      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns(["account"]),
+    );
+    expect(await hiddenColumns(grid)).not.toContain("account");
+    await grid
+      .locator(SEARCH_ROWS)
+      .evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
+
     // ── 1. the Pipeline table shows the whole chain in flight ───────
     // Every row Running in one reading: both downloads, the render
     // behind each, and the index behind both. A download counts its
@@ -296,5 +317,14 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
         message: "the grid stopped following the index after its first refresh",
       })
       .toBe(search.rows.length);
+    expect(
+      await hiddenColumns(grid),
+      "a refresh of the same query hid a column the person showed",
+    ).not.toContain("account");
+    const keptSearch = await grid
+      .locator(`${SEARCH_ROWS}[data-probe]`)
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-row")));
+    console.log(`[e2e] search rows kept across the refreshes: ${JSON.stringify(keptSearch)}`);
+    expect(keptSearch.length, "a refresh of the same query redrew every row").toBeGreaterThan(0);
   });
 });
