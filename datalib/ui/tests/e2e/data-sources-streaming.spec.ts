@@ -14,7 +14,10 @@
 //      them finishes.** The grid was opened and searched before the sync
 //      began, and is never touched again; it refetches itself when the
 //      index moves.
-//   3. **A refresh changes only what changed.** A column the person
+//   3. **The Pipeline table redraws only the rows that changed.** Its
+//      rows are refetched several times a second while a run goes, and
+//      a row redrawn under the pointer loses the click aimed at it.
+//   4. **A refresh changes only what changed.** A column the person
 //      showed stays shown, and a row the index did not touch keeps its
 //      element while new ones arrive.
 //
@@ -37,6 +40,7 @@ import {
   stampsBefore,
   statusOf,
   MANAGE_WITH_CONFIG,
+  TABLE_ROWS,
   SEARCH_ROWS,
   type GridApi,
 } from "./grid-helpers";
@@ -103,6 +107,21 @@ async function readRows(page: Page, ids: readonly string[]) {
   return { status, activity };
 }
 
+/// Mark every Pipeline row's element, let `frames` more answers for the
+/// rows land, and name the rows whose element is still the one marked:
+/// a row the grid redraws is a new element.
+async function rowsKeptAcross(page: Page, frames: number): Promise<string[]> {
+  const rows = page.locator(TABLE_ROWS);
+  await rows.evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
+  for (let i = 0; i < frames; i++) {
+    await page.waitForResponse((r) => r.url().includes("/api/manage/rows"), { timeout: 30_000 });
+  }
+  // The last answer is committed after it arrives, and painted after that.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+  return rows.evaluateAll((els) =>
+    els.filter((el) => el.hasAttribute("data-probe")).map((el) => el.dataset.key ?? ""),
+  );
+}
 /// The Explore grid's hidden columns.
 const hiddenColumns = (grid: Page) =>
   grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.hiddenColumns());
@@ -228,7 +247,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
         `(runner: ${JSON.stringify(when)})`,
     ).toBe("running");
 
-    // ── 3. the person's columns outlive a refresh ───────────────────
+    // ── 4. the person's columns outlive a refresh ───────────────────
     // Every row is from one account, so the grid hides Account on its
     // own. Show it the way the column picker does, and mark the rows'
     // elements to see which ones the refreshes below redraw.
@@ -268,6 +287,11 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
         throw new Error(`${e.message}\nlast reading: ${JSON.stringify(last, null, 2)}`);
       });
 
+    // ── 3. a refetch redraws only what changed ──────────────────────
+    const kept = await rowsKeptAcross(page, 3);
+    console.log(`[e2e] rows kept across three refetches: ${JSON.stringify(kept)}`);
+    expect(kept, "every Pipeline row was redrawn by a refetch").toContain(`group:${SOURCES[0]}`);
+
     // ── let every row finish ────────────────────────────────────────
     release();
     for (const id of STEPS) {
@@ -297,10 +321,10 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
       await hiddenColumns(grid),
       "a refresh of the same query hid a column the person showed",
     ).not.toContain("account");
-    const kept = await grid
+    const keptSearch = await grid
       .locator(`${SEARCH_ROWS}[data-probe]`)
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-row")));
-    console.log(`[e2e] search rows kept across the refreshes: ${JSON.stringify(kept)}`);
-    expect(kept.length, "a refresh of the same query redrew every row").toBeGreaterThan(0);
+    console.log(`[e2e] search rows kept across the refreshes: ${JSON.stringify(keptSearch)}`);
+    expect(keptSearch.length, "a refresh of the same query redrew every row").toBeGreaterThan(0);
   });
 });
