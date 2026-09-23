@@ -1,5 +1,5 @@
-// The run-log card: the Manage screen's "Server log" opens the lines
-// of the server launch serving the page in a column beside it, a
+// The run-log card: opened on the server launch serving the page, it
+// shows that launch's lines in a column beside Manage, a
 // right-click on a cell narrows the query to that cell's value (and
 // clears it again), the bar above the grid groups the lines by a
 // column, and a selected line opens in full in the next column.
@@ -26,13 +26,26 @@ const quoted = (v: string) =>
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
-/// The log opens as the column after the Manage card, titled for
-/// what it shows.
+/// The status bar's "Logs" opens the log as the column after the
+/// Manage card; picking this server's launch retitles it. The lines
+/// already shown stay until the launch's replace them, so this waits
+/// for that load to finish before anything reads a row.
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
-  await page.getByRole("button", { name: "Server log" }).click();
+  await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
   const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
+  const scope = dialog.getByLabel("Which run or launch");
+  const mine = scope.locator("option", { hasText: /this server$/ });
+  await expect(mine).toHaveCount(1);
+  const value = (await mine.getAttribute("value"))!;
+  const launch = value.replace(/^launch:/, "");
+  const loaded = page.waitForResponse(
+    (r) => r.url().includes("/api/log?") && r.url().includes(`process=${launch}`),
+  );
+  await scope.selectOption(value);
+  await loaded;
+  await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
   await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;

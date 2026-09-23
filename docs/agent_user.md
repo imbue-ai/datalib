@@ -183,7 +183,7 @@ is the log, tailable by `seq`. `GET /api/log?q=` is the same log
 across every run, in the search bar's grammar — `level:warn
 -target:sqlx "history"` — and `process:http` narrows it to what the
 server itself said (the worker, the applets, requests that failed),
-which the Manage screen shows under **Server log**. All of it is
+which the app's **Logs** shows when you pick this server's launch. All of it is
 `system/runs/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
 too.
 
