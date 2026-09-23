@@ -27,6 +27,7 @@ import {
   settleRow,
   settleRunner,
   stampOf as lastSyncedOf,
+  untilTheSecondTurns,
   stampsBefore,
   statusLog,
   statusWord,
@@ -266,21 +267,16 @@ ${applets()}`;
     await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
     const seen = (await statusLog(page, "pdfs/ingest")).slice(beforeUp);
 
-    // What the sequence must contain. "Queued" is the frame that used
-    // to be missing entirely — the click produced no visible change
-    // until the whole run was over.
-    expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
+    // What the sequence must contain: a frame from before the run was
+    // over, which used to be missing entirely — the click produced no
+    // visible change until the whole run was done. Which frame it is
+    // depends on how fast the loop takes the job on: Queued if the rows
+    // repaint first, Running if the loop does. The render row above is
+    // the one that is always Queued first, because it waits on this one.
+    expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
+      /^(Queued|Running)$/,
+    );
     expect(statusWord(seen[seen.length - 1])).toBe("Succeeded");
-
-    // "Running" stays optional, and recording the transitions is what
-    // settled *why*.
-    //
-    // The sampler this replaces guessed: "a scan of a small tree can
-    // finish inside one sample". It could not tell a status that never
-    // appeared from one it blinked past, so it had to allow both. The
-    // recorder can, and the answer is the first: on this fixture the
-    // sequence is `["Queued","Succeeded"]` — the row never paints
-    // Running at all.
 
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
@@ -635,13 +631,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
-    // A stamp is to the second, and the server's loop takes the next
-    // sync on at once: two syncs inside one second carry one stamp, and
-    // Last synced moving could not be told from it staying put.
-    const settledIn = Math.floor(Date.now() / 1000);
-    await expect
-      .poll(() => Math.floor(Date.now() / 1000), { intervals: [50] })
-      .toBeGreaterThan(settledIn);
+    await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");

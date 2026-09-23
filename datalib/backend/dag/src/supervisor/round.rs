@@ -62,6 +62,11 @@ enum Mailbox<'a> {
 struct Open {
     id: Option<String>,
     request: Request,
+    /// Whether the host has been told the loop took it on. Only once the
+    /// record has been saved with its steps in it: told sooner, a job
+    /// reads as running while the record still says its steps were not
+    /// selected.
+    told: bool,
 }
 
 /// A stopped request whose steps are still winding down.
@@ -308,6 +313,12 @@ impl Runner {
                 }
             }
             state.save(&self.data_root).context("save dag state")?;
+            for o in open.iter_mut().filter(|o| !o.told) {
+                o.told = true;
+                if let Some(id) = &o.id {
+                    self.tell(RequestEvent::Admitted { id: id.clone() });
+                }
+            }
 
             for &(r, outcome) in t.closed.iter().rev() {
                 let closed = open.remove(r);
@@ -450,11 +461,9 @@ impl Runner {
             for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
                 ever_in_scope[i] |= reached;
             }
-            if let Some(id) = &id {
-                self.tell(RequestEvent::Admitted { id: id.clone() });
-            }
             *seq += 1;
             open.push(Open {
+                told: false,
                 id,
                 request: Request {
                     roots,
@@ -1223,6 +1232,38 @@ mod tests {
                 }
             ]
         );
+    }
+
+    /// The host flips its job to running when it hears a request was taken
+    /// on, and the Manage row then reads the record. Told before the
+    /// record was saved, the row read the step as not selected by its own
+    /// job's run, and painted last week's status instead of Running.
+    #[tokio::test]
+    async fn the_host_hears_of_a_request_only_once_the_record_names_its_steps() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let (running, mut rx) = serve_telling(&f);
+        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
+
+        let b = other.open_request(&["b/raw".into()], "ui").await.unwrap();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("b to be taken on")
+                .unwrap();
+            if event == (RequestEvent::Admitted { id: b.clone() }) {
+                break;
+            }
+        }
+        let recorded = DagState::load(f.root.path())
+            .unwrap()
+            .current_run
+            .and_then(|r| r.states.get("b/raw").cloned());
+        assert_eq!(recorded.as_deref(), Some("running"));
+
+        f.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
     }
 
     /// A stop closes the request's row at once, but its host hears it is

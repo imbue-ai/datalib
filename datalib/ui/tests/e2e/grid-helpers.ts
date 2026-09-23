@@ -560,14 +560,27 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
+/// Resolves once the wall clock is in a later second than when it was
+/// called. A stamp is to the second, and the server's loop takes a sync
+/// on the moment it is asked: without this, a run started straight after
+/// another can carry the same stamp, and a settle that waits for the
+/// stamp to move waits for ever. Every stamp read before calling this is
+/// of a run already over, so a run started after it stamps later.
+export async function untilTheSecondTurns() {
+  const now = Math.floor(Date.now() / 1000);
+  await expect.poll(() => Math.floor(Date.now() / 1000), { intervals: [50] }).toBeGreaterThan(now);
+}
+
 /// Every row's stamp, keyed by id — the reading a settle compares
-/// against. Taken for the whole set before the click that starts a run.
+/// against. Taken for the whole set before the click that starts a run,
+/// which it holds until a run started then would stamp later.
 export async function stampsBefore(
   page: Page,
   ids: readonly string[],
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {};
   for (const id of ids) out[id] = await stampOf(page, id);
+  await untilTheSecondTurns();
   return out;
 }
 
