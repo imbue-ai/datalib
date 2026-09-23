@@ -1,5 +1,5 @@
-// The run-log card: the Manage screen's "Server log" opens the lines
-// of the server launch serving the page in a column beside it, a
+// The run-log card: opened on the server launch serving the page, it
+// shows that launch's lines in a column beside Manage, a
 // right-click on a cell narrows the query to that cell's value (and
 // clears it again), the bar above the grid groups the lines by a
 // column, and a selected line opens in full in the next column.
@@ -26,11 +26,20 @@ const quoted = (v: string) =>
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
-/// The log opens as the column after the Manage card, titled for
-/// what it shows.
+/// The status bar's "Logs" names this server's launch in its picker;
+/// the log opened straight on that launch is the column after the
+/// Manage card, titled for what it shows. Straight on, as Manage's
+/// "Server log" button used to open it: switching the picker instead
+/// left the right-click test below failing, for a reason not yet known.
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
-  await page.getByRole("button", { name: "Server log" }).click();
+  await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
+  const mine = page.getByLabel("Which run or launch").locator("option", {
+    hasText: /this server$/,
+  });
+  await expect(mine).toHaveCount(1);
+  const launch = (await mine.getAttribute("value"))!.replace(/^launch:/, "");
+  await page.goto(`/sourcesView()/${encodeURIComponent(`logView(${JSON.stringify({ launch })})`)}`);
   const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");

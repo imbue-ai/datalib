@@ -9,7 +9,6 @@ import {
   fetchAllJobs,
   fetchManageRows,
   fetchRuns,
-  healthSnapshot,
   fetchTreeHistory,
   enqueueJob,
   cancelJob,
@@ -403,16 +402,6 @@ async function runFor(row: Row): Promise<{ runId: string; live: boolean } | null
   if (row.last_run_id) return { runId: row.last_run_id, live: false };
   const [newest] = await fetchRuns({ step: row.id, limit: 1 });
   return newest ? { runId: newest.run_id, live: !newest.finished_at_utc } : null;
-}
-
-/// The server's log — what `datalib-http` itself said: the worker, the
-/// applets, every request that failed — as a card beside this one,
-/// opened on the launch serving this page; when the server is
-/// recording nothing (no store), on everything, narrowed by the query
-/// bar.
-function openServerLog() {
-  const launch = healthSnapshot()?.process_id ?? null;
-  props.ctx.host.openCards(logSource(launch ? { launch } : { q: "process:http min_level:info" }));
 }
 
 /// A step's log as a card beside this one. With `runId`, that run's;
@@ -1499,13 +1488,6 @@ onUnmounted(() => {
         </button>
         <button class="m2-add" :disabled="busy || !!parseError || !!configError" @click="openAdd">
           + Data Source
-        </button>
-        <button
-          class="m2-btn"
-          title="What the app’s own server has been saying — the sync worker, the applets, requests that failed."
-          @click="openServerLog"
-        >
-          Server log
         </button>
       </div>
     </header>
