@@ -48,7 +48,7 @@ fn parent(watch: bool) {
     let mut cmd = Command::new(std::env::current_exe().expect("own path"));
     cmd.arg("child");
     if watch {
-        cmd.env(datalib_parent_watch::ENV_VAR, "1");
+        cmd.env(datalib_parent_watch::ENV_VAR, "0");
     } else {
         cmd.env_remove(datalib_parent_watch::ENV_VAR);
     }
@@ -57,7 +57,7 @@ fn parent(watch: bool) {
 
 fn exec(program: &str, args: &[String]) {
     let mut cmd = Command::new(program);
-    cmd.args(args).env(datalib_parent_watch::ENV_VAR, "1");
+    cmd.args(args).env(datalib_parent_watch::ENV_VAR, "0");
     hold(cmd);
 }
 

@@ -97,13 +97,14 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
 
 /// A step stops itself when the *runner* is SIGKILLed, which runs no
 /// runner code at all: `kill_children` never gets a chance, and nothing
-/// else ever signals a step. A step that says it watches the runner is
-/// given a pipe from it, and stops when it reads EOF on that.
+/// else ever signals a step. Every step is handed a pipe from the runner
+/// on fd 3, and one that watches it stops when it reads EOF there.
 ///
-/// `watches_runner` is a declaration about the program, so the step here
-/// is the parent-watch probe — what a program that honours it looks
-/// like. Without the pipe the probe watches nothing, sleeps for an hour,
-/// and this times out.
+/// The step is the parent-watch probe — what a program that watches the
+/// pipe looks like. Nothing in the config asks for this: the pipe is
+/// always there, and watching it is the program's own business. Point
+/// the runner at a program that ignores it and the step outlives the
+/// runner, which is what this asserts against.
 #[test]
 fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     let td = tempfile::tempdir().unwrap();
@@ -112,8 +113,7 @@ fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     std::fs::write(
         root.join("config.toml"),
         format!(
-            "[[steps]]\nid = \"watched/step\"\n\
-             command = \"'{}' child\"\nwatches_runner = true\n",
+            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n",
             env_path("PARENT_WATCH_PROBE")
         ),
     )

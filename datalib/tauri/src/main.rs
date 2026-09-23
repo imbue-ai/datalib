@@ -452,7 +452,7 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
         // arranges however the shell goes — the `kill` at exit is for
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
-        .env("DATALIB_PARENT_PIPE", "1")
+        .env("DATALIB_PARENT_PIPE", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))

@@ -268,11 +268,6 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
-    /// Whether this step's program stops itself when the runner goes
-    /// away. `None` takes the default for its kind: a built-in step
-    /// does, an arbitrary `command` does not. See
-    /// `docs/dev/step_protocol.md` § stdin before setting it.
-    pub watches_runner: Option<bool>,
 }
 
 /// A `[[steps]]` table exactly as a person writes it. Either `group` and
@@ -299,8 +294,6 @@ struct StepTable {
     env: BTreeMap<String, String>,
     #[serde(default)]
     code_version: Option<String>,
-    #[serde(default)]
-    watches_runner: Option<bool>,
 }
 
 impl TryFrom<StepTable> for StepEntry {
@@ -346,7 +339,6 @@ impl TryFrom<StepTable> for StepEntry {
             name: t.name,
             inputs: t.inputs,
             command: t.command,
-            watches_runner: t.watches_runner,
             params: t.params,
             env: t.env,
             code_version: t.code_version,
@@ -1254,20 +1246,7 @@ fn spec_of(
             t.to_string(),
         );
     }
-    // A built-in step is `datalib-step`, which watches the pipe; an
-    // arbitrary command is assumed not to, because handing one to a
-    // program that ignores it buys nothing and costs a hang if the
-    // program reads stdin. Either way the config can say otherwise.
-    let watches_runner = e.watches_runner.unwrap_or(e.command.is_none());
-    let mut spec = StepSpec::new(
-        &e.id,
-        StepRun::Subprocess {
-            argv,
-            env,
-            params,
-            watches_runner,
-        },
-    );
+    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
@@ -1754,60 +1733,6 @@ mod tests {
         assert_ne!(
             with("2026-06-15").fingerprint_material(),
             with("2020-01-01").fingerprint_material()
-        );
-    }
-
-    /// Who is handed the runner's parent pipe. `datalib-step` watches it,
-    /// so a built-in step opts in by default; an arbitrary `command` is
-    /// assumed not to, because a program that ignores the pipe gains
-    /// nothing from holding one and would hang if it read stdin. Either
-    /// default can be overridden, which is the only way a custom step can
-    /// ask for it.
-    #[test]
-    fn a_builtin_step_watches_the_runner_and_a_command_step_does_not() {
-        let cfg: DagConfig = toml::from_str(
-            r#"
-            [[groups]]
-            id = "slack"
-            type = "slack"
-
-            [[steps]]
-            group = "slack"
-            function = "ingest"
-
-            [[steps]]
-            id = "plain/step"
-            command = "my-program"
-
-            [[steps]]
-            id = "watching/step"
-            command = "my-watching-program"
-            watches_runner = true
-
-            [[steps]]
-            group = "slack"
-            function = "render_markdown"
-            inputs = ["slack/ingest"]
-            watches_runner = false
-            "#,
-        )
-        .unwrap();
-        let specs = to_specs(&cfg).unwrap();
-        let watches = |id: &str| match &specs
-            .iter()
-            .find(|s| s.id.as_str() == id)
-            .unwrap_or_else(|| panic!("no step {id}"))
-            .run
-        {
-            StepRun::Subprocess { watches_runner, .. } => *watches_runner,
-            other => panic!("expected subprocess, got {other:?}"),
-        };
-        assert!(watches("slack/ingest"), "a built-in step opts in");
-        assert!(!watches("plain/step"), "an arbitrary command does not");
-        assert!(watches("watching/step"), "and can say it does");
-        assert!(
-            !watches("slack/render_markdown"),
-            "a built-in step can opt back out"
         );
     }
 

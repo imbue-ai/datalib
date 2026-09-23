@@ -1,6 +1,7 @@
 //! `StepRun::Subprocess` execution.
 
 use std::collections::BTreeMap;
+use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -11,6 +12,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::events::{Event, EventSink, LogLevel, Stream};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
+
+/// Where a step finds the runner's pipe, named to the child in
+/// `datalib_parent_watch::ENV_VAR`. Deliberately not stdin: a step is an
+/// arbitrary program, and one that reads stdin expecting `/dev/null`'s
+/// immediate end-of-file would block forever on a pipe nobody writes to.
+const PARENT_PIPE_FD: libc::c_int = 3;
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
 /// The run this invocation belongs to — the id every row of
@@ -139,12 +146,10 @@ impl WireOutcome {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
     params: Option<&str>,
-    watches_runner: bool,
     extra_env: &BTreeMap<String, String>,
     attempt: u32,
     ctx: &StepCtx,
@@ -198,22 +203,46 @@ pub(crate) async fn run_subprocess(
         // leave an orphaned download running.
         .kill_on_drop(true);
 
-    // A step that says it watches the runner gets the pipe to watch:
-    // reading EOF on it is how it notices a runner that died without
-    // running any code — a SIGKILL, an abort, the OOM killer — which is
-    // the one case `kill_children` cannot reach. Everything else keeps
-    // `/dev/null`, because the protection needs the child to watch, so a
-    // program that does not gains nothing from holding a pipe and would
-    // block forever if it read stdin expecting an immediate EOF.
+    // Every step is handed the runner's pipe, and reading EOF on it is
+    // how a step notices a runner that died without running any code — a
+    // SIGKILL, an abort, the OOM killer — the one case `kill_children`
+    // cannot reach. A step that wants that watches the descriptor named
+    // by `DATALIB_PARENT_PIPE` (`datalib_parent_watch::exit_with_parent`
+    // does it in one call); a step that ignores it just carries one extra
+    // open descriptor, which costs nothing.
+    //
+    // Not on stdin, though `Stdio::piped()` is how the pipe gets made: a
+    // step is an arbitrary program, and one that reads stdin expecting
+    // the immediate end-of-file `/dev/null` gives would block forever on
+    // a pipe nobody writes to. The child moves the pipe to
+    // `PARENT_PIPE_FD` and restores `/dev/null` on stdin before exec, so
+    // a step that reads stdin sees exactly what it always did.
     //
     // The write end stays on the child handle: take it and the step reads
     // EOF at once and exits, believing the runner is already gone.
-    if watches_runner {
-        cmd.env(datalib_parent_watch::ENV_VAR, "1")
-            .stdin(Stdio::piped());
-    } else {
-        cmd.env_remove(datalib_parent_watch::ENV_VAR)
-            .stdin(Stdio::null());
+    cmd.env(datalib_parent_watch::ENV_VAR, PARENT_PIPE_FD.to_string())
+        .stdin(Stdio::piped());
+    let devnull = std::ffi::CString::new("/dev/null").expect("no interior nul");
+    // Safety: only async-signal-safe calls may run between fork and exec.
+    // `dup2`, `open` and `close` are; the `CString` is allocated above,
+    // before the fork, and only its pointer is read here.
+    unsafe {
+        cmd.as_std_mut().pre_exec(move || {
+            if libc::dup2(0, PARENT_PIPE_FD) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let null = libc::open(devnull.as_ptr(), libc::O_RDONLY);
+            if null < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::dup2(null, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if null != 0 {
+                libc::close(null);
+            }
+            Ok(())
+        });
     }
     // Its own process group, so a signal aimed at the step reaches what
     // the step spawned. A step is often a wrapper around something else
@@ -644,24 +673,6 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
             env: BTreeMap::new(),
             params: None,
-            watches_runner: false,
-        }
-    }
-
-    /// The same, for a step whose program claims to watch the runner and
-    /// so is handed the parent pipe on stdin.
-    fn sh_watching(script: &str) -> StepRun {
-        let StepRun::Subprocess {
-            argv, env, params, ..
-        } = sh(script)
-        else {
-            unreachable!("sh builds a subprocess")
-        };
-        StepRun::Subprocess {
-            argv,
-            env,
-            params,
-            watches_runner: true,
         }
     }
 
@@ -687,19 +698,23 @@ mod tests {
         panic!("timed out waiting for {what}");
     }
 
-    /// An arbitrary `command` step keeps `/dev/null` on stdin. Only
-    /// `datalib-step` is handed the runner's parent pipe: a program that
-    /// does not watch the pipe gains nothing from holding one, and a
-    /// program that reads stdin — expecting the immediate EOF
-    /// `/dev/null` gives — would block forever on a pipe nobody writes
-    /// to, which is a hung step holding its store open.
+    /// Every step gets `/dev/null` on stdin and the runner's pipe on fd
+    /// 3. Both halves matter.
     ///
-    /// The `cat` is the real assertion. If stdin were a pipe it never
-    /// returns, the step never finishes, and this times out rather than
-    /// failing on the recorded line.
+    /// Stdin, because a step is an arbitrary program: one that reads it
+    /// expecting the immediate end-of-file `/dev/null` gives would block
+    /// forever on a pipe nobody writes to, and a hung step holding its
+    /// store open is worse than the orphan the pipe prevents. The `cat`
+    /// is that assertion — if stdin were the pipe it never returns, the
+    /// step never finishes, and this times out rather than failing on the
+    /// recorded line.
+    ///
+    /// Fd 3, because that is what `datalib_parent_watch` is pointed at,
+    /// and it refuses to start if the variable names something that is
+    /// not a pipe — so the number and the descriptor have to agree.
     #[cfg(unix)]
     #[tokio::test]
-    async fn an_arbitrary_step_keeps_dev_null_on_stdin() {
+    async fn a_step_gets_dev_null_on_stdin_and_the_parent_pipe_beside_it() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
             "g/out",
@@ -707,8 +722,9 @@ mod tests {
                 out="$DATALIB_DAG_DATA_ROOT/g/out"
                 mkdir -p "$out"
                 cat > /dev/null
-                if [ -p /dev/fd/0 ]; then kind=pipe; else kind=not-a-pipe; fi
-                echo "$kind ${DATALIB_PARENT_PIPE:-unset}" > "$out/stdin"
+                if [ -p /dev/fd/0 ]; then stdin=pipe; else stdin=not-a-pipe; fi
+                if [ -p /dev/fd/3 ]; then watch=pipe; else watch=no-pipe; fi
+                echo "$stdin $watch ${DATALIB_PARENT_PIPE:-unset}" > "$out/fds"
             "#),
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -716,45 +732,10 @@ mod tests {
         Runner::new(data_root).run(&g).await.expect("the run");
 
         assert_eq!(
-            std::fs::read_to_string(root.path().join("g/out/stdin"))
+            std::fs::read_to_string(root.path().join("g/out/fds"))
                 .expect("the step wrote what it saw")
                 .trim(),
-            "not-a-pipe unset",
-        );
-    }
-
-    /// A step that declares it watches the runner is handed both halves
-    /// `datalib_parent_watch::exit_with_parent` needs: the pipe on stdin
-    /// and `DATALIB_PARENT_PIPE`. It refuses to start given the variable
-    /// without a pipe, so the two have to travel together.
-    ///
-    /// Note what this step does *not* do: read stdin. The runner holds
-    /// the write end open for as long as it lives, so a read would block
-    /// until the run ended.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_watching_step_is_handed_the_parent_pipe() {
-        let root = tempfile::tempdir().unwrap();
-        let spec = StepSpec::new(
-            "g/out",
-            sh_watching(
-                r#"
-                out="$DATALIB_DAG_DATA_ROOT/g/out"
-                mkdir -p "$out"
-                if [ -p /dev/fd/0 ]; then kind=pipe; else kind=not-a-pipe; fi
-                echo "$kind ${DATALIB_PARENT_PIPE:-unset}" > "$out/stdin"
-            "#,
-            ),
-        );
-        let g = Graph::build(vec![spec]).unwrap();
-        let data_root = root.path().to_path_buf();
-        Runner::new(data_root).run(&g).await.expect("the run");
-
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("g/out/stdin"))
-                .expect("the step wrote what it saw")
-                .trim(),
-            "pipe 1",
+            "not-a-pipe pipe 3",
         );
     }
 
@@ -885,7 +866,6 @@ mod tests {
                 ],
                 env: BTreeMap::new(),
                 params: Some(r#"{"token":"s3cret"}"#.into()),
-                watches_runner: false,
             },
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1201,7 +1181,6 @@ mod tests {
                 ],
                 env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
                 params: None,
-                watches_runner: false,
             },
         );
         let g = Graph::build(vec![spec]).unwrap();

@@ -315,16 +315,18 @@ The scheduler models the same distinction: an artifact that doesn't
 exist hashes to the distinguished version `absent`
 (`datalib_dag::version::ABSENT`) rather than being an error state.
 
-## stdin: nothing to read, unless you ask
+## stdin: nothing to read
 
-**By default your step is given `/dev/null` on stdin.** Read it and you
-get an immediate end-of-file; there is no input channel. Everything a
-step is told arrives as environment variables, the `--params-file`, and
-its declared inputs.
+**Your step is given `/dev/null` on stdin**, as it always has been. Read
+it and you get an immediate end-of-file; there is no input channel.
+Everything a step is told arrives as environment variables, the
+`--params-file`, and its declared inputs.
 
-The exception is opt-in, and worth understanding before you take it.
+## fd 3: the runner's pipe, if you want it
 
-### Why a step might want a pipe there
+Every step is also handed a pipe on file descriptor 3. You can ignore it
+completely — it costs one open descriptor and nothing else. What it is
+for:
 
 The runner normally stops its steps by signalling them: SIGINT on a
 cancel, SIGKILL for anything still running as it exits. Both need the
@@ -334,46 +336,34 @@ nothing else ever signals a step, a step that waits to be told would
 carry on with its store open and nobody recording how the run ended.
 
 What survives a SIGKILL is the kernel closing the dead process' file
-descriptors. So the runner can put a pipe on stdin, hold the other end,
-and set `DATALIB_PARENT_PIPE=1`. End-of-file on that pipe means the
-runner is gone.
+descriptors. So the runner holds the write end of that pipe for exactly
+as long as it lives. **End-of-file on fd 3 means the runner is gone.**
 
-### Asking for it
-
-```toml
-[[steps]]
-id = "mine/step"
-command = "my-step-program"
-watches_runner = true
-```
-
-`watches_runner` is an assertion **about your program**: that it watches
-stdin for end-of-file and stops itself when that arrives. A built-in
-step (one with no `command`, which runs `datalib-step`) declares it by
-default; anything else defaults to `false`.
-
-In Rust, honouring it is one call at startup:
+`DATALIB_PARENT_PIPE` holds the descriptor's number — read it rather
+than hard-coding 3. In Rust it is one call at startup:
 
 ```rust
 datalib_parent_watch::exit_with_parent(|| { /* stop; see below */ })?;
 ```
 
-In any other language, watch fd 0 for end-of-file yourself.
+In any other language, watch that descriptor for end-of-file yourself.
 
-### Why it is not the default
+### Why fd 3 and not stdin
 
-The protection only works if your program watches the pipe. Handing one
-to a program that ignores it buys nothing — and costs something real: a
-program that reads stdin expecting the immediate end-of-file
-`/dev/null` gives would block on a pipe nobody ever writes to. That is a
-hung step holding its store open, which is a worse failure than the one
-being prevented. So the runner is told rather than left to guess.
+Other datalib spawners do put this pipe on stdin — the gateway's
+applets, the desktop shell's `datalib-http` — because they know exactly
+what program they are starting. The runner does not: a step is whatever
+`command` says. A program that reads stdin expecting the immediate
+end-of-file `/dev/null` gives would block forever on a pipe nobody ever
+writes to, and a hung step holding its store open is a worse failure
+than the orphan the pipe prevents. So stdin is left alone and the pipe
+goes somewhere a program will only find if it looks.
 
-**If you set it and do not honour it, do not read stdin.** The runner
-holds the write end open for as long as it lives, so a read blocks until
-the run ends.
+This is also why there is no configuration for it. There is nothing to
+opt into and nothing to get wrong: the pipe is always there, and
+watching it is your program's business.
 
-### What to do when the pipe closes
+### What to do when it closes
 
 Take down what *you* spawned, not just yourself. The runner starts each
 step as its own process-group leader — so that a signal aimed at a step
@@ -381,8 +371,8 @@ reaches a `node` the step wrapped — which makes `kill(0, SIGINT)`
 exactly "me and my children". That is what `datalib-step` does, and its
 ordinary SIGINT handler then seals and exits.
 
-Without `watches_runner`, a step is not cleaned up after a runner that
-was SIGKILLed: it keeps running until something else stops it.
+A step that ignores fd 3 is simply one the runner cannot clean up after
+being SIGKILLed: it keeps running until something else stops it.
 
 ## stderr: logging
 

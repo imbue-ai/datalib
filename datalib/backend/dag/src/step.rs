@@ -84,9 +84,7 @@ impl StepSpec {
         m.push('\u{1}');
         match &self.run {
             StepRun::InProcess(_) => m.push_str("in-process"),
-            StepRun::Subprocess {
-                argv, env, params, ..
-            } => {
+            StepRun::Subprocess { argv, env, params } => {
                 for a in argv {
                     m.push_str(a);
                     m.push('\u{2}');
@@ -159,12 +157,6 @@ pub enum StepRun {
         /// tokens and device ids, and argv is visible to every user on
         /// the machine through `ps`.
         params: Option<String>,
-        /// The program watches for the runner to go away, so give it the
-        /// pipe to watch: stdin becomes a pipe the runner holds open and
-        /// `DATALIB_PARENT_PIPE` is set. An assertion about the program,
-        /// which is why it is declared rather than detected — see
-        /// `docs/dev/step_protocol.md` § stdin.
-        watches_runner: bool,
     },
 }
 

@@ -473,39 +473,60 @@ after twenty seconds of a wedged runner. `subprocess.rs` used to say
 "a SIGKILL at the runner runs no Rust and leaves the steps behind";
 that sentence is now gone.
 
-**The pipe is opt-in: `watches_runner` on the step.** A built-in step
-declares it by default, a `command` step defaults to false, and either
-can say otherwise. Getting to that took two wrong turns worth recording.
+**The pipe goes on fd 3, and stdin is left alone.** Getting there took
+three cuts, and the wrong two are the instructive part.
 
-The first cut gave *every* step the pipe and called stdin part of the
-protocol. That is backwards: the protection needs the child to *watch*
-the pipe, so an arbitrary program gains nothing from holding one — while
-a program that reads stdin expecting the immediate EOF `/dev/null` gives
+The first gave every step the pipe *on stdin* and called stdin part of
+the protocol. Backwards: the protection needs the child to watch the
+pipe, so an arbitrary program gains nothing from holding one — while a
+program that reads stdin expecting the immediate EOF `/dev/null` gives
 blocks on a pipe nobody writes to. A hung step holding its store open is
-the disease, not the cure. Measured: forcing every step onto the pipe
-turns `an_arbitrary_step_keeps_dev_null_on_stdin` into a 90-second
-timeout on its `cat`.
+the disease, not the cure. Measured: forcing every step onto a stdin
+pipe turns a step that runs `cat` into a 90-second timeout.
 
-The second cut keyed the decision off the program's *name*
-(`is_datalib_step`). Three things were wrong with that. It is implicit —
-wrap or rename the binary and the behaviour changes silently. It put a
-decision inside the imperative spawn path when it is a pure function of
-the config, against `style.md`. And the test had to copy the probe to a
-file called `datalib-step` to reach the path at all: when a test has to
-spoof an identity, the code is keyed on the wrong thing.
+The second kept stdin but gave the pipe only to `datalib-step`, detected
+by the program's *name*. Implicit — wrap or rename the binary and the
+behaviour changes silently. It put a decision inside the imperative
+spawn path when it is a pure function of the config, against
+`style.md`. And the test had to copy the probe to a file called
+`datalib-step` to reach the path: when a test spoofs an identity, the
+code is keyed on the wrong thing.
 
-So the config declares it. `watches_runner` is an assertion about the
-program — that it watches stdin for EOF — which is exactly the kind of
-thing only the person writing the config can know. It also gives a
-custom step a way to ask, which the name-based rule denied it.
+The third made it a config flag, `watches_runner`. Better, but it still
+left a footgun: set it on a step that reads stdin and you get a silent
+hang. That is not detectable from the runner's side — a step blocked
+waiting for EOF and a step blocked waiting for input are the same
+`read()`, and `parent_watch` consumes and discards bytes, so probing
+does not separate them either.
 
-Three guards, each watched failing against the behaviour it forbids:
+So the pipe moved off stdin entirely. `DATALIB_PARENT_PIPE` now names
+the descriptor holding it: `0` for the spawners that legitimately use
+stdin (the applets, the desktop shell's `datalib-http`, the e2e
+backends, all of which know the program they start) and `3` for a step.
+`Stdio::piped()` still makes the pipe; a `pre_exec` moves it to fd 3 and
+reopens `/dev/null` on stdin before exec.
+
+That removes the failure mode instead of documenting it, and with it the
+reason for a flag: the pipe is harmless to a program that ignores it, so
+every step gets one and watching it is the program's own business. No
+config surface, no name detection, no way to hold it wrong.
+
+Two things the change turned up. A stale spawner sending the old `"1"`
+would name fd 1 — stdout, which *is* a pipe, so the validation would
+pass and the watch would read the wrong end of the child's own output.
+`parse_fd` refuses 1 and 2 by number with a message saying so, rather
+than letting that be silent. And there is **no production step timeout
+at all** — every `tokio::time::timeout` in `dag` is in a test module, so
+a step that hangs for any reason hangs the run indefinitely. That is the
+general form of the same problem and is not addressed here.
+
+Three guards, each watched failing against what it forbids:
 `parent_gone::a_watching_step_exits_when_the_runner_itself_is_sigkilled`
-(with the flag off: *"the step outlived the runner that was
-SIGKILLed"*), `a_watching_step_is_handed_the_parent_pipe` (the flag's
-two halves travel together — `exit_with_parent` refuses the variable
-without a pipe), and `an_arbitrary_step_keeps_dev_null_on_stdin` (hangs
-if the pipe is handed out unasked).
+(without the wiring: *"the step outlived the runner that was
+SIGKILLed"*, 30s), `a_step_gets_dev_null_on_stdin_and_the_parent_pipe_beside_it`
+(asserts `not-a-pipe pipe 3`; times out on its `cat` if the pipe ever
+lands on stdin again), and the crate's own
+`parent_watch_test`.
 
 ### Decided, no PR — Gmail's quota ceiling
 
