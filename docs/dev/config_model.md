@@ -241,8 +241,8 @@ nothing consumes.
 One row per group, its steps and applets under a chevron. The group
 row's rules are in `http/src/manage/group.rs`: children in pipeline
 order; status running if any child is, else failed, else stopped, else
-the last step's; last synced is the ingest step's instant, else the
-newest child's; bytes are the group directory's own measured series,
+the last step's; last synced and last success are the ingest step's
+instants, else the newest child's; bytes are the group directory's own measured series,
 never a sum across children; a sync of the group starts at its steps
 with no inputs. A child step is labelled by its function, with the
 composed id muted beside it. Phase is read off `function` and the

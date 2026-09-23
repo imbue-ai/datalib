@@ -733,6 +733,10 @@ impl Runner {
                                         .steps
                                         .get(&spec.id)
                                         .and_then(|s| s.last_run.clone()),
+                                    last_success_at: state
+                                        .steps
+                                        .get(&spec.id)
+                                        .and_then(|s| s.last_success_at.clone()),
                                 },
                             );
                             StepStatus::Succeeded { changed }
@@ -1120,10 +1124,13 @@ impl Runner {
                 ..Default::default()
             });
             last.run_id = run_id;
-            last.finished_at = Some(stamp);
+            last.finished_at = Some(stamp.clone());
             last.status = st.state().as_str().to_string();
             last.attempts = attempts;
             last.error = error;
+            if matches!(st.state(), RunState::Succeeded | RunState::SkippedUpToDate) {
+                entry.last_success_at = Some(stamp);
+            }
         }
         status[i] = Some(st);
     }
@@ -3182,6 +3189,63 @@ mod tests {
                 .status,
             "succeeded"
         );
+    }
+
+    /// A failure moves `last_run` and leaves `last_success_at` where the
+    /// last good run put it — the Manage screen's "last success" (#646).
+    #[tokio::test]
+    async fn a_failure_keeps_the_last_success_it_follows() {
+        let fx = Fixture::new();
+        let fails = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fail_now = fails.clone();
+        let flaky = StepSpec::new(
+            "email/rendered_md",
+            StepRun::in_process(move |_ctx| {
+                let fail = fail_now.load(std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if fail {
+                        Err(StepError::new(
+                            FailureKind::Data,
+                            anyhow::anyhow!("bad json"),
+                        ))
+                    } else {
+                        Ok(StepOutcome::default())
+                    }
+                }
+            }),
+        )
+        .input("email/raw");
+        let g = Graph::build(vec![
+            download(
+                "email",
+                fx.email_content.clone(),
+                fx.runs["email/raw"].clone(),
+            ),
+            flaky,
+        ])
+        .unwrap();
+        let r = runner(fx.root.path());
+        r.run(&g).await.unwrap();
+        let mut st = DagState::load(fx.root.path()).unwrap();
+        let good = st.steps.get_mut("email/rendered_md").unwrap();
+        let succeeded_at = good.last_run.as_ref().unwrap().finished_at.clone();
+        assert!(succeeded_at.is_some());
+        assert_eq!(good.last_success_at, succeeded_at);
+        // Both runs finish within the same second, so a stamp the
+        // failure wrongly wrote would equal the real one. Back-date it.
+        let succeeded_at = Some("2026-01-01T00:00:00+00:00".to_string());
+        good.last_success_at = succeeded_at.clone();
+        st.save(fx.root.path()).unwrap();
+
+        fails.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Moving the input is what makes the step run again rather than
+        // skip as up to date.
+        *fx.email_content.lock().unwrap() = "email v2".to_string();
+        r.run(&g).await.unwrap();
+        let st = DagState::load(fx.root.path()).unwrap();
+        let after = &st.steps["email/rendered_md"];
+        assert_eq!(after.last_run.as_ref().unwrap().status, "failed");
+        assert_eq!(after.last_success_at, succeeded_at);
     }
 
     #[tokio::test]

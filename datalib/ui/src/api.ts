@@ -852,6 +852,9 @@ export type StatusView = {
   /// When this status was reached. Feeds the "Last synced" column, so
   /// the two can never disagree about which run they describe.
   at: string | null;
+  /// When it last succeeded, whatever it has done since. Feeds "Last
+  /// success"; older than `at` when the runs since have failed.
+  last_success_at?: string | null;
   detail: string | null;
   /// How far along, in [0, 1], while `key` is `running`.
   fraction?: number | null;
@@ -902,6 +905,7 @@ export type ManageRow = {
   /// group above it.
   documents: number | null;
   last_synced: string | null;
+  last_success: string | null;
   disk: Timeseries;
   actions: Action[];
   seeds: string[];
