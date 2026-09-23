@@ -1248,6 +1248,9 @@ pub struct DagRecord {
     pub states: std::collections::BTreeMap<String, String>,
     /// step id → what it did the last time a run reached it.
     pub last_runs: std::collections::HashMap<String, DagStepRun>,
+    /// step id → when a run last left it current. Absent for a step
+    /// that has never succeeded.
+    pub last_successes: std::collections::HashMap<String, String>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → the errors and warnings its store held the last time
@@ -1318,6 +1321,12 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
         })
         .collect();
 
+    let last_successes = state
+        .steps
+        .iter()
+        .filter_map(|(id, st)| Some((id.clone(), st.last_success_at.clone()?)))
+        .collect();
+
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
     let documents = manage::documents_by_step(
@@ -1328,6 +1337,7 @@ pub async fn dag_record(root: &std::path::Path) -> DagRecord {
         run,
         states,
         last_runs,
+        last_successes,
         progress,
         problems,
         documents,
@@ -1345,6 +1355,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         run,
         states,
         last_runs,
+        last_successes: _,
         progress,
         problems: _,
         documents: _,

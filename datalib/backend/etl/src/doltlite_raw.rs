@@ -1402,9 +1402,9 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
 /// --hard`, it restores tracked tables and ignores an untracked one, and a
 /// writer that died after `CREATE TABLE` and before its first commit leaves
-/// exactly that. Every commit here is `-Am`, so anything still dirty after
-/// this rides into the schema commit a few lines later — which is why the
-/// untracked tables are dropped rather than left for the DDL pass to adopt.
+/// exactly that. `dolt_clean` takes those, the way `git clean` does. Every
+/// commit here is `-Am`, so anything still dirty after this rides into the
+/// schema commit a few lines later — which is why both halves run.
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
@@ -1429,29 +1429,16 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         .execute(pool)
         .await
         .context("dolt_reset --hard")?;
-    let untracked: Vec<String> =
-        sqlx::query_scalar("SELECT table_name FROM dolt_status WHERE status = 'new table'")
-            .fetch_all(pool)
-            .await
-            .context("list untracked tables")?;
-    for table in &untracked {
-        // The name comes from doltlite's own status table, not from data;
-        // quoted anyway, since a provider may mirror upstream table names.
-        let quoted = format!("\"{}\"", table.replace('"', "\"\""));
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {quoted}")))
-            .execute(pool)
-            .await
-            .with_context(|| format!("drop untracked table {table}"))?;
-    }
+    sqlx::query("SELECT dolt_clean()")
+        .execute(pool)
+        .await
+        .context("dolt_clean")?;
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
         .fetch_one(pool)
         .await
         .context("re-probe dolt_status")?;
     if left != 0 {
-        bail!(
-            "{left} entries still dirty after dolt_reset --hard and dropping {} untracked table(s)",
-            untracked.len()
-        );
+        bail!("{left} entries still dirty after dolt_reset --hard and dolt_clean");
     }
     Ok(())
 }

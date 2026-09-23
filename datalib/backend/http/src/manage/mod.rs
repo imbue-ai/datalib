@@ -112,7 +112,10 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("Errors (records dropped) and warnings (records kept with something lost) the step's store holds, as of its last run. A green zero means it counted and found none; blank means it has never counted. Double-click for the list."),
         ColumnSpec::new("documents", "Documents", ColumnType::Count)
             .describe("How many documents this source holds \u{2014} the things Browse opens, whole store, as of its last render. Blank means it has never counted; a source that renders nothing counts zero."),
-        ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp),
+        ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
+            .describe("When it last ran, whatever came of it. A source's is its ingest step's."),
+        ColumnSpec::new("last_success", "Last success", ColumnType::Timestamp)
+            .describe("When it last ran without failing \u{2014} for a source, the last moment its mirror is known to have matched upstream. Older than Last synced when the runs since have failed; blank if none has succeeded."),
         ColumnSpec::new("disk", "Bytes on disk", ColumnType::Timeseries)
             .describe("What this tree weighs, with the last few minutes behind it."),
     ]
@@ -171,6 +174,8 @@ pub struct ManageRow {
     /// is every row but a render step and the group above it.
     pub documents: Option<i64>,
     pub last_synced: Option<String>,
+    /// When it last succeeded; see `Status::last_success_at`.
+    pub last_success: Option<String>,
     /// Bytes on disk, with the recent measurements behind the number.
     pub disk: Timeseries,
     /// The Sync column: a Sync button, or a Stop button while a job has
@@ -480,6 +485,7 @@ impl Snapshot<'_> {
             problems: vec![],
             documents: None,
             last_synced: None,
+            last_success: None,
             disk,
             actions: vec![browse, sync()],
             seeds: vec![],
@@ -640,9 +646,11 @@ impl RowCtx<'_> {
         let record = self.snap.record;
         let last_run = record.last_runs.get(id).cloned();
         let current_state = record.states.get(id).cloned();
+        let last_success_at = record.last_successes.get(id).cloned();
         let rec = (last_run.is_some() || current_state.is_some()).then_some(StepRecord {
             last_run,
             current_state,
+            last_success_at,
         });
         status::step_for_run(rec.as_ref(), self.stale)
     }
@@ -678,7 +686,12 @@ impl RowCtx<'_> {
             .map(|j| j.id.as_str())
             .or(self.run.map(|r| r.run_id.as_str()))
             .unwrap_or("");
+        // The floor may hand back an earlier frame's view; the last
+        // success is history, not a point in this run, so it is always
+        // the current one.
+        let last_success_at = view.last_success_at.clone();
         let mut held = floor.hold(id, key, view);
+        held.last_success_at = last_success_at;
         // The step's own words and how far along it is, while it runs.
         if let Some(p) = self.progress(id) {
             if let Some(msg) = &p.msg {
@@ -939,6 +952,7 @@ impl RowCtx<'_> {
             r#type,
             dropped: dropped.cloned(),
             last_synced: status.at.clone(),
+            last_success: status.last_success_at.clone(),
             status,
             status_from: None,
             activity,
@@ -1128,20 +1142,26 @@ impl RowCtx<'_> {
         // that one child's number rather than a sum over children that
         // would double it the day a second step reported one.
         let documents = ordered.iter().find_map(|c| row_of(c.id()).documents);
-        let last_synced = if dropped.is_some() {
-            None
-        } else {
-            group::group_last_synced(
+        let stamp_of = |at: fn(&StatusView) -> Option<String>| {
+            if dropped.is_some() {
+                return None;
+            }
+            group::group_instant(
                 &ordered
                     .iter()
                     .map(|c| ChildStamp {
                         is_ingest: row_of(c.id()).phase == Phase::Ingest
                             && c.kind() == ChildKind::Step,
-                        at: row_of(c.id()).status.at.clone(),
+                        at: at(&row_of(c.id()).status),
                     })
                     .collect::<Vec<_>>(),
             )
         };
+        let last_synced = stamp_of(|s| s.at.clone());
+        let last_success = stamp_of(|s| s.last_success_at.clone());
+        // The status is read off one child, but its last success is the
+        // group's: a failed render must not lend the row its own stamp.
+        status.last_success_at = last_success.clone();
 
         ManageRow {
             id: g.id.clone(),
@@ -1180,6 +1200,7 @@ impl RowCtx<'_> {
             problems,
             documents,
             last_synced,
+            last_success,
             disk,
             actions: vec![browse, sync],
             seeds,
