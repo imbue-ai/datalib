@@ -515,10 +515,17 @@ Two things the change turned up. A stale spawner sending the old `"1"`
 would name fd 1 — stdout, which *is* a pipe, so the validation would
 pass and the watch would read the wrong end of the child's own output.
 `parse_fd` refuses 1 and 2 by number with a message saying so, rather
-than letting that be silent. And there is **no production step timeout
-at all** — every `tokio::time::timeout` in `dag` is in a test module, so
-a step that hangs for any reason hangs the run indefinitely. That is the
-general form of the same problem and is not addressed here.
+than letting that be silent.
+
+A hung step of any kind — this one, a wedged socket, a deadlock — is
+already visible without anything new. `STALL_AFTER_SECS` in
+`http/src/manage/activity.rs` puts a stall chip on the Activity cell
+when a running step has not moved a metric for 60 seconds. Nothing acts
+on it, and that is the right call: a download waiting on the network and
+a download that is stuck look identical from outside, so the cell says
+so and a person decides. There is no wall-clock step timeout and should
+not be one — it would have to exceed the slowest legitimate step, which
+would make it useless.
 
 Three guards, each watched failing against what it forbids:
 `parent_gone::a_watching_step_exits_when_the_runner_itself_is_sigkilled`
