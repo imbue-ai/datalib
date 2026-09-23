@@ -1,8 +1,10 @@
 // Streaming, watched from the two screens it is for.
 //
-// Two API-backed sources replay playback tapes with a delay on every
-// request, so each download lasts several seconds and seals checkpoints
-// on the way. What has to be true while they are still running:
+// Two API-backed sources replay playback tapes behind a hold: while the
+// hold file exists, a download that has sealed a checkpoint answers
+// nothing more. Each download runs to its first seal and parks there,
+// in flight with rows already published, until the test lets go. What
+// has to be true while they are parked:
 //
 //   1. **The Pipeline table shows the whole chain in flight at once.**
 //      A download's Activity cell counts its checkpoints; its render and
@@ -13,11 +15,8 @@
 //      began, and is never touched again; it refetches itself when the
 //      index moves.
 //
-// Both were false before the scheduler learned that an early pass of a
-// middle step is a seal for the next hop (`render` ran on each `ingest`
-// checkpoint, but `grid_index` heard nothing until `render` went
-// terminal — after the download was over) and before the grid listened
-// for the index changing at all.
+// Both are states to wait for, not frames to catch: nothing upstream can
+// finish while the hold is in place.
 //
 // `qmd_index` is deliberately not in this config: its sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
@@ -25,12 +24,15 @@
 // load is the slowest thing in the suite.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
+  pipelineRow,
   searchAndSettle,
   settleRow,
   settleRunner,
   stampsBefore,
+  statusOf,
   MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
 
@@ -40,6 +42,16 @@ declare const process: { env: Record<string, string | undefined> };
 
 const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
 const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
+const HOLD = process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD_SEALED;
+
+/// Park every download of this spec's backend at its first seal.
+function hold() {
+  writeFileSync(HOLD!, "");
+}
+/// Let the parked downloads run to their end at fixture speed.
+function release() {
+  rmSync(HOLD!, { force: true });
+}
 
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
@@ -73,76 +85,17 @@ async function writeConfig(page: Page, text: string) {
   await openManager(page);
 }
 
-/// One reading of the Pipeline rows this spec watches: each row's
-/// status word and its Activity text.
-type Frame = {
-  t: number;
-  status: Record<string, string | null>;
-  activity: Record<string, string>;
-};
-
-/// Record every distinct reading of the rows from now until the page
-/// navigates. Mutation-driven rather than polled, so a frame that lasts
-/// a few hundred milliseconds is still seen.
-async function recordFrames(page: Page, ids: readonly string[]): Promise<void> {
-  await page.evaluate((ids: string[]) => {
-    const w = window as unknown as { __frames?: Frame[] };
-    const frames: Frame[] = [];
-    w.__frames = frames;
-    // The Sources grid lives in a card's shadow root, which neither
-    // `document.querySelector` nor an observer on `document.body` can
-    // see into: query every open shadow root, and observe them too.
-    const roots = (): (Document | ShadowRoot)[] => {
-      const out: (Document | ShadowRoot)[] = [document];
-      for (const el of document.querySelectorAll("*")) {
-        if (el.shadowRoot) out.push(el.shadowRoot);
-      }
-      return out;
-    };
-    const deepQuery = (sel: string): Element | null => {
-      for (const r of roots()) {
-        const el = r.querySelector(sel);
-        if (el) return el;
-      }
-      return null;
-    };
-    const read = (): Frame => {
-      const status: Record<string, string | null> = {};
-      const activity: Record<string, string> = {};
-      for (const id of ids) {
-        const row = deepQuery(`.slick-row[data-key="${CSS.escape(id)}"]`);
-        status[id] =
-          row?.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null;
-        activity[id] =
-          row?.querySelector('[col-id="activity"] .tg-chips')?.getAttribute("title") ?? "";
-      }
-      return { t: Date.now(), status, activity };
-    };
-    const sample = () => {
-      const next = read();
-      const last = frames[frames.length - 1];
-      const same =
-        last &&
-        JSON.stringify(last.status) === JSON.stringify(next.status) &&
-        JSON.stringify(last.activity) === JSON.stringify(next.activity);
-      if (!same) frames.push(next);
-    };
-    sample();
-    const observer = new MutationObserver(sample);
-    for (const r of roots()) {
-      observer.observe(r === document ? document.body : r, {
-        subtree: true,
-        childList: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ["aria-label", "title"],
-      });
-    }
-  }, ids as string[]);
-}
-
-async function frames(page: Page): Promise<Frame[]> {
-  return page.evaluate(() => (window as unknown as { __frames?: Frame[] }).__frames ?? []);
+/// One reading of the Pipeline rows this spec watches — each row's
+/// status word and its Activity text — so "at once" means one reading.
+async function readRows(page: Page, ids: readonly string[]) {
+  const status: Record<string, string | null> = {};
+  const activity: Record<string, string> = {};
+  for (const id of ids) {
+    status[id] = await statusOf(page, id);
+    const chips = pipelineRow(page, id).locator('[col-id="activity"] .tg-chips');
+    activity[id] = (await chips.count()) ? ((await chips.first().getAttribute("title")) ?? "") : "";
+  }
+  return { status, activity };
 }
 
 /// What the runner says each step is doing right now.
@@ -167,18 +120,19 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  release();
   if (!original) return;
   await writeConfig(page, original);
 });
 
 test.describe("a streaming sync, watched live", () => {
-  // Two replayed downloads of a few conversations each, at 1.5 s per
-  // request, plus the renders and index passes they drive.
+  // Two replayed downloads of a few conversations each, plus the renders
+  // and index passes they drive.
   test.setTimeout(180_000);
 
   test.skip(
-    !STEP_BIN || !PLAYBACK,
-    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR from run_e2e.sh",
+    !STEP_BIN || !PLAYBACK || !HOLD,
+    "needs DATALIB_TEST_E2E_DATALIB_STEP + DATALIB_TEST_E2E_PLAYBACK_DIR + DATALIB_TEST_E2E_PLAYBACK_HOLD_SEALED from run_e2e.sh",
   );
 
   // Carry the `[[applets]]` stanza forward from whatever was there.
@@ -188,9 +142,9 @@ test.describe("a streaming sync, watched live", () => {
   };
 
   // A binary path is single-quoted: a step's `command` is split
-  // shell-style and the runfiles path may contain a space. The cadence
-  // is short so a download of three conversations seals more than once
-  // rather than only at its end.
+  // shell-style and the runfiles path may contain a space. A cadence of
+  // zero seals after every conversation, so each download's first seal
+  // comes after its first conversation however fast the tape plays.
   const source = (id: string, type: string) => `
 [[groups]]
 id = "${id}"
@@ -212,7 +166,7 @@ inputs = ["${id}/ingest"]
   const config = () => `data_root = "${dataRoot}"
 
 [checkpoint_cadence]
-at_most_every_secs = 2
+at_most_every_secs = 0
 
 [[groups]]
 id = "unified_index"
@@ -240,16 +194,12 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
-    await recordFrames(page, STEPS);
     const was = await stampsBefore(page, STEPS);
+    hold();
     await page.getByRole("button", { name: "Sync everything" }).click();
     await expect(page.getByText("Queued a sync of everything.")).toBeVisible();
 
     // ── 2. rows arrive while their download is still running ────────
-    // The instant the grid first shows a row, ask the runner what the
-    // download that produced it is doing. Sampled from the test rather
-    // than the page so the two readings are as close together as a
-    // request allows.
     await expect
       .poll(() => gridRowCount(grid), {
         timeout: 60_000,
@@ -269,47 +219,39 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
         `(runner: ${JSON.stringify(when)})`,
     ).toBe("running");
 
-    // ── let every row finish, then read the whole sequence back ─────
-    // `settleRow` rather than `settleRows`: the recorder lives in the
-    // page, and the remount `settleRunner` does would throw it away.
+    // ── 1. the Pipeline table shows the whole chain in flight ───────
+    // Every row Running in one reading: both downloads, the render
+    // behind each, and the index behind both. A download counts its
+    // seals (the runner records every checkpoint as a metric, and the
+    // Activity cell draws it); the index says where its work came from.
+    let last = await readRows(page, STEPS);
+    const inFlight = () =>
+      STEPS.every((id) => last.status[id] === "Running") &&
+      /\bcheckpoints \d+/.test(last.activity[INGESTS[0]]) &&
+      /queued/.test(last.activity[INDEX]);
+    await expect
+      .poll(
+        async () => {
+          last = await readRows(page, STEPS);
+          return inFlight();
+        },
+        {
+          timeout: 60_000,
+          intervals: [250],
+          message: "the whole chain was never in flight at once",
+        },
+      )
+      .toBe(true)
+      .catch((e: Error) => {
+        throw new Error(`${e.message}\nlast reading: ${JSON.stringify(last, null, 2)}`);
+      });
+
+    // ── let every row finish ────────────────────────────────────────
+    release();
     for (const id of STEPS) {
       const st = await settleRow(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    const seen = await frames(page);
-    const describe = (f: Frame) =>
-      `${new Date(f.t).toISOString().slice(11, 23)} ${JSON.stringify(f.status)} ${JSON.stringify(f.activity)}`;
-    const trace = () => seen.map(describe).join("\n");
-    // What the Pipeline table showed, frame by frame — in the report and
-    // in bazel's test log, so a run can be read without a trace viewer.
-    console.log(`[e2e] the Pipeline table, as recorded:\n${trace()}`);
-
-    // ── 1. the Pipeline table showed the whole chain in flight ──────
-    // A download counts its seals: the runner records every checkpoint
-    // as a metric, and the Activity cell draws it.
-    expect(
-      seen.some((f) => /\bcheckpoints \d+/.test(f.activity[INGESTS[0]])),
-      `${INGESTS[0]} never showed a checkpoints chip:\n${trace()}`,
-    ).toBe(true);
-    // Its render was Running while it was still Running.
-    expect(
-      seen.some((f) => f.status[RENDERS[0]] === "Running" && f.status[INGESTS[0]] === "Running"),
-      `${RENDERS[0]} never ran while ${INGESTS[0]} was running:\n${trace()}`,
-    ).toBe(true);
-    // And the index was Running while *every* download still was — the
-    // whole chain in flight from one checkpoint, not the index waiting
-    // for a source to finish.
-    expect(
-      seen.some(
-        (f) => f.status[INDEX] === "Running" && INGESTS.every((i) => f.status[i] === "Running"),
-      ),
-      `${INDEX} never ran while both downloads were running:\n${trace()}`,
-    ).toBe(true);
-    // The index's Activity says where its work came from, per producer.
-    expect(
-      seen.some((f) => /queued/.test(f.activity[INDEX])),
-      `${INDEX} never showed its queue:\n${trace()}`,
-    ).toBe(true);
 
     // ── and the grid caught up with every pass, not just the first ──
     // Every conversation the tapes hold, once the run is over: the same

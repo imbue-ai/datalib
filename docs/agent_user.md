@@ -134,10 +134,22 @@ ids in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
 of scraping human output. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `data` / `cancelled`); the
-runner already retries transient/rate-limited ones with backoff, and a
-failed step blocks only its downstream subtree. Ctrl-C is graceful:
+runner already retries transient/rate-limited ones with backoff, and
+what a failed step committed is still read downstream; only a step
+whose inputs were never written at all is `blocked`. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
+
+**You can sync while the app, or another `datalib-dag`, is syncing the
+same root.** A sync is a request in `<data_root>/system/supervisor.sqlite`.
+If nothing else is running the root, your `datalib-dag` runs it; if
+something is, yours hands it the request, says `following request <id>`,
+and waits for it — your source runs beside theirs, not after. Either way
+it exits with *your* request's outcome: 0 done, 2 failed, 130 stopped,
+and Ctrl-C stops your request only. Pass `--by <name>` so the request
+says who asked (`sqlite3 system/supervisor.sqlite 'select * from
+requests'`). `--reset` is the exception: it empties stores, so it
+refuses while anything else is syncing.
 
 Via the server instead: `POST /api/sync/jobs` enqueues —
 `{"kind":"all"}` with an optional comma-separated `source_ids`, or

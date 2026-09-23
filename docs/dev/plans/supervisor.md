@@ -1,7 +1,9 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–2 are built —
-`datalib-dag` runs one round of the tick — and the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slices 0–3 and 4a are
+built — `datalib-dag` runs the loop over requests in
+`system/supervisor.sqlite`, or hands its request to the one already
+running — and the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -464,7 +466,7 @@ for a commit between a truncate and its refill in any step.
 
 ### 2.6 What a step sees
 
-Unchanged, plus `DATALIB_READS`: a JSON map of sink → version this
+Unchanged, plus `DATALIB_READS` (built): a JSON map of sink → version this
 invocation was started against, so a consumer that pins does so at the
 version the supervisor recorded as *consumed*. `DATALIB_DAG_NOW` is
 pinned **per invocation**, not per run; one clock per run was a rule
@@ -473,8 +475,14 @@ about a unit this design does not have. `DATALIB_DAG_RUN_ID` becomes
 
 ### 2.7 One store, one writer, everything the UI shows
 
-`dag_state.json` goes. The supervisor's memory *is* `system/runs/runs.sqlite`,
-which it alone writes:
+`dag_state.json` goes. The supervisor's memory *is*
+`system/supervisor.sqlite` — plain SQLite, beside the run store rather
+than in it. The run store is deleted and recreated whenever its schema
+moves (`SCHEMA_VERSION`), which would forget open requests and pauses;
+this store's schema only ever grows, because two builds — an agent's CLI
+and an older app — may share it. It is the **mailbox as well as the
+record** (§2.8): anyone may write intent into it, and only the process
+running the loop writes facts.
 
 | table | rows |
 |---|---|
@@ -483,7 +491,7 @@ which it alone writes:
 | `sinks` | path, version, updated_at_utc, by_invocation |
 | `invocations` | id, step, started/finished, exit, failure_kind, error, pid, consumed (json), produced (json) |
 | `request_steps` | request → step, for every step in the request's scope, with the step's state as of the request's close |
-| `log`, `metrics`, `metric_samples` | as today |
+| `log`, `metrics`, `metric_samples` | as today, in the run store |
 
 A request *is* the wave — "your Sync of Gmail: ingest done, render
 running, index waiting on its sink" is `request_steps` joined to
@@ -504,20 +512,42 @@ same loop, unmodified:
 
 | host | what it adds around the loop |
 |---|---|
-| `datalib-dag <config>` | opens one request rooted at every source (or at the `--sync` roots); exits 0 or 1 when that request closes |
-| `datalib-http` | in place of `worker.rs`: requests arrive over HTTP, it keeps ticking when idle, and the UI reads the store it writes |
+| `datalib-http` | runs the loop for as long as it is up, in place of `worker.rs` |
+| `datalib-dag` | runs the loop only when nobody else is, and only until every open request has closed |
 
-There are no modes. `datalib-dag` runs **one round** of what the
-server keeps open: the same tick over the same facts, stopping when
-the request it opened closes. There is no resident CLI host; a
-supervisor that stays up is the server.
+There are no modes, and there is no forwarding. **Intent is rows**: a
+request, a stop, a pause, a resume, a clear is a row in
+`system/supervisor.sqlite`, written by whoever wants it — the UI through
+the server, an agent through the CLI, a person with bare `sqlite3` — and
+tagged with `by`. **Exactly one process runs the loop**: the one holding
+`system/runner-lock`. It notices new intent by polling the store's
+`PRAGMA data_version` (a read of one integer, sub-second), acts on it,
+and writes the facts: steps' states, invocations, sinks' versions,
+requests closing. Nothing else writes facts.
 
-A per-root lock makes a supervisor the only one on its root; it
-replaces `runner-lock`. When the server holds the root, `datalib-dag`
-forwards to it (`POST /api/requests`, which is how "a sync you start
-from a terminal shows up here too" stays true) instead of running a
-round of its own; when nothing holds it, the CLI runs the round
-itself.
+Who holds the lock:
+
+- **The server, while it is up.** Whoever runs the loop owns the steps'
+  processes, and a running process cannot be handed to another. A loop
+  in an agent's CLI would carry the UI's syncs inside the agent's
+  process: its `--wait` could not return before your forty-minute Gmail
+  sync finished, and killing its shell would kill that sync. A process
+  that outlives every caller is the right owner, and while the server is
+  up it is that process.
+- **The CLI, when nobody does.** It serves every open request —
+  including ones the UI or a second CLI add meanwhile — and exits when
+  none is left. A server that starts meanwhile waits for the lock; the
+  UI's clicks are rows, so the CLI's loop runs them in the meantime.
+- **A CLI that finds the lock taken is a client.** It writes its
+  request, follows it — progress from the run store, Ctrl-C marks *its*
+  request stopped — and exits 0 or 1 with the request's outcome.
+
+So an agent drives the system while the UI is up, and the UI while an
+agent's round runs: neither waits on the other, and each sees the
+other's requests live because both read the same tables. A request
+outlives the process that was running it: if that process dies, its
+steps die with it (below), but the request is still a row, and the next
+process to take the lock runs it.
 
 **The host owns the steps' processes**, and the library is where that
 lives, so no host does it differently:
@@ -552,12 +582,12 @@ is not hypothetical — `agent_user.md` exists because agents already run
 syncs and read the mirror — and because a person and an agent will
 often be working the same root at once.
 
-**Observe.** `system/runs/runs.sqlite` is plain SQLite, so an agent needs no
-datalib binary to read it: `sqlite3 system/runs/runs.sqlite 'select id,
-state, state_detail from steps'` is the whole of the Manage screen's
-Status column; `invocations` joined to `log` is the per-step log the
-UI shows on double-click; `requests` joined to `request_steps` is the
-wave. The GUI reads
+**Observe.** Both stores are plain SQLite, so an agent needs no
+datalib binary to read them: `sqlite3 system/supervisor.sqlite 'select
+id, state, state_detail from steps'` is the whole of the Manage screen's
+Status column; `requests` joined to `request_steps` is the wave;
+`invocations`, and the run store's `log`, are the per-step log the UI
+shows on double-click. The GUI reads
 the same tables through `table_changed` frames. Nothing the screen
 shows is computed in the browser from something the shell cannot see.
 
@@ -566,10 +596,12 @@ shows is computed in the browser from something the shell cannot see.
 steps, `clear <sink>` on sinks (§2.10) — exposed identically as
 `POST /api/requests` and `/api/requests/<id>/stop`,
 `POST /api/steps/<id>/{pause,resume}`, `POST /api/sinks/<path>/clear`, and
-as `datalib-dag <verb> …`. The CLI forwards to the server when one
-holds the root. When none does, `request` runs a round itself, and
-`pause`, `resume` and `clear` act on the store directly — a pause is a
-row, and the next round honours it. Every request, pause and
+as `datalib-dag <verb> …`. Both doors write the same row (§2.8): the
+HTTP API is the UI's, since a browser cannot write SQLite, and the CLI
+is the agent's — it works whether or not a server is up, needs no port
+or token, and checks a step id against the config before it writes
+anything. The token is not bypassed in any way that matters: whatever
+can write the data root can read `system/api-token`. Every request, pause and
 clear records `by` — `ui`, `cli`, or a name an agent passes
 (`--by claude`) — so each operator sees the other's hand on the wheel:
 a source paused by an agent reads "paused by claude" on the screen,
@@ -581,8 +613,9 @@ what makes that possible.
 **The batch verbs are the same verbs.** `datalib-dag <config>` is one
 request rooted at every source plus "exit when it closes"; an agent
 that wants one chain synced and to know when it settled runs
-`datalib-dag request work-gmail/ingest --wait`, which polls the
-request's row and exits with its outcome. No agent should ever
+`datalib-dag request work-gmail/ingest --wait`, which writes the
+request's row, follows it, and exits with its outcome — whether its own
+process runs the loop or the server's does. No agent should ever
 have to `sleep` and re-check, which is the AGENTS.md rule for tests
 applied to operators.
 
@@ -729,23 +762,76 @@ last.
    The scheduler's own tests pass against it with four changed on
    purpose: a failed producer's committed output is read by its
    consumers, and a failed render no longer blocks the index (§2.5).
-3. **Sink versions from the sink.** A doltlite sink's version is
+3. **Sink versions from the sink.** ~~A doltlite sink's version is
    `main`'s head, read by the host after every writer invocation
    (§2.1); the step's report is checked against it in tests, then
-   becomes optional for doltlite sinks. The qmd index gets a `versions`
-   row written in the transaction that updates it. A plain tree keeps
-   the tree hash, computed on writer completion and cached; the
-   supervisor learns which sinks' readers do not pin, so it never
-   starts a writer on one while a reader runs.
-4. **The server hosts it.** The run store gains `requests`,
-   `request_steps`, `steps`, `sinks` and `invocations`, and the
-   supervisor's facts move there from `dag_state.json`, which goes.
-   `datalib-http` runs the same library `datalib-dag` does (§2.8), and
-   keeps it running; the server's `worker.rs` and `sync_jobs` go.
-   `POST /api/requests`, `/api/requests/<id>/stop`,
-   `/api/steps/<id>/{pause,resume}`, the CLI verbs that forward to
-   them, live frames. `status.rs` shrinks to a read of `steps.state`.
-   Startup closes the invocations a dead supervisor left open.
+   becomes optional for doltlite sinks.~~ **Built:** `dag/src/sink.rs`
+   reads `main`'s head of every store at the top of a step's tree, after
+   every invocation and at every checkpoint, and a step's report is used
+   only for a tree with no store. It fixed a waste nobody had seen: a
+   step's checkpoints and its outcome spelled one commit differently
+   (`<hash>` against `store:<hash>`), so every finishing ingest and
+   render made its consumers run one more pass over nothing. **Also
+   built:** `DATALIB_READS` (§2.6), and the qmd index reports a hash of
+   it — the render versions it indexed — instead of having its tree
+   hashed. The two unpinned readers are marked by the loader
+   (`UNPINNED_BUILTINS`), and the tick keeps each apart from the writers
+   of what it reads, in both orders: the reader waits even for a
+   streaming producer, and a writer waits in `waiting(reader)`. The cost
+   is some streaming: the qmd index no longer runs while a render does.
+4. **The mailbox, then the server**, in three slices, each landing
+   green. A map of what the server's sync path touches (2026-09-23)
+   found the couplings that decide the order; each is named where it is
+   dealt with.
+
+   **4a. The store, and the CLI as loop or client.** *Built, narrower
+   than first written:* the store holds `requests` and `pauses` only
+   (steps' states and invocations come with 4c), the facts stay in
+   `dag_state.json`, and the verbs (`stop`, `pause`, `resume` as
+   commands) follow separately — the store takes them already. The
+   server is untouched but for tagging its requests `--by ui`: its
+   worker still runs one job at a time, so the UI's own syncs overlap
+   from 4b, and a job whose `datalib-dag` joined a CLI's loop has no run
+   of its own until then. What was first written:
+   `system/supervisor.sqlite` with `requests`, `pauses`, `steps` and
+   `invocations`; the facts move there from `dag_state.json`. The round
+   becomes a loop that reads intent from the store (`data_version`),
+   runs until no request is open, and writes facts back. `datalib-dag`
+   takes `runner-lock` and runs that loop, or — lock taken — writes its
+   request and follows it as a client; the verbs `request`, `stop`,
+   `pause`, `resume`. The server is untouched: its worker still spawns
+   `datalib-dag`, which now joins whatever loop is running instead of
+   failing on the lock, so two sources started a minute apart already
+   run side by side (`data-sources-control.spec.ts`'s `test.fail()`
+   comes off). With syncs overlapping, a run in the run store is a
+   *busy period* — the loop going from idle to busy and back — and each
+   request inside it is recorded against it (`sync_jobs.parent_job_id`
+   for the server's jobs), so `status.rs`'s `effective_run` and
+   `spoken_for`, and `dag_record`'s progress gate, learn "the job's run
+   is its parent's". Startup closes the invocations a dead loop left
+   open.
+
+   **4b. The server runs the loop.** `datalib-http` takes `runner-lock`
+   for its life and runs the loop in-process in place of `worker.rs`; a
+   Sync click writes a request row. Because the lock is held for good,
+   "the runner lock is held" stops meaning "a sync is running":
+   `DagRunInfo.live`, `usage::pipeline_is_running` and the e2e
+   `settleRunner` read "a request is open" instead. Each step is spawned
+   with the parent-watch pipe to the server (`datalib_parent_watch`,
+   which `datalib-step` honours), so a SIGKILLed server leaves no step
+   running; `CHILD_PIDS` and the `exit` paths become the host's
+   shutdown, not a process-wide "kill all". `sync_jobs` and its
+   endpoints become a view over `requests`; `dag_state.json` goes, and
+   `watch.rs` gains the store's parts.
+
+   **4c. Rows read the supervisor.** `steps.state` is what a Manage row
+   says; `status.rs`'s inference (`reached_since`, `spoken_for`,
+   `StatusFloor`) is deleted. `POST /api/requests`,
+   `/api/requests/<id>/stop`, `/api/steps/<id>/{pause,resume}`, the
+   Pause button, "Sync by claude" on a request an agent opened.
+   `sync_jobs` goes, and so does the `/sources` page, a second
+   job-driven UI, unless it is ported. `agent_user.md` is rewritten
+   around the verbs.
 5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
    request and the wave under each, and Clear on
    a sink with the wording of §2.10. The help text is rewritten around rows, not runs.

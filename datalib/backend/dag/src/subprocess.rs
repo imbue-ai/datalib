@@ -42,6 +42,8 @@ pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";
 pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
+/// `StepCtx::reads` as a JSON object: input path → version.
+pub const ENV_READS: &str = "DATALIB_READS";
 /// Run-wide pinned timestamp (RFC 3339), set by the runner on every
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
@@ -191,6 +193,10 @@ pub(crate) async fn run_subprocess(
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
+        .env(
+            ENV_READS,
+            serde_json::to_string(&ctx.reads).expect("a string map is JSON"),
+        )
         // Run-wide env from the runner (PATH with binary_dir
         // prepended, the pinned DATALIB_DAG_NOW, …); the step's
         // own `env:` entries win on key collision.
@@ -840,6 +846,40 @@ mod tests {
         for id in ["a/raw", "b/raw", "a/rendered"] {
             assert_eq!(rep.step(id).status, cancelled, "{id}: {rep:#?}");
         }
+    }
+
+    /// A step is told the version of each input it was started against, as
+    /// the runner recorded it — which is how the qmd index versions itself
+    /// by what it indexed.
+    #[tokio::test]
+    async fn a_step_is_told_the_versions_it_was_started_against() {
+        let root = tempfile::tempdir().unwrap();
+        let producer = StepSpec::new(
+            "src/raw",
+            sh(r#"mkdir -p src/raw && echo data > src/raw/f
+                  echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v7"}]}'"#),
+        );
+        let consumer = StepSpec::new(
+            "src/rendered",
+            sh(r#"mkdir -p src/rendered && printf '%s' "$DATALIB_READS" > src/rendered/reads.json"#),
+        )
+        .input("src/raw");
+        let g = Graph::build(vec![producer, consumer]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+
+        let reads: BTreeMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("src/rendered/reads.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reads,
+            BTreeMap::from([(
+                "src/raw".to_string(),
+                rep.step("src/raw").outputs[0].1.clone()
+            )])
+        );
+        assert!(reads["src/raw"].ends_with(":v7"), "{reads:?}");
     }
 
     /// Params reach the child as a file only its owner can read, named

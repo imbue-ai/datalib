@@ -1,11 +1,11 @@
 //! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
 //! for the schema).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::scheduler::{ResetTarget, StepStatus};
+use datalib_dag::scheduler::ResetTarget;
 
 // `DATALIB_VERSION` is `git describe` at build time under Bazel
 // release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
@@ -24,7 +24,7 @@ const VERSION_RESOLVED: &str = {
 };
 use datalib_dag::events::FanOutSink;
 use datalib_dag::runs_sink::RunStoreSink;
-use datalib_dag::step::FailureKind;
+use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
@@ -59,12 +59,16 @@ async fn main() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     const USAGE: &str = "usage: datalib-dag <config.toml> [--binary-dir DIR] \
          [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
-         [--run-id ID] [--parallelism N]\n       \
+         [--run-id ID] [--parallelism N] [--by WHO]\n       \
          datalib-dag --check <config.toml>\n\n\
          --reset drops what a step wrote (its store; `+blobs` an ingest step's blob \
          CAS with it), keeping its doltlite history, so the next run does its work \
          from the start. Alone, that is all the invocation does; with --sync it runs \
-         first.";
+         first.\n\n\
+         A sync is a request in <root>/system/supervisor.sqlite, tagged --by (default \
+         `cli`). If another process is already running the loop on this root — the app, \
+         or another datalib-dag — this one hands it the request and follows it; either \
+         way it exits with the request's outcome. Ctrl-C asks for this request to stop.";
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
@@ -73,6 +77,7 @@ async fn main() -> Result<()> {
     let mut parallelism: Option<usize> = None;
     let mut reset: Vec<ResetTarget> = Vec::new();
     let mut check_only = false;
+    let mut by = "cli".to_string();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -100,6 +105,7 @@ async fn main() -> Result<()> {
                 reset.extend(v.split(',').map(|s| ResetTarget::parse(s.trim())));
             }
             "--check" => check_only = true,
+            "--by" => by = args.next().context("--by needs a name")?,
             "--version" | "-V" => {
                 #[allow(clippy::disallowed_macros)]
                 {
@@ -182,62 +188,6 @@ async fn main() -> Result<()> {
     let cfg = checked.cfg;
     let graph = checked.graph;
 
-    // One runner per data root, taken before anything is written.
-    let _lock = datalib_dag::lock::acquire_runner(&data_root).map_err(|e| {
-        if e.is_held() {
-            anyhow::anyhow!(
-                "another datalib-dag is already running against {}{}.\n\
-                 Two runners on one data root overwrite each other's scheduler state and \
-                 each other's raw stores. Wait for it to finish, or point this one at a \
-                 different root.\n(lock: {})",
-                data_root.display(),
-                match e.holder() {
-                    Some(h) => format!(" — {h}"),
-                    None => String::new(),
-                },
-                e.path().display()
-            )
-        } else {
-            anyhow::anyhow!("{e}")
-        }
-    })?;
-
-    // Run-wide environment for every step subprocess: PATH with the
-    // binary dir prepended (so commands can say `datalib-step` bare),
-    // one pinned timestamp for the whole run — whether given or
-    // sampled, every stamped output (raw bookkeeping, rendered_at_utc)
-    // agrees.
-    let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
-    if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {
-        let mut paths = vec![dir];
-        if let Some(p) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&p));
-        }
-        let joined = std::env::join_paths(paths).context("prepend --binary-dir to PATH")?;
-        child_env.insert("PATH".into(), joined.to_string_lossy().into_owned());
-    }
-    let now =
-        now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-    // The run id: the caller's (the http worker passes its job id, so
-    // the job row *is* the run) or a fresh one. The scheduler reads it
-    // back out of ENV_RUN_ID, so the record, the store and every step
-    // name the same run.
-    let run_id = run_id.unwrap_or_else(datalib_dag::scheduler::new_run_id);
-    child_env.insert(subprocess::ENV_RUN_ID.into(), run_id.clone());
-    child_env.insert(subprocess::ENV_NOW.into(), now.clone());
-    // A child's stdout is a pipe here, and Python block-buffers a pipe
-    // by default — its progress lines would arrive in 4KB lumps, long
-    // after the stderr they belong beside. Rust and sh need no help.
-    child_env.insert("PYTHONUNBUFFERED".into(), "1".into());
-    if let Some(cadence) = cfg.checkpoint_cadence {
-        child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
-    }
-    // One filter for the run: the runner's own lines and every step's.
-    // A `RUST_LOG` already in the environment is a person's choice and
-    // wins; else the config's level (`log_level`, default `trace`).
-    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
-    child_env.insert("RUST_LOG".into(), log_filter.clone());
-
     if !sync_only.is_empty() {
         let fringe = graph.fringe_ids();
         for id in &sync_only {
@@ -251,10 +201,18 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Cancellation: the first SIGINT/SIGTERM stops the round — each
-    // running step gets SIGINT on its own process group, so it can stop
-    // at its next consistent point, commit there and exit `cancelled`
-    // (`step_protocol.md` § Signals), and nothing new starts. A second
+    // `--reset` empties stores, so it needs the root to itself: it is
+    // refused, not queued, while anyone runs the loop.
+    let reset_lock = if reset.is_empty() {
+        None
+    } else {
+        Some(acquire_or_explain(&data_root)?)
+    };
+
+    // Cancellation. The first SIGINT/SIGTERM asks for *this* request to
+    // stop — the loop may be running other people's too — and the loop
+    // interrupts its steps (SIGINT on each process group), which stop at
+    // their next consistent point (`step_protocol.md` § Signals). A second
     // signal gives up waiting and exits hard, taking the steps with it.
     //
     // SIGHUP is not one of those two. It says the terminal is gone, so
@@ -263,6 +221,7 @@ async fn main() -> Result<()> {
     // same one it uses when its parent dies. It has to: a step is in a
     // process group of its own, so the kernel's SIGHUP to the
     // foreground group no longer reaches it.
+    let (ask_tx, ask_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
@@ -292,12 +251,87 @@ async fn main() -> Result<()> {
                 subprocess::kill_children();
                 std::process::exit(130);
             }
-            let _ = stop_tx.send(true);
+            let _ = ask_tx.send(true);
         }
     });
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
+    let store = Store::open(&data_root).await?;
+
+    // The request this invocation stands for; none for a reset alone.
+    let own = if reset.is_empty() || !sync_only.is_empty() {
+        let roots: Vec<String> = if sync_only.is_empty() {
+            graph.fringe_ids().into_iter().map(str::to_string).collect()
+        } else {
+            sync_only.clone()
+        };
+        let id = store.open_request(&roots, &by).await?;
+        // The stop goes through the store, like a stop from anywhere else.
+        let (root, id2, by2) = (data_root.clone(), id.clone(), by.clone());
+        let mut ask = ask_rx;
+        tokio::spawn(async move {
+            if ask.wait_for(|asked| *asked).await.is_ok() {
+                if let Ok(s) = Store::open(&root).await {
+                    let _ = s.request_stop(&id2, &by2).await;
+                    s.close().await;
+                }
+            }
+        });
+        Some(id)
+    } else {
+        None
+    };
+
+    let _lock = match reset_lock {
+        Some(lock) => lock,
+        None => {
+            let own = own.as_deref().expect("a request unless resetting");
+            match follow_or_lock(&data_root, &store, own).await? {
+                Taken::Lock(lock) => lock,
+                Taken::Closed(outcome) => {
+                    store.close().await;
+                    std::process::exit(exit_code(outcome, dropped_entries));
+                }
+            }
+        }
+    };
+
+    // Run-wide environment for every step subprocess: PATH with the
+    // binary dir prepended (so commands can say `datalib-step` bare),
+    // one pinned timestamp for the whole run — whether given or
+    // sampled, every stamped output (raw bookkeeping, rendered_at_utc)
+    // agrees.
+    let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
+    if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {
+        let mut paths = vec![dir];
+        if let Some(p) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&p));
+        }
+        let joined = std::env::join_paths(paths).context("prepend --binary-dir to PATH")?;
+        child_env.insert("PATH".into(), joined.to_string_lossy().into_owned());
+    }
+    let now =
+        now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+    // The run id: the caller's (the http worker passes its job id, so
+    // the job row *is* the run) or a fresh one. With the loop serving
+    // several requests, a run is the stretch this process runs it for.
+    let run_id = run_id.unwrap_or_else(datalib_dag::scheduler::new_run_id);
+    child_env.insert(subprocess::ENV_RUN_ID.into(), run_id.clone());
+    child_env.insert(subprocess::ENV_NOW.into(), now.clone());
+    // A child's stdout is a pipe here, and Python block-buffers a pipe
+    // by default — its progress lines would arrive in 4KB lumps, long
+    // after the stderr they belong beside. Rust and sh need no help.
+    child_env.insert("PYTHONUNBUFFERED".into(), "1".into());
+    if let Some(cadence) = cfg.checkpoint_cadence {
+        child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
+    }
+    // One filter for the run: the runner's own lines and every step's.
+    // A `RUST_LOG` already in the environment is a person's choice and
+    // wins; else the config's level (`log_level`, default `trace`).
+    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
+    child_env.insert("RUST_LOG".into(), log_filter.clone());
+
     // stderr stays the stream; the store is the record. Both, not
     // either: the stream is what a terminal or a tee sees as it happens,
     // the store is what a second process reads — live, and after the
@@ -333,9 +367,8 @@ async fn main() -> Result<()> {
                 // No tracing subscriber is installed on this path and
                 // there are no indicatif bars, so the macro's usual
                 // objection does not apply and `tracing::warn!` would go
-                // nowhere at all. The NDJSON reader tolerates non-JSON
-                // lines (worker.rs skips what it cannot parse), so a
-                // plain line is safe here.
+                // nowhere at all. A plain line on stderr is safe: the
+                // worker keeps only a tail of it for an error message.
                 #[allow(clippy::disallowed_macros)]
                 {
                     eprintln!("datalib-dag: run store unavailable; nothing recorded this run");
@@ -351,14 +384,12 @@ async fn main() -> Result<()> {
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
-            if sync_only.is_empty() {
-                return Ok(());
-            }
         }
-        if !sync_only.is_empty() {
-            runner = runner.only_fringe(sync_only);
-        }
-        let report = runner.run(&graph).await?;
+        let Some(own) = own else {
+            store.close().await;
+            return Ok(());
+        };
+        let report = runner.serve(&graph, &store).await?;
 
         #[allow(clippy::disallowed_macros)]
         for s in &report.steps {
@@ -391,21 +422,93 @@ async fn main() -> Result<()> {
                 );
             }
         }
-        let cancelled = report.steps.iter().any(|s| {
-            matches!(
-                s.status,
-                StepStatus::Failed {
-                    kind: FailureKind::Cancelled
-                }
-            )
-        });
-        if cancelled {
-            130
-        } else if report.all_ok() && dropped_entries == 0 {
-            0
-        } else {
-            2
-        }
+        // Still open only when the host stopped the loop under it: a
+        // request nobody is waiting on must not be left for the next loop.
+        let outcome = match store.request(&own).await?.and_then(|r| r.closed) {
+            Some(outcome) => outcome,
+            None => {
+                store
+                    .close_request(&own, RequestOutcome::Stopped, None)
+                    .await?;
+                Some(RequestOutcome::Stopped)
+            }
+        };
+        store.close().await;
+        exit_code(outcome, dropped_entries)
     }; // every sink drops here, so the store flushes and joins before we exit
     std::process::exit(code);
+}
+
+enum Taken {
+    /// This process runs the loop.
+    Lock(datalib_dag::lock::FileLock),
+    /// Another process ran it, and the request is over.
+    Closed(Option<RequestOutcome>),
+}
+
+/// Take the loop, or follow the request while someone else runs it. The
+/// lock is tried again on every beat, not just once: the loop that was
+/// running may end between our look and our request landing, and then
+/// nobody is left to serve it but us.
+async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
+    const BEAT: std::time::Duration = std::time::Duration::from_millis(500);
+    let mut announced = false;
+    loop {
+        match datalib_dag::lock::try_acquire_runner(data_root) {
+            Ok(lock) => return Ok(Taken::Lock(lock)),
+            Err(e) if e.is_held() => {
+                if !announced {
+                    announced = true;
+                    #[allow(clippy::disallowed_macros)]
+                    {
+                        eprintln!(
+                            "datalib-dag: the loop on {} is already running{}; \
+                             following request {own} there",
+                            data_root.display(),
+                            e.holder().map(|h| format!(" ({h})")).unwrap_or_default()
+                        );
+                    }
+                }
+                if let Some(closed) = store.request(own).await?.and_then(|r| r.closed) {
+                    #[allow(clippy::disallowed_macros)]
+                    {
+                        println!(
+                            "request {own}: {}",
+                            closed.map(RequestOutcome::as_str).unwrap_or("closed")
+                        );
+                    }
+                    return Ok(Taken::Closed(closed));
+                }
+                tokio::time::sleep(BEAT).await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::FileLock> {
+    datalib_dag::lock::acquire_runner(data_root).map_err(|e| {
+        if e.is_held() {
+            anyhow::anyhow!(
+                "the loop on {} is running{}, and --reset needs the root to itself. \
+                 Wait for it to finish.\n(lock: {})",
+                data_root.display(),
+                match e.holder() {
+                    Some(h) => format!(" — {h}"),
+                    None => String::new(),
+                },
+                e.path().display()
+            )
+        } else {
+            anyhow::anyhow!("{e}")
+        }
+    })
+}
+
+fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
+    match outcome {
+        Some(RequestOutcome::Done) if dropped_entries == 0 => 0,
+        Some(RequestOutcome::Stopped) => 130,
+        _ => 2,
+    }
 }

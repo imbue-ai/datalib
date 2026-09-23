@@ -652,12 +652,13 @@ def _load_diff_pairs(workspace: Path) -> dict[str, tuple[str, str]]:
 
 def _ingest_commit(workspace: Path, source_id: str) -> str:
     """A source's raw store's HEAD, as the runner recorded it after the
-    ingest step: the `entities:<hash>` in the step's output version in
-    `system/dag_state.json` (`datalib_step::ingest::raw_store_version`)."""
+    ingest step: the `entities.doltlite_db:<hash>` in the step's output
+    version in `system/dag_state.json`, read from the store's `main`
+    (`datalib_dag::sink::read_version`)."""
     step = f"{source_id}/ingest"
     state = json.loads((workspace / "system" / "dag_state.json").read_text())
     version = state["steps"][step]["output_versions"][step]
-    m = re.search(r"entities:([0-9a-f]+)", version)
+    m = re.search(r"entities\.doltlite_db:([0-9a-f]+)", version)
     if m is None:
         raise SystemExit(f"no entities commit in {version!r} for {step}")
     return m.group(1)

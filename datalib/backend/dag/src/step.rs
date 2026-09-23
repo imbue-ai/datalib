@@ -49,6 +49,11 @@ pub struct StepSpec {
     /// never what this step produces, so flipping it should not re-run
     /// anything.
     pub streams_output: bool,
+    /// Whether this step reads its inputs at a pinned commit. One that does
+    /// not — it reads files off disk — must not overlap with a writer of
+    /// what it reads, in either order. Not in the fingerprint, for the same
+    /// reason as `streams_output`.
+    pub reads_pinned: bool,
     /// The `[[groups]]` entry this step belongs to, when it has one. The
     /// id is then `<group>/<function>`, composed by the loader; a step
     /// with no group carries a verbatim id and none of these three.
@@ -110,6 +115,7 @@ impl StepSpec {
             run,
             code_version: None,
             streams_output: false,
+            reads_pinned: true,
             group: None,
             group_type: None,
             function: None,
@@ -266,6 +272,10 @@ pub struct StepCtx {
     /// never completed, or because its own definition changed, so
     /// "what moved" has no meaning and the step should do all its work.
     pub changed_inputs: Vec<ArtifactPath>,
+    /// The version of each input this invocation was started against,
+    /// by input path: what it reads, as far as the runner knows. An input
+    /// with no version yet is left out.
+    pub reads: BTreeMap<String, String>,
     /// Progress/log emitter, already tagged with this step's id.
     pub progress: StepProgress,
     /// Where to announce a seal. See [`StepCtx::checkpoint`].

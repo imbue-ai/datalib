@@ -165,6 +165,7 @@ impl Runner {
                 data_root: self.data_root.clone(),
                 inputs: vec![],
                 changed_inputs: vec![],
+                reads: BTreeMap::new(),
                 progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
                 checkpoint: crate::step::CheckpointSink::disconnected(),
                 stop: StopSignal::never(),
@@ -850,6 +851,79 @@ mod tests {
         .input(input)
     }
 
+    /// A doltlite store with one table and one commit on `main`; its head.
+    async fn committed_store(path: &std::path::Path) -> String {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for sql in [
+            "CREATE TABLE t (x INTEGER)",
+            "INSERT INTO t VALUES (1)",
+            "SELECT dolt_commit('-Am', 'seal')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        head
+    }
+
+    /// A step's checkpoint and its outcome name one commit in two spellings
+    /// — a bare hash on the seal, `store:<hash>` on the outcome, as render
+    /// does. The runner reads the store rather than comparing the strings,
+    /// so finishing on the commit it last sealed moves nothing and the
+    /// consumer does not run a second time.
+    #[tokio::test]
+    async fn finishing_on_the_commit_already_sealed_does_not_run_the_consumer_again() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let producer = StepSpec::new(
+            "src/rendered_md",
+            StepRun::in_process({
+                let passes = passes.clone();
+                move |ctx: StepCtx| {
+                    let passes = passes.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let head = committed_store(&dir.join("store.doltlite_db")).await;
+                        ctx.checkpoint(&head);
+                        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                        while passes.load(Ordering::SeqCst) == 0 {
+                            assert!(std::time::Instant::now() < deadline, "no pass on the seal");
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, format!("store:{head}"))],
+                            exit: None,
+                        })
+                    }
+                }
+            }),
+        )
+        .streams_output();
+        let graph = Graph::build(vec![
+            producer,
+            counting_consumer("unified_index/grid", "src/rendered_md", passes.clone()),
+        ])
+        .unwrap();
+
+        let report = runner(root.path()).run(&graph).await.unwrap();
+        assert!(report.all_ok(), "{report:#?}");
+        assert_eq!(passes.load(Ordering::SeqCst), 1, "{report:#?}");
+    }
+
     /// The S of USE, from what the producer says: each seal's rows go on
     /// the consumer's queue, and each pass the consumer completes takes
     /// off everything up to the version it read. The sequence is the
@@ -1064,6 +1138,104 @@ mod tests {
             "the last step ran {} time(s) before the first finished; \
              a middle step's early pass must wake its own consumers",
             sink_passes_at_producer_end.load(Ordering::SeqCst)
+        );
+    }
+
+    /// A chain of three, the last step two hops from a producer still
+    /// running. Its early pass must end as a pass, not a finish: the middle
+    /// step is waiting on the next seal, so nothing the last one reads has
+    /// settled. Finishing it showed the index Succeeded under a render and
+    /// a download that both still read Running.
+    #[tokio::test]
+    async fn the_end_of_a_chain_stays_running_while_its_first_step_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let sink_passes = Arc::new(AtomicU32::new(0));
+        let finished_early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ended = |events: &[Event]| {
+            events.iter().any(|e| {
+                matches!(e, Event::PassEnd { step, .. } | Event::StepFinish { step, .. }
+                    if step == "unified_index/grid")
+            })
+        };
+
+        let producer = {
+            let (rec, sink_passes, finished_early) =
+                (rec.clone(), sink_passes.clone(), finished_early.clone());
+            StepSpec::new(
+                "slack/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, sink_passes, finished_early) =
+                        (rec.clone(), sink_passes.clone(), finished_early.clone());
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("data.txt"), "batch0").unwrap();
+                        // Bounded, so a regression fails rather than hangs.
+                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        let sink_ran = || {
+                            let events = rec.0.lock().unwrap();
+                            sink_passes.load(Ordering::SeqCst) >= 1 && ended(events.as_slice())
+                        };
+                        while !sink_ran() && std::time::Instant::now() < deadline {
+                            ctx.checkpoint("v0");
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        let finished = {
+                            let events = rec.0.lock().unwrap();
+                            events.iter().any(|e| {
+                                matches!(e, Event::StepFinish { step, .. }
+                                    if step == "unified_index/grid")
+                            })
+                        };
+                        finished_early.store(finished, Ordering::SeqCst);
+                        std::fs::write(dir.join("data.txt"), "final").unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "final")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+            .streams_output()
+        };
+        let middle = StepSpec::new(
+            "slack/rendered",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
+                    .unwrap_or_default();
+                std::fs::write(dir.join("out.txt"), &read).unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, version)],
+                    exit: None,
+                })
+            }),
+        )
+        .input("slack/raw")
+        .streams_output();
+        let graph = Graph::build(vec![
+            producer,
+            middle,
+            counting_consumer("unified_index/grid", "slack/rendered", sink_passes.clone()),
+        ])
+        .unwrap();
+
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(
+            ended(rec.0.lock().unwrap().as_slice()),
+            "the last step never ran while the first was running"
+        );
+        assert!(
+            !finished_early.load(Ordering::SeqCst),
+            "the last step finished while the first was still running"
         );
     }
 

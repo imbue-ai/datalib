@@ -157,9 +157,9 @@ _E2E_DATA = [
     # Two API-backed sources for the streaming spec. Neither reaches the
     # network: run_e2e.sh turns each checked-in fixture into playback
     # tapes with `datalib-step synthesize`, and the spec's backend replays
-    # them with a per-request delay so a download lasts long enough to
-    # watch. These two are among the downloads that seal checkpoints
-    # mid-run, which is what the spec is about.
+    # them behind a hold that parks each download after its first seal,
+    # for as long as the spec watches. These two are among the downloads
+    # that seal checkpoints mid-run, which is what the spec is about.
     "//datalib/backend/etl/providers/chatgpt:tng_fixture",
     "//datalib/backend/etl/providers/claude:tng_fixture",
     # rules_js-linked node_modules built from pnpm-lock.yaml; replaces

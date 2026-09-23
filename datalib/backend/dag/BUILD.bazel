@@ -28,7 +28,10 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
@@ -37,6 +40,7 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -67,7 +71,7 @@ rust_binary(
     edition = "2021",
     # Must match [workspace.package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.36.1",
+    version = "0.37.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -109,6 +113,7 @@ rust_test(
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

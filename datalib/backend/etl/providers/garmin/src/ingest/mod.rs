@@ -208,6 +208,10 @@ fn ymd(d: NaiveDate) -> String {
     d.format("%Y-%m-%d").to_string()
 }
 
+fn days_through(start: NaiveDate, end: NaiveDate) -> u64 {
+    ((end - start).num_days() + 1).max(0) as u64
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
     let api = opts.api;
@@ -567,13 +571,18 @@ impl Walk<'_> {
     // ── per-day metrics ──────────────────────────────────────────────
 
     async fn daily(&mut self, s: &mut FetchSummary) -> Result<()> {
-        let metrics = self.api.metrics();
-        let total_days = (self.today - self.since).num_days().max(0) as u64 + 1;
-        self.progress
-            .set_length(Some(total_days * metrics.len() as u64));
-        for metric in metrics {
+        let mut walks = Vec::new();
+        for metric in self.api.metrics() {
             let scope = format!("{CURSOR_DAILY_PREFIX}{metric}");
             let start = self.resume_from(&scope).await?;
+            walks.push((metric, scope, start));
+        }
+        let total: u64 = walks
+            .iter()
+            .map(|(_, _, start)| days_through(*start, self.today))
+            .sum();
+        self.progress.set_length(Some(total));
+        for (metric, scope, start) in walks {
             let mut day = start;
             let mut consecutive_failures = 0u32;
             info!(event = "garmin_daily_begin", metric, start = %ymd(start), end = %ymd(self.today), "walking one daily metric");
@@ -616,6 +625,7 @@ impl Walk<'_> {
                                 "too many days in a row failed; leaving this metric"
                             );
                             cursor_at = Some(d);
+                            self.progress.inc(days_through(day, self.today));
                             break;
                         }
                     }
@@ -1119,6 +1129,14 @@ mod tests {
             assert!(p.contains("2026-09-14"), "{m}: {p}");
             assert!(!p.contains(' '), "{m}: display name must be encoded: {p}");
         }
+    }
+
+    #[test]
+    fn days_through_counts_both_ends_and_never_goes_negative() {
+        let d = |s| date(s).unwrap();
+        assert_eq!(days_through(d("2026-09-01"), d("2026-09-01")), 1);
+        assert_eq!(days_through(d("2026-09-01"), d("2026-09-08")), 8);
+        assert_eq!(days_through(d("2026-09-09"), d("2026-09-08")), 0);
     }
 
     #[test]
