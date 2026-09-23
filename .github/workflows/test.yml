@@ -181,6 +181,12 @@ jobs:
     # otherwise hold a runner for GitHub's default of six hours.
     timeout-minutes: 90
 
+    # Everything but a `main` push builds our own crates at opt-level 1
+    # (`.bazelrc`'s `pr-tests`). The flag changes the output directory,
+    # so every step below that names the flags has to carry it too.
+    env:
+      PR_TESTS: ${{ github.event_name != 'push' && '--config=pr-tests' || '' }}
+
     # GitHub Actions defaults `run:` steps to `sh` (dash) when the job
     # runs inside a container, which rejects `set -o pipefail` and `[[ ]]`.
     # Force bash so the bash-isms in the steps below work.
@@ -350,7 +356,7 @@ jobs:
           else
               mode=(--jobs=16)
           fi
-          bazel test -c opt --config=release --config=ci --nostamp "${mode[@]}" \
+          bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
@@ -366,7 +372,7 @@ jobs:
         if: failure()
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           zip="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.outputs/outputs.zip"
           if [[ -f "${zip}" ]]; then
             mkdir -p e2e-report && cp -L "${zip}" e2e-report/playwright-report.zip
@@ -394,7 +400,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           log="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.log"
           if [[ -f "${log}" ]]; then
             mkdir -p e2e-report && cp -L "${log}" e2e-report/test.log
@@ -420,7 +426,7 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
@@ -506,6 +512,7 @@ jobs:
       - name: bazel test //... (contributor cache)
         run: |
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
+            --config=pr-tests \
             --build_metadata=ROLE=CACHE \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...

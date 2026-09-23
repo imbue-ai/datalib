@@ -392,6 +392,16 @@ common:ci --lockfile_mode=error
 build:ci --remote_download_minimal
 build:ci --disk_cache=
 
+# Pull-request test runs: our own crates at opt-level 1, everything else
+# (third-party crates, doltlite's C) still at `-c opt`'s 3. CI is bound
+# by rustc code generation on a 4-vCPU runner, and optimising our crates
+# is most of it; a PR only needs them correct, not fast. `main` pushes
+# and releases leave this off, so an opt-only bug still reds `main`.
+# rules_rust appends the flag after the compilation mode's, and rustc
+# takes the last `-C opt-level`. The filter is the crate root's path:
+# third-party crates live under `external/`.
+build:pr-tests --@rules_rust//rust/settings:per_crate_rustc_flag=datalib/@-Copt-level=1
+
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
 common --enable_platform_specific_config
 
