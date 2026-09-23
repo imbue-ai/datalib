@@ -40,7 +40,7 @@ async fn parses_tng_api_fixture() {
     // Commit what the ingest wrote, the way the processor's `RawStoreSession`
     // does in production: render reads committed state only.
     {
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: claude ingest")
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: claude ingest")
             .await
             .expect("commit the ingest");
         db.close().await;

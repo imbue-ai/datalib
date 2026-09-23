@@ -144,7 +144,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         ] {
             let _ = sqlx::query(q).execute(db.pool()).await;
         }
-        let _ = datalib_etl::doltlite_raw::commit_run(db.pool(), "test download").await;
+        let _ = datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await;
     }
     db.close().await;
 

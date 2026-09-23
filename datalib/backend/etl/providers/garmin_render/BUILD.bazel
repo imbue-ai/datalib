@@ -52,7 +52,6 @@ rust_test(
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl/render:datalib_etl_render",
         "@datalib_crates//:chrono",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

@@ -125,8 +125,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     let again = fetch(opts()).await.unwrap();
     assert_eq!((again.files, again.files_read), (3, 0));
 
-    sqlx::query("SELECT dolt_commit('-Am', 'fixture ingest')")
-        .execute(pool)
+    datalib_etl::doltlite_raw::commit_run(pool, "fixture ingest")
         .await
         .unwrap();
     db.close().await;

@@ -495,11 +495,18 @@ fn rows_a_killed_writer_committed_at_the_sql_level_are_discarded_by_the_next_ope
 ///
 /// What it measures, and what the applet's per-request pin rests on:
 /// a transaction another process has open is invisible here (the reader
-/// never sees the delete without the reload), the window between the SQL
-/// `COMMIT` and the `dolt_commit` shows the whole uncommitted batch to a
-/// working-set read and nothing new to a pinned one, and HEAD moves on a
+/// never sees the delete without the reload), and HEAD moves on a
 /// connection that was open before the commit -- so a long-lived reader
 /// can pin per request without reopening.
+///
+/// The `sql_committed` phase is the one that used to be frightening.
+/// A writer on `main` that `COMMIT`ed at the SQL level but had not yet
+/// `dolt_commit`ed showed its whole uncommitted batch to any working-set
+/// read in any process, which is most of why readers pin at all. Writers
+/// now work on `WRITER_BRANCH` and fast-forward `main` only at the seal,
+/// so that phase shows a reader nothing: the working set it can see is
+/// `main`'s, and `main` does not move until the batch is sealed. This
+/// test is where that claim is checked against two real processes.
 #[test]
 fn what_a_reader_sees_while_a_writer_deletes_and_reloads() {
     let t = Scratch::new();
@@ -589,9 +596,11 @@ fn what_a_reader_sees_while_a_writer_deletes_and_reloads() {
             // A transaction the writer has open is the writer's alone:
             // neither the delete nor the reload reaches another process.
             "before" | "deleted" | "reloaded" => (SEED_ROWS, &seed, SEED_ROWS),
-            // `COMMIT`ed at the SQL level, not yet to doltlite: the working
-            // set now shows the batch to anyone, HEAD does not.
-            "sql_committed" => (RELOAD_ROWS, &seed, SEED_ROWS),
+            // `COMMIT`ed at the SQL level, not yet sealed: the batch is on
+            // the writer's branch, so a reader on `main` sees neither it
+            // nor a moved HEAD. Before writers took a branch this read
+            // `RELOAD_ROWS` -- the uncommitted batch, visible to everyone.
+            "sql_committed" => (SEED_ROWS, &seed, SEED_ROWS),
             "dolt_committed" => (RELOAD_ROWS, &commit, RELOAD_ROWS),
             _ => unreachable!(),
         };

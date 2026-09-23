@@ -90,7 +90,7 @@ async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
     let s = fetch(o).await;
     // Sealed the way the processor's `RawStoreSession::finish` seals a
     // run: a writer's next open discards what was never committed.
-    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: conv_uuids fetch")
+    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: conv_uuids fetch")
         .await
         .unwrap();
     db.close().await;

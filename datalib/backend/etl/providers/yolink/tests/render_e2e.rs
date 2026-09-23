@@ -44,8 +44,7 @@ async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&s
             .unwrap();
     }
     tx.commit().await.unwrap();
-    sqlx::query("SELECT dolt_commit('-Am', 'test seed')")
-        .execute(pool)
+    datalib_etl::doltlite_raw::commit_run(pool, "test seed")
         .await
         .unwrap();
 }

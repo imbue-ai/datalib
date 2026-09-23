@@ -71,6 +71,25 @@ def _tail(output: str | bytes | None, lines: int = 40) -> str:
     return "".join(f"  | {ln}\n" for ln in kept) if kept else ""
 
 
+def _last_cause(stderr: str) -> str | None:
+    """The innermost `caused by:` a failed step printed, or `None`.
+
+    `datalib-step` prints its error chain through `tracing`, so off a TTY
+    each cause arrives as a JSON envelope with the sentence in
+    `fields.message`. A line that is not an envelope is kept as it is:
+    a panic, or a step that prints its own prose.
+    """
+    causes = []
+    for ln in stderr.splitlines():
+        try:
+            msg = json.loads(ln)["fields"]["message"]
+        except (ValueError, KeyError, TypeError):
+            msg = ln
+        if isinstance(msg, str) and msg.startswith(("error:", "caused by:")):
+            causes.append(msg)
+    return causes[-1] if causes else None
+
+
 # Bookkeeping the ingest side owns and render never reads. Mutating it
 # proves nothing, and deleting `sync_runs` would only exercise the
 # framework's own skip. `_datalib_meta` is which build wrote the store.
@@ -254,12 +273,7 @@ class RenderContractTest(unittest.TestCase):
             )
         if result.returncode == 0:
             return None
-        causes = [
-            ln
-            for ln in result.stderr.splitlines()
-            if ln.startswith(("error:", "caused by:"))
-        ]
-        return causes[-1] if causes else f"exit {result.returncode}"
+        return _last_cause(result.stderr) or f"exit {result.returncode}"
 
     # ── the raw store ───────────────────────────────────────────────
 

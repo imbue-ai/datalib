@@ -249,6 +249,118 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
     db_path.with_file_name(name)
 }
 
+/// The branch every datalib writer works on.
+///
+/// `main` is what a reader reads, and a writer never touches it
+/// directly: it works here, and fast-forwards `main` at each seal
+/// ([`commit_run`]). Everything between two seals is invisible to a
+/// reader until that moment — the rows, and the schema reconcile that
+/// creates the tables, which is the half a pinned read could not
+/// protect itself from (`pin.rs` reads the *working set's*
+/// `sqlite_master`, not the pin's).
+///
+/// The name is also the signal. `fsindex` keeps one branch per scan root
+/// and publishes none of them, so [`publish_to_main`] fires only for a
+/// connection sitting on this exact branch and leaves every other one
+/// alone.
+pub const WRITER_BRANCH: &str = "datalib_writer";
+
+/// Whether an error is "this build has no doltlite", rather than
+/// anything about the store.
+fn is_missing_function(e: &sqlx::Error) -> bool {
+    e.to_string().contains("no such function")
+}
+
+/// Put a writer's connection on [`WRITER_BRANCH`], creating it the one
+/// time it is not there yet.
+///
+/// In `after_connect` rather than once at open, because sqlx replaces a
+/// connection that breaks and a replacement would start on the file's
+/// default branch — where a writer's half-finished work would be
+/// visible to every reader.
+///
+/// **`dolt_connect_branch`, not `dolt_checkout`.** Both leave the
+/// session on the branch, but `dolt_checkout` persists a working set
+/// for the branch it leaves and the one it enters, which costs a few
+/// hundred bytes on *every* open — including opens of a store nobody
+/// writes to. `dolt_connect_branch` only loads the branch's working set
+/// and sets the session's branch and head: it serializes no refs and
+/// commits nothing, so it writes nothing.
+/// `reopening_an_untouched_store_does_not_grow_it` is what holds this.
+async fn checkout_writer_branch(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+) -> std::result::Result<(), sqlx::Error> {
+    // Absent branch is `branch not found`, which is how we learn to
+    // create it rather than a failure. Creating it is a real write, and
+    // happens once per file.
+    match sqlx::query("SELECT dolt_connect_branch(?)")
+        .bind(WRITER_BRANCH)
+        .execute(&mut *conn)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if is_missing_function(&e) => Ok(()),
+        Err(_) => sqlx::query("SELECT dolt_checkout('-b', ?)")
+            .bind(WRITER_BRANCH)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ()),
+    }
+}
+
+/// The commit a branch names, or `None` when this build has no doltlite
+/// or the branch does not exist yet.
+async fn branch_head(pool: &SqlitePool, branch: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT dolt_hashof(?)")
+        .bind(branch)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .flatten()
+}
+
+/// Fast-forward `main` to the writer's branch: the moment a seal becomes
+/// visible to every reader of this file.
+///
+/// A force-move rather than a `dolt_merge` because one writer per file
+/// means `main` only ever moves here, so the branch is always a
+/// descendant of `main` and a merge would be a fast-forward anyway. It
+/// also keeps `main`'s history linear, which is what
+/// `dolt_diff_<table>` between two of its commits rests on. Two writers
+/// on one store would need the real merge.
+///
+/// A no-op on any other branch — see [`WRITER_BRANCH`].
+///
+/// `commit_run` calls this for you, and that is the seal every step and
+/// provider should use. It is public for the one shape `commit_run`
+/// cannot express: a commit that needs an argument of its own, such as
+/// the `--date` the yolink fixture generator pins so `dolt_log()` does
+/// not report build time. Such a caller commits by hand and then calls
+/// this — a commit nobody can see is not a seal.
+pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
+    let active: Option<String> = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    if active.as_deref() != Some(WRITER_BRANCH) {
+        return Ok(());
+    }
+    // Re-pointing `main` at a commit it already names still writes a ref
+    // chunk — ~676 bytes an open, on a store nobody touched.
+    // `reopening_an_untouched_store_does_not_grow_it` is what notices,
+    // and it is the only check that would: this kind of leak leaves
+    // `dolt_log` unchanged and `dolt_status` clean.
+    if branch_head(pool, WRITER_BRANCH).await == branch_head(pool, "main").await {
+        return Ok(());
+    }
+    sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
+        .bind(WRITER_BRANCH)
+        .execute(pool)
+        .await
+        .context("fast-forward main to the writer branch")?;
+    Ok(())
+}
+
 /// The pool every open shares: one connection, never recycled.
 ///
 /// Pool size 1 with no recycling because doltlite's HEAD, working set and
@@ -266,7 +378,7 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// the connection to close, so it is also the moment the lock is free.
 ///
 /// The acquire timeout is [`datalib_pin::acquire_timeout`].
-async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
+async fn connect_pool(db_path: &Path, access: Access, on_branch: bool) -> Result<SqlitePool> {
     let writable = access == Access::ReadWrite;
     let mut options = SqlitePoolOptions::new()
         .max_connections(1)
@@ -295,7 +407,11 @@ async fn connect_pool(db_path: &Path, access: Access) -> Result<SqlitePool> {
                     None => take_writer_lock(&db_path)
                         .map_err(|e| sqlx::Error::Configuration(e.into()))?,
                 };
-                attach_writer_lock(conn, lock).await
+                attach_writer_lock(conn, lock).await?;
+                if !on_branch {
+                    return Ok(());
+                }
+                checkout_writer_branch(conn).await
             })
         });
     }
@@ -542,7 +658,7 @@ impl std::error::Error for SchemaBreak {}
 ///
 /// [`Reads::At`]: crate::pin::Reads::At
 pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
-    let pool = connect_pool(db_path, Access::ReadOnly).await?;
+    let pool = connect_pool(db_path, Access::ReadOnly, false).await?;
     let pin = match commit {
         Some(commit) => Some(crate::pin::Pin::at(commit)?),
         None => crate::pin::head(&pool).await?,
@@ -557,12 +673,15 @@ pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<
     Ok(Some(Reader { pool, pin }))
 }
 
-/// A read-only connection with no pin, for the one store that cannot be
-/// read at a commit yet: the blob CAS, which most downloads never commit
-/// (docs/dev/audit_2026-09-17.md §7), so a read at HEAD would find no
-/// blob at all. Everything else reads through [`open_reader`].
+/// A read-only connection with no pin, for the blob CAS alone.
+///
+/// Not because the CAS cannot be pinned — it is committed like every
+/// other store, blobs before the entities that name them
+/// (`raw_store::SealState::seal`) — but because nothing has moved it
+/// over yet. `blob_cas::open_cas_reader` has the note. Everything else
+/// reads through [`open_reader`].
 pub(crate) async fn open_reader_unpinned(db_path: &Path) -> Result<SqlitePool> {
-    connect_pool(db_path, Access::ReadOnly).await
+    connect_pool(db_path, Access::ReadOnly, false).await
 }
 
 /// A store somebody else writes, read at one commit. Derefs to its pool,
@@ -623,7 +742,7 @@ async fn open_inner(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    let pool = connect_pool(db_path, Access::ReadWrite).await?;
+    let pool = connect_pool(db_path, Access::ReadWrite, true).await?;
     // Before anything writes: a store a newer line of datalib wrote is
     // refused whole, because the reconcile below would drop what it
     // does not know (`datalib_store_meta::guard`).
@@ -638,6 +757,11 @@ async fn open_inner(
     // writer left in the working set was never at a seal boundary, and every
     // reader pins commits, so nobody was promised it.
     discard_dirty_working_tree(&pool, db_path).await?;
+    // A writer that died between its commit and its publication left the
+    // branch ahead of `main`. The commit is a seal the last run meant to
+    // make, so finish it rather than leaving it stranded where no reader
+    // can see it.
+    publish_to_main(&pool).await?;
     // The ladder, before the DDL is compared to anything: a rung is how
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
@@ -792,8 +916,9 @@ async fn open_inner(
     //
     // Same predicate the reader uses, not a second copy of it: a store this
     // says is fine and `pin::head` then refuses would be the worst of both.
-    // A store with no tables at all passes -- nothing creates a view over
-    // it, and a read fails loudly by itself.
+    // Reachable only past `bare`, so `_datalib_meta` and the caller's DDL
+    // have been created -- the predicate's "a file with no tables is not
+    // readable" arm cannot fire here.
     anyhow::ensure!(
         crate::pin::carries_committed_schema(&pool).await,
         "opened {} but its tables are not committed: either the schema \
@@ -1411,6 +1536,12 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
         Err(e) if e.to_string().contains("nothing to commit") => None,
         Err(e) => return Err(anyhow::Error::new(e).context("dolt_commit")),
     };
+    // The seal is the commit *and* its publication: a commit a reader
+    // cannot see is not a seal. Between the two a crash leaves the
+    // branch ahead of `main`, which the next `open` finishes.
+    if hash.is_some() {
+        publish_to_main(pool).await?;
+    }
     let elapsed_ms = started.elapsed().as_millis() as u64;
     // `message` is the sentence's own field name in tracing, so the
     // commit message goes under another.
@@ -2368,6 +2499,11 @@ mod tests {
     /// Asserting on the byte size is the point: this leak left `dolt_log`
     /// unchanged, `dolt_status` clean and every step reporting no work, so
     /// every cheaper proxy was already true while it was live.
+    ///
+    /// It also holds the reason `checkout_writer_branch` uses
+    /// `dolt_connect_branch`: `dolt_checkout` persists a working set for
+    /// the branch it leaves and the one it enters, which put ~500 bytes
+    /// into an untouched store on every open and nothing else noticed.
     #[tokio::test]
     async fn reopening_an_untouched_store_does_not_grow_it() {
         let dir = tempdir().unwrap();
@@ -3917,7 +4053,7 @@ mod tests {
 
         // A store from before the table existed reads as absent.
         let old = tmp.path().join("old.doltlite_db");
-        let c = connect_pool(&old, Access::ReadWrite).await.unwrap();
+        let c = connect_pool(&old, Access::ReadWrite, true).await.unwrap();
         sqlx::query(T1).execute(&c).await.unwrap();
         assert_eq!(datalib_store_meta::read(&c).await.unwrap(), None);
         c.close().await;
@@ -3983,7 +4119,7 @@ mod tests {
             *last = (last.parse::<u64>().unwrap() + 1).to_string();
             parts.join(".")
         };
-        let c = connect_pool(&path, Access::ReadWrite).await.unwrap();
+        let c = connect_pool(&path, Access::ReadWrite, true).await.unwrap();
         sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
             .bind(&patch)
             .execute(&c)
@@ -4055,6 +4191,23 @@ mod tests {
         pool.close().await;
     }
 
+    /// A fresh connection starts on the file's **stored default branch**,
+    /// and ours must stay `main` however many times a writer uses its own.
+    ///
+    /// Not "a connection always starts on `main`" — that is the
+    /// consequence, not the rule. In doltlite the default branch is
+    /// `zDefaultBranch` in the persisted refs block: seeding sets it to
+    /// the branch it created, `csEnsureDefaultBranch` falls back to
+    /// `main` only for a file carrying none, and `dolt_default_branch(x)`
+    /// moves it. Nothing in this repo calls that — and if anything ever
+    /// did, every reader would silently start on a writer's branch and
+    /// read uncommitted rows, which is the failure this whole
+    /// construction exists to prevent. So assert the rule, not the
+    /// consequence.
+    ///
+    /// Measured through a *reader*: a writer is put on [`WRITER_BRANCH`]
+    /// by `after_connect` whether or not it inherited anything, so it
+    /// could not tell the two apart.
     #[tokio::test]
     async fn a_fresh_connection_starts_on_main() {
         let tmp = tempfile::tempdir().unwrap();
@@ -4066,6 +4219,11 @@ mod tests {
         )
         .await
         .unwrap();
+        if !has_dolt_extensions(&first).await {
+            return;
+        }
+        // The writer is on its own branch, and a checkout somewhere else
+        // again is still only this connection's business.
         sqlx::query("SELECT dolt_checkout('-b', ?)")
             .bind("elsewhere")
             .execute(&first)
@@ -4078,16 +4236,23 @@ mod tests {
         assert_eq!(active, "elsewhere");
         first.close().await;
 
-        let second = open(&path, &[]).await.unwrap();
+        let second = connect_pool(&path, Access::ReadOnly, false).await.unwrap();
         let active: String = sqlx::query_scalar("SELECT active_branch()")
             .fetch_one(&second)
             .await
             .unwrap();
+        let default: String = sqlx::query_scalar("SELECT dolt_default_branch()")
+            .fetch_one(&second)
+            .await
+            .unwrap();
         assert_eq!(
-            active, "main",
-            "a new connection inherited the previous one's branch; if doltlite \
-             ever makes the active branch a property of the file, the \
-             recycling guard in `open` can be revisited"
+            default, "main",
+            "the file's default branch moved; every reader now starts on \
+             {default:?} and reads whatever a writer left uncommitted there"
+        );
+        assert_eq!(
+            active, default,
+            "a new connection did not start on the file's default branch"
         );
         second.close().await;
     }
