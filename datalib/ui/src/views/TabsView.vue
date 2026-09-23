@@ -316,7 +316,7 @@ function titleOf(tab: Tab): string {
   return displayTitle(tab.source, tab.title);
 }
 
-// The tab alone, at its current state: a new window with a stack of its own.
+// The tab alone, at its current state: a new tab or window with a stack of its own.
 function popOutHref(tab: Tab): string {
   return encodeColumns([specOfTab(tab)]);
 }
@@ -426,7 +426,7 @@ function resetSidebarWidth() {
             :href="popOutHref(row.tab)"
             target="_blank"
             rel="noopener"
-            title="pop out: open this card alone, in a new window"
+            title="pop out: open this card alone, in a new tab or window"
             @click.stop
             >↗</a
           >
