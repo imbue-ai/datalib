@@ -1,7 +1,13 @@
-//! Drive the `qmd` CLI to (re)build a BM25 + embedding index over the
-//! rendered conversation markdown tree at a given root.
+//! Drive `qmd` to (re)build a BM25 + embedding index over the rendered
+//! conversation markdown tree at a given root.
+//!
+//! Indexing goes through the qmd CLI. The embedding pass does not: it is
+//! the long one, and the CLI reports its progress only to a terminal, so
+//! that pass runs a small script of ours against qmd's SDK instead and
+//! reads progress back as NDJSON. See [`EmbedEvent`].
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use datalib_obs::status_line;
@@ -50,9 +56,76 @@ pub fn discover_groups(root: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// How far along the embedding pass is, as qmd's own `EmbedProgress`
+/// reports it (`third-party/qmd/src/store.ts`).
+///
+/// Progress is measured in **input bytes**, not chunks: qmd discovers
+/// the chunk count batch by batch, so `total_chunks` climbs during the
+/// run and a chunk ratio reads wrong while large documents remain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EmbedProgress {
+    pub chunks_embedded: u64,
+    pub total_chunks: u64,
+    pub bytes_processed: u64,
+    pub total_bytes: u64,
+    /// Failed chunks still awaiting a successful retry.
+    pub errors: u64,
+}
+
+/// One line of the embed wrapper's NDJSON (`src/js/embed_ndjson.mjs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbedEvent {
+    Progress(EmbedProgress),
+    Done {
+        docs_processed: u64,
+        chunks_embedded: u64,
+        errors: u64,
+    },
+    /// Another process holds qmd's embed lock, so this pass embedded
+    /// nothing.
+    Busy,
+    Error(String),
+}
+
+/// Parse one line of the wrapper's output.
+///
+/// `None` for anything that is not one of our events — a blank line, or
+/// something a dependency printed to stdout. The caller logs those
+/// rather than failing on them: a chatty transitive package must not be
+/// able to fail an embed that otherwise worked.
+pub fn parse_embed_event(line: &str) -> Option<EmbedEvent> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let n = |key: &str| v.get(key).and_then(serde_json::Value::as_u64).unwrap_or(0);
+    match v.get("event")?.as_str()? {
+        "progress" => Some(EmbedEvent::Progress(EmbedProgress {
+            chunks_embedded: n("chunksEmbedded"),
+            total_chunks: n("totalChunks"),
+            bytes_processed: n("bytesProcessed"),
+            total_bytes: n("totalBytes"),
+            errors: n("errors"),
+        })),
+        "done" => Some(EmbedEvent::Done {
+            docs_processed: n("docsProcessed"),
+            chunks_embedded: n("chunksEmbedded"),
+            errors: n("errors"),
+        }),
+        "busy" => Some(EmbedEvent::Busy),
+        "error" => Some(EmbedEvent::Error(
+            v.get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("qmd embed failed without a message")
+                .to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// Called with each [`EmbedProgress`] as the embedding pass reports it.
+pub type OnEmbedProgress = Arc<dyn Fn(EmbedProgress) + Send + Sync>;
+
 /// Options for an indexer run. Construct with `IndexOptions::new(root)` and
 /// override fields as needed.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IndexOptions {
     pub root: PathBuf,
     pub embed: bool,
@@ -73,6 +146,9 @@ pub struct IndexOptions {
     /// pinned, sha256-verified files (`datalib_qmd_models`) before this
     /// runs, and qmd finds them in place.
     pub models_dir: PathBuf,
+    /// Where to report the embedding pass's progress. `None` runs it
+    /// exactly the same way and drops the numbers.
+    pub on_embed_progress: Option<OnEmbedProgress>,
 }
 
 impl IndexOptions {
@@ -84,7 +160,22 @@ impl IndexOptions {
             groups: Vec::new(),
             retire_collections: Vec::new(),
             models_dir: default_models_dir(),
+            on_embed_progress: None,
         }
+    }
+}
+
+impl std::fmt::Debug for IndexOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexOptions")
+            .field("root", &self.root)
+            .field("embed", &self.embed)
+            .field("qmd_version", &self.qmd_version)
+            .field("groups", &self.groups)
+            .field("retire_collections", &self.retire_collections)
+            .field("models_dir", &self.models_dir)
+            .field("on_embed_progress", &self.on_embed_progress.is_some())
+            .finish()
     }
 }
 
@@ -237,7 +328,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     }
 
     if opts.embed {
-        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
+        run_embed(&cache_home, &qmd_dir, &index_path, opts)?;
     }
 
     if !index_path.exists() {
@@ -391,6 +482,178 @@ fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result
     );
 }
 
+/// Our SDK driver. Written to a temp file per run and deleted after,
+/// so what runs is always the copy this build carries.
+///
+/// It has to be a *file*: see the script's own header for why `node -e`
+/// is not an option, and [`embed_script`] for why the file is not in the
+/// data root.
+const EMBED_NDJSON_MJS: &str = include_str!("js/embed_ndjson.mjs");
+
+/// The wrapper on disk, removed when this is dropped.
+///
+/// Outside the data root deliberately. The step's tree is swept whole
+/// into the test fixture's overlay tar
+/// (`tests/fixtures/build_qmd_index.py`), so a scratch file written
+/// beside the index would be baked into the fixture.
+struct EmbedScript(PathBuf);
+
+impl EmbedScript {
+    fn write() -> Result<Self> {
+        // The pid alone is not unique enough: a crate's tests run as
+        // threads of one process, so two scripts would share a path and
+        // the first `Drop` would delete a file the other still needed.
+        static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // `.mjs` so node reads it as a module from the extension alone,
+        // with no flag that a forked grandchild could inherit.
+        let path = std::env::temp_dir().join(format!(
+            "datalib-qmd-embed-{}-{nth}.mjs",
+            std::process::id()
+        ));
+        std::fs::write(&path, EMBED_NDJSON_MJS)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for EmbedScript {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The embedding pass.
+///
+/// Through qmd's SDK when the runtime is staged, so progress comes back
+/// as NDJSON; through `qmd embed` when it is not. The `npx` fallback has
+/// no importable package path (see
+/// `datalib_runtime::node_runtime::staged_package`), and that is the
+/// only way to be here without one.
+fn run_embed(
+    cache_home: &Path,
+    qmd_dir: &Path,
+    index_path: &Path,
+    opts: &IndexOptions,
+) -> Result<()> {
+    let Some((node, pkg_dir)) = datalib_runtime::qmd::qmd_sdk_paths(&opts.qmd_version) else {
+        status_line!(
+            "[qmd-indexer] no staged qmd package — embedding through the CLI, \
+             which reports no progress until it is done"
+        );
+        return run_qmd(cache_home, &opts.qmd_version, &["embed"]);
+    };
+
+    let script = EmbedScript::write()?;
+    let mut cmd = std::process::Command::new(&node);
+    // No node flags before the script. Anything here is inherited by
+    // every process forked below us — see the script's header.
+    cmd.arg(&script.0).arg(&pkg_dir).arg(index_path);
+    // qmd writes this beside the index during `update`; it is where the
+    // embedding model is pinned. Passing it keeps the SDK resolving the
+    // same model the CLI would rather than falling back to qmd's default
+    // and agreeing with us only by coincidence.
+    let config = qmd_dir.join("index.yml");
+    if config.is_file() {
+        cmd.arg(&config);
+    }
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
+    cmd.env("NO_COLOR", "1");
+    cmd.stdout(std::process::Stdio::piped());
+    status_line!(
+        "[qmd-indexer] $ {}",
+        datalib_runtime::node_runtime::display_command(&cmd)
+    );
+
+    // No `shared_multi().suspend(…)` here, unlike `run_qmd`. That
+    // exists so a child printing to an inherited stdout doesn't scribble
+    // over live bars — but this child's stdout is a pipe, and suspending
+    // for the length of the embed would hide the bars for exactly the
+    // stretch this progress is for.
+    read_embed_events(&mut cmd, opts.on_embed_progress.as_deref())
+}
+
+/// Spawn the wrapper and drain its NDJSON until it exits.
+///
+/// stderr is left inherited — it is the step's log, and node's own
+/// diagnostics belong there rather than in this parser.
+fn read_embed_events(
+    cmd: &mut std::process::Command,
+    on_progress: Option<&(dyn Fn(EmbedProgress) + Send + Sync)>,
+) -> Result<()> {
+    use std::io::BufRead;
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| "failed to spawn node; is the runtime staged?")?;
+    let stdout = child.stdout.take().expect("stdout piped");
+
+    let mut failure: Option<String> = None;
+    let mut done: Option<String> = None;
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line.context("read from qmd embed")?;
+        match parse_embed_event(&line) {
+            Some(EmbedEvent::Progress(p)) => {
+                if let Some(f) = on_progress {
+                    f(p);
+                }
+            }
+            Some(EmbedEvent::Done {
+                docs_processed,
+                chunks_embedded,
+                errors,
+            }) => {
+                done = Some(format!(
+                    "embedded {chunks_embedded} chunks from {docs_processed} documents\
+                     {}",
+                    if errors > 0 {
+                        format!(", {errors} chunk(s) failed after retries")
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+            // The CLI prints "Skipping." here and exits 0, which leaves
+            // a half-embedded index looking like a finished one. This
+            // step owns the index, so a second embed means something
+            // unexpected is writing it: say so and fail.
+            Some(EmbedEvent::Busy) => {
+                failure = Some(
+                    "another process holds qmd's embed lock \
+                     (.qmd-embed.lock beside the index); nothing else should be \
+                     writing this index"
+                        .to_string(),
+                )
+            }
+            Some(EmbedEvent::Error(msg)) => failure = Some(msg),
+            // Not ours: a dependency wrote to stdout. Say so rather than
+            // dropping it, and don't let it fail the pass.
+            None if !line.trim().is_empty() => status_line!("[qmd-indexer] qmd: {line}"),
+            None => {}
+        }
+    }
+
+    let status = child.wait().context("wait for qmd embed")?;
+    if let Some(msg) = failure {
+        bail!("qmd embed failed: {msg}");
+    }
+    // A wrapper that died without saying why — an OOM kill, a native
+    // crash in node-llama-cpp — exits non-zero with no `error` line.
+    // Leaving that as success would silently ship a half-embedded index.
+    if !status.success() {
+        bail!("qmd embed failed: {status}");
+    }
+    // Every branch of the wrapper ends in one of the three terminal
+    // events, so a clean exit with none of them means the script did
+    // not run — a broken invocation, which exits 0 and embeds nothing.
+    let Some(done) = done else {
+        bail!("qmd embed exited cleanly without reporting what it did");
+    };
+    status_line!("[qmd-indexer] {done}");
+    Ok(())
+}
+
 fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
     let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
     cmd.args(args);
@@ -445,6 +708,235 @@ mod tests {
         unsafe { std::env::set_var("HOME", "/tmp/qmd-test-home") };
         let dir = default_models_dir();
         assert_eq!(dir, PathBuf::from("/tmp/qmd-test-home/.cache/qmd/models"));
+    }
+
+    /// The exact lines a real embed produced, pasted from a run of the
+    /// wrapper against a scratch index. The field names are qmd's
+    /// (`EmbedProgress` in `third-party/qmd/src/store.ts`), so a rename
+    /// upstream has to fail here rather than silently zero the numbers.
+    #[test]
+    fn a_real_progress_line_parses_into_its_numbers() {
+        let line = r#"{"event":"progress","chunksEmbedded":32,"totalChunks":60,"bytesProcessed":62171,"totalBytes":116328,"errors":0}"#;
+        assert_eq!(
+            parse_embed_event(line),
+            Some(EmbedEvent::Progress(EmbedProgress {
+                chunks_embedded: 32,
+                total_chunks: 60,
+                bytes_processed: 62171,
+                total_bytes: 116328,
+                errors: 0,
+            }))
+        );
+    }
+
+    #[test]
+    fn the_terminal_events_parse() {
+        let done = r#"{"event":"done","docsProcessed":5,"chunksEmbedded":60,"errors":2,"failures":[],"durationMs":25365}"#;
+        assert_eq!(
+            parse_embed_event(done),
+            Some(EmbedEvent::Done {
+                docs_processed: 5,
+                chunks_embedded: 60,
+                errors: 2,
+            })
+        );
+        assert_eq!(
+            parse_embed_event(r#"{"event":"busy"}"#),
+            Some(EmbedEvent::Busy)
+        );
+        assert_eq!(
+            parse_embed_event(r#"{"event":"error","message":"no such model"}"#),
+            Some(EmbedEvent::Error("no such model".to_string()))
+        );
+    }
+
+    /// Anything that isn't one of our events is `None`, so the caller
+    /// logs it instead of failing an otherwise-good embed on it. A
+    /// dependency writing a banner to stdout must not break indexing.
+    #[test]
+    fn foreign_output_is_not_an_event() {
+        for line in [
+            "",
+            "   ",
+            "Loading model...",
+            r#"{"level":"warn","msg":"something else entirely"}"#,
+            r#"{"event":"some_future_event","n":1}"#,
+            "{not json at all",
+        ] {
+            assert_eq!(parse_embed_event(line), None, "line: {line:?}");
+        }
+    }
+
+    /// A missing number reads as zero rather than dropping the whole
+    /// event: a reading with one field absent is still a reading, and
+    /// losing it would stall the bar until the next one.
+    #[test]
+    fn a_progress_line_missing_a_field_still_reports_the_rest() {
+        assert_eq!(
+            parse_embed_event(r#"{"event":"progress","bytesProcessed":10,"totalBytes":20}"#),
+            Some(EmbedEvent::Progress(EmbedProgress {
+                chunks_embedded: 0,
+                total_chunks: 0,
+                bytes_processed: 10,
+                total_bytes: 20,
+                errors: 0,
+            }))
+        );
+    }
+
+    /// The wrapper runs as a file, so its arguments start at argv[2] —
+    /// argv[1] is the script itself.
+    #[test]
+    fn the_wrapper_reads_argv_the_way_a_script_file_gets_it() {
+        assert!(
+            EMBED_NDJSON_MJS.contains("process.argv.slice(2)"),
+            "a script file's own path is argv[1], so its arguments start at 2"
+        );
+    }
+
+    /// **No node flags before the script path.** node passes its own
+    /// flags down to anything forked beneath it, dropping `-e` but
+    /// keeping `--input-type`; node-llama-cpp probes its prebuilt by
+    /// forking such a child, and on linux-x64 that child then fails to
+    /// start. The whole embed comes back `NoBinaryFoundError` — green
+    /// on a mac, red on CI, which is how this was found.
+    #[test]
+    fn nothing_we_pass_node_can_be_inherited_by_a_forked_grandchild() {
+        let script = EmbedScript::write().unwrap();
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg(&script.0).arg("pkg").arg("db");
+        let first = cmd.get_args().next().unwrap();
+        assert_eq!(
+            first,
+            script.0.as_os_str(),
+            "the script must be node's first argument, with no flags in front of it"
+        );
+        assert!(
+            script.0.extension().is_some_and(|e| e == "mjs"),
+            "the file is read as a module by its extension, not by a flag"
+        );
+    }
+
+    /// The script is a scratch file, and it does not belong in the data
+    /// root: the step's tree is swept whole into the fixture's overlay
+    /// tar, so one written there would be baked into the fixture.
+    #[test]
+    fn the_script_is_cleaned_up_and_lives_outside_any_data_root() {
+        let path = {
+            let script = EmbedScript::write().unwrap();
+            assert!(script.0.is_file());
+            assert!(script.0.starts_with(std::env::temp_dir()));
+            script.0.clone()
+        };
+        assert!(!path.exists(), "the script should be gone once dropped");
+    }
+
+    /// Two live scripts must not share a path. They did while the name
+    /// was the pid alone: `cargo`/bazel run a crate's tests as threads
+    /// of **one** process, so every test that wrote a script wrote the
+    /// same file, and the first one to drop deleted a file another was
+    /// still asserting on. It fails as a flake somewhere else, which is
+    /// the expensive kind.
+    #[test]
+    fn two_scripts_in_one_process_get_their_own_files() {
+        let a = EmbedScript::write().unwrap();
+        let b = EmbedScript::write().unwrap();
+        assert_ne!(a.0, b.0, "two scripts collided on one path");
+        assert!(a.0.is_file() && b.0.is_file());
+        drop(a);
+        assert!(b.0.is_file(), "dropping one script deleted the other's");
+    }
+
+    /// A stand-in for the wrapper: `sh` printing canned lines, then
+    /// exiting with `code`. Lets the read loop be tested without node,
+    /// qmd or a model — the loop is the part that decides whether a
+    /// pass counted as success.
+    fn fake_wrapper(lines: &str, code: i32) -> std::process::Command {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("printf '%s' \"$0\"; exit {code}"))
+            .arg(lines)
+            .stdout(std::process::Stdio::piped());
+        cmd
+    }
+
+    /// Collects what the callback was handed, in order.
+    fn drain(lines: &str, code: i32) -> (Result<()>, Vec<EmbedProgress>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = {
+            let seen = seen.clone();
+            move |p: EmbedProgress| seen.lock().unwrap().push(p)
+        };
+        let out = read_embed_events(&mut fake_wrapper(lines, code), Some(&sink));
+        let seen = seen.lock().unwrap().clone();
+        (out, seen)
+    }
+
+    #[test]
+    fn every_progress_line_reaches_the_callback_in_order() {
+        let (result, seen) = drain(
+            "{\"event\":\"progress\",\"bytesProcessed\":10,\"totalBytes\":30}\n\
+             {\"event\":\"progress\",\"bytesProcessed\":20,\"totalBytes\":30}\n\
+             {\"event\":\"done\",\"docsProcessed\":2,\"chunksEmbedded\":5,\"errors\":0}\n",
+            0,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            seen.iter().map(|p| p.bytes_processed).collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+    }
+
+    /// The regression this guards: a wrapper that exits 0 having
+    /// embedded nothing must not read as a finished index. The old CLI
+    /// path did exactly that when the embed lock was held.
+    #[test]
+    fn a_clean_exit_that_reported_nothing_is_a_failure() {
+        let (result, _) = drain("", 0);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("without reporting what it did"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_busy_lock_fails_rather_than_claiming_the_index_is_built() {
+        let (result, _) = drain("{\"event\":\"busy\"}\n", 75);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("embed lock"), "unexpected error: {err}");
+    }
+
+    /// The wrapper's own error message has to survive to the step's
+    /// failure, not be replaced by "exit status: 1".
+    #[test]
+    fn the_wrappers_error_message_is_what_the_step_reports() {
+        let (result, _) = drain("{\"event\":\"error\",\"message\":\"no such model\"}\n", 1);
+        assert!(result.unwrap_err().to_string().contains("no such model"));
+    }
+
+    /// A crash with no error line — an OOM kill, a native fault in
+    /// node-llama-cpp — still has to fail, on the exit code alone.
+    #[test]
+    fn a_silent_crash_after_progress_still_fails() {
+        let (result, seen) = drain(
+            "{\"event\":\"progress\",\"bytesProcessed\":10,\"totalBytes\":30}\n",
+            1,
+        );
+        assert_eq!(seen.len(), 1, "the progress before the crash still counts");
+        assert!(result.is_err());
+    }
+
+    /// Foreign stdout is logged, not fatal: a dependency's banner must
+    /// not fail an embed that otherwise finished.
+    #[test]
+    fn chatter_on_stdout_does_not_fail_the_pass() {
+        let (result, _) = drain(
+            "Loading model...\n\
+             {\"event\":\"done\",\"docsProcessed\":1,\"chunksEmbedded\":1,\"errors\":0}\n",
+            0,
+        );
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]

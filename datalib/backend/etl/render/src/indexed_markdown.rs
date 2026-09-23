@@ -564,6 +564,28 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// How many documents this store holds, `except` one — the storage
+    /// report, which datalib writes about the source rather than out of
+    /// it, and which would otherwise make a source that renders nothing
+    /// read as holding one thing.
+    ///
+    /// Whole store, not this run: the number is what the source has,
+    /// and an incremental render touches a handful of documents out of
+    /// a hundred thousand.
+    pub fn document_count(&self, except: Option<&str>) -> Result<i64> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM markdowns WHERE ? IS NULL OR markdown_uuid <> ?",
+            )
+            .bind(except)
+            .bind(except)
+            .fetch_one(&mut **guard.conn())
+            .await
+            .context("count the store's documents")
+        })
+    }
+
     /// Every document this store holds. The other half of a sweep: a
     /// renderer that walked its whole raw store says what should be here,
     /// and whatever else is here is what the store lost.
@@ -1361,6 +1383,23 @@ mod tests {
         .unwrap();
         assert_eq!(n, 1);
         assert_eq!(s.render_versions().unwrap(), [7].into_iter().collect());
+    }
+
+    /// The count is of what the source has, so the storage report —
+    /// datalib's own document about the source — is left out of it. A
+    /// source that renders nothing holds only that report, and the
+    /// column has to read zero there rather than one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_storage_report_is_not_one_of_the_source_s_documents() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let s = store(root);
+        s.put_document(root, &doc(root, "storage", "fp-s")).unwrap();
+        assert_eq!(s.document_count(Some("storage")).unwrap(), 0);
+        assert_eq!(s.document_count(None).unwrap(), 1, "without one to skip");
+        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
+        assert_eq!(s.document_count(Some("storage")).unwrap(), 2);
     }
 
     /// A document that comes back at another path — beeper's

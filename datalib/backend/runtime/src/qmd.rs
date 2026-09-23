@@ -33,11 +33,22 @@ pub fn qmd_index_path(root: &Path) -> PathBuf {
     qmd_state_dir(root).join("index.sqlite")
 }
 
+/// The `@tobilu/qmd` package inside a staged runtime tree.
+const QMD_PKG_REL: &str = "node_modules/@tobilu/qmd";
+
 /// Entry script of the `@tobilu/qmd` package inside a staged runtime
 /// tree — what the package's `bin/qmd` launcher execs (see
 /// `third-party/qmd/bin/qmd`), so running it via node directly is
 /// equivalent to `npx -y @tobilu/qmd@<v>`.
 const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
+
+/// The staged Node and the `@tobilu/qmd` package directory, for a caller
+/// driving qmd's SDK (`dist/index.js`) from its own script instead of
+/// running the CLI. `None` when qmd resolves through `npx`, which has no
+/// importable path — see [`crate::node_runtime::staged_package`].
+pub fn qmd_sdk_paths(version: &str) -> Option<(PathBuf, PathBuf)> {
+    crate::node_runtime::staged_package("qmd", version, QMD_PKG_REL)
+}
 
 /// `Command` invoking the qmd CLI at exactly `version` from the staged
 /// runtime tree (see [`crate::node_runtime::tool_command`] for the gated
@@ -114,6 +125,18 @@ pub const PINNED_MODELS: &[PinnedModel] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI entry has to sit *inside* the package directory: a caller
+    /// importing the SDK from `qmd_sdk_paths` and one spawning the CLI
+    /// must land in the same staged copy, or they would run two qmds.
+    #[test]
+    fn the_cli_entry_lives_inside_the_package_dir() {
+        assert_eq!(
+            QMD_ENTRY_REL,
+            format!("{QMD_PKG_REL}/dist/cli/qmd.js"),
+            "QMD_ENTRY_REL and QMD_PKG_REL have drifted apart"
+        );
+    }
 
     #[test]
     fn cache_names_match_node_llama_cpp_convention() {

@@ -31,8 +31,17 @@ fake_cargo_about="$(rlocation _main/tools/fake_cargo_about.sh)"
 # that tree out of links.
 runfiles="${script%/scripts/release/stage_tarball.sh}"
 tree="$TEST_TMPDIR/bazel-bin"
-mkdir -p "$tree/datalib/backend"
-ln -s "$runfiles/datalib/backend/bin_unstamped" "$tree/datalib/backend/bin"
+mkdir -p "$tree/datalib/backend/bin"
+for staged in "$runfiles/datalib/backend/bin_unstamped"/*; do
+    ln -s "$staged" "$tree/datalib/backend/bin/${staged##*/}"
+done
+# `:bin` is `:bin_unstamped` plus `git-hash`, which the release then
+# writes its own commit over. Only `:bin` has that file, so a tree of
+# `:bin_unstamped` alone never exercises the overwrite — and a bazel
+# output is read-only, which is how v0.36.0 lost all five tarballs to
+# "Permission denied". Stage it read-only, as bazel hands it over.
+echo 1111111111111111111111111111111111111111 > "$tree/datalib/backend/bin/git-hash"
+chmod 0444 "$tree/datalib/backend/bin/git-hash"
 ln -s "$runfiles/datalib/ui" "$tree/datalib/ui"
 ln -s "$runfiles/third-party" "$tree/third-party"
 

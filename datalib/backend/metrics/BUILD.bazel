@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# The metric names a step reports and the server reads back by name.
+# A leaf crate with no dependencies at all, because the two sides of
+# the wire link nothing else in common: `datalib-step` is above
+# `datalib_etl` and `datalib_schema`, `datalib-http` is below both
+# (AGENTS.md, "Ingest and render are separate crates"). Bazel-only, no
+# `Cargo.toml`: nothing outside bazel needs to see it. See src/lib.rs.
+rust_library(
+    name = "datalib_metrics",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_metrics",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)

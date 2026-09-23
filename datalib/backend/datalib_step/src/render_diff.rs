@@ -409,12 +409,16 @@ pub fn render_diff_source(
         .with_context(|| format!("commit diff render store for {}", name))?;
     let versions = store.render_versions()?;
     let problems = store.problem_counts()?;
+    // No storage report in a diff store (`RunEnd::storage` is `None`
+    // above), so nothing is excluded from the count.
+    let documents = store.document_count(None)?;
     let head = store.head()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
     Ok(RenderReport {
         docs,
         removed: sealed.removed,
+        documents,
         problems,
         head,
         // No checkpoints: the one commit seals every document.
