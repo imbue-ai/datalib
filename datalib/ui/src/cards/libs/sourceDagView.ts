@@ -246,19 +246,22 @@ export function sourceDagView(): CardRender {
       }
     }
 
-    const unsubscribe = subscribeLive({
-      // The shape of the graph is the config and the colours are the
-      // runner's record; `GET /api/dag` is both, and the `dag` frame is
-      // sent when either moves — instead of the 15-second poll this
-      // replaces, which every mounted card ran independently and which
-      // made a saved config take up to fifteen seconds to show.
-      root: (e) => {
-        if (!disposed && changed(e, "dag")) void load();
+    const unsubscribe = subscribeLive(
+      {
+        // The shape of the graph is the config and the colours are the
+        // runner's record; `GET /api/dag` is both, and the `dag` frame is
+        // sent when either moves — instead of the 15-second poll this
+        // replaces, which every mounted card ran independently and which
+        // made a saved config take up to fifteen seconds to show.
+        root: (e) => {
+          if (!disposed && changed(e, "dag")) void load();
+        },
+        resync: () => {
+          if (!disposed) void load();
+        },
       },
-      resync: () => {
-        if (!disposed) void load();
-      },
-    });
+      { onScreen: root.host },
+    );
     void load();
 
     return () => {

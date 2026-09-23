@@ -10,7 +10,10 @@
 //!
 //! A request a `root` frame caused carries that frame's chain; the line
 //! stores it, and a chain long enough to be a loop is warned about here
-//! (`loop_guard`).
+//! (`loop_guard`). Such a request is a live refetch: while a sync runs
+//! the Manage rows alone are one a second, so one that succeeded is a
+//! `debug` line, kept for the loop guard and out of the card's default
+//! `min_level:info` view.
 
 use std::time::Instant;
 
@@ -33,11 +36,12 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         .get(crate::ui_events::PAGE_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let chain = crate::loop_guard::request_chain(
-        req.headers()
-            .get(crate::loop_guard::CAUSE_HEADER)
-            .and_then(|v| v.to_str().ok()),
-    );
+    let cause = req
+        .headers()
+        .get(crate::loop_guard::CAUSE_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let live_refetch = cause.is_some();
+    let chain = crate::loop_guard::request_chain(cause);
     let started = Instant::now();
     let resp = crate::loop_guard::scope(chain, next.run(req)).await;
     let status = resp.status();
@@ -65,6 +69,13 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
     }
     if status.is_server_error() {
         tracing::warn!(
+            target: TARGET,
+            method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
+            page = page.as_deref(), chain,
+            "{method} {path} {code} {ms}ms"
+        );
+    } else if live_refetch && status.is_success() {
+        tracing::debug!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
             page = page.as_deref(), chain,

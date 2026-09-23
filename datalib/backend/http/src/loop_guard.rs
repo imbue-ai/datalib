@@ -8,8 +8,8 @@
 
 use datalib_runs::LogRow;
 
-/// The request header a page echoes a frame's `chain` in, when the
-/// fetch was made while that frame was being handled.
+/// The request header a page sends on a fetch it made while handling a
+/// `root` frame: the frame's `chain`, or 0 when the frame had none.
 pub const CAUSE_HEADER: &str = "x-datalib-cause";
 
 /// The tracing target of the warning; `target:http.loop` in the log
