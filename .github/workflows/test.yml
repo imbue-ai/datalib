@@ -150,6 +150,7 @@ jobs:
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -176,6 +177,15 @@ jobs:
   bazel-test:
     name: bazel test //...
     runs-on: ubuntu-latest
+    # A cold run's test step has reached 51 minutes; a wedged one would
+    # otherwise hold a runner for GitHub's default of six hours.
+    timeout-minutes: 90
+
+    # Everything but a `main` push builds our own crates at opt-level 1
+    # (`.bazelrc`'s `pr-tests`). The flag changes the output directory,
+    # so every step below that names the flags has to carry it too.
+    env:
+      PR_TESTS: ${{ github.event_name != 'push' && '--config=pr-tests' || '' }}
 
     # GitHub Actions defaults `run:` steps to `sh` (dash) when the job
     # runs inside a container, which rejects `set -o pipefail` and `[[ ]]`.
@@ -346,7 +356,7 @@ jobs:
           else
               mode=(--jobs=16)
           fi
-          bazel test -c opt --config=release --config=ci --nostamp "${mode[@]}" \
+          bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
@@ -374,7 +384,7 @@ jobs:
         if: failure()
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           zip="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.outputs/outputs.zip"
           if [[ -f "${zip}" ]]; then
             mkdir -p e2e-report && cp -L "${zip}" e2e-report/playwright-report.zip
@@ -394,11 +404,15 @@ jobs:
       # passes — bazel prints one wall-clock number for the whole target.
       # When the test step says `(cached) PASSED` for the target, the
       # suite did not run here and this log is the run's that did.
+      # `!cancelled()`, not `always()`: on a cancelled run the bazel
+      # server is still winding down the build, `bazel info` queues
+      # behind it, and the job then holds its concurrency group — and
+      # the push that superseded it — for GitHub's full 5-minute grace.
       - name: Keep the e2e log
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           log="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.log"
           if [[ -f "${log}" ]]; then
             mkdir -p e2e-report && cp -L "${log}" e2e-report/test.log
@@ -406,7 +420,7 @@ jobs:
             echo "no e2e log at ${log} — the suite did not run"
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && hashFiles('e2e-report/test.log') != ''
+        if: ${{ !cancelled() && hashFiles('e2e-report/test.log') != '' }}
         with:
           name: e2e-test-log
           path: e2e-report/test.log
@@ -424,7 +438,7 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
-          flags=(-c opt --config=release --config=ci --nostamp)
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
@@ -476,6 +490,7 @@ jobs:
     name: warm the contributor cache
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     continue-on-error: true
 
     # Same shell, image and checkout depth as `bazel-test` above, for the
@@ -509,6 +524,7 @@ jobs:
       - name: bazel test //... (contributor cache)
         run: |
           bazel test -c opt --config=release --config=ci --nostamp --jobs=16 \
+            --config=pr-tests \
             --build_metadata=ROLE=CACHE \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
             //...
@@ -535,6 +551,7 @@ jobs:
   musl-dist:
     name: bazel build :dist (musl static)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     # Same shell, image and checkout depth as `bazel-test` above, for the
     # reasons documented there.

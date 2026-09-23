@@ -18,6 +18,7 @@ exports_files([
     "insta_update.sh",
     "live_run.sh",
     "repin_cargo.sh",
+    "test_slice.sh",
     "workspace_status.sh",
 ])
 
