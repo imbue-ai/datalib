@@ -392,6 +392,20 @@ pub fn bundled_command(kind: &str, version: &str, entry_rel: &str) -> Option<Com
     command_in(&runtime_root()?, kind, version, entry_rel)
 }
 
+/// A staged tool's Node binary and package directory, for a caller that
+/// runs its own script *against* the package rather than running the
+/// package's own entry point.
+///
+/// `None` under the `npx` fallback. There the package is unpacked into
+/// an npm cache under a name npm chooses, so there is no path a script
+/// could import from — a caller that needs one runs the CLI instead.
+pub fn staged_package(kind: &str, version: &str, pkg_rel: &str) -> Option<(PathBuf, PathBuf)> {
+    let root = runtime_root()?;
+    let node = root.join(NODE_REL);
+    let pkg = root.join(kind).join(version).join(pkg_rel);
+    (node.is_file() && pkg.is_dir()).then_some((node, pkg))
+}
+
 fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
     let node = root.join(NODE_REL);
     let entry = root.join(kind).join(version).join(entry_rel);

@@ -82,7 +82,11 @@ install -m 0755 "$repo_root/scripts/latchkey-wrapper.sh" "$stage/latchkey"
 # a log line's file and line number are relative to. `:bin` stages one
 # already (a stamped genrule, not a rustc stamp — .bazelrc §stamping);
 # the release writes the workflow's own `GITHUB_SHA` over it, the same
-# value from the source the job trusts, and the test's tree has none.
+# value from the source the job trusts.
+#
+# Delete before writing: what `cp` brought over is a bazel output, and
+# those are read-only, so redirecting onto it is "Permission denied".
+rm -f "$stage/git-hash"
 if [[ -n "${GITHUB_SHA:-}" ]]; then
     echo "$GITHUB_SHA" > "$stage/git-hash"
 else
