@@ -36,6 +36,13 @@ walkdir = { workspace = true }
 # Signal forwarding to step subprocesses (kill(2)); already pinned
 # transitively.
 libc = "0.2"
+# Puts each step in a process group of its own, so a signal aimed at a
+# step reaches what the step spawned. From the watchexec project, which
+# runs arbitrary user commands for a living.
+process-wrap = { version = "10", default-features = false, features = [
+    "tokio1",
+    "process-group",
+] }
 datalib-time = { path = "../time" }
 strum = { workspace = true }
 # Owner-only params files for step subprocesses (subprocess.rs).
