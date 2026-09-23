@@ -486,26 +486,25 @@ invocation.
 ### 2.8 Where it runs, and the CLI
 
 The supervisor is **one library** (`datalib_dag` grows into it; the
-name can follow), and every way of running it runs that library, the
+name can follow), and both ways of running it run that library, the
 same loop, unmodified:
 
 | host | what it adds around the loop |
 |---|---|
-| `datalib-dag <config>` | opens one request rooted at every source; exits 0 or 1 when that request closes |
-| `datalib-dag serve <root>` | nothing: requests arrive from the CLI verbs, and it runs until it is told to stop |
-| `datalib-http` | the same as `serve`, in place of `worker.rs`; requests arrive over HTTP, and the UI reads the store it writes |
+| `datalib-dag <config>` | opens one request rooted at every source (or at the `--sync` roots); exits 0 or 1 when that request closes |
+| `datalib-http` | in place of `worker.rs`: requests arrive over HTTP, it keeps ticking when idle, and the UI reads the store it writes |
 
-There are no modes. The only difference between "one pass" and "UI
-controllable" is **when the host stops ticking**: the batch CLI stops
-when the request it opened closes; `serve` and the server do not stop
-when they are idle. Anything the batch CLI does, a resident host can
-be asked to do, and the other way round.
+There are no modes. `datalib-dag` runs **one round** of what the
+server keeps open: the same tick over the same facts, stopping when
+the request it opened closes. There is no resident CLI host; a
+supervisor that stays up is the server.
 
 A per-root lock makes a supervisor the only one on its root; it
-replaces `runner-lock`. When one holds the root, the CLI forwards to
-it (`POST /api/requests`, which is how "a sync you start from a
-terminal shows up here too" stays true); when none does, the CLI
-embeds the library itself.
+replaces `runner-lock`. When the server holds the root, `datalib-dag`
+forwards to it (`POST /api/requests`, which is how "a sync you start
+from a terminal shows up here too" stays true) instead of running a
+round of its own; when nothing holds it, the CLI runs the round
+itself.
 
 **The host owns the steps' processes**, and the library is where that
 lives, so no host does it differently:
@@ -520,9 +519,9 @@ lives, so no host does it differently:
   after the grace, SIGKILL after that. `next_stage` stays the pure
   function it is.
 - **The host's own death takes its steps with it.** The batch runner
-  already forwards SIGHUP and its parent's death (#682); a resident
-  host needs the same, and in `datalib-http` it replaces the runner
-  that used to sit between the server and the steps. A step that
+  already forwards SIGHUP and its parent's death (#682); the server
+  needs the same, because the runner that used to sit between it and
+  the steps is gone. A step that
   outlives its supervisor is the orphan #682 fixed, with nobody to
   record its end.
 - **An invocation left open by a dead supervisor is closed by the next
@@ -554,8 +553,10 @@ shows is computed in the browser from something the shell cannot see.
 steps, `clear <sink>` on sinks (§2.10) — exposed identically as
 `POST /api/requests` and `/api/requests/<id>/stop`,
 `POST /api/steps/<id>/{pause,resume}`, `POST /api/sinks/<path>/clear`, and
-as `datalib-dag <verb> …` (the CLI forwards to the server that holds
-the root, and acts directly when none does). Every request, pause and
+as `datalib-dag <verb> …`. The CLI forwards to the server when one
+holds the root. When none does, `request` runs a round itself, and
+`pause`, `resume` and `clear` act on the store directly — a pause is a
+row, and the next round honours it. Every request, pause and
 clear records `by` — `ui`, `cli`, or a name an agent passes
 (`--by claude`) — so each operator sees the other's hand on the wheel:
 a source paused by an agent reads "paused by claude" on the screen,
@@ -725,11 +726,11 @@ last.
    the tree hash, computed on writer completion and cached; the
    supervisor learns which sinks' readers do not pin, so it never
    starts a writer on one while a reader runs.
-4. **The resident host.** The run store gains `requests`,
+4. **The server hosts it.** The run store gains `requests`,
    `request_steps`, `steps`, `sinks` and `invocations`, and the
    supervisor's facts move there from `dag_state.json`, which goes.
-   `datalib-dag serve <root>` and `datalib-http` host the same library
-   (§2.8); the server's `worker.rs` and `sync_jobs` go.
+   `datalib-http` runs the same library `datalib-dag` does (§2.8), and
+   keeps it running; the server's `worker.rs` and `sync_jobs` go.
    `POST /api/requests`, `/api/requests/<id>/stop`,
    `/api/steps/<id>/{pause,resume}`, the CLI verbs that forward to
    them, live frames. `status.rs` shrinks to a read of `steps.state`.
