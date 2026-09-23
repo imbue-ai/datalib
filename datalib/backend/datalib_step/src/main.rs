@@ -325,14 +325,17 @@ async fn main() {
             // partial output; with no claims the scheduler re-hashes
             // the declared outputs and sees whatever landed.
             emitter.outcome(&[], Some(kind));
+            // `tracing::error!` alone, never a `status_line!` beside it.
+            // Both land on the same stderr, so a second copy is a second
+            // row in the run store -- one with no `target`, because a
+            // line that is not a tracing envelope is filed as plain text
+            // -- and a second copy of every cause in the step's error
+            // message, which the runner builds from those same lines.
+            // The fmt layer writes through indicatif, so the progress
+            // bars are already suspended across the write.
             for (i, cause) in e.chain().enumerate() {
                 let prefix = if i == 0 { "error" } else { "caused by" };
                 tracing::error!("{prefix}: {cause}");
-                // `status_line!`, not `eprintln!`: it suspends the
-                // progress bars across the write (and falls through to
-                // raw stderr when the draw target is hidden, e.g. when
-                // the http worker spawned us with stderr piped).
-                datalib_obs::status_line!("{prefix}: {cause}");
             }
             std::process::exit(1);
         }

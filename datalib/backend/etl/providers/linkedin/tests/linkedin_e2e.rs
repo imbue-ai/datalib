@@ -144,7 +144,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .context("fetch")?;
         // Commit, the way the processor does in production: render reads
         // committed state only.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
 
         // 7 CSVs + 1 articles batch = 8 "files".
         assert_eq!(summary.files, 8, "files (7 csv + articles)");
@@ -443,7 +443,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .context("fetch with photos")?;
         // Commit, the way the processor does in production: render reads
         // committed state only.
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: linkedin fetch").await?;
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
         std::env::remove_var(PLAYBACK_ENV);
 
         // The photo landed in CAS, keyed by the connection's URL — the
@@ -499,7 +499,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .await?;
         // Commit, the way the processor does in production: render reads
         // committed state only.
-        datalib_etl::doltlite_raw::commit_run(db2.pool(), "test: linkedin fetch").await?;
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db2, "test: linkedin fetch").await?;
 
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
@@ -560,7 +560,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .await?;
         // Commit, the way the processor does in production: render reads
         // committed state only.
-        datalib_etl::doltlite_raw::commit_run(db3.pool(), "test: linkedin fetch").await?;
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db3, "test: linkedin fetch").await?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
         let g = ingest::photos::fetch_connection_photos(
             &db3,

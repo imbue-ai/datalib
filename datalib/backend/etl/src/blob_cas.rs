@@ -66,9 +66,15 @@ pub struct CasInsert<'a> {
 }
 
 /// The CAS read-only, as a bare pool, for a render that reads blobs
-/// beside its pinned entity store. Unpinned, deliberately: most
-/// downloads never commit the CAS, so a read at HEAD would find no blob
-/// (`doltlite_raw::open_reader_unpinned`).
+/// beside its pinned entity store.
+///
+/// Unpinned, which is a leftover rather than a design: the CAS *is*
+/// committed, at every checkpoint and again at the end, before the
+/// entities that name the blobs (`raw_store::SealState::seal`). So a
+/// pinned read would find them, and this should become one — the last
+/// unpinned reader in the system. What the unpinned read costs today is
+/// that it sees a writer's uncommitted blobs, which is only harmless
+/// because the CAS is content-addressed.
 pub async fn open_cas_reader(cas_path: &Path) -> Result<SqlitePool> {
     crate::doltlite_raw::open_reader_unpinned(cas_path).await
 }

@@ -486,8 +486,7 @@ mod tests {
     }
 
     async fn commit(pool: &SqlitePool) {
-        sqlx::query("SELECT dolt_commit('-Am', 'seed')")
-            .execute(pool)
+        datalib_etl::doltlite_raw::commit_run(pool, "seed")
             .await
             .expect("dolt_commit");
     }

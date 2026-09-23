@@ -11,12 +11,11 @@ use tempfile::tempdir;
 const A: &str = "aaaaaaaa-1111-2222-3333-444444444444";
 const B: &str = "bbbbbbbb-1111-2222-3333-444444444444";
 
-/// Bound, not interpolated — the statement stays `&'static str` and
-/// needs no `AssertSqlSafe`.
+/// The seal, not a bare `dolt_commit`: a writer works on its own branch
+/// and only `commit_run` fast-forwards `main`, which is where the render
+/// below reads.
 async fn commit(db: &RawDb, msg: &str) -> String {
-    sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-        .bind(msg)
-        .fetch_one(db.pool())
+    datalib_etl::doltlite_raw::commit_run(db.pool(), msg)
         .await
         .unwrap()
         .unwrap_or_default()

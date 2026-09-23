@@ -84,7 +84,7 @@ async fn run_extract(
     // Commit what the fetch wrote, the way the processor does in
     // production. Render reads committed state only, so a store left
     // dirty here renders as empty — correct, and not what this test is about.
-    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: beeper fetch").await?;
+    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: beeper fetch").await?;
     db.close().await;
     Ok(summary)
 }

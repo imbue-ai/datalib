@@ -183,6 +183,13 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
         .execute(pool)
         .await
         .context("dolt_commit the fixture store")?;
+    // By hand, because the commit above takes `--date` and `commit_run`
+    // — which would have done this — has no parameter for it. A writer
+    // works on its own branch, so without this the fixture's rows never
+    // reach `main` and every reader of this store sees an empty source.
+    datalib_etl::doltlite_raw::publish_to_main(pool)
+        .await
+        .context("publish the fixture store to main")?;
 
     Ok(reading_rows.len())
 }

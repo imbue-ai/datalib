@@ -90,7 +90,7 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
     if !carries_committed_schema(pool).await {
         tracing::warn!(
             store = %store_filename(pool),
-            "tables exist but no commit carries them: unreadable, not empty",
+            "no commit carries this store's tables: unreadable, not empty",
         );
         return Ok(None);
     }
@@ -120,19 +120,14 @@ fn store_filename(pool: &sqlx::SqlitePool) -> String {
 /// died before its first commit, leaves exactly this.
 ///
 /// A store that has committed anything has a `dolt_at_<table>` module per
-/// committed table, so their total absence *while tables exist* is the
-/// signal. A store with no tables at all needs no answer here — nothing
-/// creates a view, and the read fails loudly on its own.
+/// committed table, so their total absence is the signal — whether the
+/// tables are there uncommitted, or not there yet at all. **A file with no
+/// tables counts as unreadable too**: that is the shape an owner's `open`
+/// leaves behind between creating the file and its first `CREATE TABLE`,
+/// and under streaming a consumer opens exactly there. No view gets
+/// created, so the consumer's first read fails with `no such table:
+/// pinned_<t>` — a loud failure over a producer doing nothing wrong.
 pub async fn carries_committed_schema(pool: &sqlx::SqlitePool) -> bool {
-    let tables: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    if tables == 0 {
-        return true;
-    }
     let modules: i64 =
         sqlx::query_scalar("SELECT count(*) FROM pragma_module_list WHERE name LIKE 'dolt_at_%'")
             .fetch_one(pool)
@@ -503,6 +498,48 @@ mod view_tests {
             .unwrap();
             assert_eq!(seen, i64::from(i) + 1, "pin at batch {i} lost rows");
         }
+    }
+
+    /// The window a fresh store is open in: the file exists and holds no
+    /// table at all.
+    ///
+    /// `connect_pool` creates the file, and every `CREATE TABLE` comes
+    /// after it — a reader that opens in between finds a doltlite file
+    /// with nothing but its birth commit. `install_views` then creates no
+    /// view, and the first read fails with `no such table: pinned_<t>`.
+    /// Under the streaming design a producer that has just created its
+    /// store is an ordinary state, not a broken one, so the answer must be
+    /// `None` — "I cannot read this yet" — which every consumer already
+    /// handles by skipping the source this pass.
+    #[tokio::test]
+    async fn a_store_with_no_tables_at_all_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("newborn.doltlite_db");
+        // Deliberately not `doltlite_raw::open`: that creates tables and
+        // commits them. This is the file as it is between the writer's
+        // connect and its first statement.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        assert!(
+            datalib_pin::head(&pool).await.unwrap().is_some(),
+            "precondition: the birth commit answers, which is why a hash \
+             cannot be the readiness test"
+        );
+        assert!(
+            head(&pool).await.unwrap().is_none(),
+            "a store with no tables yet must read as unreadable, not as a \
+             source that has nothing"
+        );
     }
 
     /// The shape that deletes a source: tables written, nothing committed.

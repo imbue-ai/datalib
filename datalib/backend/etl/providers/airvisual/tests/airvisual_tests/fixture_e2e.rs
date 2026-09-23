@@ -136,8 +136,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!((again.files, again.files_skipped, again.samples), (7, 7, 0));
 
     // Commit, so the render has a HEAD to pin.
-    sqlx::query("SELECT dolt_commit('-Am', 'fixture ingest')")
-        .execute(pool)
+    datalib_etl::doltlite_raw::commit_run(pool, "fixture ingest")
         .await
         .unwrap();
     db.close().await;

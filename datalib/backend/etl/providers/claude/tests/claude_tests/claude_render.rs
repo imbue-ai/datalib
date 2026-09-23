@@ -62,7 +62,7 @@ async fn ingest_fixture(raw: &Path) {
     // On the handle the ingest already holds: reopening here would be a
     // second live connection to the store, and one of the two commits
     // would fail with `commit conflict`.
-    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: claude ingest")
+    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: claude ingest")
         .await
         .expect("commit the ingest");
     // Closed, not dropped: whatever reads this store next is a second

@@ -56,7 +56,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         })
         .await
         .context("fetch")?;
-        datalib_etl::doltlite_raw::commit_run(db.pool(), "test: facebook fetch").await?;
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: facebook fetch").await?;
 
         // 11 JSON files; `no-data.txt` and the HTML are not files to us.
         assert_eq!(summary.files, 11, "json files ingested");
