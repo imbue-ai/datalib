@@ -595,9 +595,20 @@ pub(crate) async fn invoke_with_retry(
                 if attempt >= retry.max_attempts(e.kind) {
                     return (attempt, Err(e));
                 }
+                // A step interrupted mid-request can come back `transient`;
+                // retrying it would start it again after the stop.
+                let stopped = |mut e: StepError| {
+                    e.kind = FailureKind::Cancelled;
+                    (attempt, Err(e))
+                };
+                if ctx.stop.is_requested() {
+                    return stopped(e);
+                }
                 let backoff = retry.backoff * 2u32.saturating_pow(attempt - 1);
-                if !backoff.is_zero() {
-                    tokio::time::sleep(backoff).await;
+                let mut stop = ctx.stop.clone();
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = stop.requested() => return stopped(e),
                 }
                 attempt += 1;
             }
@@ -1361,6 +1372,10 @@ mod tests {
         // giving a wrongly-owed third pass time to show up.
         let slack_saw = Arc::new(AtomicU32::new(0));
         let email_saw = Arc::new(AtomicU32::new(0));
+        // Neither producer finishes until both have read the count: a
+        // finishing producer publishes a new version, which rightly earns
+        // a third pass, and a sibling still reading would count it.
+        let read = Arc::new(AtomicU32::new(0));
 
         async fn until(flag: impl Fn() -> bool) {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -1370,12 +1385,22 @@ mod tests {
         }
 
         let producer = |name: &str, saw: Arc<AtomicU32>| {
-            let (passes, in_pass, sealed) = (passes.clone(), in_pass.clone(), sealed.clone());
+            let (passes, in_pass, sealed, read) = (
+                passes.clone(),
+                in_pass.clone(),
+                sealed.clone(),
+                read.clone(),
+            );
             StepSpec::new(
                 format!("{name}/rendered_md"),
                 StepRun::in_process(move |ctx: StepCtx| {
-                    let (passes, in_pass, sealed, saw) =
-                        (passes.clone(), in_pass.clone(), sealed.clone(), saw.clone());
+                    let (passes, in_pass, sealed, saw, read) = (
+                        passes.clone(),
+                        in_pass.clone(),
+                        sealed.clone(),
+                        saw.clone(),
+                        read.clone(),
+                    );
                     async move {
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
@@ -1393,6 +1418,8 @@ mod tests {
                         // the moment the follow-up lands; give it room.
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         saw.store(passes.load(Ordering::SeqCst), Ordering::SeqCst);
+                        read.fetch_add(1, Ordering::SeqCst);
+                        until(|| read.load(Ordering::SeqCst) >= 2).await;
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
@@ -3058,6 +3085,53 @@ mod tests {
             "{rep:#?}"
         );
         assert_eq!(fx.run_count("unified_index/grid"), 1);
+    }
+
+    /// A step stopped mid-request can come back `transient`. Retrying it
+    /// would start it again after the stop, so the stop ends the retries
+    /// and the step reads as stopped.
+    #[tokio::test]
+    async fn a_stopped_step_is_not_retried() {
+        let root = tempfile::tempdir().unwrap();
+        let runs = Arc::new(AtomicU32::new(0));
+        let rn = runs.clone();
+        let spec = StepSpec::new(
+            "src/raw",
+            StepRun::in_process(move |ctx: StepCtx| {
+                let rn = rn.clone();
+                async move {
+                    rn.fetch_add(1, Ordering::SeqCst);
+                    let mut stop = ctx.stop.clone();
+                    stop.requested().await;
+                    Err(StepError::new(
+                        FailureKind::Transient,
+                        anyhow::anyhow!("connection reset"),
+                    ))
+                }
+            }),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let (stop, rx) = tokio::sync::watch::channel(false);
+        let r = runner(root.path()).stop_on(rx);
+        let round = tokio::spawn(async move { r.run(&g).await });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while runs.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the step never started"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        stop.send(true).unwrap();
+        let rep = round.await.unwrap().unwrap();
+
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "{rep:#?}");
+        assert_eq!(
+            rep.step("src/raw").status,
+            StepStatus::Failed {
+                kind: FailureKind::Cancelled
+            }
+        );
     }
 
     #[tokio::test]

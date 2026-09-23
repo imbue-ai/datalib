@@ -110,10 +110,18 @@ with four clauses:
 - its own fingerprint — argv, env, declared inputs — differs from the one
   recorded then.
 
-A stale step still waits while a step it reads is running or about to
-run, unless that producer declares `streams_output` and is already
-running: then it starts on each seal as it lands, and staleness keeps it
-from running when nothing new has.
+A stale step waits for a step it reads in two cases only: that producer
+is running and does not declare `streams_output`, so what it writes may
+be half-done; or it is about to run, held only by a budget or its sink.
+A running producer that streams lets its consumers start on each seal
+as it lands, and staleness keeps them from running when nothing new has.
+A producer waiting on its own upstream holds nobody back, so a fan-in
+never waits for its slowest source.
+
+Until everything a step reads has settled, its row reads Running between
+passes: the step is not finished, it is waiting for the next seal. Each
+pass's process is closed with a `PassEnd`; the `StepFinish` comes once
+its producers are done.
 
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in

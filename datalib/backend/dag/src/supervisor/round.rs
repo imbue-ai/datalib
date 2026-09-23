@@ -24,13 +24,17 @@ use crate::state::{CurrentRun, DagState};
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
 use crate::version::UNKNOWN;
 
-/// How an invocation ended, held until the next tick says whether the
-/// step runs again straight away (a pass) or is done for now (a finish).
+/// How an invocation ended, held until the step runs again (it was a
+/// pass) or everything it reads has settled (it is done for now). While a
+/// step it reads is still running or waiting, its row keeps reading
+/// Running: the step is not finished, it is waiting for the next seal.
 struct Ended {
     status: StepStatus,
     error: Option<String>,
     exit: Option<Exit>,
     attempts: u32,
+    /// Whether its process has been closed with a `PassEnd` already.
+    pass_ended: bool,
 }
 
 type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
@@ -119,14 +123,23 @@ impl Runner {
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
 
             for (i, slot) in ended.iter_mut().enumerate() {
-                let Some(e) = slot.take() else { continue };
-                if starting.contains(&i) {
+                let Some(e) = slot.as_mut() else { continue };
+                let again = starting.contains(&i);
+                let upstream_busy = graph
+                    .deps_in_order(i)
+                    .any(|p| matches!(t.states[p], Row::Running | Row::Waiting(_)));
+                if (again || upstream_busy) && !e.pass_ended {
+                    e.pass_ended = true;
                     self.sink.emit(&Event::PassEnd {
                         step: graph.steps[i].id.clone(),
                         exit_code: e.exit.and_then(|x| x.code),
                         signal: e.exit.and_then(|x| x.signal),
                     });
-                } else {
+                }
+                if again {
+                    *slot = None;
+                } else if !upstream_busy {
+                    let e = slot.take().expect("checked above");
                     self.finish(
                         graph,
                         &mut state,
@@ -209,6 +222,20 @@ impl Runner {
             }
         }
 
+        for (i, slot) in ended.iter_mut().enumerate() {
+            if let Some(e) = slot.take() {
+                self.finish(
+                    graph,
+                    &mut state,
+                    &mut status,
+                    i,
+                    e.status,
+                    e.error,
+                    e.exit,
+                    e.attempts,
+                );
+            }
+        }
         for i in 0..n {
             if status[i].is_some() {
                 continue;
@@ -406,6 +433,7 @@ impl Runner {
             error: Some(error),
             exit,
             attempts,
+            pass_ended: false,
         };
         match res {
             Ok(outcome) => {
@@ -451,6 +479,7 @@ impl Runner {
                     error: None,
                     exit,
                     attempts,
+                    pass_ended: false,
                 }
             }
             Err(step_err) => {

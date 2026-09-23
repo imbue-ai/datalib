@@ -43,9 +43,14 @@ async fn main() -> Result<()> {
     // worker spawns this binary with the pipe; a run it started must not
     // outlive it, or the next boot finds a job it cannot account for and
     // a runner lock it did not take.
-    datalib_parent_watch::exit_with_parent(|| {
-        datalib_parent_watch::report("datalib-dag: parent gone; interrupting the steps");
-        subprocess::interrupt_children();
+    // Every way this process is told to stop goes through the round's
+    // stop, so a stopped round starts nothing new while it winds down.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_tx = Arc::new(stop_tx);
+    let parent_stop = stop_tx.clone();
+    datalib_parent_watch::exit_with_parent(move || {
+        datalib_parent_watch::report("datalib-dag: parent gone; stopping the round");
+        let _ = parent_stop.send(true);
         std::thread::sleep(PARENT_GONE_GRACE);
         datalib_parent_watch::report("datalib-dag: steps still running after the grace, exiting");
         subprocess::kill_children();
@@ -258,7 +263,6 @@ async fn main() -> Result<()> {
     // same one it uses when its parent dies. It has to: a step is in a
     // process group of its own, so the kernel's SIGHUP to the
     // foreground group no longer reaches it.
-    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
@@ -270,9 +274,9 @@ async fn main() -> Result<()> {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv() => {
                     datalib_parent_watch::report(
-                        "datalib-dag: terminal hung up; interrupting the steps",
+                        "datalib-dag: terminal hung up; stopping the round",
                     );
-                    subprocess::interrupt_children();
+                    let _ = stop_tx.send(true);
                     // Async, so the runtime keeps draining what the
                     // steps say while they stop.
                     tokio::time::sleep(PARENT_GONE_GRACE).await;

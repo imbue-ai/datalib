@@ -208,7 +208,9 @@ impl EventSink for RunStoreSink {
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
-                    if let Some(p) = a.process.as_mut() {
+                    // A pass that ended while its producers ran was closed
+                    // by its `PassEnd`; the finish only settles the row.
+                    if let Some(p) = a.process.as_mut().filter(|p| p.finished_at_utc.is_none()) {
                         p.finished_at_utc = Some(finished_at_utc.clone());
                         p.exit_code = exit_code.map(i64::from);
                         p.signal = signal.map(i64::from);

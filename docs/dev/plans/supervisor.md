@@ -310,19 +310,21 @@ changed. For a root it is the request-relative rule of §2.2.
 Three rules the loop needs that the runner got for free from having a
 run:
 
-- **A consumer waits for a pending producer.** A producer is *pending*
-  when it is in scope and running, or due to start (stale, not paused,
-  not failed, held only by a budget). A consumer does not start while
-  one of its producers is pending — starting a render against a store
-  its ingest is about to rewrite is a pass thrown away — with one
-  exception, which is streaming: a producer that is *running* and
-  declares `streams_output` does not hold its consumers back. They
+- **A consumer waits for a producer for two reasons, and only two.**
+  The producer is running and does not declare `streams_output`, so its
+  sink may be half-written; or it is about to run, held only by a
+  budget or by its sink, and will rewrite what the consumer would read.
+  A running producer that streams never holds its consumers back: they
   start on each seal as it lands, and staleness keeps them from running
-  when nothing new has. (An earlier draft also asked that the producer
-  have published since it started; that made a fan-in wait for its
-  slowest source, and the scheduler's streaming tests caught it.) A
-  producer that failed or is paused is not pending, and its consumers
-  run against what it committed (§2.5).
+  when nothing new has. A producer that is itself waiting on something
+  upstream does not hold them back either — it may not run for a long
+  time, and a fan-in that waited on it would wait for its slowest
+  source. (Two drafts got this wrong, each caught by a test: one asked
+  a streaming producer to have published since it started, the other
+  counted a producer waiting on its own upstream; both made the index
+  wait for the slowest download.) A producer that failed or is paused
+  holds nothing back, and its consumers run against what it committed
+  (§2.5).
 - **Nothing to read is `blocked`.** A stale step none of whose inputs
   has ever been published — a render whose first download failed — has
   nothing to read. It does not start, does not hold its request open,

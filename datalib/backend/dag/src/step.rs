@@ -288,6 +288,10 @@ impl StopSignal {
         Self(None)
     }
 
+    pub fn is_requested(&self) -> bool {
+        self.0.as_ref().is_some_and(|rx| *rx.borrow())
+    }
+
     /// Resolves once a stop has been asked for; never, for a signal made
     /// with [`StopSignal::never`] or whose sender is gone.
     pub async fn requested(&mut self) {
