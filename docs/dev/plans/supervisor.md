@@ -237,7 +237,6 @@ made a first-class thing the supervisor holds many of at once.
 |---|---|
 | **Sync** on a source | a request with that source as its root |
 | **Sync everything** | a request with every source as a root |
-| a schedule (`every: 15m` on a source) | a request the supervisor creates when it comes due |
 | `datalib-dag <config>` | a request with every source, and "exit when it closes" |
 | **Stop** on a request | interrupts its running steps and closes it; a step also in another open request's scope stays in scope |
 | **Pause** on a step | sticky; the step never starts and is interrupted if running, whatever requests want it. **Resume** lifts it |
@@ -270,6 +269,10 @@ that invocation ends it does not count (it started earlier), the root
 is still stale for the new request, and it runs once more. One more
 pass, no bookkeeping.
 
+**Scheduled syncs are out of scope.** A schedule would be one more
+thing that opens requests, so it can be added later without touching
+the tick; nothing here depends on it.
+
 Requests and pauses are stored, not inferred: rows in the supervisor's
 store, so a restart picks up the open requests where it left them, and
 a paused source stays paused across app launches — which today has no
@@ -279,7 +282,7 @@ representation at all.
 
 One loop, one function, run on every event (a step finished, a
 checkpoint arrived, a request opened or was stopped, a step was paused,
-the config changed, a schedule came due) and on a slow timer as the
+the config changed) and on a slow timer as the
 fallback:
 
 ```
@@ -466,7 +469,7 @@ which it alone writes:
 | table | rows |
 |---|---|
 | `requests` | id, roots, `by`, created_at_utc, closed_at_utc, `state` (open · done · failed · stopped), failed_step |
-| `steps` | id, paused_by, schedule, class, fingerprint, `state` (idle · stale · fresh · waiting(sink/budget) · running · paused · failed), state_detail |
+| `steps` | id, paused_by, class, fingerprint, `state` (idle · stale · fresh · waiting(sink/budget) · running · paused · failed), state_detail |
 | `sinks` | path, version, updated_at_utc, by_invocation |
 | `invocations` | id, step, started/finished, exit, failure_kind, error, pid, consumed (json), produced (json) |
 | `request_steps` | request → step, for every step in the request's scope, with the step's state as of the request's close |
@@ -620,7 +623,7 @@ supervisor cannot know its shape.
 - **Scope is the only thing between a tick and #225.** Nothing runs
   outside an open request's closure, so a stale render from yesterday
   cannot start on its own — but a request rooted at *every* source (Sync
-  everything, the batch CLI, a schedule on a wide source) does reach
+  everything, the batch CLI) does reach
   it, honestly, and the row says which request. The test to write
   first: a tick over a graph with stale steps and no open request
   starts nothing.
@@ -736,7 +739,7 @@ last.
    them, live frames. `status.rs` shrinks to a read of `steps.state`.
    Startup closes the invocations a dead supervisor left open.
 5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
-   request and the wave under each, the schedule field, and Clear on
+   request and the wave under each, and Clear on
    a sink with the wording of §2.10. The help text is rewritten around rows, not runs.
 6. **Shared sinks.** `writes`/`reads` in the config with the defaults
    of §2.1, the loader allowing two steps to name one sink, and the
