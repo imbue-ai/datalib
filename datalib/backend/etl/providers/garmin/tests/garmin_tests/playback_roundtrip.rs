@@ -3,10 +3,11 @@
 //! upstream listing stops naming is pruned.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use datalib_etl::control::DownloadControl;
 use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::progress::Progress;
+use datalib_etl::progress::{Progress, ProgressSink};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_garmin::auth::Credentials;
@@ -24,13 +25,17 @@ fn spec_path() -> PathBuf {
 }
 
 async fn run(raw: &Path, api: &GarminApi) -> FetchSummary {
+    run_with(raw, api, Progress::noop()).await
+}
+
+async fn run_with(raw: &Path, api: &GarminApi, progress: Progress) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let summary = fetch(FetchOptions {
         db: db.clone(),
         creds: Credentials::fixed("playback"),
         api: api.clone(),
         today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
-        progress: Progress::noop(),
+        progress,
         control: DownloadControl::default(),
         sealer: None,
     })
@@ -38,6 +43,15 @@ async fn run(raw: &Path, api: &GarminApi) -> FetchSummary {
     db.commit_all("test").await.unwrap();
     db.close().await;
     summary.unwrap()
+}
+
+/// Every length the walk gave its bar, in order.
+#[derive(Default)]
+struct Lengths(Mutex<Vec<Option<u64>>>);
+impl ProgressSink for Lengths {
+    fn set_length(&self, total: Option<u64>) {
+        self.0.lock().unwrap().push(total);
+    }
 }
 
 /// The test's own store, read back bare after its own run: unpinned is
@@ -170,7 +184,8 @@ async fn garmin_synth_playback_ingest_roundtrip() {
 
     // Second run: everything re-fetched inside the refresh window, and
     // nothing new to fetch beyond it.
-    let s2 = run(&raw, &api).await;
+    let lengths = Arc::new(Lengths::default());
+    let s2 = run_with(&raw, &api, Progress::new(lengths.clone())).await;
     assert_eq!(s2.errors, 0, "{}", s2.line());
     assert_eq!(
         s2.activities_fetched, 0,
@@ -181,6 +196,11 @@ async fn garmin_synth_playback_ingest_roundtrip() {
         s2.days,
         DAILY_METRICS.len() * 8,
         "cursor at the 15th, refresh_days=7: the 8th through the 15th again"
+    );
+    assert_eq!(
+        lengths.0.lock().unwrap().first().copied().flatten(),
+        Some(s2.days as u64),
+        "the daily bar counts the days this run walks, not every day since `since`"
     );
     assert_eq!(
         count(&raw, "SELECT COUNT(*) FROM garmin_weigh_ins").await,
