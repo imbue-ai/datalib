@@ -332,6 +332,11 @@ The rules, none optional; the reasons and measurements are in
   `grid_index` step owns the index; `datalib-http`
   owns feedback, jobs and usage; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **A writer works on `datalib_writer`, never on `main`**, and
+  fast-forwards `main` when it seals, so a reader never sees a
+  half-written batch or a half-built schema. `commit_run` is the seal —
+  a bare `dolt_commit` publishes nothing and reaches no reader; use
+  `commit_all` for a handle that carries a blob CAS.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.

@@ -298,14 +298,38 @@ async fn checkout_writer_branch(
         .execute(&mut *conn)
         .await
     {
-        Ok(_) => Ok(()),
-        Err(e) if is_missing_function(&e) => Ok(()),
-        Err(_) => sqlx::query("SELECT dolt_checkout('-b', ?)")
-            .bind(WRITER_BRANCH)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ()),
+        Ok(_) => {}
+        // No doltlite: there are no branches to be on, and every read of
+        // this store is as unpinned as every write.
+        Err(e) if is_missing_function(&e) => return Ok(()),
+        Err(_) => {
+            sqlx::query("SELECT dolt_checkout('-b', ?)")
+                .bind(WRITER_BRANCH)
+                .execute(&mut *conn)
+                .await?;
+        }
     }
+    // Read it back, because a selection that quietly did nothing is the
+    // one failure this whole construction cannot survive: a fresh
+    // connection is on the file's default branch, so a writer that
+    // thinks it moved and did not writes to `main` — visible to every
+    // reader, mid-batch, which is what the branch exists to prevent.
+    // Measured in #691: a failed `dolt_checkout` is silent and the rows
+    // land on the wrong branch. `fsindex::checkout_branch` reads back
+    // for the same reason.
+    let active: String = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_one(&mut *conn)
+        .await?;
+    if active != WRITER_BRANCH {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "opened a writer on branch {active:?}, not {WRITER_BRANCH:?}: \
+                 its rows would be visible to every reader before they are sealed"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The commit a branch names, or `None` when this build has no doltlite
@@ -4175,6 +4199,54 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(at_head, vec!["w1".to_string(), "w2".to_string()]);
+        pool.close().await;
+    }
+
+    /// A writer's pool is on [`WRITER_BRANCH`], every connection of it.
+    ///
+    /// The guard against the quiet failure: a fresh connection is on the
+    /// file's default branch, so a selection that does nothing leaves the
+    /// writer on `main`, where every row it writes is visible to every
+    /// reader the moment it lands rather than when it is sealed. Nothing
+    /// else would notice — the rows are all there, the commits all
+    /// happen, and only the isolation is gone.
+    #[tokio::test]
+    async fn a_writers_pool_is_on_the_writer_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("entities.doltlite_db");
+        let pool = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            active, WRITER_BRANCH,
+            "a writer is on {active:?}; anything it writes is unsealed and \
+             visible to every reader"
+        );
+        pool.close().await;
+
+        // And the second open of the same file, where the branch already
+        // exists and `dolt_connect_branch` is what puts us on it.
+        let pool = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(active, WRITER_BRANCH, "reopen landed on {active:?}");
         pool.close().await;
     }
 
