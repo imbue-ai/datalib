@@ -212,8 +212,15 @@ version of each output you produced:
 output gained since your last seal (or in all, if you never sealed) —
 finishing is the last seal, as far as a consumer's queue is concerned.
 
-There are two cases per declared output, and that is the whole
-protocol:
+**If your tree holds doltlite stores, you need not report a version
+at all.** The runner reads the commit each `*.doltlite_db` at the top of
+your tree has on `main`, after every invocation and at every checkpoint,
+and uses that; anything you report for such a tree is not consulted.
+Publish before you checkpoint (`commit_run` does), and the checkpoint
+means what it says.
+
+For any other tree there are two cases per declared output, and that is
+the whole protocol:
 
 * **`version`** — a content version you vouch for: a dolt commit hash,
   a row-set hash, a cursor hash. Trusted verbatim, and compared only

@@ -324,8 +324,8 @@ async fn main() {
         Err(e) => {
             let kind = hints::classify(&e);
             // A failed-but-incremental step may still have committed
-            // partial output; with no claims the scheduler re-hashes
-            // the declared outputs and sees whatever landed.
+            // partial output; the runner reads its stores' heads and
+            // sees whatever was published.
             emitter.outcome(&[], Some(kind));
             // `tracing::error!` alone, never a `status_line!` beside it.
             // Both land on the same stderr, so a second copy is a second

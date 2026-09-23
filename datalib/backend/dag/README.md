@@ -137,11 +137,21 @@ is `supervisor/round.rs` calling it until the run's request closes. The
 design, and what comes next, is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
 
-## Versions are reported by the step, not measured by the runner
+## Versions: read from the store, or reported by the step
 
-A step reports one version string per output. It must be a function of the
-output's **content** — a dolt commit hash, a row-set hash, a render cursor's
-hash — so that two runs over the same data report the same string and
+**A step whose tree holds doltlite stores is versioned by the runner.**
+After every invocation, and at every checkpoint, it reads the commit each
+store's `main` is at (`sink.rs`): `<store file>:<hash>` for each
+`*.doltlite_db` directly in the tree, in name order. That is exactly what
+a pinned reader of the store can see, so it is exactly what a consumer
+reads; what the step reports is not consulted. It is read whether the step
+succeeded or failed, because a writer's `open` publishes a commit its
+crashed predecessor left. Only the stores at the top of the tree count —
+a render tree's per-document directories hold markdown.
+
+**Any other step reports one version string per output.** It must be a
+function of the output's **content** — a row-set hash, a cursor's hash —
+so that two runs over the same data report the same string and
 "unchanged" is something the scheduler *derives* rather than something a
 step asserts. A timestamp does not qualify. The value is otherwise opaque:
 the runner only ever compares it for equality.
@@ -159,12 +169,14 @@ did not run contributes the version recorded for its output last time, or
 commit hash — for work this run already decided not to do — is the thing
 that policy exists to prevent.
 
-**The step's fingerprint is folded into every recorded version.** A step
+**The step's fingerprint is folded into every reported version.** A step
 reports on its content and has no way to know its own definition changed.
 Without folding, a bumped `code_version` re-runs the step (its fingerprint
 moved) while the reported version stays identical, so consumers skip: the
 tree is rebuilt and the index keeps serving what the old definition
-produced.
+produced. A version read from a store is not folded: a rebuild that
+changes rows is a new commit, and one that changes nothing leaves nothing
+new to read.
 
 `ABSENT` and `UNKNOWN` are compared for equality like any other version,
 which gives the right answer in both directions. A tree that was never

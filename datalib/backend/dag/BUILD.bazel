@@ -28,6 +28,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -52,6 +53,7 @@ rust_test(
     crate = ":datalib_dag",
     edition = "2021",
     deps = [
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )
