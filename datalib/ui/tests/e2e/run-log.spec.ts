@@ -26,22 +26,26 @@ const quoted = (v: string) =>
     ? `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : v;
 
-/// The status bar's "Logs" names this server's launch in its picker;
-/// the log opened straight on that launch is the column after the
-/// Manage card, titled for what it shows. Straight on, as Manage's
-/// "Server log" button used to open it: switching the picker instead
-/// left the right-click test below failing, for a reason not yet known.
+/// The status bar's "Logs" opens the log as the column after the
+/// Manage card; picking this server's launch retitles it. The lines
+/// already shown stay until the launch's replace them, so this waits
+/// for that load to finish before anything reads a row.
 async function openServerLog(page: Page) {
   await page.goto("/data_sources");
   await page.locator(".cards-statusbar").getByRole("button", { name: "Logs" }).click();
-  const mine = page.getByLabel("Which run or launch").locator("option", {
-    hasText: /this server$/,
-  });
-  await expect(mine).toHaveCount(1);
-  const launch = (await mine.getAttribute("value"))!.replace(/^launch:/, "");
-  await page.goto(`/sourcesView()/${encodeURIComponent(`logView(${JSON.stringify({ launch })})`)}`);
   const dialog = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
   await expect(dialog).toBeVisible();
+  const scope = dialog.getByLabel("Which run or launch");
+  const mine = scope.locator("option", { hasText: /this server$/ });
+  await expect(mine).toHaveCount(1);
+  const value = (await mine.getAttribute("value"))!;
+  const launch = value.replace(/^launch:/, "");
+  const loaded = page.waitForResponse(
+    (r) => r.url().includes("/api/log?") && r.url().includes(`process=${launch}`),
+  );
+  await scope.selectOption(value);
+  await loaded;
+  await expect(dialog.locator(".rl-panel")).toHaveAttribute("aria-busy", "false");
   await expect(dialog.locator(".miller-col-title")).toHaveText("Server log");
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
@@ -58,11 +62,16 @@ const lineCount = (page: Page) =>
 /// delivered at the next frame, after the press has opened the menu, and
 /// the grid's context menu closes on any scroll of the grid. Scroll
 /// events are dispatched before a frame's animation callbacks, so one
-/// frame is enough.
+/// frame is enough. Retried until a menu is up: the server's log grows
+/// with every request, and a line arriving re-renders the row it holds.
 async function rightClick(target: Locator) {
-  await target.scrollIntoViewIfNeeded();
-  await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
-  await target.click({ button: "right" });
+  const menu = target.page().locator(".slick-context-menu");
+  await expect(async () => {
+    await target.scrollIntoViewIfNeeded();
+    await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+    await target.click({ button: "right" });
+    await expect(menu).toBeVisible({ timeout: 1_000 });
+  }, "no context menu opened").toPass({ timeout: 10_000 });
 }
 
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
