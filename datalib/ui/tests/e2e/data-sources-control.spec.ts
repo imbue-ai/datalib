@@ -154,7 +154,9 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
 /// Wait until a job has *finished* in one of the given states — the
 /// worker has stamped it, so nothing is still running on its behalf.
 /// A cancel flips the state the moment it is asked for; `active` is
-/// what says the runner has actually gone.
+/// what says the runner has actually gone. `settleRunner` is not enough:
+/// the runner closes its run record before it exits, and the worker
+/// stamps the job only after it has reaped the process.
 async function untilJobFinished(
   request: APIRequestContext,
   s: Source,
@@ -350,12 +352,7 @@ test.describe("sources run independently, one job at a time", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await settleRunner(page, 60_000);
-    const finished = await jobs(request);
-    for (const s of [CHATGPT, CLAUDE, PDFS]) {
-      expect(finished.find((j) => j.source_ids === ingestOf(s))?.state, `${s.id}'s job`).toBe(
-        "done",
-      );
-    }
+    for (const s of [CHATGPT, CLAUDE, PDFS]) await untilJobFinished(request, s, ["done"]);
   });
 
   test("stopping one source mid-sync leaves the others alone, and it restarts after an edit", async ({
@@ -505,6 +502,7 @@ test.describe("sources run independently, one job at a time", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await settleRunner(page, 60_000);
+    await untilJobFinished(request, CHATGPT, ["done"]);
     // Two jobs for this source now: the one that was stopped, and the
     // one that finished. Neither is the other's.
     const mine = (await jobs(request)).filter(
