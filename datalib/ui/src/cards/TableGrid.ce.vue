@@ -21,14 +21,15 @@ import type {
   SlickEventData,
   TreeToggleStateChange,
 } from "@slickgrid-universal/common";
-import type { ColumnSpec } from "@/api";
-import { formatRelative } from "@/config/timeFormat";
+import type { ColumnSpec, Timeseries } from "@/api";
+import { calibrationMax } from "@/config/sparkline";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
+import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
-import { timestampFields } from "./cellRenderers";
+import { fieldsOfType, sparkStepMs } from "./cellRenderers";
 
 const props = withDefaults(
   defineProps<{
@@ -127,13 +128,14 @@ function syncRows(rows: T[]) {
   if (!sameShape) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
+    ceilings = ceilingsOf(rows);
     bundle.dataset = annotate(rows);
     return;
   }
   // A row whose cell is being edited is left as it is: the grid drops
   // the editor when it rebuilds that row. The change stays unpainted,
   // so the next sync after the edit closes applies it.
-  const busy = editingRow();
+  const busy = editingCell()?.row ?? null;
   dataView.beginUpdate();
   for (const r of rows) {
     const key = keyOf(r);
@@ -146,33 +148,52 @@ function syncRows(rows: T[]) {
     dataView.updateItem(key, { ...dataView.getItemById(key), ...r });
   }
   dataView.endUpdate();
+  const next = ceilingsOf(rows);
+  if (next !== ceilings) {
+    ceilings = next;
+    refreshCells(fieldsOfType(props.columns, "timeseries"));
+  }
 }
 
-/// The row with an open cell editor, if any.
-function editingRow(): number | null {
+/// Every sparkline in a column is drawn against the column's largest
+/// row, so a new largest moves every line in it: the column is
+/// repainted, not the rows.
+let ceilings = "";
+function ceilingsOf(rows: T[]): string {
+  const series = fieldsOfType(props.columns, "timeseries").map((f) =>
+    calibrationMax(rows.map((r) => (r[f] as Timeseries | undefined) ?? EMPTY_SERIES)),
+  );
+  return JSON.stringify(series);
+}
+const EMPTY_SERIES: Timeseries = { value: null, unit: "", samples: [] };
+
+/// The cell with an open editor, if any.
+function editingCell(): { row: number; cell: number } | null {
   const grid = bundle?.slickGrid;
   if (!grid?.getCellEditor()) return null;
-  return grid.getActiveCell()?.row ?? null;
+  return grid.getActiveCell() ?? null;
 }
 
-/// Repaint the visible rows: every typed cell draws from the row, but
-/// a `timestamp` cell also draws from the clock, and a host may hold
-/// state outside the rows that a cell reads. The row being edited is
-/// skipped — the grid closes the editor when it rebuilds that row, and
-/// the clock ticks every second.
-function refreshCells(fields?: string[]) {
+/// Redraw single cells in place, leaving the rest of each row alone: a
+/// row rebuilt under the pointer loses the button it was about to
+/// press. A cell being edited is skipped, because redrawing it resets
+/// what the person typed.
+function repaintCells(cells: { key: string; field: string }[]) {
   if (!bundle) return;
-  const grid = bundle.slickGrid;
-  void fields;
-  const busy = editingRow();
-  if (busy == null) {
-    grid.invalidateAllRows();
-  } else {
-    const others = [];
-    for (let i = 0; i < bundle.dataView.getLength(); i++) if (i !== busy) others.push(i);
-    grid.invalidateRows(others);
+  const { slickGrid: grid, dataView } = bundle;
+  const busy = editingCell();
+  for (const { key, field } of cells) {
+    const row = dataView.getRowById(key);
+    const cell = grid.getColumnIndex(field);
+    if (row == null || cell == null || cell < 0) continue;
+    if (busy?.row === row && busy.cell === cell) continue;
+    grid.updateCell(row, cell);
   }
-  grid.render();
+}
+
+/// Redraw the named columns in every row.
+function refreshCells(fields: string[]) {
+  repaintCells(props.rows.flatMap((r) => fields.map((field) => ({ key: keyOf(r), field }))));
 }
 
 function selectedRows(): T[] {
@@ -195,7 +216,7 @@ function startEditing(row: T, field: string) {
 }
 
 const api: TableGridApi<T> = { startEditing, selectedRows, refreshCells };
-defineExpose({ refreshCells, api: () => api });
+defineExpose({ api: () => api });
 
 function buildColumns(): Column<T>[] {
   const typed = typedColumns<T>(props.columns, {
@@ -397,6 +418,7 @@ function createGrid() {
   }
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
+  ceilings = ceilingsOf(props.rows);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
@@ -408,28 +430,31 @@ function createGrid() {
   emit("ready", api);
 }
 
-// A `timestamp` cell reads "5 minutes ago", which goes stale on its
-// own, so it needs a clock rather than an event. It ticks every second
-// but repaints only when a cell would actually read differently.
-let lastRelativePaint = "";
-let relativePoll: ReturnType<typeof setInterval> | null = null;
-function tickRelative() {
-  const fields = timestampFields(props.columns);
-  if (fields.length === 0) return;
-  const now = Date.now();
-  const next = props.rows
-    .map((r) => fields.map((f) => formatRelative((r[f] as string | null) ?? null, now)).join(""))
-    .join(" ");
-  if (next !== lastRelativePaint) {
-    lastRelativePaint = next;
-    refreshCells(fields);
-  }
+// Some cells go stale with no new data ("5 minutes ago", a sliding
+// sparkline), so they need a clock rather than an event. It ticks every
+// second and repaints only the cells that would draw differently.
+let faces: ClockFaces = new Map();
+let clock: ReturnType<typeof setInterval> | null = null;
+function tickClock() {
+  const timestamps = fieldsOfType(props.columns, "timestamp");
+  const timeseries = fieldsOfType(props.columns, "timeseries");
+  if (timestamps.length === 0 && timeseries.length === 0) return;
+  const cols = {
+    timestamps,
+    timeseries,
+    windowMs: props.windowSecs * 1000,
+    stepMs: sparkStepMs(props.windowSecs),
+  };
+  const next = clockFaces(props.rows, keyOf, cols, Date.now());
+  const moved = movedCells(faces, next);
+  faces = next;
+  repaintCells(moved);
 }
 
 let themeWatch: MutationObserver | null = null;
 onMounted(() => {
   createGrid();
-  relativePoll = setInterval(tickRelative, 1000);
+  clock = setInterval(tickClock, 1000);
   themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
@@ -437,7 +462,7 @@ onMounted(() => {
   });
 });
 onBeforeUnmount(() => {
-  if (relativePoll) clearInterval(relativePoll);
+  if (clock) clearInterval(clock);
   themeWatch?.disconnect();
   bundle?.dispose();
   bundle = null;

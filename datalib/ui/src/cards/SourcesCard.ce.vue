@@ -365,8 +365,6 @@ const rowActions: Record<string, (row: Row) => void> = {
   },
 };
 
-const tableGrid = ref<{ refreshCells: (fields?: string[]) => void } | null>(null);
-
 let gridApi: TableGridApi<Row> | null = null;
 function onGridReady(api: TableGridApi<Row>) {
   gridApi = api;
@@ -857,9 +855,6 @@ function reparse() {
   } catch (e) {
     parseError.value = (e as Error).message;
   }
-  // A hand-edit that makes a source editable again has to reach its
-  // Edit button, whose face is decided outside the row.
-  tableGrid.value?.refreshCells(["actions"]);
 }
 
 async function loadConfig() {
@@ -895,17 +890,8 @@ async function loadConfig() {
 /// The rows the loader dropped, for the banner above the table.
 const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
-/// Repaint the columns whose content is a `cellRenderer` over state
-/// that lives outside the row's identity.
-function repaint() {
-  tableGrid.value?.refreshCells();
-}
-
 const commitJobs = freshest<SyncJob[]>((list) => {
   jobs.value = list;
-  // The queue decides "Queued" and the Run/Stop face, so a new job is
-  // a repaint even when the runner's record hasn't moved.
-  repaint();
   // Both paths retire the banner, because either can be the one that
   // learns the job stopped: the push covers a sync this server ran,
   // the poll covers a dropped SSE connection and a run started from a
@@ -935,10 +921,6 @@ const anyJobActive = computed(() => jobs.value.some((j) => j.active));
 
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
-  // Several columns are `cellRenderer`s over data outside the row's
-  // identity, so a new answer only reaches the screen if the cells are
-  // told to repaint.
-  repaint();
 });
 
 /// Read the rows. `refresh` asks the backend to walk the disk before
@@ -1321,7 +1303,6 @@ function adoptJob(job: SyncJob) {
   const at = jobs.value.findIndex((j) => j.id === job.id);
   jobs.value =
     at >= 0 ? [...jobs.value.slice(0, at), job, ...jobs.value.slice(at + 1)] : [job, ...jobs.value];
-  repaint();
 }
 
 /// Sync everything the config declares, in one run.
@@ -1376,9 +1357,10 @@ function onJobEvent(e: JobProgressEvent) {
   void loadRows(!active);
 }
 
-/// Fold a pushed job update into the queue we hold, so the Run/Stop
-/// face and every Queued row move on the push rather than on the next
-/// `GET /api/sync/jobs/all`.
+/// Fold a pushed job update into the queue we hold, so the Sync
+/// everything button and the banner move on the push rather than on the
+/// next `GET /api/sync/jobs/all`. The rows' Queued and Run/Stop come
+/// from the server with the rows.
 function mergeJob(e: JobProgressEvent) {
   const now = new Date().toISOString();
   const at = jobs.value.findIndex((j) => j.id === e.id);
@@ -1535,7 +1517,6 @@ onUnmounted(() => {
            added lands at the bottom, where a virtualized grid would
            have no row for it until scrolled to. -->
       <TableGrid
-        ref="tableGrid"
         :columns="manage?.columns ?? []"
         :rows="rows"
         :tree="true"
