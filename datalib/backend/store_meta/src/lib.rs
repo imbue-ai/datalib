@@ -51,8 +51,10 @@ pub enum StoreKind {
     /// `system/remote_media.doltlite_db`: what remote media a person
     /// let a document load, and the URLs fetched into the download CAS.
     RemoteMedia,
-    /// `system/runs/runs.sqlite`, the one plain-SQLite store.
+    /// `system/runs/runs.sqlite`: every run's step states, log and metrics.
     Runs,
+    /// `system/supervisor.sqlite`: requests, pauses, and the loop's facts.
+    Supervisor,
 }
 
 impl StoreKind {

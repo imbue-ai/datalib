@@ -1,8 +1,9 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–3 are built —
-`datalib-dag` runs one round of the tick, with versions read from the
-sinks — and the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slices 0–3 and 4a are
+built — `datalib-dag` runs the loop over requests in
+`system/supervisor.sqlite`, or hands its request to the one already
+running — and the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -783,7 +784,15 @@ last.
    found the couplings that decide the order; each is named where it is
    dealt with.
 
-   **4a. The store, and the CLI as loop or client.**
+   **4a. The store, and the CLI as loop or client.** *Built, narrower
+   than first written:* the store holds `requests` and `pauses` only
+   (steps' states and invocations come with 4c), the facts stay in
+   `dag_state.json`, and the verbs (`stop`, `pause`, `resume` as
+   commands) follow separately — the store takes them already. The
+   server is untouched but for tagging its requests `--by ui`: its
+   worker still runs one job at a time, so the UI's own syncs overlap
+   from 4b, and a job whose `datalib-dag` joined a CLI's loop has no run
+   of its own until then. What was first written:
    `system/supervisor.sqlite` with `requests`, `pauses`, `steps` and
    `invocations`; the facts move there from `dag_state.json`. The round
    becomes a loop that reads intent from the store (`data_version`),

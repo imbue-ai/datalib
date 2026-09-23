@@ -242,10 +242,17 @@ naming no step) looks exactly like one it did.
 
 ## Two locks, two files
 
-- **One runner per data root.** The scheduler rewrites a single JSON state
-  file after every terminal step, and the steps it spawns write raw stores
-  whose doltlite working set is shared across every connection on the
-  branch, in any process. Two runners on one root interleave both.
+- **One loop per data root** (`system/runner-lock`). The loop rewrites a
+  single JSON state file after every terminal step, and the steps it
+  spawns write raw stores whose doltlite working set is shared across
+  every connection on the branch, in any process; two loops on one root
+  would interleave both. A second `datalib-dag` is not refused for it: a
+  sync is a request row in `system/supervisor.sqlite`, so it writes its
+  row and follows it while whoever holds the lock runs it, trying the
+  lock again every half second in case that loop ends first
+  (`supervisor/store.rs`, `docs/dev/plans/supervisor.md` §2.8). Only
+  `--reset`, which empties stores, needs the root to itself and is
+  refused while a loop runs.
 - **One server per data root**, which `datalib-http` takes for its own
   reasons (the API token, the job and feedback stores).
 
@@ -277,9 +284,10 @@ invariant on it.
 
 Read-only does not mean invisible. `flock(2)` has no way to ask without
 taking, so the probe holds the lock for an instant, and the server probes on
-every change under the root — most often just as a run starts. A runner that
-finds the lock held therefore keeps trying for two seconds before it refuses;
-a real second runner holds it far longer than that.
+every change under the root — most often just as a run starts. A
+`--reset` that finds the lock held therefore keeps trying for two seconds
+before it refuses; a sync that meets a probe follows for half a second and
+takes the lock on its next try.
 
 ## Progress: the store takes positions, never deltas
 
