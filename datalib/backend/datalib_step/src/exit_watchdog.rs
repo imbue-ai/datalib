@@ -58,10 +58,15 @@ fn thread_states(tasks: &Path) -> String {
     let mut out = String::from("threads (tid name wchan syscall):\n");
     for entry in entries.flatten() {
         let dir = entry.path();
+        // A thread that exits between the listing and this read has left
+        // nothing to report; every other thread keeps running meanwhile.
+        let Ok(comm) = std::fs::read_to_string(dir.join("comm")) else {
+            continue;
+        };
         out += &format!(
             "  {} {} wchan={} syscall={}\n",
             entry.file_name().to_string_lossy(),
-            read(&dir, "comm"),
+            comm.trim(),
             read(&dir, "wchan"),
             read(&dir, "syscall"),
         );
@@ -116,17 +121,28 @@ fn gdb_backtraces() -> String {
 mod tests {
     use super::*;
 
-    /// The report must list threads on Linux, and be empty rather than
-    /// an error where /proc does not exist.
+    /// The report names the calling thread on Linux, and is empty rather
+    /// than an error where /proc does not exist. Other tests' threads come
+    /// and go while it reads, which once failed an assertion that no
+    /// thread was unreadable.
     #[test]
-    fn thread_states_lists_threads_or_is_empty_without_proc() {
+    fn thread_states_names_this_thread_or_is_empty_without_proc() {
         let states = thread_states(Path::new("/proc/self/task"));
-        if Path::new("/proc/self/task").is_dir() {
-            assert!(states.contains(" wchan="), "{states}");
-            assert!(!states.contains("wchan=<"), "unreadable: {states}");
-        } else {
-            assert_eq!(states, "");
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: gettid takes no arguments and touches no memory.
+            let tid = unsafe { libc::gettid() };
+            let line = states
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{tid} ")))
+                .unwrap_or_else(|| panic!("no line for thread {tid}:\n{states}"));
+            assert!(
+                line.contains(" wchan=") && !line.contains("wchan=<"),
+                "{line}"
+            );
         }
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(states, "");
         assert_eq!(thread_states(Path::new("/nonexistent/task")), "");
     }
 }
