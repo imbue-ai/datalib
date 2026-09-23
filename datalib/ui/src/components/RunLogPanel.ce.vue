@@ -171,16 +171,43 @@ type Grid = SlickVanillaGridBundle<RunLogLine> & {
 let bundle: Grid | null = null;
 let unsubscribe: (() => void) | null = null;
 let inflight = false;
-/// A fresh load asked for while another load was in flight — a query
-/// typed while the tail was appending — runs once that one is done,
-/// instead of being lost.
+/// A load asked for while another was in flight — a query typed while
+/// the tail was appending, or a line logged while a press held the tail
+/// back — runs once that one is done, instead of being lost.
 let freshPending = false;
+let tailPending = false;
+/// Set from a press on the grid until just after its release. Any
+/// change in the row count makes the bundle re-render every row
+/// (`grid.invalidate()`), and a release that lands on a re-rendered row
+/// fires no click on the old one: on a busy log, a click selected
+/// nothing and a right-click opened no menu. So the grid is not
+/// touched while a button is down.
+let pressed: Promise<void> | null = null;
+let release: (() => void) | null = null;
+
+function onGridPointerDown() {
+  if (pressed) return;
+  pressed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+}
+
+function onPointerUp() {
+  const done = release;
+  if (!done) return;
+  pressed = null;
+  release = null;
+  // A task later, so the click or context menu the release fires has
+  // been handled before the rows are rebuilt.
+  setTimeout(done);
+}
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
 async function load(fresh: boolean) {
   if (inflight) {
-    freshPending ||= fresh;
+    if (fresh) freshPending = true;
+    else tailPending = true;
     return;
   }
   inflight = true;
@@ -205,6 +232,7 @@ async function load(fresh: boolean) {
       q: query.value,
       afterSeq: lastSeq,
     });
+    while (pressed) await pressed;
     if (got.length > 0) {
       lastSeq = got[got.length - 1].seq;
       lineCount.value += got.length;
@@ -243,7 +271,11 @@ async function load(fresh: boolean) {
     inflight = false;
     if (freshPending) {
       freshPending = false;
+      tailPending = false;
       void load(true);
+    } else if (tailPending) {
+      tailPending = false;
+      void load(false);
     }
   }
 }
@@ -812,6 +844,9 @@ function createGrid(first: RunLogLine[]) {
 let themeWatch: MutationObserver | null = null;
 
 onMounted(async () => {
+  // On the window, so a release outside the grid still ends the press.
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
   // The run's processes first, so a step opens on its attempt rather
   // than on the run and then jumps; the pickers' lists with them, so
   // the header can say what opened.
@@ -838,6 +873,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener("pointerup", onPointerUp, true);
+  window.removeEventListener("pointercancel", onPointerUp, true);
+  onPointerUp();
   unsubscribe?.();
   unsubscribe = null;
   themeWatch?.disconnect();
@@ -917,7 +955,7 @@ onUnmounted(() => {
         ><span v-else-if="runId"> for this run</span>.
       </template>
     </p>
-    <div v-show="lineCount > 0" class="rl-grid">
+    <div v-show="lineCount > 0" class="rl-grid" @pointerdown="onGridPointerDown">
       <div ref="boxEl" class="rl-box" />
     </div>
   </div>
