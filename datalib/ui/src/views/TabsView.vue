@@ -419,7 +419,7 @@ function resetSidebarWidth() {
             title="make top-level: move this tab, and everything under it, out of its opener"
             @click.stop="promote(row.tab.id)"
           >
-            ⤒
+            ⇤
           </button>
           <a
             class="tabs-action tabs-popout"

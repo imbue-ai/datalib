@@ -326,7 +326,7 @@ the person visits it from the sidebar or it opens something itself;
 the next card its opener opens replaces it. Without that, clicking
 down a grid's rows would leave a tab per row. Closing a tab hands its
 children to its own parent; closing a collapsed one closes its whole
-branch. A row's ⤒ makes the tab top-level, taking what is under it
+branch. A row's ⇤ makes the tab top-level, taking what is under it
 along, and its ↗ opens the tab alone in a new browser tab (a new
 window in the app).
 
