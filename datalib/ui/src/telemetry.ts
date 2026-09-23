@@ -9,6 +9,7 @@ import type { App } from "vue";
 import { START_LOCATION, type Router } from "vue-router";
 import { decodeColumns } from "@/router/columns";
 import { isDesktopApp } from "@/desktop";
+import { CAUSE_HEADER, chainOfFrameBeingHandled } from "@/live";
 
 export const PAGE_HEADER = "X-Datalib-Page";
 
@@ -122,7 +123,8 @@ export function navigateEvent(path: string, from: string | null): PageEvent {
   return { at: nowIso(), name: "navigate", msg: path, fields };
 }
 
-/// Wire the page up: the id on every same-origin request, the load and
+/// Wire the page up: the id on every same-origin request (and the
+/// chain of the `root` frame that caused it, if one did), the load and
 /// unload events, uncaught errors, and every route change. Once, at boot.
 export function installTelemetry(router: Router, app: App): void {
   const origin = window.location.origin;
@@ -134,6 +136,8 @@ export function installTelemetry(router: Router, app: App): void {
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
       headers.set(PAGE_HEADER, page.process_id);
+      const chain = chainOfFrameBeingHandled();
+      if (chain !== undefined) headers.set(CAUSE_HEADER, String(chain));
       init = { ...init, headers };
     }
     return nativeFetch(input, init);

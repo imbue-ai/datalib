@@ -188,6 +188,16 @@ sqlite3 <root>/system/runs/runs.sqlite \
   move the store, which is the frame, which is the next request.
   `request_log.rs` skips those two routes; a new endpoint that serves
   log rows joins the list.
+- **A loop that gets past that rule is counted.** A `root` frame
+  that only the server's own request lines moved carries `chain`, one
+  more than the longest chain among those lines. A fetch the page makes
+  while handling the frame echoes it as `X-Datalib-Cause`, and the
+  request's line stores it as `fields.chain`. At 5, and again at 50,
+  500 and so on, the server writes a `warn` with target `http.loop`
+  naming the endpoint and the page. Search `target:http.loop` to find
+  one. Only a fetch started synchronously inside the frame's handler
+  carries the header, so a refetch deferred by a timer is not counted
+  (`loop_guard.rs`).
 - **A step flushes per line.** Arrival order is the log's order, and a
   block-buffered stdout hands the runner its lines in 4KB lumps,
   minutes late. The runner sets `PYTHONUNBUFFERED=1`; anything else is
