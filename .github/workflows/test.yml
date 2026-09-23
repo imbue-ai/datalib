@@ -364,12 +364,13 @@ jobs:
       # No crate compiled twice: a Rust binary in a genrule's `tools` is
       # built again for the exec configuration, with everything under it,
       # and nothing else fails when that happens — CI just gets slower.
-      # Analysis only, and the test step above has already done it.
+      # Analysis only, and the test step above has already done it with
+      # these flags.
       - name: No crate built a second time for a tool
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          bazel aquery -c opt --config=release --config=ci --nostamp \
+          bazel aquery -c opt --config=release --config=ci --nostamp ${PR_TESTS} \
             --output=jsonproto 'mnemonic("Rustc", deps(//...))' > aquery.json
           python3 tools/check_tool_crates.py aquery.json
 
