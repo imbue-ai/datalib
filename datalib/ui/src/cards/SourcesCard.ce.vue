@@ -68,7 +68,8 @@ its chevron for the <b>steps</b> that do the work — fetch, render, index — a
 disabled and say why.</p>
 <p>A group row reads off its steps: <b>Status</b> is running if any step is, failed if
 any failed, and otherwise the last step’s in pipeline order; while a sync is in
-flight it draws one segment per step. <b>Last synced</b> is the fetch step’s.
+flight it draws one segment per step. <b>Last synced</b> and <b>Last success</b>
+are the fetch step’s.
 <b>Sync</b> runs the group’s source steps and everything downstream;
 <b>Remove</b> takes the steps and applets with it.</p>
 <p><b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
@@ -97,7 +98,10 @@ whole folder, measured on the same walk — plotted over the last few minutes an
 against the largest row, so a row’s height means its size, and its shape means what
 that size has been doing. Hover for the total and the breakdown.</p>
 <p><b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
-record — so a sync you start from a terminal shows up here too. A run whose record
+record — so a sync you start from a terminal shows up here too. <b>Last success</b>
+is when the step last ran without failing: when it is older than Last synced, every
+run since has failed, and a source's mirror is only known to match upstream as of
+then. A run whose record
 never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
 killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
 Sync button becomes a Stop — one job is one runner process over a whole subgraph,

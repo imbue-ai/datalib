@@ -1,9 +1,10 @@
 //! What a group's row on the Manage screen says about the steps and
 //! applets filed under it: the order they run in, the status the row
-//! shows, the instant it calls "last synced", and the steps a sync of
-//! the group starts at. The rules are the aggregation table in
-//! docs/dev/config_model.md. Nothing here does arithmetic
-//! across children: a group's bytes come from its own measured series.
+//! shows, the instants it calls "last synced" and "last success", and
+//! the steps a sync of the group starts at. The rules are the
+//! aggregation table in docs/dev/config_model.md. Nothing here does
+//! arithmetic across children: a group's bytes come from its own
+//! measured series.
 
 use super::status::{compare_stamps, StatusView};
 
@@ -102,10 +103,11 @@ pub struct ChildStamp {
     pub at: Option<String>,
 }
 
-/// When a group last synced: its ingest step's instant, else the newest
-/// any child reports. The ingest step is what "synced" means for a
-/// source, so a render that ran later does not move the group's stamp.
-pub fn group_last_synced(children: &[ChildStamp]) -> Option<String> {
+/// A group's instant for one of its children's stamps — last synced,
+/// last success: its ingest step's, else the newest any child reports.
+/// The ingest step is what "synced" means for a source, so a render
+/// that ran later does not move the group's stamp.
+pub fn group_instant(children: &[ChildStamp]) -> Option<String> {
     if let Some(ingest) = children.iter().find(|c| c.is_ingest) {
         return ingest.at.clone();
     }
@@ -362,8 +364,8 @@ mod tests {
     }
 
     #[test]
-    fn group_last_synced_is_the_ingest_steps_instant_even_when_the_render_ran_later() {
-        let got = group_last_synced(&[
+    fn group_instant_is_the_ingest_steps_instant_even_when_the_render_ran_later() {
+        let got = group_instant(&[
             stamp(true, Some("2026-09-10T10:00:00+02:00")),
             stamp(false, Some("2026-09-10T10:05:00+02:00")),
         ]);
@@ -371,8 +373,8 @@ mod tests {
     }
 
     #[test]
-    fn group_last_synced_is_none_while_the_ingest_step_has_never_run_whatever_the_render_says() {
-        let got = group_last_synced(&[
+    fn group_instant_is_none_while_the_ingest_step_has_never_run_whatever_the_render_says() {
+        let got = group_instant(&[
             stamp(true, None),
             stamp(false, Some("2026-09-10T10:05:00+02:00")),
         ]);
@@ -381,8 +383,8 @@ mod tests {
 
     /// Stamps in different offsets: the comparison is on the instant.
     #[test]
-    fn group_last_synced_is_the_newest_childs_instant_for_a_group_with_no_ingest_step() {
-        let got = group_last_synced(&[
+    fn group_instant_is_the_newest_childs_instant_for_a_group_with_no_ingest_step() {
+        let got = group_instant(&[
             stamp(false, Some("2026-09-10T10:00:00+02:00")),
             stamp(false, Some("2026-09-10T09:30:00+00:00")),
             stamp(false, None),
@@ -391,8 +393,8 @@ mod tests {
     }
 
     #[test]
-    fn group_last_synced_is_none_when_nothing_has_run() {
-        assert_eq!(group_last_synced(&[stamp(false, None)]), None);
+    fn group_instant_is_none_when_nothing_has_run() {
+        assert_eq!(group_instant(&[stamp(false, None)]), None);
     }
 
     #[test]

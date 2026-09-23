@@ -14,6 +14,7 @@ use crate::{DagRunInfo, DagStepRun};
 pub struct StepRecord {
     pub last_run: Option<DagStepRun>,
     pub current_state: Option<String>,
+    pub last_success_at: Option<String>,
 }
 
 /// The record as it applies to the run now in flight. `stale` is true
@@ -28,8 +29,8 @@ pub fn step_for_run(step: Option<&StepRecord>, stale: bool) -> Option<StepRecord
         return Some(step.clone());
     }
     Some(StepRecord {
-        last_run: step.last_run.clone(),
         current_state: None,
+        ..step.clone()
     })
 }
 
@@ -111,8 +112,8 @@ pub fn status_rank(key: &str) -> Option<i32> {
 }
 
 /// One row's status, in the shape the Status column draws. The rules
-/// here fill `key`, `label`, `at` and `detail`; the assembly adds a
-/// fraction and segments where a run is in flight.
+/// here fill `key`, `label`, `at`, `last_success_at` and `detail`; the
+/// assembly adds a fraction and segments where a run is in flight.
 pub type StatusView = datalib_columns::Status;
 
 /// The word each status key stands for. `skipped_up_to_date` is the
@@ -375,13 +376,28 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
     }
 }
 
-/// What a step is doing right now, or did last.
+/// What a step is doing right now, or did last, and when it last
+/// succeeded. The last success is history whatever the step is doing
+/// now, so every status carries it — except a dropped entry's, for
+/// the reason that one carries no `at`.
 ///
 /// `not_selected` appears nowhere. It is a fact about a *run* ("this
 /// one didn't ask for me"), not about the step; the runner no longer
 /// records it as a `last_run`, and `GET /api/dag` drops the ones
 /// already on disk.
 pub fn step_status(args: StatusArgs<'_>) -> StatusView {
+    let last_success_at = args
+        .dropped
+        .is_none()
+        .then(|| args.step.and_then(|s| s.last_success_at.clone()))
+        .flatten();
+    StatusView {
+        last_success_at,
+        ..current_status(args)
+    }
+}
+
+fn current_status(args: StatusArgs<'_>) -> StatusView {
     // A step the config loader dropped is not going to run, whatever
     // the runner's record still remembers. This has to outrank
     // everything else: a row still reading "Up to date" from last
@@ -567,6 +583,7 @@ mod tests {
         StepRecord {
             last_run: last,
             current_state: current.map(str::to_string),
+            last_success_at: None,
         }
     }
 
@@ -881,6 +898,84 @@ mod tests {
             let s = status_in(&f, "b/ingest");
             assert_eq!(s.key, "never_run", "b/ingest changed at: {note}");
             assert_eq!(s.at, None, "b/ingest got a timestamp at: {note}");
+        }
+    }
+
+    /// A sync that succeeds and a later one that fails: `at` follows the
+    /// attempt, `last_success_at` stays on the success, through the
+    /// failing run as well as after it (#646).
+    #[test]
+    fn a_failure_moves_the_attempt_and_leaves_the_last_success() {
+        const FAILED_AT: &str = "2026-09-02T10:00:09+02:00";
+        let succeeded = StepRecord {
+            last_success_at: Some(A_DONE.into()),
+            ..rec(
+                Some("succeeded"),
+                Some(last_run("r", RUN_START, Some(A_DONE), "succeeded")),
+            )
+        };
+        let second_run = "2026-09-02T10:00:01+02:00";
+        let mut running_again = job("running", true);
+        running_again.id = second_run.into();
+        let frames = [
+            (
+                "the first sync settled, succeeded",
+                Frame {
+                    jobs: vec![],
+                    run: Some(run(RUN_START, RUN_START, Some(RUN_END), false)),
+                    dag: dag(&[("a/ingest", succeeded.clone())]),
+                },
+            ),
+            (
+                "the second sync is running it",
+                Frame {
+                    jobs: vec![running_again],
+                    run: Some(run(second_run, second_run, None, true)),
+                    dag: dag(&[(
+                        "a/ingest",
+                        StepRecord {
+                            current_state: Some("running".into()),
+                            last_run: Some(last_run(second_run, second_run, None, "")),
+                            ..succeeded.clone()
+                        },
+                    )]),
+                },
+            ),
+            (
+                "the second sync settled, failed",
+                Frame {
+                    jobs: vec![],
+                    run: Some(run(second_run, second_run, Some(FAILED_AT), false)),
+                    dag: dag(&[(
+                        "a/ingest",
+                        StepRecord {
+                            current_state: Some("failed".into()),
+                            last_run: Some(last_run(
+                                second_run,
+                                second_run,
+                                Some(FAILED_AT),
+                                "failed",
+                            )),
+                            ..succeeded.clone()
+                        },
+                    )]),
+                },
+            ),
+        ];
+        let seen: Vec<StatusView> = frames
+            .iter()
+            .map(|(_, f)| status_in(f, "a/ingest"))
+            .collect();
+        let keys: Vec<&str> = seen.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys, ["succeeded", "running", "failed"]);
+        let ats: Vec<Option<&str>> = seen.iter().map(|s| s.at.as_deref()).collect();
+        assert_eq!(ats, [Some(A_DONE), Some(second_run), Some(FAILED_AT)]);
+        for ((note, _), s) in frames.iter().zip(&seen) {
+            assert_eq!(
+                s.last_success_at.as_deref(),
+                Some(A_DONE),
+                "moved at: {note}"
+            );
         }
     }
 
@@ -1304,15 +1399,18 @@ mod tests {
         }
 
         fn healthy() -> StepRecord {
-            rec(
-                None,
-                Some(last_run(
-                    "r1",
-                    "2026-09-01T10:00:00+00:00",
-                    Some("2026-09-01T10:01:00+00:00"),
-                    "succeeded",
-                )),
-            )
+            StepRecord {
+                last_success_at: Some("2026-09-01T10:01:00+00:00".into()),
+                ..rec(
+                    None,
+                    Some(last_run(
+                        "r1",
+                        "2026-09-01T10:00:00+00:00",
+                        Some("2026-09-01T10:01:00+00:00"),
+                        "succeeded",
+                    )),
+                )
+            }
         }
 
         fn status(step: Option<&StepRecord>, dropped: Option<&Diagnostic>) -> StatusView {
@@ -1340,6 +1438,7 @@ mod tests {
             // No timestamp: it would describe a run this config never
             // took part in.
             assert_eq!(now.at, None);
+            assert_eq!(now.last_success_at, None);
         }
 
         /// `blocked` and `rejected` drop the entry alike and say

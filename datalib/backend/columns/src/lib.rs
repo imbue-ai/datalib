@@ -177,6 +177,11 @@ pub struct Status {
     pub label: String,
     /// When this status was reached, if it is the kind that is reached.
     pub at: Option<String>,
+    /// When the thing last succeeded, whatever it has done since. Equal
+    /// to `at` for a row whose latest outcome was a success; older for
+    /// one that has failed since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<String>,
     /// Why it is that word — the failure, what it is waiting on.
     pub detail: Option<String>,
     /// How far along, in `[0, 1]`, when the thing said how much is ahead

@@ -319,7 +319,16 @@ export async function statusOf(page: Page, id: string): Promise<string | null> {
 /// clocks rather than two records. Null for a row that has never run,
 /// which renders "—" with no title to read.
 export async function stampOf(page: Page, id: string): Promise<string | null> {
-  const el = pipelineRow(page, id).locator('[col-id="last_synced"] [title]');
+  return stampIn(page, id, "last_synced");
+}
+
+/// `stampOf` for the Last-success cell.
+export async function lastSuccessOf(page: Page, id: string): Promise<string | null> {
+  return stampIn(page, id, "last_success");
+}
+
+async function stampIn(page: Page, id: string, column: string): Promise<string | null> {
+  const el = pipelineRow(page, id).locator(`[col-id="${column}"] [title]`);
   if ((await el.count()) === 0) return null;
   return await el.first().getAttribute("title");
 }

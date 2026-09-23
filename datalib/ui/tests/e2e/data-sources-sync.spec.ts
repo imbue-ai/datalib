@@ -19,6 +19,8 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   expandGroup,
+  groupRow,
+  lastSuccessOf,
   pipelineRow as row,
   recordStatuses,
   settle,
@@ -602,6 +604,49 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
       '.rl-grid .slick-row:not(.slick-group) .slick-cell[col-id="msg"]',
     );
     await expect(messages.filter({ hasText: /^walking page 1$/ })).toBeVisible();
+  });
+
+  // A source that syncs once and fails from then on: Last synced
+  // follows the failure, Last success stays on the one that worked —
+  // on the step and on its group (#646).
+  test("a failure after a success moves Last synced and leaves Last success", async ({ page }) => {
+    // Named per attempt, so a retry does not find the last one's marker
+    // and fail its first sync.
+    const once = `$DATALIB_DAG_STEP/once-${Date.now()}`;
+    const soured = `${config()}
+
+[[groups]]
+id = "soured"
+type = "pdf"
+
+[[steps]]
+group = "soured"
+function = "ingest"
+command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo upstream went away >&2; exit 1; fi; touch ${once}'"
+`;
+    await writeConfig(page, soured);
+    await expandGroup(page, "soured");
+    expect(await lastSuccessOf(page, "soured/ingest")).toBeNull();
+
+    await syncBtn(page, "soured/ingest").click();
+    expect(await settle(page, "soured/ingest", null)).toBe("Succeeded");
+    await expandGroup(page, "soured");
+    const succeeded = await lastSyncedOf(page, "soured/ingest");
+    expect(succeeded).not.toBeNull();
+    expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
+
+    await syncBtn(page, "soured/ingest").click();
+    expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
+    await expandGroup(page, "soured");
+    const failed = await lastSyncedOf(page, "soured/ingest");
+    expect(failed).not.toBe(succeeded);
+    expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
+    await expect(
+      groupRow(page, "soured").locator('[col-id="last_synced"] [title]'),
+    ).toHaveAttribute("title", failed!);
+    await expect(
+      groupRow(page, "soured").locator('[col-id="last_success"] [title]'),
+    ).toHaveAttribute("title", succeeded!);
   });
 
   test("a downstream step can't be synced on its own, and says what would carry it", async ({
