@@ -300,7 +300,7 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
       ...process.env,
       DATALIB_BIND: "127.0.0.1:0",
       DATALIB_TOKEN: API_TOKEN,
-      DATALIB_PARENT_PIPE: "1",
+      DATALIB_PARENT_PIPE: "0",
       ...env,
     },
   });

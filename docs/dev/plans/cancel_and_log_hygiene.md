@@ -1,9 +1,9 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 to 4 landed (#682, #686, #692, #697, #700); 5 is void
-and 6 and 7 are open. PRs 3, 4 and 5 were none of them what this doc
-first said they were — each says so in its own section. Last read against the tree
-2026-09-23.** §1 is what a real data root actually contained — every
+**Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700); 5 is
+void and 6 and 7 are open. PRs 3, 4, 5 and 8 were none of them what this
+doc first said they were — each says so in its own section. Last read
+against the tree 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
 Where this doc and the tree disagree, the tree wins.
@@ -434,6 +434,106 @@ not meaningfully exist yet, or run the guard after the stores are made.
 - Default the Slack event tape to **off**. It is a debugging tool.
 - Give `disk_usage` a retention knob beside the others in
   `[run_history]`, or downsample anything older than a day.
+
+### PR 8 — A step outlives no runner, however the runner died — **done**
+
+This started as "give the worker→runner spawn a process group, so the
+`SIGKILL` at the end of PR 1's ladder has something to aim at". That is
+not a thing that can work, and the measurement says why. A step under a
+runner today:
+
+```
+  PID  PPID  PGID  COMMAND
+72586 72556 72556  datalib_dag_bin …     runner, in the shell's group
+72592 72586 72592  /bin/sh s.sh          step, in its OWN group
+72594 72592 72592  sleep 200             grandchild, in the step's group
+```
+
+Process groups are flat: a process is in exactly one, and #686 moved
+every step into its own so that a signal aimed at a step reaches the
+`node` it wrapped. Steps have therefore *left* the runner's group, and
+a group at the runner would contain the runner alone.
+
+Worth noticing that #686 removed coverage that used to exist by
+accident — before it, a signal to the runner's group did reach the
+steps. It was still the right change; the grandchild case was the
+common one. But it left a hole that a group cannot close.
+
+What closes it is the other end, and it was already in the tree for
+every other long-running process datalib starts. The runner now hands
+each step a pipe on stdin with `DATALIB_PARENT_PIPE` set, and
+`datalib-step` calls `datalib_parent_watch::exit_with_parent`. A runner
+that is SIGKILLed, aborts, or is taken by the OOM killer runs no code
+at all, but the kernel still closes its descriptors — so the step reads
+EOF and raises on its own group the SIGINT the runner would have sent,
+which its existing handler answers by sealing and exiting 130.
+
+This is strictly wider than the ladder's rung 3, which only ever fires
+after twenty seconds of a wedged runner. `subprocess.rs` used to say
+"a SIGKILL at the runner runs no Rust and leaves the steps behind";
+that sentence is now gone.
+
+**The pipe goes on fd 3, and stdin is left alone.** Getting there took
+three cuts, and the wrong two are the instructive part.
+
+The first gave every step the pipe *on stdin* and called stdin part of
+the protocol. Backwards: the protection needs the child to watch the
+pipe, so an arbitrary program gains nothing from holding one — while a
+program that reads stdin expecting the immediate EOF `/dev/null` gives
+blocks on a pipe nobody writes to. A hung step holding its store open is
+the disease, not the cure. Measured: forcing every step onto a stdin
+pipe turns a step that runs `cat` into a 90-second timeout.
+
+The second kept stdin but gave the pipe only to `datalib-step`, detected
+by the program's *name*. Implicit — wrap or rename the binary and the
+behaviour changes silently. It put a decision inside the imperative
+spawn path when it is a pure function of the config, against
+`style.md`. And the test had to copy the probe to a file called
+`datalib-step` to reach the path: when a test spoofs an identity, the
+code is keyed on the wrong thing.
+
+The third made it a config flag, `watches_runner`. Better, but it still
+left a footgun: set it on a step that reads stdin and you get a silent
+hang. That is not detectable from the runner's side — a step blocked
+waiting for EOF and a step blocked waiting for input are the same
+`read()`, and `parent_watch` consumes and discards bytes, so probing
+does not separate them either.
+
+So the pipe moved off stdin entirely. `DATALIB_PARENT_PIPE` now names
+the descriptor holding it: `0` for the spawners that legitimately use
+stdin (the applets, the desktop shell's `datalib-http`, the e2e
+backends, all of which know the program they start) and `3` for a step.
+`Stdio::piped()` still makes the pipe; a `pre_exec` moves it to fd 3 and
+reopens `/dev/null` on stdin before exec.
+
+That removes the failure mode instead of documenting it, and with it the
+reason for a flag: the pipe is harmless to a program that ignores it, so
+every step gets one and watching it is the program's own business. No
+config surface, no name detection, no way to hold it wrong.
+
+Two things the change turned up. A stale spawner sending the old `"1"`
+would name fd 1 — stdout, which *is* a pipe, so the validation would
+pass and the watch would read the wrong end of the child's own output.
+`parse_fd` refuses 1 and 2 by number with a message saying so, rather
+than letting that be silent.
+
+A hung step of any kind — this one, a wedged socket, a deadlock — is
+already visible without anything new. `STALL_AFTER_SECS` in
+`http/src/manage/activity.rs` puts a stall chip on the Activity cell
+when a running step has not moved a metric for 60 seconds. Nothing acts
+on it, and that is the right call: a download waiting on the network and
+a download that is stuck look identical from outside, so the cell says
+so and a person decides. There is no wall-clock step timeout and should
+not be one — it would have to exceed the slowest legitimate step, which
+would make it useless.
+
+Three guards, each watched failing against what it forbids:
+`parent_gone::a_watching_step_exits_when_the_runner_itself_is_sigkilled`
+(without the wiring: *"the step outlived the runner that was
+SIGKILLed"*, 30s), `a_step_gets_dev_null_on_stdin_and_the_parent_pipe_beside_it`
+(asserts `not-a-pipe pipe 3`; times out on its `cat` if the pipe ever
+lands on stdin again), and the crate's own
+`parent_watch_test`.
 
 ### Decided, no PR — Gmail's quota ceiling
 

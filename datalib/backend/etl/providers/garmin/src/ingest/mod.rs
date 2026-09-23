@@ -30,6 +30,7 @@ use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
+use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin_config::{GarminApi, DEFAULT_SINCE_DAYS};
 
 use crate::auth::Credentials;
@@ -43,11 +44,12 @@ const CURSOR_WEIGHT: &str = "garmin:weight";
 const CURSOR_ACTIVITIES: &str = "garmin:activities";
 const CURSOR_WELLNESS: &str = "garmin:wellness";
 
-/// A metric that fails this many days in a row is abandoned for the
-/// run: a dead endpoint should not cost a request per day of history.
 /// Days of one metric written per transaction.
 const DAILY_BATCH_DAYS: usize = 31;
 
+/// A metric that fails this many days in a row is abandoned for the
+/// run: a dead endpoint should not cost a request per day of history.
+/// The retried days and the forward walk each get this many.
 const CONSECUTIVE_FAILURE_BUDGET: u32 = 10;
 /// `/weight-service/weight/range/<start>/<end>` per request.
 pub const WEIGHT_CHUNK_DAYS: i64 = 90;
@@ -255,21 +257,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         since_widened,
         sealer: opts.sealer.as_ref(),
         progress,
+        stop: &opts.control.stop,
         problems: Vec::new(),
     };
 
+    // A stop makes every request after it fail at once. None of those
+    // failures is Garmin's, so none becomes a `problems` row, and a phase
+    // not yet started is left for the next run.
     macro_rules! phase {
         ($name:literal, $fut:expr) => {
             progress.set_message(concat!("garmin: ", $name));
-            if let Err(e) = $fut.await {
+            if walk.stopping() {
+                info!(event = "garmin_phase_skipped", phase = $name, "told to stop; leaving this phase for the next run");
+            } else if let Err(e) = $fut.await {
                 if is_auth(&e) {
                     return Err(e.context(concat!("garmin ", $name)));
                 }
                 let detail = format!("{e:#}");
-                s.errors += 1;
-                s.phases_failed += 1;
-                warn!(event = "garmin_phase_failed", phase = $name, error = %detail, "a phase of the download failed; continuing with the rest");
-                walk.problems.push(RunProblem::phase($name, detail));
+                if walk.stopping() {
+                    info!(event = "garmin_phase_stopped", phase = $name, error = %detail, "a phase ended on the stop");
+                } else {
+                    s.errors += 1;
+                    s.phases_failed += 1;
+                    warn!(event = "garmin_phase_failed", phase = $name, error = %detail, "a phase of the download failed; continuing with the rest");
+                    walk.problems.push(RunProblem::phase($name, detail));
+                }
             }
         };
     }
@@ -281,13 +293,23 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     phase!("items", walk.items(&mut s));
     let requests = walk.client.requests;
     s.requests = requests;
-    // Every run, empty included: last run's rows go with it.
-    download_problems::report_run(db.pool(), &walk.problems).await;
+    let stopped = walk.stopping();
+    // Every finished run, empty included: last run's rows go with it. A
+    // stopped run did not list everything, so it has no verdict on the
+    // listings it never reached and leaves last run's rows standing.
+    if stopped {
+        info!(
+            event = "garmin_stopped",
+            "told to stop; the run-level problems stay as the last run left them"
+        );
+    } else {
+        download_problems::report_run(db.pool(), &walk.problems).await;
+    }
     datalib_etl::scope_config::store_if_satisfied(
         db.pool(),
         SCOPE_CONFIG_KEY,
         &scope_cfg,
-        s.errors == 0,
+        s.errors == 0 && !stopped,
     )
     .await;
     Ok(s)
@@ -305,6 +327,7 @@ struct Walk<'a> {
     since_widened: bool,
     sealer: Option<&'a Sealer>,
     progress: &'a Progress,
+    stop: &'a StopFlag,
     /// What the run could not do as a whole, reported once at the end.
     problems: Vec<RunProblem>,
 }
@@ -427,6 +450,86 @@ fn str_of(v: &Value, path: &[&str]) -> Option<String> {
     cur.as_str().map(str::to_string)
 }
 
+/// How one day's request came out.
+enum Day {
+    Fetched(DailyRow),
+    Failed,
+    /// The request failed because the step was told to stop. Not a
+    /// failure of the day: nothing is recorded and the cursor stays.
+    Stopped,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DaysEnd {
+    /// Every day was tried, or the metric was given up on.
+    Done,
+    Stopped,
+}
+
+/// The days of `metric` an earlier run tried and failed that this run's
+/// walk from `resume` will not reach, oldest first. Only those: the days
+/// between them that fetched are not asked for again. `failed_ids` are
+/// `garmin_daily` ids, `<metric>#<date>`.
+fn days_to_retry(
+    failed_ids: &[String],
+    metric: &str,
+    since: NaiveDate,
+    resume: NaiveDate,
+) -> Vec<NaiveDate> {
+    let mut days: Vec<NaiveDate> = failed_ids
+        .iter()
+        .filter_map(|id| id.strip_prefix(metric)?.strip_prefix('#'))
+        .filter_map(|d| date(d).ok())
+        .filter(|d| (since..resume).contains(d))
+        .collect();
+    days.sort();
+    days.dedup();
+    days
+}
+
+/// One activity's share of the fetch loop.
+#[derive(Debug, PartialEq, Eq)]
+struct ActivityWork {
+    id: String,
+    detail: bool,
+    file: bool,
+}
+
+/// What the activity loop fetches, listed activities first. A detail is
+/// fetched when the listing changed or no detail is stored — failed,
+/// interrupted, or never asked — including for an activity older than
+/// this run's listing window. A FIT file is only sought for a listed
+/// activity: a manual one has none and answers 404 every time.
+fn activity_work(
+    listed: &[&str],
+    changed: &HashSet<String>,
+    without_detail: &[String],
+    wants_file: impl Fn(&str) -> bool,
+) -> Vec<ActivityWork> {
+    let missing: HashSet<&str> = without_detail.iter().map(String::as_str).collect();
+    let mut work: Vec<ActivityWork> = listed
+        .iter()
+        .map(|id| ActivityWork {
+            id: id.to_string(),
+            detail: changed.contains(*id) || missing.contains(id),
+            file: wants_file(id),
+        })
+        .filter(|w| w.detail || w.file)
+        .collect();
+    let listed: HashSet<&str> = listed.iter().copied().collect();
+    work.extend(
+        without_detail
+            .iter()
+            .filter(|id| !listed.contains(id.as_str()))
+            .map(|id| ActivityWork {
+                id: id.clone(),
+                detail: true,
+                file: false,
+            }),
+    );
+    work
+}
+
 impl Walk<'_> {
     /// Where a date walk resumes: `since`, or the cursor less the refresh
     /// window, whichever is later — unless `since` moved earlier.
@@ -441,6 +544,10 @@ impl Walk<'_> {
             }
             None => Ok(self.since),
         }
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop.requested()
     }
 
     async fn wrote(&self, rows: u64) {
@@ -515,6 +622,15 @@ impl Walk<'_> {
     /// A listing that is not an enumeration: nothing is pruned to it
     /// this run, and the run says so. Counted once per listing.
     fn listing_failed(&mut self, s: &mut FetchSummary, name: &str, why: &str) {
+        if self.stopping() {
+            info!(
+                event = "garmin_listing_stopped",
+                listing = name,
+                reason = why,
+                "a listing ended on the stop; nothing is pruned"
+            );
+            return;
+        }
         s.errors += 1;
         warn!(
             event = "garmin_listing_incomplete",
@@ -571,78 +687,121 @@ impl Walk<'_> {
     // ── per-day metrics ──────────────────────────────────────────────
 
     async fn daily(&mut self, s: &mut FetchSummary) -> Result<()> {
+        let failed = self.db.failed_daily_ids().await?;
         let mut walks = Vec::new();
         for metric in self.api.metrics() {
             let scope = format!("{CURSOR_DAILY_PREFIX}{metric}");
             let start = self.resume_from(&scope).await?;
-            walks.push((metric, scope, start));
+            let retry = days_to_retry(&failed, metric, self.since, start);
+            walks.push((metric, scope, retry, start));
         }
         let total: u64 = walks
             .iter()
-            .map(|(_, _, start)| days_through(*start, self.today))
+            .map(|(_, _, retry, start)| retry.len() as u64 + days_through(*start, self.today))
             .sum();
         self.progress.set_length(Some(total));
-        for (metric, scope, start) in walks {
-            let mut day = start;
-            let mut consecutive_failures = 0u32;
-            info!(event = "garmin_daily_begin", metric, start = %ymd(start), end = %ymd(self.today), "walking one daily metric");
-            // A day is one request; a month of them is one write and one
-            // cursor move, so a resume re-fetches at most a month.
-            let mut pending: Vec<DailyRow> = Vec::new();
-            let mut cursor_at: Option<String> = None;
-            while day <= self.today {
-                let d = ymd(day);
-                self.progress.set_message(&format!("garmin: {metric} {d}"));
-                let path = daily_path(metric, &self.account.display_name, &d);
-                let id = DailyRow::id_for(metric, &d);
-                match self.client.get_json(&path).await {
-                    Ok(fetched) => {
-                        let payload = match fetched {
-                            Fetched::Some(v) if !is_empty_answer(&v) => v.to_string(),
-                            _ => "null".to_string(),
-                        };
-                        pending.push(DailyRow {
-                            id_and_payload: WirePayload { id, payload },
-                            metric: metric.to_string(),
-                            calendar_date: d.clone(),
-                        });
-                        consecutive_failures = 0;
-                        s.days += 1;
-                    }
-                    Err(e) => {
-                        if is_auth(&e) {
-                            return Err(e);
-                        }
-                        consecutive_failures += 1;
-                        s.errors += 1;
-                        warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"), "a day could not be fetched");
-                        record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
-                        if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
-                            warn!(
-                                event = "garmin_metric_abandoned",
-                                metric,
-                                after = consecutive_failures,
-                                "too many days in a row failed; leaving this metric"
-                            );
-                            cursor_at = Some(d);
-                            self.progress.inc(days_through(day, self.today));
-                            break;
-                        }
-                    }
-                }
-                cursor_at = Some(d);
-                if pending.len() >= DAILY_BATCH_DAYS {
-                    self.flush_daily(&scope, &mut pending, &mut cursor_at)
-                        .await?;
-                }
-                self.progress.inc(1);
-                day += Duration::days(1);
+        for (metric, scope, retry, start) in walks {
+            info!(event = "garmin_daily_begin", metric, retry = retry.len(), start = %ymd(start), end = %ymd(self.today), "walking one daily metric");
+            if !retry.is_empty()
+                && self.walk_days(metric, &scope, &retry, false, s).await? == DaysEnd::Stopped
+            {
+                return Ok(());
             }
-            self.flush_daily(&scope, &mut pending, &mut cursor_at)
-                .await?;
+            let forward: Vec<NaiveDate> =
+                start.iter_days().take_while(|d| *d <= self.today).collect();
+            if self.walk_days(metric, &scope, &forward, true, s).await? == DaysEnd::Stopped {
+                return Ok(());
+            }
             s.metrics += 1;
         }
         Ok(())
+    }
+
+    /// Fetch `days` of one metric, in order. Only the forward walk moves
+    /// the cursor: a retried day lies behind it already. A day is one
+    /// request; a month of them is one write and one cursor move, so a
+    /// resume re-fetches at most a month.
+    async fn walk_days(
+        &mut self,
+        metric: &str,
+        scope: &str,
+        days: &[NaiveDate],
+        moves_cursor: bool,
+        s: &mut FetchSummary,
+    ) -> Result<DaysEnd> {
+        let mut pending: Vec<DailyRow> = Vec::new();
+        let mut cursor_at: Option<String> = None;
+        let mut consecutive_failures = 0u32;
+        let mut end = DaysEnd::Done;
+        for (i, day) in days.iter().enumerate() {
+            match self.fetch_day(metric, *day, s).await? {
+                Day::Stopped => {
+                    end = DaysEnd::Stopped;
+                    break;
+                }
+                Day::Fetched(row) => {
+                    pending.push(row);
+                    consecutive_failures = 0;
+                }
+                Day::Failed => consecutive_failures += 1,
+            }
+            if moves_cursor {
+                cursor_at = Some(ymd(*day));
+            }
+            self.progress.inc(1);
+            if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
+                warn!(
+                    event = "garmin_metric_abandoned",
+                    metric,
+                    retrying = !moves_cursor,
+                    after = consecutive_failures,
+                    "too many days in a row failed; leaving these days of this metric"
+                );
+                self.progress.inc((days.len() - i - 1) as u64);
+                break;
+            }
+            if pending.len() >= DAILY_BATCH_DAYS {
+                self.flush_daily(scope, &mut pending, &mut cursor_at)
+                    .await?;
+            }
+        }
+        self.flush_daily(scope, &mut pending, &mut cursor_at)
+            .await?;
+        Ok(end)
+    }
+
+    async fn fetch_day(
+        &mut self,
+        metric: &str,
+        day: NaiveDate,
+        s: &mut FetchSummary,
+    ) -> Result<Day> {
+        let d = ymd(day);
+        self.progress.set_message(&format!("garmin: {metric} {d}"));
+        let path = daily_path(metric, &self.account.display_name, &d);
+        let id = DailyRow::id_for(metric, &d);
+        match self.client.get_json(&path).await {
+            Ok(fetched) => {
+                let payload = match fetched {
+                    Fetched::Some(v) if !is_empty_answer(&v) => v.to_string(),
+                    _ => "null".to_string(),
+                };
+                s.days += 1;
+                Ok(Day::Fetched(DailyRow {
+                    id_and_payload: WirePayload { id, payload },
+                    metric: metric.to_string(),
+                    calendar_date: d,
+                }))
+            }
+            Err(e) if is_auth(&e) => Err(e),
+            Err(_) if self.stopping() => Ok(Day::Stopped),
+            Err(e) => {
+                s.errors += 1;
+                warn!(event = "garmin_day_failed", metric, date = %d, error = %format!("{e:#}"), "a day could not be fetched");
+                record_error(self.db, "garmin_daily", &id, &format!("{e:#}")).await?;
+                Ok(Day::Failed)
+            }
+        }
     }
 
     async fn flush_daily(
@@ -669,7 +828,7 @@ impl Walk<'_> {
         let mut chunk_start = start;
         let mut seen: HashSet<String> = HashSet::new();
         let mut complete = true;
-        while chunk_start <= self.today {
+        while chunk_start <= self.today && !self.stopping() {
             let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(self.today);
             let path = format!(
                 "/weight-service/weight/range/{}/{}?includeAll=true",
@@ -707,7 +866,7 @@ impl Walk<'_> {
         }
         // A chunk that did not list leaves the window unenumerated: no
         // prune, and the cursor stays so the next run walks it again.
-        if !complete {
+        if !complete || self.stopping() {
             return Ok(());
         }
         let keep: HashSet<&str> = seen.iter().map(String::as_str).collect();
@@ -752,16 +911,14 @@ impl Walk<'_> {
         let stored_files = self.db.stored_activity_files().await?;
 
         let mut rows = Vec::with_capacity(listed.len());
-        let mut to_fetch: Vec<(String, Value)> = Vec::new();
+        let mut changed: HashSet<String> = HashSet::new();
         for a in listed {
             let Some(id) = id_of(&a, &["activityId"]) else {
                 continue;
             };
             let payload = a.to_string();
-            let changed = stored.get(&id).is_none_or(|old| old != &payload);
-            let wants_file = self.api.activity_files() && !stored_files.contains_key(&id);
-            if changed || wants_file {
-                to_fetch.push((id.clone(), a.clone()));
+            if stored.get(&id).is_none_or(|old| old != &payload) {
+                changed.insert(id.clone());
             }
             rows.push(ActivityRow {
                 id_and_payload: WirePayload { id, payload },
@@ -774,12 +931,20 @@ impl Walk<'_> {
         upsert(self.db, &rows).await?;
         self.wrote(rows.len() as u64).await;
 
+        let listed_ids: Vec<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
+        let without_detail = self.db.activities_without_detail().await?;
+        let to_fetch = activity_work(&listed_ids, &changed, &without_detail, |id| {
+            self.api.activity_files() && !stored_files.contains_key(id)
+        });
         self.progress.set_length(Some(to_fetch.len() as u64));
         let mut edges = CasEdgeAccumulator::new();
-        for (id, listing) in &to_fetch {
+        for work in &to_fetch {
+            if self.stopping() {
+                break;
+            }
+            let id = &work.id;
             self.progress.set_message(&format!("garmin: activity {id}"));
-            let changed = stored.get(id).is_none_or(|old| old != &listing.to_string());
-            if changed {
+            if work.detail {
                 match self
                     .client
                     .get_json(&format!("/activity-service/activity/{id}"))
@@ -798,8 +963,23 @@ impl Walk<'_> {
                         .await?;
                         s.activities_fetched += 1;
                     }
-                    Ok(Fetched::Nothing) => {}
+                    // Stored as `null` so that "no detail yet" stays
+                    // distinct from "Garmin has none", and only the
+                    // first is asked for again.
+                    Ok(Fetched::Nothing) => {
+                        upsert(
+                            self.db,
+                            &[ActivityDetailRow {
+                                id_and_payload: WirePayload {
+                                    id: id.clone(),
+                                    payload: "null".to_string(),
+                                },
+                            }],
+                        )
+                        .await?;
+                    }
                     Err(e) if is_auth(&e) => return Err(e),
+                    Err(_) if self.stopping() => break,
                     Err(e) => {
                         s.errors += 1;
                         record_error(self.db, "garmin_activity_details", id, &format!("{e:#}"))
@@ -807,7 +987,7 @@ impl Walk<'_> {
                     }
                 }
             }
-            if self.api.activity_files() && !stored_files.contains_key(id) {
+            if work.file {
                 match self
                     .client
                     .get_bytes(&format!("/download-service/files/activity/{id}"))
@@ -831,6 +1011,7 @@ impl Walk<'_> {
                     },
                     Ok(Fetched::Nothing) => {}
                     Err(e) if is_auth(&e) => return Err(e),
+                    Err(_) if self.stopping() => break,
                     Err(e) => {
                         s.errors += 1;
                         edges.add_failed(id, FILE_KIND_FIT, format!("{e:#}"));
@@ -848,7 +1029,7 @@ impl Walk<'_> {
 
         // A walk that stopped short enumerated nothing: no prune, and
         // the cursor stays so the next run walks the window again.
-        if incomplete.is_some() {
+        if incomplete.is_some() || self.stopping() {
             return Ok(());
         }
         // The listing is complete from `start`, so an activity dated
@@ -872,7 +1053,7 @@ impl Walk<'_> {
         let stored = self.db.stored_wellness_files().await?;
         let mut day = start;
         let mut edges = CasEdgeAccumulator::new();
-        while day <= self.today {
+        while day <= self.today && !self.stopping() {
             let d = ymd(day);
             // Unlike the JSON metrics a day's bundle does not get
             // corrected after the fact, so one already stored is left
@@ -896,6 +1077,7 @@ impl Walk<'_> {
                     }
                     Ok(Fetched::Nothing) => {}
                     Err(e) if is_auth(&e) => return Err(e),
+                    Err(_) if self.stopping() => break,
                     Err(e) => {
                         s.errors += 1;
                         edges.add_failed(&d, FILE_KIND_WELLNESS_ZIP, format!("{e:#}"));
@@ -920,6 +1102,9 @@ impl Walk<'_> {
         let display_name = self.account.display_name.clone();
         let profile_pk = self.account.profile_pk.clone();
         for kind in ITEM_KINDS {
+            if self.stopping() {
+                break;
+            }
             let path = |offset: usize| {
                 item_listing_path(kind.name, &display_name, profile_pk.as_deref(), offset)
             };
@@ -1137,6 +1322,56 @@ mod tests {
         assert_eq!(days_through(d("2026-09-01"), d("2026-09-01")), 1);
         assert_eq!(days_through(d("2026-09-01"), d("2026-09-08")), 8);
         assert_eq!(days_through(d("2026-09-09"), d("2026-09-08")), 0);
+    }
+
+    /// Only failed days behind the resume point, of this metric and not
+    /// one whose name it prefixes, and none before `since`.
+    #[test]
+    fn days_to_retry_are_the_failed_days_the_walk_will_not_reach() {
+        let d = |s| date(s).unwrap();
+        let failed: Vec<String> = [
+            "body_battery#2026-09-01",
+            "body_battery#2026-09-03",
+            "body_battery#2026-09-10",
+            "body_battery#2026-08-01",
+            "body_battery_events#2026-09-02",
+            "body_battery#not-a-date",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            days_to_retry(&failed, "body_battery", d("2026-08-15"), d("2026-09-10")),
+            [d("2026-09-01"), d("2026-09-03")]
+        );
+        assert!(
+            days_to_retry(&failed, "body_battery", d("2026-08-15"), d("2026-08-15")).is_empty()
+        );
+    }
+
+    /// A listed activity whose detail is missing is fetched even when
+    /// its listing did not change; an older one outside the listing gets
+    /// its detail and no FIT file; one with both in place is left alone.
+    #[test]
+    fn activity_work_fetches_every_missing_detail_and_only_listed_files() {
+        let changed: HashSet<String> = ["2".to_string()].into();
+        let without_detail = ["1".to_string(), "9".to_string()];
+        let work = activity_work(&["1", "2", "3", "4"], &changed, &without_detail, |id| {
+            id == "4"
+        });
+        let w = |id: &str, detail, file| ActivityWork {
+            id: id.into(),
+            detail,
+            file,
+        };
+        assert_eq!(
+            work,
+            [
+                w("1", true, false),
+                w("2", true, false),
+                w("4", false, true),
+                w("9", true, false)
+            ]
+        );
     }
 
     #[test]

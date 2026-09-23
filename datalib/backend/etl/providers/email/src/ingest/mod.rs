@@ -723,7 +723,7 @@ async fn incremental_emails(
             // the blobs they name together -- so the store is consistent
             // here. Deletions are applied separately, after the walk.
             if let Some(sealer) = sealer {
-                sealer.wrote(1).await;
+                sealer.wrote(batch.len() as u64).await;
             }
         }
 
@@ -875,7 +875,7 @@ async fn full_enumerate_emails(
             bar.did(batch.len() as u64);
             // A batch has landed in full, so the store is consistent here.
             if let Some(sealer) = sealer {
-                sealer.wrote(1).await;
+                sealer.wrote(batch.len() as u64).await;
             }
 
             if live_state.is_none() {

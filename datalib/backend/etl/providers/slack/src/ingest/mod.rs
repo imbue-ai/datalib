@@ -1288,6 +1288,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             bar.did(1);
             match result {
                 Ok(()) => {
+                    let written = (totals.messages + totals.replies + totals.pruned) as u64;
                     grand.messages += totals.messages;
                     grand.replies += totals.replies;
                     grand.pruned += totals.pruned;
@@ -1302,7 +1303,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     // A channel that *failed* deliberately seals nothing --
                     // its window is half-walked.
                     if let Some(sealer) = opts.sealer.as_ref() {
-                        sealer.wrote(1).await;
+                        sealer.wrote(written).await;
                     }
                 }
                 Err(e) => {

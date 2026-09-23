@@ -7,6 +7,8 @@ export const CONFIG_MUTATING = [
   "data-sources-streaming",
   "data-sources-control",
   "data-sources-name",
+  // Syncs, which write the root's stores and job queue.
+  "data-sources-layout",
   "data-sources-menu",
   "grid-source-id",
   // Writes the remote-media allow-list, not the config.

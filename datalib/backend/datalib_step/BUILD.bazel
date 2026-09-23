@@ -102,6 +102,7 @@ rust_binary(
         "//datalib/backend/etl/providers/yolink_render:datalib_etl_yolink_render",
         "//datalib/backend/etl/providers/yolink_config:datalib_etl_yolink_config",
         "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",

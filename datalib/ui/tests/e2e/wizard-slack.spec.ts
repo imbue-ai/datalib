@@ -201,6 +201,30 @@ test("a typed name is checked the way the downloader reads it", async ({ page })
   await expect(wizard(page).getByText(/Not on this account: @riker\./)).toBeVisible();
 });
 
+/// A list box re-rendered from its parsed array on every keystroke,
+/// which swallowed a trailing comma the moment it was typed; `fill`
+/// sets the whole value at once and never saw it.
+test("a list field can be typed key by key, commas included", async ({ page }) => {
+  await pickSlack(page);
+  const box = field(page, "Channels");
+  await box.pressSequentially("bridge, engineering");
+  await expect(box).toHaveValue("bridge, engineering");
+  await wizard(page).getByText("Review the TOML this writes").click();
+  await expect(wizard(page).locator(".wiz-review pre")).toContainText(
+    'channels = ["bridge", "engineering"]',
+  );
+});
+
+/// Every text box was `width: 100%` plus its padding, so the form
+/// scrolled sideways by that padding.
+test("the form never scrolls sideways", async ({ page }) => {
+  await pickSlack(page);
+  const body = wizard(page).locator(".wiz-body");
+  await expect(field(page, "Channels")).toBeVisible();
+  const overflow = await body.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBe(0);
+});
+
 // The attachment cap is a number beside a unit, and the config gets
 // the same two words — the form the backend parses.
 test("the attachment cap is edited in units and written the same way", async ({ page }) => {

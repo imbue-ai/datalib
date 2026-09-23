@@ -693,7 +693,7 @@ impl Supervisor {
         // The env var is how the applet knows this stdin means that; see
         // `datalib_parent_watch`.
         cmd.stdin(Stdio::piped());
-        cmd.env(datalib_parent_watch::ENV_VAR, "1");
+        cmd.env(datalib_parent_watch::ENV_VAR, "0");
         // stdout is the readiness channel; stderr is the log, captured
         // so a server that dies on startup can say why. Without the
         // latter the only symptom is a readiness failure, which names

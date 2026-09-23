@@ -7,3 +7,4 @@
 
 mod playback_roundtrip;
 mod prune_gate;
+mod retry_and_stop;

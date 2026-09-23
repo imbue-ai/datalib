@@ -89,6 +89,7 @@ rust_binary(
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],

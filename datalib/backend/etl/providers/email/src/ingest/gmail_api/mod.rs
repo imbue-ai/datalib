@@ -892,6 +892,7 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
         return Ok(());
     }
     let rows = std::mem::take(&mut state.pending.emails);
+    let written = rows.len() as u64;
     summary.emails_upserted += rows.len();
     super::upsert_emails(state.db, state.now, &rows).await?;
 
@@ -927,7 +928,7 @@ async fn flush(state: &mut RunState<'_>, summary: &mut FetchSummary) -> Result<(
     // mid-prune -- `prune_to_enumeration` runs after the walk, and only when
     // the walk was authoritative over the whole mailbox.
     if let Some(sealer) = state.sealer {
-        sealer.wrote(1).await;
+        sealer.wrote(written).await;
     }
     Ok(())
 }

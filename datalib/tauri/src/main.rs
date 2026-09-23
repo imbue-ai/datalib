@@ -127,7 +127,16 @@ fn main() {
         // why both need a `remote` block at all (this app loads its UI
         // from localhost as an external URL, and Tauri withholds IPC
         // from remote origins by default).
-        .plugin(tauri_plugin_opener::init())
+        // Without `open_js_links_on_click(false)` the plugin injects a
+        // click handler that sends every `target="_blank"` link to the OS
+        // browser, same-origin included, so `on_new_window` never runs and
+        // the card's ↗ lands in a browser with no session cookie.
+        // Off-origin links are `ui/src/externalLinks.ts`'s job.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             version,
             launcher_state,
@@ -452,7 +461,7 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
         // arranges however the shell goes — the `kill` at exit is for
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
-        .env("DATALIB_PARENT_PIPE", "1")
+        .env("DATALIB_PARENT_PIPE", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
