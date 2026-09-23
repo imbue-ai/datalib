@@ -84,7 +84,7 @@ fn without_the_pipe_the_child_outlives_its_parent() {
 fn asked_to_watch_with_no_pipe_it_refuses_to_start() {
     let out = probe()
         .arg("child")
-        .env(datalib_parent_watch::ENV_VAR, "1")
+        .env(datalib_parent_watch::ENV_VAR, "0")
         .stdin(Stdio::null())
         .output()
         .expect("run probe child");

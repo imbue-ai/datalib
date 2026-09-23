@@ -1,9 +1,10 @@
 //! The runner exits with the process that started it, and its steps
-//! with the runner. The app server's worker spawns `datalib-dag` on a
-//! parent pipe; when the server is SIGKILLed — the desktop shell's way
-//! of stopping it — the run must not carry on with nobody to record how
-//! it ended. The step is a `sleep` that writes its pid first, so the
-//! test can check that the runner took it along.
+//! with the runner — including when the runner is the one that is
+//! SIGKILLed and so runs no code of its own. The app server's worker
+//! spawns `datalib-dag` on a parent pipe; when the server is SIGKILLed —
+//! the desktop shell's way of stopping it — the run must not carry on
+//! with nobody to record how it ended. The steps write their pid first,
+//! so the test can check what was taken along.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -92,4 +93,69 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
         "the runner {runner} outlived its SIGKILLed parent"
     );
     assert!(step_gone, "the step {step} outlived the runner");
+}
+
+/// A step stops itself when the *runner* is SIGKILLed, which runs no
+/// runner code at all: `kill_children` never gets a chance, and nothing
+/// else ever signals a step. Every step is handed a pipe from the runner
+/// on fd 3, and one that watches it stops when it reads EOF there.
+///
+/// The step is the parent-watch probe — what a program that watches the
+/// pipe looks like. Nothing in the config asks for this: the pipe is
+/// always there, and watching it is the program's own business. Point
+/// the runner at a program that ignores it and the step outlives the
+/// runner, which is what this asserts against.
+#[test]
+fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().canonicalize().unwrap();
+    let pid_file = root.join("step.pid");
+    std::fs::write(
+        root.join("config.toml"),
+        format!(
+            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n",
+            env_path("PARENT_WATCH_PROBE")
+        ),
+    )
+    .unwrap();
+
+    let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
+        .args(["exec", &env_path("DATALIB_DAG_BIN")])
+        .arg(root.join("config.toml"))
+        // Inherited down through the runner to the step. The runner's own
+        // stdout is the event stream, so there is nowhere else to read
+        // the step's pid from.
+        .env("PARENT_WATCH_PID_FILE", &pid_file)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn the probe parent");
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().expect("stdout"))
+        .read_line(&mut line)
+        .expect("read the runner's pid");
+    let runner: u32 = line.trim().parse().expect("runner pid");
+    let step: u32 = wait_for_file(&pid_file, Duration::from_secs(60))
+        .parse()
+        .unwrap();
+    assert!(alive(runner) && alive(step), "runner {runner}, step {step}");
+
+    // SIGKILL, so the runner runs nothing at all on its way out —
+    // `kill_children` included. That is the whole point of the case.
+    let killed = Command::new("kill")
+        .args(["-9", &runner.to_string()])
+        .status()
+        .expect("run kill");
+    assert!(killed.success(), "kill -9 {runner}");
+    let runner_gone = wait_until_gone(runner, Duration::from_secs(10));
+    let step_gone = wait_until_gone(step, Duration::from_secs(30));
+    let _ = parent.kill();
+    let _ = parent.wait();
+    for pid in [runner, step] {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+    assert!(runner_gone, "the runner {runner} survived a SIGKILL");
+    assert!(
+        step_gone,
+        "the step {step} outlived the runner that was SIGKILLed"
+    );
 }

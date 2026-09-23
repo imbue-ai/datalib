@@ -495,7 +495,7 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     // that has to record how it ended.
     command
         .stdin(Stdio::piped())
-        .env(datalib_parent_watch::ENV_VAR, "1")
+        .env(datalib_parent_watch::ENV_VAR, "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
