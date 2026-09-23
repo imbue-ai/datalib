@@ -12,6 +12,7 @@ mod config_init;
 mod dactal_csp;
 mod dag_run_state;
 mod feedback_endpoint;
+mod feedback_loop;
 mod lib_endpoint;
 mod manage_rows;
 mod pipeline_history;

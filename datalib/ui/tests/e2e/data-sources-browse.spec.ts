@@ -14,6 +14,8 @@ import {
   searchHeader,
   type GridApi,
   MANAGE_WITH_CONFIG,
+  expandGroup,
+  pipelineRow,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -177,6 +179,20 @@ test("the index group browses every source", async ({ page }) => {
   await expect(searchHeader(page, "source_ref")).toBeVisible();
 });
 
+test("a step's row opens its source, as its group's row does", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openManage(page);
+  await expandGroup(page, "slack");
+  const step = pipelineRow(page, "slack/render_markdown").getByRole("button", {
+    name: /^Browse/,
+  });
+  await expect(step).toBeEnabled();
+  await step.click();
+  await expect(page.locator(SEARCH)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(SEARCH)).toHaveValue("source_id:slack is:document");
+  await expect(page).toHaveURL(/source_id%3Aslack/);
+});
+
 /// A source that renders nothing has no rows at all — not even the
 /// storage rows, which render is what emits. The button says so rather
 /// than opening an empty grid onto a source that looks broken.
@@ -185,4 +201,9 @@ test("a download-only source cannot be browsed", async ({ page }) => {
   const media = browseButton(page, "media");
   await expect(media).toBeDisabled();
   await expect(media).toHaveAttribute("title", /no render step/);
+  // Its step says the same thing, not something of its own.
+  await expandGroup(page, "media");
+  const step = pipelineRow(page, "media/ingest").getByRole("button", { name: /^Browse/ });
+  await expect(step).toBeDisabled();
+  await expect(step).toHaveAttribute("title", /no render step/);
 });

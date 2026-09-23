@@ -36,7 +36,7 @@ use datalib_dag::config::AppletEntry;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::watch::RootEvent;
+use crate::watch::{RootEvent, RootFrame};
 
 /// The applet's own id, as the gateway knows it. The reference applet
 /// uses it to label its data; anything building an absolute URL should
@@ -180,11 +180,15 @@ fn tail_lines(s: &str, n: usize) -> String {
 /// request: the root watcher says `config.toml` moved, the registry
 /// reconciles. A lagged receiver reloads too — a change may be in the
 /// gap, and a reload of an unchanged file costs a `stat`.
-pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootEvent>) {
+pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootFrame>) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(RootEvent::ConfigChanged) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                Ok(RootFrame {
+                    event: RootEvent::ConfigChanged,
+                    ..
+                })
+                | Err(broadcast::error::RecvError::Lagged(_)) => {
                     let registry = registry.clone();
                     let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
                 }
