@@ -315,6 +315,35 @@ The scheduler models the same distinction: an artifact that doesn't
 exist hashes to the distinguished version `absent`
 (`datalib_dag::version::ABSENT`) rather than being an error state.
 
+## stdin: the runner's pipe, not input
+
+**A step is never given anything to read on stdin, and should not read
+it.** Stdin is a pipe the runner holds the other end of, and it exists
+so a step can tell when the runner is gone.
+
+The runner normally stops its steps itself: on a cancel it sends each
+one SIGINT, and on its way out it sends SIGKILL to anything left. Both
+need the runner to be alive to run that code. A runner that is itself
+SIGKILLed — or that aborts, or is taken by the OOM killer — runs
+nothing, and since nothing else ever signals a step, a step that waits
+to be told would keep going with its store open and nobody recording
+how the run ended.
+
+What survives a SIGKILL is the kernel closing the dead process' file
+descriptors. So the runner sets `DATALIB_PARENT_PIPE=1` and gives every
+step a pipe on stdin; when the step reads EOF on it, the runner is gone.
+A step written in Rust gets this by calling
+`datalib_parent_watch::exit_with_parent` once at startup — that is all
+`datalib-step` does. A step in any other language can watch fd 0 for EOF
+itself, or ignore the whole thing: an unread pipe costs nothing, and a
+step that ignores it is simply one the runner cannot clean up after a
+SIGKILL.
+
+Whatever a step does on EOF, it should also take down what *it*
+spawned. The runner starts each step as its own process-group leader
+(so that a signal aimed at the step reaches a `node` the step wrapped),
+which makes `kill(0, SIGINT)` exactly "me and my children".
+
 ## stderr: logging
 
 stderr is yours for humans: every line is captured into the event

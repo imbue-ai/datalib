@@ -189,12 +189,17 @@ pub(crate) async fn run_subprocess(
         // own `env:` entries win on key collision.
         .envs(extra_env)
         .envs(env)
-        // The runner's own parent pipe is not the step's: with the
-        // variable inherited and stdin `/dev/null`, a step that watches
-        // its parent would refuse to start.
-        .env_remove(datalib_parent_watch::ENV_VAR)
+        // Stdin is the step's own parent pipe. A step that links
+        // `datalib_parent_watch` sees EOF on it and stops itself when the
+        // runner dies without running any code — a SIGKILL, a panic that
+        // aborts, the OOM killer — which is the one case `kill_children`
+        // cannot reach. Nothing reads stdin for input; the step protocol
+        // claims it for this. The write end stays on the child handle
+        // below: take it and every step exits at once, reading EOF as a
+        // dead runner.
+        .env(datalib_parent_watch::ENV_VAR, "1")
         .current_dir(&ctx.data_root)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // If the runner dies (or a step future is dropped), don't
@@ -572,9 +577,12 @@ pub fn interrupt_children() {
 /// SIGKILL every running step and what it spawned. For the exits
 /// `std::process::exit` takes, where no `kill_on_drop` runs: a step that
 /// ignored its SIGINT must not outlive the runner, holding its store
-/// open. Nothing else ever signals a step, so whoever stops the runner
-/// has to reach this — a SIGKILL at the runner runs no Rust and leaves
-/// the steps behind.
+/// open.
+///
+/// A runner that is itself SIGKILLed never reaches this. What covers
+/// that is the other end: each step holds a pipe from the runner and
+/// stops itself when it reads EOF, so this is the tidy path rather than
+/// the only one.
 pub fn kill_children() {
     #[cfg(unix)]
     signal_children(libc::SIGKILL);

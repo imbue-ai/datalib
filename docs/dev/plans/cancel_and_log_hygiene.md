@@ -1,9 +1,9 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 to 4 landed (#682, #686, #692, #697, #700); 5 is void
-and 6 and 7 are open. PRs 3, 4 and 5 were none of them what this doc
-first said they were — each says so in its own section. Last read against the tree
-2026-09-23.** §1 is what a real data root actually contained — every
+**Status: PRs 1 to 4 and 8 landed (#682, #686, #692, #697, #700); 5 is
+void and 6 and 7 are open. PRs 3, 4, 5 and 8 were none of them what this
+doc first said they were — each says so in its own section. Last read
+against the tree 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
 Where this doc and the tree disagree, the tree wins.
@@ -434,6 +434,48 @@ not meaningfully exist yet, or run the guard after the stores are made.
 - Default the Slack event tape to **off**. It is a debugging tool.
 - Give `disk_usage` a retention knob beside the others in
   `[run_history]`, or downsample anything older than a day.
+
+### PR 8 — A step outlives no runner, however the runner died — **done**
+
+This started as "give the worker→runner spawn a process group, so the
+`SIGKILL` at the end of PR 1's ladder has something to aim at". That is
+not a thing that can work, and the measurement says why. A step under a
+runner today:
+
+```
+  PID  PPID  PGID  COMMAND
+72586 72556 72556  datalib_dag_bin …     runner, in the shell's group
+72592 72586 72592  /bin/sh s.sh          step, in its OWN group
+72594 72592 72592  sleep 200             grandchild, in the step's group
+```
+
+Process groups are flat: a process is in exactly one, and #686 moved
+every step into its own so that a signal aimed at a step reaches the
+`node` it wrapped. Steps have therefore *left* the runner's group, and
+a group at the runner would contain the runner alone.
+
+Worth noticing that #686 removed coverage that used to exist by
+accident — before it, a signal to the runner's group did reach the
+steps. It was still the right change; the grandchild case was the
+common one. But it left a hole that a group cannot close.
+
+What closes it is the other end, and it was already in the tree for
+every other long-running process datalib starts. The runner now hands
+each step a pipe on stdin with `DATALIB_PARENT_PIPE` set, and
+`datalib-step` calls `datalib_parent_watch::exit_with_parent`. A runner
+that is SIGKILLed, aborts, or is taken by the OOM killer runs no code
+at all, but the kernel still closes its descriptors — so the step reads
+EOF and raises on its own group the SIGINT the runner would have sent,
+which its existing handler answers by sealing and exiting 130.
+
+This is strictly wider than the ladder's rung 3, which only ever fires
+after twenty seconds of a wedged runner. `subprocess.rs` used to say
+"a SIGKILL at the runner runs no Rust and leaves the steps behind";
+that sentence is now gone, and
+`parent_gone::a_step_exits_when_the_runner_itself_is_sigkilled` fails
+with *"the step outlived the runner that was SIGKILLed"* if the pipe is
+taken away again. Stdin is now part of the step protocol, documented
+there: steps are handed a pipe and must not read it for input.
 
 ### Decided, no PR — Gmail's quota ceiling
 

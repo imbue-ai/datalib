@@ -1,9 +1,10 @@
 //! The runner exits with the process that started it, and its steps
-//! with the runner. The app server's worker spawns `datalib-dag` on a
-//! parent pipe; when the server is SIGKILLed — the desktop shell's way
-//! of stopping it — the run must not carry on with nobody to record how
-//! it ended. The step is a `sleep` that writes its pid first, so the
-//! test can check that the runner took it along.
+//! with the runner — including when the runner is the one that is
+//! SIGKILLed and so runs no code of its own. The app server's worker
+//! spawns `datalib-dag` on a parent pipe; when the server is SIGKILLed —
+//! the desktop shell's way of stopping it — the run must not carry on
+//! with nobody to record how it ended. The steps write their pid first,
+//! so the test can check what was taken along.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -92,4 +93,69 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
         "the runner {runner} outlived its SIGKILLed parent"
     );
     assert!(step_gone, "the step {step} outlived the runner");
+}
+
+/// A step stops itself when the *runner* is SIGKILLed, which runs no
+/// runner code at all: `kill_children` never gets a chance, and nothing
+/// else ever signals a step. Each step therefore holds a pipe from the
+/// runner and stops when it reads EOF on it.
+///
+/// The step is the parent-watch probe, which is what a custom step that
+/// links the crate looks like. `sh` records the pid and then `exec`s the
+/// probe over itself, so the pid on disk is the probe's and the runner's
+/// pipe survives the exec. With the runner unsetting the variable and
+/// handing the step `/dev/null` — what it did before — the probe does
+/// not watch anything, sleeps for an hour, and this times out.
+#[test]
+fn a_step_exits_when_the_runner_itself_is_sigkilled() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().canonicalize().unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        "[[steps]]\nid = \"watched/step\"\n\
+         command = \"sh -c 'mkdir -p watched/step; echo $$ > watched/step/pid; \
+         exec \\\"$PARENT_WATCH_PROBE_ABS\\\" child'\"\n",
+    )
+    .unwrap();
+
+    let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
+        .args(["exec", &env_path("DATALIB_DAG_BIN")])
+        .arg(root.join("config.toml"))
+        // The step resolves the probe through the environment: its
+        // working directory is the data root, so the rootpath bazel
+        // hands the test would not resolve, and an absolute path
+        // interpolated into the command would not survive a space in it.
+        .env("PARENT_WATCH_PROBE_ABS", env_path("PARENT_WATCH_PROBE"))
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn the probe parent");
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().expect("stdout"))
+        .read_line(&mut line)
+        .expect("read the runner's pid");
+    let runner: u32 = line.trim().parse().expect("runner pid");
+    let step: u32 = wait_for_file(&root.join("watched/step/pid"), Duration::from_secs(60))
+        .parse()
+        .unwrap();
+    assert!(alive(runner) && alive(step), "runner {runner}, step {step}");
+
+    // SIGKILL, so the runner runs nothing at all on its way out —
+    // `kill_children` included. That is the whole point of the case.
+    let killed = Command::new("kill")
+        .args(["-9", &runner.to_string()])
+        .status()
+        .expect("run kill");
+    assert!(killed.success(), "kill -9 {runner}");
+    let runner_gone = wait_until_gone(runner, Duration::from_secs(10));
+    let step_gone = wait_until_gone(step, Duration::from_secs(30));
+    let _ = parent.kill();
+    let _ = parent.wait();
+    for pid in [runner, step] {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+    assert!(runner_gone, "the runner {runner} survived a SIGKILL");
+    assert!(
+        step_gone,
+        "the step {step} outlived the runner that was SIGKILLed"
+    );
 }
