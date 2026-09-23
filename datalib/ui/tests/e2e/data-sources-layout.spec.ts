@@ -20,21 +20,25 @@ async function openSources(page: Page) {
 
 /// Run a whole sync from the card and wait for it to end — without the
 /// reload `settleRunner` does, which would throw away the layout under
-/// test. Waits until the run has closed and the card has read its rows
-/// at least twice in the meantime, so the grid really was handed new
-/// answers.
+/// test. Waits on the job itself (the banner goes when the job does,
+/// which can be before anything looks for it) and on the card having
+/// read its rows at least twice meanwhile, so the grid really was handed
+/// new answers.
 async function syncEverything(page: Page) {
+  type Job = { id: string; active: boolean };
+  const jobs = async () =>
+    (await (await page.request.get("/api/sync/jobs/all?limit=100")).json()) as Job[];
+  const before = new Set((await jobs()).map((j) => j.id));
   let reads = 0;
   page.on("response", (r) => {
     if (r.url().includes("/api/manage/rows") && r.ok()) reads++;
   });
   await page.getByRole("button", { name: "Sync everything" }).click();
-  await expect(page.getByText("Queued a sync of everything.")).toBeVisible();
   await expect
     .poll(
       async () => {
-        const dag = await (await page.request.get("/api/dag")).json();
-        return dag.run?.live !== true && reads >= 2;
+        const mine = (await jobs()).filter((j) => !before.has(j.id));
+        return mine.length > 0 && mine.every((j) => !j.active) && reads >= 2;
       },
       { timeout: 60_000, intervals: [200], message: "the sync never ended" },
     )
