@@ -228,6 +228,18 @@ impl RawDb {
             .collect())
     }
 
+    /// Every `garmin_daily` id whose last attempt failed. Read from the
+    /// sidecar: a day that never fetched has no data row, since the stub
+    /// insert cannot fill `metric` and `calendar_date`.
+    pub async fn failed_daily_ids(&self) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "SELECT id FROM garmin_daily_bookkeeping WHERE last_error IS NOT NULL ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select failed garmin_daily ids")
+    }
+
     pub async fn cursor(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)

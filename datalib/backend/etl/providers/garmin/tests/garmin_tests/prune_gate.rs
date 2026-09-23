@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::http::{HttpResponse, PLAYBACK_ENV};
 use datalib_etl::progress::Progress;
+use datalib_etl::retry::{self, RetryGuard};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{write_fixture, Synthesizer};
 use datalib_etl_garmin::auth::Credentials;
@@ -21,7 +22,7 @@ use datalib_etl_garmin_config::GarminApi;
 use serde_json::{json, Value};
 
 /// `PLAYBACK_ENV` is process-global; the tests in this binary take turns.
-static PLAYBACK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static PLAYBACK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn spec_path() -> PathBuf {
     let rel = "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json";
@@ -31,17 +32,17 @@ fn spec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/garmin_tng/tng.json")
 }
 
-struct Account {
+pub(crate) struct Account {
     _dir: tempfile::TempDir,
     playback: PathBuf,
     raw: PathBuf,
     spec_file: PathBuf,
-    spec: Value,
-    api: GarminApi,
+    pub(crate) spec: Value,
+    pub(crate) api: GarminApi,
 }
 
 impl Account {
-    fn tng() -> Self {
+    pub(crate) fn tng() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let playback = dir.path().join("playback");
         let raw = dir.path().join("garmin").join("ingest");
@@ -64,7 +65,7 @@ impl Account {
     }
 
     /// Rewrite every fixture from the (possibly edited) spec.
-    fn resynthesize(&self) {
+    pub(crate) fn resynthesize(&self) {
         std::fs::write(&self.spec_file, serde_json::to_vec(&self.spec).unwrap()).unwrap();
         GarminSynth::new(&self.spec_file)
             .synthesize(&self.playback)
@@ -72,30 +73,52 @@ impl Account {
     }
 
     /// Make one request answer differently from what the spec says.
-    fn answer(&self, path: &str, resp: HttpResponse) {
+    pub(crate) fn answer(&self, path: &str, resp: HttpResponse) {
         let req = req_get(&format!("{}{path}", base_url("garmin.com")));
         write_fixture(&self.playback, &req, &resp).unwrap();
     }
 
-    async fn run(&self) -> FetchSummary {
+    pub(crate) async fn run(&self) -> FetchSummary {
+        self.run_with(DownloadControl::default(), Progress::noop())
+            .await
+    }
+
+    /// A run whose transport honours `control.stop`, as the step
+    /// driver's retry scope makes it in production.
+    pub(crate) async fn run_with(
+        &self,
+        control: DownloadControl,
+        progress: Progress,
+    ) -> FetchSummary {
         std::env::set_var(PLAYBACK_ENV, &self.playback);
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            creds: Credentials::fixed("playback"),
-            api: self.api.clone(),
-            today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
-            progress: Progress::noop(),
-            control: DownloadControl::default(),
-            sealer: None,
-        })
+        let fast = std::time::Duration::from_millis(1);
+        let guard = RetryGuard::new(
+            std::time::Duration::from_secs(3600),
+            100,
+            fast,
+            fast,
+            control.stop.clone(),
+        );
+        let summary = retry::scope(
+            guard,
+            fetch(FetchOptions {
+                db: db.clone(),
+                creds: Credentials::fixed("playback"),
+                api: self.api.clone(),
+                today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
+                progress,
+                control,
+                sealer: None,
+            }),
+        )
         .await;
         db.commit_all("test").await.unwrap();
         db.close().await;
         summary.unwrap()
     }
 
-    async fn count(&self, sql: &'static str) -> i64 {
+    pub(crate) async fn count(&self, sql: &'static str) -> i64 {
         let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
             .await
             .unwrap();
@@ -105,7 +128,7 @@ impl Account {
     }
 
     /// Every fetch-stage `problems` row, `scope_key → sample`.
-    async fn problems(&self) -> BTreeMap<String, String> {
+    pub(crate) async fn problems(&self) -> BTreeMap<String, String> {
         let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
             .await
             .unwrap();
@@ -119,7 +142,7 @@ impl Account {
         rows.into_iter().collect()
     }
 
-    async fn set_cursor(&self, scope: &str, value: &str) {
+    pub(crate) async fn set_cursor(&self, scope: &str, value: &str) {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         db.set_cursor(scope, value).await.unwrap();
         db.commit_all("test").await.unwrap();
@@ -127,7 +150,7 @@ impl Account {
     }
 }
 
-fn status(code: u16, body: &str) -> HttpResponse {
+pub(crate) fn status(code: u16, body: &str) -> HttpResponse {
     let mut headers = BTreeMap::new();
     headers.insert("content-type".into(), "application/json".into());
     HttpResponse {
