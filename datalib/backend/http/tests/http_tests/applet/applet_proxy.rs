@@ -24,6 +24,7 @@ async fn state_with(root: &Path, config_toml: &str) -> AppState {
     datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
     AppState {
         root: root.clone(),
+        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,

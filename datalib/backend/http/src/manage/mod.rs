@@ -239,7 +239,15 @@ pub async fn get_manage_rows(
     }
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let record = crate::dag_record(&s.root).await;
+    // The queue before the record: the loop saves its record before it
+    // marks a job running, so a job read as running here has its record
+    // already on disk. Read the other way round, a request landing
+    // between the two reads pairs a running job with the record from
+    // before its steps were taken on, and the row paints their history.
+    // The grid is still useful without the queue; the columns it feeds
+    // just read as idle.
+    let jobs = s.app.list_jobs(false, 200).await.unwrap_or_default();
+    let record = crate::dag_record(&s.root, s.sync.running()).await;
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
@@ -264,9 +272,6 @@ pub async fn get_manage_rows(
         }
     };
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
-    // The grid is still useful without the queue; the columns it feeds
-    // just read as idle.
-    let jobs = s.app.list_jobs(false, 200).await.unwrap_or_default();
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let rows = {

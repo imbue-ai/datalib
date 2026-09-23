@@ -23,7 +23,7 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::events::FanOutSink;
-use datalib_dag::runs_sink::RunStoreSink;
+use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
@@ -32,18 +32,17 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// After the parent is gone — or the terminal is — how long the steps
-/// get to checkpoint on their SIGINT before they are killed. The same
-/// grace the app server's worker gives a cancel. Used where no second
-/// signal is coming, so the runner has to escalate on its own.
-const PARENT_GONE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+/// get to checkpoint on their SIGINT before they are killed: the grace a
+/// stopped step gets anywhere. Used where no second signal is coming, so
+/// the runner has to escalate on its own.
+const PARENT_GONE_GRACE: std::time::Duration = datalib_dag::step::STOP_GRACE;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // First, so a spawner that asked for the watch and forgot the pipe
-    // is refused before the runner lock is taken. The app server's
-    // worker spawns this binary with the pipe; a run it started must not
-    // outlive it, or the next boot finds a job it cannot account for and
-    // a runner lock it did not take.
+    // is refused before the runner lock is taken. A loop whose spawner is
+    // gone has nobody left to report to, and holds a lock the next one
+    // is waiting on.
     // Every way this process is told to stop goes through the round's
     // stop, so a stopped round starts nothing new while it winds down.
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
@@ -306,59 +305,31 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Run-wide environment for every step subprocess: PATH with the
-    // binary dir prepended (so commands can say `datalib-step` bare),
-    // one pinned timestamp for the whole run — whether given or
-    // sampled, every stamped output (raw bookkeeping, rendered_at_utc)
-    // agrees.
-    let mut child_env: std::collections::BTreeMap<String, String> = Default::default();
-    if let Some(dir) = config::resolve_binary_dir(&cfg, binary_dir.as_deref()) {
-        let mut paths = vec![dir];
-        if let Some(p) = std::env::var_os("PATH") {
-            paths.extend(std::env::split_paths(&p));
+    // Whoever held the lock before us may have died holding it.
+    if let Some(dead) = host::close_dead_loop(&data_root).await? {
+        #[allow(clippy::disallowed_macros)]
+        {
+            eprintln!("datalib-dag: closed run {dead}, which a loop that died left open");
         }
-        let joined = std::env::join_paths(paths).context("prepend --binary-dir to PATH")?;
-        child_env.insert("PATH".into(), joined.to_string_lossy().into_owned());
     }
+
     let now =
         now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-    // The run id: the caller's (the http worker passes its job id, so
-    // the job row *is* the run) or a fresh one. With the loop serving
-    // several requests, a run is the stretch this process runs it for.
+    // With the loop serving several requests, a run is the stretch this
+    // process runs it for.
     let run_id = run_id.unwrap_or_else(datalib_dag::scheduler::new_run_id);
-    child_env.insert(subprocess::ENV_RUN_ID.into(), run_id.clone());
-    child_env.insert(subprocess::ENV_NOW.into(), now.clone());
-    // A child's stdout is a pipe here, and Python block-buffers a pipe
-    // by default — its progress lines would arrive in 4KB lumps, long
-    // after the stderr they belong beside. Rust and sh need no help.
-    child_env.insert("PYTHONUNBUFFERED".into(), "1".into());
-    if let Some(cadence) = cfg.checkpoint_cadence {
-        child_env.insert(subprocess::ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
-    }
-    // One filter for the run: the runner's own lines and every step's.
-    // A `RUST_LOG` already in the environment is a person's choice and
-    // wins; else the config's level (`log_level`, default `trace`).
-    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
-    child_env.insert("RUST_LOG".into(), log_filter.clone());
+    let host::StepEnv {
+        vars: child_env,
+        log_filter,
+    } = host::step_env(&cfg, binary_dir.as_deref(), &[], &now, &run_id)?;
 
     // stderr stays the stream; the store is the record. Both, not
     // either: the stream is what a terminal or a tee sees as it happens,
     // the store is what a second process reads — live, and after the
-    // fact. Publishing the store here rather than inside `Runner` means
-    // every way of starting a sync gets it — the http server's worker
-    // shells out to this binary too — while a library caller embedding
-    // `Runner` is not forced to own a file.
+    // fact.
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
-        let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
-        let commit = datalib_runs::git_hash_and_origin();
-        match RunStoreSink::start(
-            &data_root,
-            &run_id,
-            &now,
-            commit.as_ref().map(|(hash, _)| hash.clone()),
-            retention,
-        ) {
+        match host::start_record(&data_root, &cfg, &run_id, &now) {
             Some(store) => {
                 // The runner's own `tracing` lines go to the store too,
                 // as the run's lines with no step — and only there:
@@ -369,15 +340,14 @@ async fn main() -> Result<()> {
                     .with(filter)
                     .with(datalib_runs::StoreLayer::new(store.log_sink()))
                     .try_init();
-                datalib_runs::log_build_commit(commit.as_ref());
+                datalib_runs::log_build_commit(datalib_runs::git_hash_and_origin().as_ref());
                 sinks.push(Arc::new(store));
             }
             None => {
                 // No tracing subscriber is installed on this path and
                 // there are no indicatif bars, so the macro's usual
                 // objection does not apply and `tracing::warn!` would go
-                // nowhere at all. A plain line on stderr is safe: the
-                // worker keeps only a tail of it for an error message.
+                // nowhere at all.
                 #[allow(clippy::disallowed_macros)]
                 {
                     eprintln!("datalib-dag: run store unavailable; nothing recorded this run");
