@@ -270,6 +270,40 @@ pub struct StepCtx {
     pub progress: StepProgress,
     /// Where to announce a seal. See [`StepCtx::checkpoint`].
     pub checkpoint: CheckpointSink,
+    pub stop: StopSignal,
+}
+
+/// How the host asks one invocation to stop at its next consistent
+/// point. A subprocess step gets SIGINT on its own process group; an
+/// in-process step may await [`StopSignal::requested`].
+#[derive(Clone, Debug, Default)]
+pub struct StopSignal(Option<tokio::sync::watch::Receiver<bool>>);
+
+impl StopSignal {
+    pub fn new(rx: tokio::sync::watch::Receiver<bool>) -> Self {
+        Self(Some(rx))
+    }
+
+    pub fn never() -> Self {
+        Self(None)
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.0.as_ref().is_some_and(|rx| *rx.borrow())
+    }
+
+    /// Resolves once a stop has been asked for; never, for a signal made
+    /// with [`StopSignal::never`] or whose sender is gone.
+    pub async fn requested(&mut self) {
+        match self.0.as_mut() {
+            Some(rx) => {
+                if rx.wait_for(|stop| *stop).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            None => std::future::pending().await,
+        }
+    }
 }
 
 impl StepCtx {

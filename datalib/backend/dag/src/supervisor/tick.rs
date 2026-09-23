@@ -92,6 +92,16 @@ pub struct Budgets {
 }
 
 impl Budgets {
+    /// What `--parallelism N` means: N downloads and N renders at once,
+    /// and the two index steps free to run beside each other.
+    pub fn from_parallelism(n: usize) -> Self {
+        Self {
+            network: n,
+            cpu: n,
+            index: 2,
+        }
+    }
+
     fn of(&self, class: Class) -> usize {
         match class {
             Class::Network => self.network,
@@ -137,9 +147,6 @@ pub struct Attempt {
 #[derive(Debug, Clone)]
 pub struct Running {
     pub started: Seq,
-    /// The version of the sink it writes when it started, so a publish
-    /// since then can be told from one before it.
-    pub sink_at_start: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +178,9 @@ pub enum StepState {
     Paused,
     /// Its retries ran out and nothing it reads has moved since.
     Failed,
+    /// Out of date, but a producer it reads has never published
+    /// anything and is not going to run, so there is nothing to read.
+    Blocked(StepIx),
     Waiting(Wait),
 }
 
@@ -186,7 +196,8 @@ pub enum Wait {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Done,
-    /// The first step, in topological order, that failed for it.
+    /// The first step, in topological order, that failed for it or was
+    /// blocked.
     Failed {
         step: StepIx,
     },
@@ -276,11 +287,21 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
             continue;
         }
 
-        pending[i] = true;
-        if let Some(w) = blocking_producer(i, shape, facts, &writers, &pending) {
+        if let Some(w) = blocking_producer(i, shape, facts, &writers, &states) {
+            pending[i] = true;
             states[i] = StepState::Waiting(Wait::Upstream(w));
             continue;
         }
+        if let Some(w) = nothing_to_read(step, facts, &writers) {
+            if pending[w] {
+                pending[i] = true;
+                states[i] = StepState::Waiting(Wait::Upstream(w));
+            } else {
+                states[i] = StepState::Blocked(w);
+            }
+            continue;
+        }
+        pending[i] = true;
         if writers[step.writes].iter().any(|&w| busy[w]) {
             states[i] = StepState::Waiting(Wait::Sink(step.writes));
             continue;
@@ -306,7 +327,9 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
             })
         })
         .map(|r| {
-            let failed = shape.topo.iter().copied().find(|&i| failed_for[i][r]);
+            let failed = shape.topo.iter().copied().find(|&i| {
+                failed_for[i][r] || (scopes[r][i] && matches!(states[i], StepState::Blocked(_)))
+            });
             let outcome = match failed {
                 Some(step) => Outcome::Failed { step },
                 None => Outcome::Done,
@@ -360,32 +383,40 @@ fn started_since(f: &StepFacts, opened: Seq) -> bool {
     running || attempted
 }
 
-/// A producer of something `i` reads that is running or due, unless it
-/// streams and has published since it started — then there is something
-/// new to read now, and reading it is the point of streaming.
+/// A writer of what the step reads, when nothing it reads has ever been
+/// published. A fan-in reads whichever of its sources exist.
+fn nothing_to_read(step: &StepShape, facts: &Facts, writers: &[Vec<StepIx>]) -> Option<StepIx> {
+    if step.reads.is_empty() || step.reads.iter().any(|&s| facts.sinks[s].is_some()) {
+        return None;
+    }
+    writers[step.reads[0]].first().copied()
+}
+
+/// A producer of something `i` reads that `i` must wait for. Two reasons,
+/// and only two: it is running and does not stream, so its sink may be
+/// half-written; or it is about to run, held only by a budget or its sink,
+/// and will rewrite what `i` would read. A producer that is itself waiting
+/// on something upstream may not run for a long time, and a fan-in that
+/// waited on it would wait for its slowest source.
 fn blocking_producer(
     i: StepIx,
     shape: &Shape,
     facts: &Facts,
     writers: &[Vec<StepIx>],
-    pending: &[bool],
+    states: &[StepState],
 ) -> Option<StepIx> {
     shape.steps[i]
         .reads
         .iter()
-        .flat_map(|&s| writers[s].iter().map(move |&w| (s, w)))
-        .find(|&(s, w)| {
-            if w == i || !pending[w] {
-                return false;
-            }
-            let f = &facts.steps[w];
-            let published_since_start = f
-                .running
-                .as_ref()
-                .is_some_and(|r| f.streams_output && facts.sinks[s] != r.sink_at_start);
-            !published_since_start
+        .flat_map(|&s| writers[s].iter().copied())
+        .find(|&w| {
+            w != i
+                && match states[w] {
+                    StepState::Running => !facts.steps[w].streams_output,
+                    StepState::Waiting(Wait::Budget(_) | Wait::Sink(_)) => true,
+                    _ => false,
+                }
         })
-        .map(|(_, w)| w)
 }
 
 #[cfg(test)]
@@ -473,11 +504,7 @@ mod tests {
     }
 
     fn run(facts: &mut Facts, step: StepIx, at: u64) {
-        let sink_at_start = facts.sinks[step].clone();
-        facts.steps[step].running = Some(Running {
-            started: Seq(at),
-            sink_at_start,
-        });
+        facts.steps[step].running = Some(Running { started: Seq(at) });
     }
 
     /// The step finishes: it succeeds against `consumed` and publishes
@@ -738,6 +765,78 @@ mod tests {
         let t = tick(&s, &intent, &facts, &BUDGETS);
         assert_eq!(started(&t), vec![1]);
         assert_eq!(start_of(&t, 1).reads[&0].as_deref(), Some("partial"));
+    }
+
+    /// Two streaming sources into one index, on a first sync. `a` has
+    /// sealed and its render has run; `b` has sealed nothing, so its render
+    /// waits. The index must not wait with it: `a`'s rows reach the grid
+    /// while `b` is still downloading.
+    #[test]
+    fn a_fan_in_does_not_wait_for_a_render_still_waiting_on_its_download() {
+        //  a 0 → render 1 ┐
+        //                  ├→ index 4
+        //  b 2 → render 3 ┘
+        let mut s = shape(&[&[], &[0], &[], &[2], &[1, 3]]);
+        s.steps[4].class = Class::Index;
+        let mut facts = all_fresh(&s, 1);
+        for i in [0, 2] {
+            facts.steps[i].streams_output = true;
+            run(&mut facts, i, 6);
+        }
+        for i in [2, 3, 4] {
+            facts.steps[i].last_success = None;
+        }
+        facts.sinks[2] = None;
+        facts.sinks[3] = None;
+
+        let t = tick(&s, &request(&[0, 2], 5), &facts, &BUDGETS);
+        assert_eq!(t.states[3], StepState::Waiting(Wait::Upstream(2)));
+        assert!(started(&t).contains(&4), "{t:?}");
+    }
+
+    /// A render that is about to start will rewrite what the index would
+    /// read, so the index lets it go first rather than running twice.
+    #[test]
+    fn a_consumer_waits_for_a_producer_held_only_by_its_budget() {
+        let mut s = chain();
+        s.steps[1].class = Class::Cpu;
+        let mut facts = all_fresh(&s, 1);
+        facts.sinks[0] = Some("v0-new".into());
+        facts.steps[2].last_success = None;
+        let budgets = Budgets { cpu: 0, ..BUDGETS };
+        let t = tick(&s, &request(&[1], 5), &facts, &budgets);
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Budget(Class::Cpu)));
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+    }
+
+    /// A first sync whose download fails has written nothing. Its render
+    /// has nothing to read, so it waits for a download that works instead
+    /// of running against a store that is not there.
+    #[test]
+    fn a_consumer_of_a_producer_that_never_published_is_blocked() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        facts.sinks[0] = None;
+        facts.steps[0].last_success = None;
+        let intent = request(&[0], 5);
+        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        run(&mut facts, 0, 6);
+        finish(&mut facts, 0, c0, Err(()));
+
+        let t = tick(&s, &intent, &facts, &BUDGETS);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[1], StepState::Blocked(0));
+        assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 0 })]);
+    }
+
+    #[test]
+    fn a_blocked_step_fails_a_request_that_reaches_it_but_not_its_producer() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        facts.sinks[0] = None;
+        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 1 })]);
     }
 
     #[test]

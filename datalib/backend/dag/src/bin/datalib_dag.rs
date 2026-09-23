@@ -25,6 +25,7 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::events::FanOutSink;
 use datalib_dag::runs_sink::RunStoreSink;
 use datalib_dag::step::FailureKind;
+use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -42,9 +43,14 @@ async fn main() -> Result<()> {
     // worker spawns this binary with the pipe; a run it started must not
     // outlive it, or the next boot finds a job it cannot account for and
     // a runner lock it did not take.
-    datalib_parent_watch::exit_with_parent(|| {
-        datalib_parent_watch::report("datalib-dag: parent gone; interrupting the steps");
-        subprocess::interrupt_children();
+    // Every way this process is told to stop goes through the round's
+    // stop, so a stopped round starts nothing new while it winds down.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_tx = Arc::new(stop_tx);
+    let parent_stop = stop_tx.clone();
+    datalib_parent_watch::exit_with_parent(move || {
+        datalib_parent_watch::report("datalib-dag: parent gone; stopping the round");
+        let _ = parent_stop.send(true);
         std::thread::sleep(PARENT_GONE_GRACE);
         datalib_parent_watch::report("datalib-dag: steps still running after the grace, exiting");
         subprocess::kill_children();
@@ -245,10 +251,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Cancellation: forward the first SIGINT/SIGTERM to running steps
-    // as SIGINT so each can stop at its next consistent point, commit
-    // there and exit `cancelled` (`step_protocol.md` § Signals); the
-    // scheduler drains normally. A second
+    // Cancellation: the first SIGINT/SIGTERM stops the round — each
+    // running step gets SIGINT on its own process group, so it can stop
+    // at its next consistent point, commit there and exit `cancelled`
+    // (`step_protocol.md` § Signals), and nothing new starts. A second
     // signal gives up waiting and exits hard, taking the steps with it.
     //
     // SIGHUP is not one of those two. It says the terminal is gone, so
@@ -257,7 +263,7 @@ async fn main() -> Result<()> {
     // same one it uses when its parent dies. It has to: a step is in a
     // process group of its own, so the kernel's SIGHUP to the
     // foreground group no longer reaches it.
-    tokio::spawn(async {
+    tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
         let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
@@ -268,9 +274,9 @@ async fn main() -> Result<()> {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv() => {
                     datalib_parent_watch::report(
-                        "datalib-dag: terminal hung up; interrupting the steps",
+                        "datalib-dag: terminal hung up; stopping the round",
                     );
-                    subprocess::interrupt_children();
+                    let _ = stop_tx.send(true);
                     // Async, so the runtime keeps draining what the
                     // steps say while they stop.
                     tokio::time::sleep(PARENT_GONE_GRACE).await;
@@ -286,7 +292,7 @@ async fn main() -> Result<()> {
                 subprocess::kill_children();
                 std::process::exit(130);
             }
-            subprocess::interrupt_children();
+            let _ = stop_tx.send(true);
         }
     });
 
@@ -338,9 +344,10 @@ async fn main() -> Result<()> {
         }
         let mut runner = Runner::new(&data_root)
             .sink(Arc::new(FanOutSink(sinks)))
-            .child_env(child_env);
+            .child_env(child_env)
+            .stop_on(stop_rx);
         if let Some(p) = parallelism {
-            runner.parallelism = p;
+            runner.budgets = Budgets::from_parallelism(p);
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;

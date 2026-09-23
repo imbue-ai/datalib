@@ -219,6 +219,13 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
+    let stop_task = child.id().map(|pid| {
+        let mut stop = ctx.stop.clone();
+        tokio::spawn(async move {
+            stop.requested().await;
+            signal_group(pid, libc::SIGINT);
+        })
+    });
 
     let stdout = child.stdout().take().expect("stdout piped");
     let stderr = child.stderr().take().expect("stderr piped");
@@ -300,6 +307,9 @@ pub(crate) async fn run_subprocess(
         .await
         .context("wait for subprocess")
         .map_err(internal)?;
+    if let Some(t) = stop_task {
+        t.abort();
+    }
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if status.success() {
@@ -579,14 +589,18 @@ fn signal_children(signal: libc::c_int) {
         .map(|s| s.iter().copied().collect())
         .unwrap_or_default();
     for pid in pids {
-        // The step's process *group*, not the step: `spawn` gives each
-        // one a group of its own, so its id is the step's pid and this
-        // reaches whatever the step spawned as well as the step.
-        // Safety: plain kill(2) with a valid signal; racing a
-        // just-exited group is benign (ESRCH).
-        unsafe {
-            libc::kill(-(pid as libc::pid_t), signal);
-        }
+        signal_group(pid, signal);
+    }
+}
+
+/// The step's process *group*, not the step: `spawn` gives each one a
+/// group of its own, so its id is the step's pid and this reaches
+/// whatever the step spawned as well as the step.
+fn signal_group(pid: u32, signal: libc::c_int) {
+    // Safety: plain kill(2) with a valid signal; racing a just-exited
+    // group is benign (ESRCH).
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), signal);
     }
 }
 
@@ -689,6 +703,55 @@ mod tests {
 
         until("the step's own child to go with it", || !alive(grandchild)).await;
         let _ = runner.await;
+    }
+
+    /// Stopping a round stops each running step through its own process
+    /// group, and nothing else starts: not the source still waiting on the
+    /// budget, not the render below the stopped one.
+    ///
+    /// The step's `sleep` is in the foreground, and `sh` runs its INT trap
+    /// only once that has exited. A SIGINT to the step's pid alone would
+    /// leave the sleep running and the round waiting on it for two minutes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_a_round_interrupts_its_steps_and_starts_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let started = root.path().join("started");
+        std::fs::create_dir_all(&started).unwrap();
+        let source = |id: &str| {
+            StepSpec::new(
+                id,
+                sh(r#"
+                    trap 'echo "{\"event\":\"outcome\",\"failure\":\"cancelled\"}"; exit 130' INT
+                    touch "$DATALIB_DAG_DATA_ROOT/started/${DATALIB_DAG_STEP%/*}"
+                    sleep 120
+                "#),
+            )
+        };
+        let render = StepSpec::new("a/rendered", sh("touch started/render")).input("a/raw");
+        let g = Graph::build(vec![source("a/raw"), source("b/raw"), render]).unwrap();
+
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let mut runner = Runner::new(root.path()).stop_on(stop_rx);
+        runner.budgets.network = 1;
+        let round = tokio::spawn(async move { runner.run(&g).await });
+
+        let count = || std::fs::read_dir(&started).unwrap().count();
+        until("a source to start", || count() == 1).await;
+        stop.send(true).unwrap();
+        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
+            .await
+            .expect("the stop reached the step's sleep")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(count(), 1, "only the first source ever started");
+        let cancelled = StepStatus::Failed {
+            kind: FailureKind::Cancelled,
+        };
+        for id in ["a/raw", "b/raw", "a/rendered"] {
+            assert_eq!(rep.step(id).status, cancelled, "{id}: {rep:#?}");
+        }
     }
 
     /// Params reach the child as a file only its owner can read, named

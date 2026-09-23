@@ -1,7 +1,7 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slice 0 is built, slice
-1 (the tick) is being written, the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slices 0–2 are built —
+`datalib-dag` runs one round of the tick — and the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -310,16 +310,26 @@ changed. For a root it is the request-relative rule of §2.2.
 Three rules the loop needs that the runner got for free from having a
 run:
 
-- **A consumer waits for a pending producer.** A producer is *pending*
-  when it is in scope and running, or due to start (stale, not paused,
-  not failed, held only by a budget). A consumer does not start while
-  one of its producers is pending — starting a render against a store
-  its ingest is about to rewrite is a pass thrown away — with one
-  exception, which is streaming: a producer that is running, declares
-  `streams_output`, and has published a version since its invocation
-  began lets its consumers start against that version. A producer that
-  failed or is paused is not pending, and its consumers run against
-  what it committed (§2.5).
+- **A consumer waits for a producer for two reasons, and only two.**
+  The producer is running and does not declare `streams_output`, so its
+  sink may be half-written; or it is about to run, held only by a
+  budget or by its sink, and will rewrite what the consumer would read.
+  A running producer that streams never holds its consumers back: they
+  start on each seal as it lands, and staleness keeps them from running
+  when nothing new has. A producer that is itself waiting on something
+  upstream does not hold them back either — it may not run for a long
+  time, and a fan-in that waited on it would wait for its slowest
+  source. (Two drafts got this wrong, each caught by a test: one asked
+  a streaming producer to have published since it started, the other
+  counted a producer waiting on its own upstream; both made the index
+  wait for the slowest download.) A producer that failed or is paused
+  holds nothing back, and its consumers run against what it committed
+  (§2.5).
+- **Nothing to read is `blocked`.** A stale step none of whose inputs
+  has ever been published — a render whose first download failed — has
+  nothing to read. It does not start, does not hold its request open,
+  and fails the request. A fan-in reads whichever of its inputs exist,
+  so one never-synced source does not block the index.
 - **A failure is not retried by the tick.** Retries happen inside an
   invocation, as today (`invoke_with_retry`), so a retrying step reads
   `running`. Once they are exhausted the step is **failed for** every
@@ -708,19 +718,17 @@ last.
    first test written" are the first two. The graph it takes already
    names sinks (`writes`, `reads`), but only in the shape the tree has
    today: each step writes the sink its id names. Nothing calls it yet.
-2. **The batch host.** The thin shell around the tick: it turns a step
-   exiting and a checkpoint arriving into new facts, calls the tick,
-   spawns its starts and signals its stops, per invocation (§2.8). Its
-   facts come from `dag_state.json` for now, the file the runner
-   already keeps, so this slice changes how steps are scheduled and
-   nothing about where that is recorded. `datalib-dag <config>`
-   switches to it: one request rooted at every source (or at the
-   `--sync` roots), run until it closes. It passes the scheduler's
-   existing tests re-expressed against requests and invocations (the
-   semantics they pin — subset sync, not-selected history, unselected
-   trees never hashed — are exactly what scope means, and hold), and
-   most of them stop needing tokio to say so. `Runner::run` is
-   deleted; the fixture genrule is the proof.
+2. ~~**The batch host.**~~ **Built.** `supervisor/round.rs` is the
+   body of `Runner::run`: one request rooted at every source (or the
+   `--sync` roots), ticked until it closes, facts read from and written
+   back to `dag_state.json`, and the events the run store and the server
+   already read. Each invocation has its own stop handle
+   (`StepCtx::stop`, SIGINT to its process group); the first SIGINT or
+   SIGTERM to `datalib-dag` stops the round through it. The old loop and
+   its `in_flight` / `final_pass_owed` / `streaming_pass_owed` are gone.
+   The scheduler's own tests pass against it with four changed on
+   purpose: a failed producer's committed output is read by its
+   consumers, and a failed render no longer blocks the index (§2.5).
 3. **Sink versions from the sink.** A doltlite sink's version is
    `main`'s head, read by the host after every writer invocation
    (§2.1); the step's report is checked against it in tests, then

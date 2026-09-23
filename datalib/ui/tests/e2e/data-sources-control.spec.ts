@@ -453,8 +453,11 @@ test.describe("sources run independently, one job at a time", () => {
     // Its download's row says what happened: stopped — not failed,
     // nothing went wrong, and not finished, the work is not done. The
     // step answered SIGINT with a `cancelled` outcome, which the
-    // scheduler records as `stopped`; its render step, never reached,
-    // is blocked on it.
+    // scheduler records as `stopped`. A stopped download is not a fence
+    // over its render (plans/supervisor.md §2.5): the held download
+    // sealed nothing, so the render is up to date with what it committed
+    // — or, if this root has never rendered the source, it was waiting
+    // for a first seal and the stop ended that wait.
     await expect
       .poll(() => statusOf(page, ingestOf(CHATGPT)), {
         timeout: 30_000,
@@ -464,7 +467,7 @@ test.describe("sources run independently, one job at a time", () => {
       .toBe("Stopped");
     await expect
       .poll(() => statusOf(page, renderOf(CHATGPT)), { timeout: 10_000, intervals: [200] })
-      .toBe("Blocked");
+      .toMatch(/^(Up to date|Stopped)$/);
     // …and the group reads the same, off that child.
     await expect
       .poll(() => statusOf(page, `group:${CHATGPT.id}`), { timeout: 10_000, intervals: [200] })
