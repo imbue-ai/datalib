@@ -91,9 +91,10 @@ fn four_writers(t: &Scratch) {
         assert!(
             missing.is_empty(),
             "the {tag} writer published {PUBLISHED} lines and {} never reached \
-             the store, starting at {:?}",
+             the store, starting at {:?}.\nWhat the store said while it wrote:\n{}",
             missing.len(),
-            &missing[..missing.len().min(10)]
+            &missing[..missing.len().min(10)],
+            t.warnings()
         );
         assert_eq!(
             stored.len() as u64,
@@ -183,6 +184,8 @@ impl Scratch {
                 &self.path("start"),
                 "--out",
                 &self.path(&format!("{tag}.json")),
+                "--warn-log",
+                &self.path(&format!("{tag}.warn.log")),
             ])
             .spawn()
             .unwrap_or_else(|e| panic!("spawn {}: {e}", self.bin.display()))
@@ -190,6 +193,24 @@ impl Scratch {
 
     fn go(&self, name: &str) {
         std::fs::write(self.dir.path().join(name), b"go").expect("write the starting gun");
+    }
+
+    /// What the store told *every* writer while they ran — not just the
+    /// one whose lines went missing. A writer loses a batch because of
+    /// what another one did to the file, so the useful evidence is
+    /// usually somebody else's: the replaced file over here, the lost
+    /// batch over there. Nothing else records either.
+    fn warnings(&self) -> String {
+        let mut out = String::new();
+        for (_, tag) in WRITERS {
+            let said = match std::fs::read_to_string(self.path(&format!("{tag}.warn.log"))) {
+                Ok(s) if s.trim().is_empty() => "    (nothing)\n".to_string(),
+                Ok(s) => s.lines().map(|l| format!("    {l}\n")).collect::<String>(),
+                Err(e) => format!("    (unreadable: {e})\n"),
+            };
+            out.push_str(&format!("  {tag}:\n{said}"));
+        }
+        out
     }
 
     fn report(&self, tag: &str) -> Value {

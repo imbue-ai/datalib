@@ -10,6 +10,13 @@
 //!
 //! Each side writes one JSON report to `--out` and exits; nothing goes
 //! to stdout, so a crashed child is distinguishable from a slow one.
+//!
+//! It also installs a subscriber, which matters more than it sounds. The
+//! store reports a lost batch, a file it replaced and an open it could
+//! not lock through `tracing`; a binary with no subscriber throws all of
+//! that away. This test exists to catch silent loss, so a run of it that
+//! cannot say *why* a writer lost its lines has caught the failure and
+//! dropped the evidence.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,6 +30,7 @@ fn main() {
     let role = argv.next().expect("usage: <run|server> [--flag value]…");
     let args = Args::parse(argv);
     let out = args.path("out");
+    capture_warnings(args.path("warn-log"));
 
     let (lines, process_id) = match role.as_str() {
         "run" => as_run(&args),
@@ -35,6 +43,25 @@ fn main() {
         serde_json::to_vec_pretty(&report).expect("the report is JSON"),
     )
     .unwrap_or_else(|e| panic!("write {}: {e}", out.display()));
+}
+
+/// Send the store's own warnings to a file the test reads back, so a
+/// failure names its cause instead of costing another investigation.
+/// A fresh handle per event: these are rare, and it keeps the writer
+/// free of a shared handle to reason about.
+fn capture_warnings(path: PathBuf) {
+    let _ = std::fs::write(&path, b"");
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .with_writer(move || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .unwrap_or_else(|e| panic!("open the warning log: {e}"))
+        })
+        .init();
 }
 
 /// The runner's writer: a run with metrics as well as lines. Returns
