@@ -1,7 +1,8 @@
 # The supervisor: steps as managed processes, not as a batch run
 
 **Status: chosen over the join (2026-09-23); slices 0–2 are built —
-`datalib-dag` runs one round of the tick — and the rest is not.** This is the alternative to
+`datalib-dag` runs one round of the tick — and slice 3's doltlite half
+is; the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -729,14 +730,26 @@ last.
    The scheduler's own tests pass against it with four changed on
    purpose: a failed producer's committed output is read by its
    consumers, and a failed render no longer blocks the index (§2.5).
-3. **Sink versions from the sink.** A doltlite sink's version is
+3. **Sink versions from the sink.** ~~A doltlite sink's version is
    `main`'s head, read by the host after every writer invocation
    (§2.1); the step's report is checked against it in tests, then
-   becomes optional for doltlite sinks. The qmd index gets a `versions`
-   row written in the transaction that updates it. A plain tree keeps
-   the tree hash, computed on writer completion and cached; the
-   supervisor learns which sinks' readers do not pin, so it never
-   starts a writer on one while a reader runs.
+   becomes optional for doltlite sinks.~~ **Built:** `dag/src/sink.rs`
+   reads `main`'s head of every store at the top of a step's tree, after
+   every invocation and at every checkpoint, and a step's report is used
+   only for a tree with no store. It fixed a waste nobody had seen: a
+   step's checkpoints and its outcome spelled one commit differently
+   (`<hash>` against `store:<hash>`), so every finishing ingest and
+   render made its consumers run one more pass over nothing. Still to
+   do from this slice: the qmd index gets a version cheaper than
+   hashing its tree after every pass, which is what it gets today (qmd
+   writes `index.sqlite` itself, so a `versions` row in qmd's own
+   transaction is not ours to add). A plain tree keeps the tree hash,
+   computed on writer completion. And the supervisor learns which sinks'
+   readers do not pin, so it never starts a writer on one while a
+   reader runs. Two readers do not pin today: `qmd_index`, which globs
+   each render tree's `.md` files off disk and so can index a file a
+   render has written but not yet committed; and perseus's render,
+   which reads its ingest's TEI tree directly.
 4. **The server hosts it.** The run store gains `requests`,
    `request_steps`, `steps`, `sinks` and `invocations`, and the
    supervisor's facts move there from `dag_state.json`, which goes.

@@ -195,7 +195,7 @@ impl Runner {
                 biased;
                 Some(signal) = checkpoints.recv() => {
                     self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut warned_not_streaming);
+                        &mut queue, &mut warned_not_streaming).await;
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     cancelled = true;
@@ -208,7 +208,7 @@ impl Runner {
                     stops[i] = None;
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
                     let e = self.on_ended(graph, i, attempts, res, &consumed, &mut facts,
-                        &mut state, &mut changed_now, &mut queue);
+                        &mut state, &mut changed_now, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
@@ -330,8 +330,35 @@ impl Runner {
         }
     }
 
+    /// The version of what step `i` has published, read from its stores.
+    /// `None` for a tree with no store, whose version is what the step
+    /// reports. Not qualified with the step's fingerprint, as a reported
+    /// version is: a commit names content, and a definition change that
+    /// rewrites nothing leaves nothing new to read.
+    async fn read_sink(&self, graph: &Graph, i: usize) -> Option<String> {
+        let tree = self.data_root.join(graph.steps[i].output().as_str());
+        match crate::sink::read_version(&tree).await {
+            Ok(v) => v,
+            Err(e) => {
+                self.sink.emit(&Event::Log {
+                    step: graph.steps[i].id.clone(),
+                    level: crate::events::LogLevel::Warn,
+                    msg: format!(
+                        "could not read its stores' heads, using the step's report: {e:#}"
+                    ),
+                    ts: None,
+                    stream: None,
+                    target: None,
+                    thread: None,
+                    fields: None,
+                });
+                None
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn on_signal(
+    async fn on_signal(
         &self,
         graph: &Graph,
         signal: crate::step::StepSignal,
@@ -366,9 +393,12 @@ impl Runner {
         if facts.steps[p].running.is_none() {
             return;
         }
-        // Qualified with the producer's fingerprint exactly as a finished
-        // pass's version is, so the two are comparable.
-        let qualified = format!("{}:{}", graph.fingerprints[p], version);
+        // The commit `main` is at now, which is at least the one the step
+        // announced: it publishes before it says so.
+        let qualified = match self.read_sink(graph, p).await {
+            Some(read) => read,
+            None => format!("{}:{}", graph.fingerprints[p], version),
+        };
         let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
@@ -405,7 +435,7 @@ impl Runner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn on_ended(
+    async fn on_ended(
         &self,
         graph: &Graph,
         i: usize,
@@ -435,15 +465,24 @@ impl Runner {
             attempts,
             pass_ended: false,
         };
+        // Read after every invocation, whatever it reported and however it
+        // ended: a writer's open publishes a commit its crashed predecessor
+        // left, so even a step that failed at once can move its sink.
+        let read = self.read_sink(graph, i).await;
         match res {
             Ok(outcome) => {
-                let resolved = match resolve_outputs(
-                    &self.data_root,
-                    spec,
-                    fingerprint,
-                    &outcome.outputs,
-                    &*self.sink,
-                ) {
+                let resolved = match &read {
+                    Some(v) => check_reported(spec, &outcome.outputs)
+                        .map(|()| vec![(spec.output().as_str().to_string(), v.clone())]),
+                    None => resolve_outputs(
+                        &self.data_root,
+                        spec,
+                        fingerprint,
+                        &outcome.outputs,
+                        &*self.sink,
+                    ),
+                };
+                let resolved = match resolved {
                     Ok(r) => r,
                     Err(e) => return failed(FailureKind::Data, format!("{e:#}")),
                 };
@@ -483,10 +522,21 @@ impl Runner {
                 }
             }
             Err(step_err) => {
-                // What a failed step vouched for it did commit, and its
-                // consumers read it (plans/supervisor.md §2.5). Only the
-                // reported outputs: an unreported one may be mid-write.
-                if !step_err.outputs.is_empty() {
+                // What a failed step committed, its consumers read
+                // (plans/supervisor.md §2.5). A store's `main` holds only
+                // what was published; without a store, only what the step
+                // reported, since an unreported tree may be mid-write.
+                if let Some(v) = read {
+                    let path = spec.output().as_str().to_string();
+                    changed_now.insert(path.clone(), prior.get(&path) != Some(&v));
+                    facts.sinks[i] = Some(v.clone());
+                    state
+                        .steps
+                        .entry(spec.id.clone())
+                        .or_default()
+                        .output_versions
+                        .insert(path, v);
+                } else if !step_err.outputs.is_empty() {
                     if let Ok(resolved) = resolve_outputs(
                         &self.data_root,
                         spec,
@@ -506,6 +556,25 @@ impl Runner {
             }
         }
     }
+}
+
+/// A step reports only on the tree it writes; the version itself is read
+/// from the store.
+fn check_reported(
+    spec: &crate::step::StepSpec,
+    reported: &[crate::step::ArtifactState],
+) -> Result<()> {
+    let output = spec.output();
+    for r in reported {
+        anyhow::ensure!(
+            r.path.as_str() == output.as_str(),
+            "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
+            spec.id,
+            r.path.as_str(),
+            output.as_str()
+        );
+    }
+    Ok(())
 }
 
 /// Resolves when a stop has been asked for; never, with no stop wired.

@@ -850,6 +850,79 @@ mod tests {
         .input(input)
     }
 
+    /// A doltlite store with one table and one commit on `main`; its head.
+    async fn committed_store(path: &std::path::Path) -> String {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        for sql in [
+            "CREATE TABLE t (x INTEGER)",
+            "INSERT INTO t VALUES (1)",
+            "SELECT dolt_commit('-Am', 'seal')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        head
+    }
+
+    /// A step's checkpoint and its outcome name one commit in two spellings
+    /// — a bare hash on the seal, `store:<hash>` on the outcome, as render
+    /// does. The runner reads the store rather than comparing the strings,
+    /// so finishing on the commit it last sealed moves nothing and the
+    /// consumer does not run a second time.
+    #[tokio::test]
+    async fn finishing_on_the_commit_already_sealed_does_not_run_the_consumer_again() {
+        let root = tempfile::tempdir().unwrap();
+        let passes = Arc::new(AtomicU32::new(0));
+        let producer = StepSpec::new(
+            "src/rendered_md",
+            StepRun::in_process({
+                let passes = passes.clone();
+                move |ctx: StepCtx| {
+                    let passes = passes.clone();
+                    async move {
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let head = committed_store(&dir.join("store.doltlite_db")).await;
+                        ctx.checkpoint(&head);
+                        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                        while passes.load(Ordering::SeqCst) == 0 {
+                            assert!(std::time::Instant::now() < deadline, "no pass on the seal");
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, format!("store:{head}"))],
+                            exit: None,
+                        })
+                    }
+                }
+            }),
+        )
+        .streams_output();
+        let graph = Graph::build(vec![
+            producer,
+            counting_consumer("unified_index/grid", "src/rendered_md", passes.clone()),
+        ])
+        .unwrap();
+
+        let report = runner(root.path()).run(&graph).await.unwrap();
+        assert!(report.all_ok(), "{report:#?}");
+        assert_eq!(passes.load(Ordering::SeqCst), 1, "{report:#?}");
+    }
+
     /// The S of USE, from what the producer says: each seal's rows go on
     /// the consumer's queue, and each pass the consumer completes takes
     /// off everything up to the version it read. The sequence is the
