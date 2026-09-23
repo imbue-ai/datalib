@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::progress::Progress;
+use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
 use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow};
@@ -250,33 +250,40 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         devices: opts.sync.devices.len(),
         ..Default::default()
     };
-    opts.progress
-        .set_length(Some(opts.sync.devices.len() as u64));
     let now_ms = Utc::now().timestamp_millis();
     // Diff the per-device `start` dates against the ones that produced
     // the stored resume cursors. `None` (fresh store, or one written before
     // `sync_scope_config` existed) plans no backfill.
     let prior_scope_cfg =
         datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
+
+    // Every device's resume point first, so the bar counts requests (one
+    // per window) rather than devices, which finish in uneven lumps.
+    let mut plans = Vec::with_capacity(opts.sync.devices.len());
     for dev in &opts.sync.devices {
-        opts.progress.set_message(&format!("yolink: {}", dev.name));
         let prior_start = prior_start_for(prior_scope_cfg.as_ref(), &dev.name);
-        if let Err(e) = fetch_device(
-            &db,
-            dev,
-            prior_start.as_deref(),
-            overlap_ms,
-            stride_ms,
-            window_ms,
-            now_ms,
-            &mut s,
-        )
-        .await
+        match plan_device(&db, dev, prior_start.as_deref(), overlap_ms).await {
+            Ok(cursor) => plans.push((dev, cursor)),
+            Err(e) => {
+                s.errors += 1;
+                warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
+            }
+        }
+    }
+    let requests: u64 = plans
+        .iter()
+        .map(|(_, cursor)| window_count(*cursor, now_ms, stride_ms))
+        .sum();
+    let bar = RunBar::new(&opts.progress, requests);
+
+    for (dev, cursor) in plans {
+        bar.doing(&format!("yolink: {}", dev.name));
+        if let Err(e) =
+            walk_device(&db, dev, cursor, stride_ms, window_ms, now_ms, &bar, &mut s).await
         {
             s.errors += 1;
             warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"), "a device could not be fetched");
         }
-        opts.progress.inc(1);
     }
     // Record the config only when every device succeeded: a device that
     // errored hasn't covered its widened `start`, and the blob is one
@@ -289,6 +296,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     )
     .await;
     Ok(s)
+}
+
+/// How many windows `walk_device` requests walking from `cursor` to
+/// `now_ms`: one per stride, the last one cut short at `now_ms`.
+fn window_count(cursor: i64, now_ms: i64, stride_ms: i64) -> u64 {
+    if cursor >= now_ms {
+        return 0;
+    }
+    let stride = stride_ms.max(1) as u128;
+    let span = (now_ms as i128 - cursor as i128) as u128;
+    span.div_ceil(stride) as u64
 }
 
 /// What the resume decision did, for the caller to log.
@@ -312,7 +330,7 @@ enum CursorNote {
 /// Where this run should begin walking for one device.
 ///
 /// Pure so the config-change branches are testable without a transport;
-/// `fetch_device` shells out to curl.
+/// `walk_device` shells out to curl.
 fn resume_cursor(
     stored_ms: Option<i64>,
     start_ms: i64,
@@ -335,17 +353,13 @@ fn resume_cursor(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn fetch_device(
+/// Record the device and decide where this run's walk of it begins.
+async fn plan_device(
     db: &RawDb,
     dev: &YolinkDevice,
     prior_start: Option<&str>,
     overlap_ms: i64,
-    stride_ms: i64,
-    window_ms: i64,
-    now_ms: i64,
-    s: &mut FetchSummary,
-) -> Result<()> {
+) -> Result<i64> {
     let start_ms = NaiveDate::parse_from_str(&dev.start, "%Y-%m-%d")
         .with_context(|| format!("device {:?} start", dev.name))?
         .and_hms_opt(0, 0, 0)
@@ -400,8 +414,20 @@ async fn fetch_device(
         ),
         CursorNote::Normal => {}
     }
-    let mut cursor = cursor_start;
+    Ok(cursor_start)
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn walk_device(
+    db: &RawDb,
+    dev: &YolinkDevice,
+    mut cursor: i64,
+    stride_ms: i64,
+    window_ms: i64,
+    now_ms: i64,
+    bar: &RunBar,
+    s: &mut FetchSummary,
+) -> Result<()> {
     info!(event = "yolink_begin", device = %dev.name, cursor, now_ms, "fetching one device");
 
     // Tolerate per-window failures (a single 4xx or transient curl error
@@ -425,6 +451,7 @@ async fn fetch_device(
             Ok::<_, anyhow::Error>(upserted)
         }
         .await;
+        bar.did(1);
         let upserted = match window_result {
             Ok(v) => {
                 consecutive_failures = 0;
@@ -715,6 +742,35 @@ mod scope_config_tests {
         let (c, note) = resume_cursor(Some(10 * HOUR), 50 * HOUR, HOUR, false, true);
         assert_eq!(c, 50 * HOUR, "start wins; the gap is what it asks for");
         assert_eq!(note, CursorNote::SkipsAhead);
+    }
+
+    /// The bar's total is this count, so it must match the walk loop's
+    /// request count exactly or "N queued" ends above zero.
+    #[test]
+    fn window_count_matches_the_walk() {
+        let walk = |mut c: i64, now: i64, stride: i64| {
+            let mut n = 0;
+            while c < now {
+                n += 1;
+                c = c.saturating_add(stride).max(c + 1);
+            }
+            n
+        };
+        for (c, now, stride) in [
+            (0, 0, HOUR),
+            (5, 0, HOUR),
+            (0, HOUR, HOUR),
+            (0, HOUR + 1, HOUR),
+            (0, 10 * HOUR - 1, HOUR),
+            (3, 1_000, 7),
+            (0, 5, 0),
+        ] {
+            assert_eq!(
+                window_count(c, now, stride),
+                walk(c, now, stride),
+                "{c} {now} {stride}"
+            );
+        }
     }
 
     #[test]
