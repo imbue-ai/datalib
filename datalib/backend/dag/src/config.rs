@@ -268,6 +268,11 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
+    /// Whether this step's program stops itself when the runner goes
+    /// away. `None` takes the default for its kind: a built-in step
+    /// does, an arbitrary `command` does not. See
+    /// `docs/dev/step_protocol.md` § stdin before setting it.
+    pub watches_runner: Option<bool>,
 }
 
 /// A `[[steps]]` table exactly as a person writes it. Either `group` and
@@ -294,6 +299,8 @@ struct StepTable {
     env: BTreeMap<String, String>,
     #[serde(default)]
     code_version: Option<String>,
+    #[serde(default)]
+    watches_runner: Option<bool>,
 }
 
 impl TryFrom<StepTable> for StepEntry {
@@ -339,6 +346,7 @@ impl TryFrom<StepTable> for StepEntry {
             name: t.name,
             inputs: t.inputs,
             command: t.command,
+            watches_runner: t.watches_runner,
             params: t.params,
             env: t.env,
             code_version: t.code_version,
@@ -1246,7 +1254,20 @@ fn spec_of(
             t.to_string(),
         );
     }
-    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
+    // A built-in step is `datalib-step`, which watches the pipe; an
+    // arbitrary command is assumed not to, because handing one to a
+    // program that ignores it buys nothing and costs a hang if the
+    // program reads stdin. Either way the config can say otherwise.
+    let watches_runner = e.watches_runner.unwrap_or(e.command.is_none());
+    let mut spec = StepSpec::new(
+        &e.id,
+        StepRun::Subprocess {
+            argv,
+            env,
+            params,
+            watches_runner,
+        },
+    );
     spec.code_version = e.code_version.clone();
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);

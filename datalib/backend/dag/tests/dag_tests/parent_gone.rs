@@ -97,33 +97,24 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
 
 /// A step stops itself when the *runner* is SIGKILLed, which runs no
 /// runner code at all: `kill_children` never gets a chance, and nothing
-/// else ever signals a step. `datalib-step` therefore holds a pipe from
-/// the runner and stops when it reads EOF on it.
+/// else ever signals a step. A step that says it watches the runner is
+/// given a pipe from it, and stops when it reads EOF on that.
 ///
-/// Only a step whose program is `datalib-step` is given that pipe, so
-/// the stand-in here is the parent-watch probe copied to that name —
-/// which is exactly the rule the runner applies. A `command` step is
-/// still handed `/dev/null`, because a program that does not watch the
-/// pipe gains nothing from holding one and one that reads stdin would
-/// block on it.
-///
-/// Without the pipe the probe watches nothing, sleeps for an hour, and
-/// this times out.
+/// `watches_runner` is a declaration about the program, so the step here
+/// is the parent-watch probe — what a program that honours it looks
+/// like. Without the pipe the probe watches nothing, sleeps for an hour,
+/// and this times out.
 #[test]
-fn a_builtin_step_exits_when_the_runner_itself_is_sigkilled() {
+fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().canonicalize().unwrap();
-
-    // `is_datalib_step` matches on the program's name, so a copy under
-    // that name is a built-in step as far as the runner is concerned.
-    let step_bin = root.join("datalib-step");
-    std::fs::copy(env_path("PARENT_WATCH_PROBE"), &step_bin).expect("copy the probe");
     let pid_file = root.join("step.pid");
     std::fs::write(
         root.join("config.toml"),
         format!(
-            "[[steps]]\nid = \"watched/step\"\ncommand = \"'{}' child\"\n",
-            step_bin.display()
+            "[[steps]]\nid = \"watched/step\"\n\
+             command = \"'{}' child\"\nwatches_runner = true\n",
+            env_path("PARENT_WATCH_PROBE")
         ),
     )
     .unwrap();
@@ -131,9 +122,9 @@ fn a_builtin_step_exits_when_the_runner_itself_is_sigkilled() {
     let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
         .args(["exec", &env_path("DATALIB_DAG_BIN")])
         .arg(root.join("config.toml"))
-        // Inherited down through the runner to the step: the runner
-        // reports the step's pid to nobody, and its stdout is the event
-        // stream rather than something this test can read a pid off.
+        // Inherited down through the runner to the step. The runner's own
+        // stdout is the event stream, so there is nowhere else to read
+        // the step's pid from.
         .env("PARENT_WATCH_PID_FILE", &pid_file)
         .stdout(Stdio::piped())
         .spawn()

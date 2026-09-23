@@ -473,27 +473,39 @@ after twenty seconds of a wedged runner. `subprocess.rs` used to say
 "a SIGKILL at the runner runs no Rust and leaves the steps behind";
 that sentence is now gone.
 
-**Only `datalib-step` gets the pipe. A `command` step keeps
-`/dev/null`.** The first cut of this gave every step the pipe and called
-stdin part of the protocol, which was wrong in a way worth recording:
-the protection needs the child to *watch* the pipe, so an arbitrary
-program gains nothing from holding one — while a program that reads
-stdin expecting the immediate EOF `/dev/null` gives would block on a
-pipe nobody writes to. That is a hung step holding its store open: the
-disease, not the cure. Measured — forcing every step onto the pipe turns
-`an_arbitrary_step_keeps_dev_null_on_stdin` into a 90-second timeout on
-its `cat`.
+**The pipe is opt-in: `watches_runner` on the step.** A built-in step
+declares it by default, a `command` step defaults to false, and either
+can say otherwise. Getting to that took two wrong turns worth recording.
 
-So the trade is only made where cooperation is guaranteed. The cost is
-that a custom step is not cleaned up after a SIGKILLed runner;
-`step_protocol.md` says so plainly, and a flag can be added when
-something needs one.
+The first cut gave *every* step the pipe and called stdin part of the
+protocol. That is backwards: the protection needs the child to *watch*
+the pipe, so an arbitrary program gains nothing from holding one — while
+a program that reads stdin expecting the immediate EOF `/dev/null` gives
+blocks on a pipe nobody writes to. A hung step holding its store open is
+the disease, not the cure. Measured: forcing every step onto the pipe
+turns `an_arbitrary_step_keeps_dev_null_on_stdin` into a 90-second
+timeout on its `cat`.
 
-Two guards, each watched failing against the behaviour it forbids:
-`parent_gone::a_builtin_step_exits_when_the_runner_itself_is_sigkilled`
-(fails with *"the step outlived the runner that was SIGKILLed"* without
-the pipe) and `an_arbitrary_step_keeps_dev_null_on_stdin` (hangs if the
-pipe is handed out too widely).
+The second cut keyed the decision off the program's *name*
+(`is_datalib_step`). Three things were wrong with that. It is implicit —
+wrap or rename the binary and the behaviour changes silently. It put a
+decision inside the imperative spawn path when it is a pure function of
+the config, against `style.md`. And the test had to copy the probe to a
+file called `datalib-step` to reach the path at all: when a test has to
+spoof an identity, the code is keyed on the wrong thing.
+
+So the config declares it. `watches_runner` is an assertion about the
+program — that it watches stdin for EOF — which is exactly the kind of
+thing only the person writing the config can know. It also gives a
+custom step a way to ask, which the name-based rule denied it.
+
+Three guards, each watched failing against the behaviour it forbids:
+`parent_gone::a_watching_step_exits_when_the_runner_itself_is_sigkilled`
+(with the flag off: *"the step outlived the runner that was
+SIGKILLed"*), `a_watching_step_is_handed_the_parent_pipe` (the flag's
+two halves travel together — `exit_with_parent` refuses the variable
+without a pipe), and `an_arbitrary_step_keeps_dev_null_on_stdin` (hangs
+if the pipe is handed out unasked).
 
 ### Decided, no PR — Gmail's quota ceiling
 

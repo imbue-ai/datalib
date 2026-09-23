@@ -315,15 +315,16 @@ The scheduler models the same distinction: an artifact that doesn't
 exist hashes to the distinguished version `absent`
 (`datalib_dag::version::ABSENT`) rather than being an error state.
 
-## stdin: nothing to read
+## stdin: nothing to read, unless you ask
 
-**Your step is given `/dev/null` on stdin.** Read it and you get an
-immediate end-of-file; there is no input channel, and adding one is not
-planned. Everything a step is told arrives as environment variables, the
-`--params-file`, and its declared inputs.
+**By default your step is given `/dev/null` on stdin.** Read it and you
+get an immediate end-of-file; there is no input channel. Everything a
+step is told arrives as environment variables, the `--params-file`, and
+its declared inputs.
 
-The one exception is `datalib-step` itself, and it is worth knowing why
-the exception is not offered to you by default.
+The exception is opt-in, and worth understanding before you take it.
+
+### Why a step might want a pipe there
 
 The runner normally stops its steps by signalling them: SIGINT on a
 cancel, SIGKILL for anything still running as it exits. Both need the
@@ -333,24 +334,55 @@ nothing else ever signals a step, a step that waits to be told would
 carry on with its store open and nobody recording how the run ended.
 
 What survives a SIGKILL is the kernel closing the dead process' file
-descriptors. So for a built-in step the runner sets
-`DATALIB_PARENT_PIPE=1` and puts a pipe on stdin instead; `datalib-step`
-watches it, and treats end-of-file as "the runner is gone".
+descriptors. So the runner can put a pipe on stdin, hold the other end,
+and set `DATALIB_PARENT_PIPE=1`. End-of-file on that pipe means the
+runner is gone.
 
-**A `command` step is deliberately left on `/dev/null`.** The protection
-only works if the program watches the pipe, so handing one to a program
-that does not watch it buys nothing — and it would cost something real:
-a program that reads stdin expecting the immediate end-of-file
-`/dev/null` gives would block on a pipe nobody ever writes to, which is
-a hung step holding its store open. That is a worse failure than the one
-being prevented, so the trade is only worth making where the program is
-known to cooperate.
+### Asking for it
 
-The consequence, stated plainly: **a custom step is not cleaned up after
-a runner that was SIGKILLed.** It keeps running until something else
-stops it. If that matters for a step you are writing, say so — the
-runner can hand the pipe to a step that asks for it, and the reason
-there is no flag for it yet is that nothing has needed one.
+```toml
+[[steps]]
+id = "mine/step"
+command = "my-step-program"
+watches_runner = true
+```
+
+`watches_runner` is an assertion **about your program**: that it watches
+stdin for end-of-file and stops itself when that arrives. A built-in
+step (one with no `command`, which runs `datalib-step`) declares it by
+default; anything else defaults to `false`.
+
+In Rust, honouring it is one call at startup:
+
+```rust
+datalib_parent_watch::exit_with_parent(|| { /* stop; see below */ })?;
+```
+
+In any other language, watch fd 0 for end-of-file yourself.
+
+### Why it is not the default
+
+The protection only works if your program watches the pipe. Handing one
+to a program that ignores it buys nothing — and costs something real: a
+program that reads stdin expecting the immediate end-of-file
+`/dev/null` gives would block on a pipe nobody ever writes to. That is a
+hung step holding its store open, which is a worse failure than the one
+being prevented. So the runner is told rather than left to guess.
+
+**If you set it and do not honour it, do not read stdin.** The runner
+holds the write end open for as long as it lives, so a read blocks until
+the run ends.
+
+### What to do when the pipe closes
+
+Take down what *you* spawned, not just yourself. The runner starts each
+step as its own process-group leader — so that a signal aimed at a step
+reaches a `node` the step wrapped — which makes `kill(0, SIGINT)`
+exactly "me and my children". That is what `datalib-step` does, and its
+ordinary SIGINT handler then seals and exits.
+
+Without `watches_runner`, a step is not cleaned up after a runner that
+was SIGKILLed: it keeps running until something else stops it.
 
 ## stderr: logging
 

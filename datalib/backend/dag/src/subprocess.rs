@@ -139,10 +139,12 @@ impl WireOutcome {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_subprocess(
     argv: &[String],
     env: &BTreeMap<String, String>,
     params: Option<&str>,
+    watches_runner: bool,
     extra_env: &BTreeMap<String, String>,
     attempt: u32,
     ctx: &StepCtx,
@@ -196,18 +198,17 @@ pub(crate) async fn run_subprocess(
         // leave an orphaned download running.
         .kill_on_drop(true);
 
-    // Only `datalib-step` is handed a parent pipe. Reading EOF on it is
-    // how a step notices a runner that died without running any code — a
-    // SIGKILL, an abort, the OOM killer — which is the one case
-    // `kill_children` cannot reach. It is deliberately not given to an
-    // arbitrary `command` step: the protection needs the child to watch
-    // the pipe, so a program that does not cooperate gains nothing from
-    // holding one, and a program that reads stdin expecting the `/dev/null`
-    // it used to get would block on it forever instead.
+    // A step that says it watches the runner gets the pipe to watch:
+    // reading EOF on it is how it notices a runner that died without
+    // running any code — a SIGKILL, an abort, the OOM killer — which is
+    // the one case `kill_children` cannot reach. Everything else keeps
+    // `/dev/null`, because the protection needs the child to watch, so a
+    // program that does not gains nothing from holding a pipe and would
+    // block forever if it read stdin expecting an immediate EOF.
     //
     // The write end stays on the child handle: take it and the step reads
     // EOF at once and exits, believing the runner is already gone.
-    if crate::config::is_datalib_step(prog) {
+    if watches_runner {
         cmd.env(datalib_parent_watch::ENV_VAR, "1")
             .stdin(Stdio::piped());
     } else {
@@ -643,6 +644,24 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
             env: BTreeMap::new(),
             params: None,
+            watches_runner: false,
+        }
+    }
+
+    /// The same, for a step whose program claims to watch the runner and
+    /// so is handed the parent pipe on stdin.
+    fn sh_watching(script: &str) -> StepRun {
+        let StepRun::Subprocess {
+            argv, env, params, ..
+        } = sh(script)
+        else {
+            unreachable!("sh builds a subprocess")
+        };
+        StepRun::Subprocess {
+            argv,
+            env,
+            params,
+            watches_runner: true,
         }
     }
 
@@ -701,6 +720,41 @@ mod tests {
                 .expect("the step wrote what it saw")
                 .trim(),
             "not-a-pipe unset",
+        );
+    }
+
+    /// A step that declares it watches the runner is handed both halves
+    /// `datalib_parent_watch::exit_with_parent` needs: the pipe on stdin
+    /// and `DATALIB_PARENT_PIPE`. It refuses to start given the variable
+    /// without a pipe, so the two have to travel together.
+    ///
+    /// Note what this step does *not* do: read stdin. The runner holds
+    /// the write end open for as long as it lives, so a read would block
+    /// until the run ended.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_watching_step_is_handed_the_parent_pipe() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "g/out",
+            sh_watching(
+                r#"
+                out="$DATALIB_DAG_DATA_ROOT/g/out"
+                mkdir -p "$out"
+                if [ -p /dev/fd/0 ]; then kind=pipe; else kind=not-a-pipe; fi
+                echo "$kind ${DATALIB_PARENT_PIPE:-unset}" > "$out/stdin"
+            "#,
+            ),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let data_root = root.path().to_path_buf();
+        Runner::new(data_root).run(&g).await.expect("the run");
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("g/out/stdin"))
+                .expect("the step wrote what it saw")
+                .trim(),
+            "pipe 1",
         );
     }
 
@@ -831,6 +885,7 @@ mod tests {
                 ],
                 env: BTreeMap::new(),
                 params: Some(r#"{"token":"s3cret"}"#.into()),
+                watches_runner: false,
             },
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1146,6 +1201,7 @@ mod tests {
                 ],
                 env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
                 params: None,
+                watches_runner: false,
             },
         );
         let g = Graph::build(vec![spec]).unwrap();

@@ -154,7 +154,13 @@ impl Runner {
                 .get(&target.step)
                 .with_context(|| format!("--reset {}: no such step", target.step))?;
             let spec = &graph.steps[i];
-            let StepRun::Subprocess { argv, env, .. } = &spec.run else {
+            let StepRun::Subprocess {
+                argv,
+                env,
+                watches_runner,
+                ..
+            } = &spec.run
+            else {
                 anyhow::bail!("--reset {}: not a subprocess step", target.step);
             };
             let ctx = StepCtx {
@@ -181,9 +187,17 @@ impl Runner {
                     .first()
                     .is_some_and(|prog| crate::config::is_datalib_step(prog)),
             });
-            let result =
-                crate::subprocess::run_subprocess(argv, env, None, &child_env, 1, &ctx, &self.sink)
-                    .await;
+            let result = crate::subprocess::run_subprocess(
+                argv,
+                env,
+                None,
+                *watches_runner,
+                &child_env,
+                1,
+                &ctx,
+                &self.sink,
+            )
+            .await;
             let (status, error) = match &result {
                 Ok(_) => (RunState::Succeeded, None),
                 Err(e) => (RunState::Failed, Some(format!("{:#}", e.error))),
@@ -576,11 +590,17 @@ pub(crate) async fn invoke_with_retry(
         });
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
-            StepRun::Subprocess { argv, env, params } => {
+            StepRun::Subprocess {
+                argv,
+                env,
+                params,
+                watches_runner,
+            } => {
                 crate::subprocess::run_subprocess(
                     argv,
                     env,
                     params.as_deref(),
+                    *watches_runner,
                     child_env,
                     attempt,
                     &ctx,
