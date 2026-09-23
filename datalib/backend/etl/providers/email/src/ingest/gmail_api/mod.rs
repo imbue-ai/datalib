@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::download_problems::{self, DownloadProblem};
+use datalib_etl::download_problems::{self, DownloadProblem, RecordProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::{Progress, RunBar};
@@ -113,7 +113,17 @@ pub struct FetchSummary {
     /// than fatal: one misspelling costs that label, not the run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<DownloadProblem>,
+    /// Messages upstream named that would not fetch or would not store.
+    /// Keyed by Gmail's own id, because a fetch that fails never gets
+    /// far enough to mint one of ours. Not serialised: the rows go to
+    /// the store, and the summary is a log line.
+    #[serde(skip)]
+    pub records: Vec<datalib_etl::download_problems::RecordProblem>,
 }
+
+/// The raw table Gmail's own message ids key. Named here so a problem
+/// row and the table it points at cannot drift apart.
+const GMAIL_MESSAGES_TABLE: &str = "gmail_messages";
 
 fn state_scope(account_id: &str) -> String {
     format!("gmail:{account_id}:historyId")
@@ -438,6 +448,9 @@ async fn run_sync(
     }
 
     summary.quota_units_spent = throttle.spent_total();
+    // After the walk, so the set is this run's whole answer: it replaces
+    // the last run's, and a message that fetched this time drops off.
+    download_problems::report_records(db.pool(), &summary.records).await;
     info!(
         event = "gmail_summary",
         account = %account_id,
@@ -453,6 +466,7 @@ async fn run_sync(
         quota_units_spent = summary.quota_units_spent,
         full_sync = summary.full_sync,
         backfilled_labels = %summary.backfilled_labels.join(", "),
+        records_unfetched = summary.records.len(),
         "gmail sync finished",
     );
     Ok(summary)
@@ -788,6 +802,16 @@ async fn fetch_ids(
                 // still want it. Counted, and the count holds the cursor.
                 warn!(event = "gmail_message_failed", id = %id, error = %e, "a message could not be fetched");
                 summary.messages_failed += 1;
+                // A cancel that lands mid-backoff arrives here as an
+                // error, and it is not one: nobody wants "you stopped
+                // this" on the Manage screen as a fetch that failed.
+                if !opts.control.stop.requested() {
+                    summary.records.push(RecordProblem::new(
+                        GMAIL_MESSAGES_TABLE,
+                        id,
+                        format!("{e}"),
+                    ));
+                }
                 state.bar.did(1);
                 continue;
             }
@@ -798,7 +822,15 @@ async fn fetch_ids(
         let ingested = match ingest::ingest(state.account_id, state.index, &msg) {
             Ok(i) => i,
             Err(e) => {
+                // Fetched but unusable: the bytes came back and we could
+                // not make a record of them. A person wants to know
+                // which message, and a `warn!` reaches nobody.
                 warn!(event = "gmail_ingest_failed", id = %msg.id, error = %e, "a message could not be stored");
+                summary.records.push(RecordProblem::new(
+                    GMAIL_MESSAGES_TABLE,
+                    &msg.id,
+                    format!("{e}"),
+                ));
                 continue;
             }
         };

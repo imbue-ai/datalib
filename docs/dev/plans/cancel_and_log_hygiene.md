@@ -1,8 +1,8 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1, 2 and 3 landed (#682, #686, #692, #697, #700); 4 to 7
-are open, and 4 and 5 were not what this doc first said they were —
-each says so in its own section. Last read against the tree
+**Status: PRs 1 to 4 landed (#682, #686, #692, #697, #700); 5 is void
+and 6 and 7 are open. PRs 3, 4 and 5 were none of them what this doc
+first said they were — each says so in its own section. Last read against the tree
 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
 `787c1a4c`, not inferred. §2 is the work, one section per change.
@@ -360,31 +360,38 @@ The `media` provider has the same shape
 (`the_payload_ceiling_leaves_null_and_is_counted`) and is still worth
 checking.
 
-### PR 4 — A Gmail fetch failure reaches the `problems` table
+### PR 4 — A Gmail fetch failure reaches the `problems` table — **done**
 
-**Costs a schema change, which this doc first missed.** `summary.problems`
-is the wrong channel: `DownloadProblem` is keyed on `setting` / `value`
-and describes a *configured entry* upstream does not have, not a record
-that would not fetch. The right channel is `record_object_error`, as
-claude, notion, chatgpt and garmin all use.
+**No schema change, which this doc twice got wrong.** It first said
+`summary.problems`, which is the wrong channel — `DownloadProblem` is
+keyed on `setting` / `value` and describes a *configured entry* upstream
+does not have. It then said a `gmail_messages_bookkeeping` sidecar and a
+minor version bump. Neither was needed:
 
-Two things stand in the way. The email provider calls it nowhere today,
-so this is the first per-record problem it reports. And
-`record_object_attempt` writes `{table}_bookkeeping`, which
-`gmail_messages` does not have — `emails`, `accounts`, `email_blobs`,
-`threads` and `mailboxes` do, and it does not (checked against the live
-store, not the schema alone). Scoping the row to `emails` instead is no
-escape: at the moment a fetch fails there is no email id yet, which is
-the whole reason `Scope::Entity` takes the raw id.
+- An absent table is simply created on open; only the store's cursors
+  are cleared, so the next run walks from the start (`etl/README.md`
+  §"Schema self-healing"). No refusal, no ladder rung, no bump.
+- But `gmail_messages` is the wrong table for a sidecar anyway. Its own
+  comment calls it "Gmail's own message id → the row it produced", and
+  it is filed under *cursor table*, deliberately outside `DATA_TABLES`,
+  which is what gets bookkeeping. A sidecar there would model a mapping
+  as a fetched entity.
 
-So it needs a bookkeeping sidecar for `gmail_messages` — a raw-store
-shape change, a minor version bump, and a line in the commit message
-saying what it invalidates (`schema_migrations.md`).
+So `download_problems::report_records` writes the row directly, keyed
+`record:gmail_messages:<id>`, through the same `replace_prefixed` the
+other two reporters use — this run's set replaces the last one's, and a
+message that fetches this time stops being a problem without anyone
+deleting a row.
 
-Still check the stop flag first and write no row when the cause was a
-cancel, per §1.3. This is one concrete instance of the per-provider
-fetch tail that [`problem_visibility.md`](problem_visibility.md) §3
-lists as still open.
+That is a second way to say "a record did not fetch", beside
+`record_object_error`. The two are for different situations and the
+choice between them is not free: use `record_object_error` wherever the
+record has a `_bookkeeping` sidecar to stamp, and this only where a
+fetch fails before an id in our own keyspace exists.
+
+A cancel that lands mid-backoff arrives as an ordinary error, so both
+sites check the stop flag first and write no row — "you stopped this" is
+not a fetch failure.
 
 ### PR 5 — ~~The downgrade guard can read the run store~~ (void)
 

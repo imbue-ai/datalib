@@ -316,6 +316,79 @@ pub async fn report_run(pool: &sqlx::SqlitePool, problems: &[RunProblem]) {
     }
 }
 
+/// One record a download could not fetch, named by the id **upstream**
+/// uses for it.
+///
+/// The other way to report this is
+/// [`crate::doltlite_raw::record_object_error`], and it is the right one
+/// wherever the record has a `_bookkeeping` sidecar to stamp. This is
+/// for the case that has none: a fetch that fails never reaches the
+/// point of minting an id in our own keyspace, so the only name the run
+/// has for it is the one upstream gave. Gmail is the example —
+/// `gmail_messages` maps Gmail's id to the row it produced, and a
+/// message that would not fetch produced none.
+#[derive(Debug, Clone)]
+pub struct RecordProblem {
+    /// The raw table the id belongs to, e.g. `gmail_messages`.
+    pub table: String,
+    /// Upstream's id.
+    pub id: String,
+    /// What upstream said.
+    pub detail: String,
+}
+
+/// The sweep key's prefix of a per-record row: every row
+/// [`report_records`] writes, and only those, so a run's report
+/// replaces the last one's whole and a record that fetches this time
+/// stops being a problem.
+const RECORD_PREFIX: &str = "record:";
+
+impl RecordProblem {
+    pub fn new(table: &str, id: &str, detail: impl Into<String>) -> Self {
+        Self {
+            table: table.to_string(),
+            id: id.to_string(),
+            detail: detail.into(),
+        }
+    }
+
+    fn key(&self) -> String {
+        format!("{RECORD_PREFIX}{}:{}", self.table, self.id)
+    }
+}
+
+/// Records this run could not fetch. Replaces the previous run's set,
+/// so one that succeeds this time drops off by itself.
+pub async fn report_records(pool: &sqlx::SqlitePool, problems: &[RecordProblem]) {
+    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    for p in problems {
+        tracing::warn!(
+            event = "record_problem",
+            table = %p.table,
+            id = %p.id,
+            detail = %p.detail,
+            "a record upstream named could not be fetched; it is missing from the mirror",
+        );
+    }
+    let rows: Vec<(String, Outcome, Problem)> = problems
+        .iter()
+        .map(|p| {
+            (
+                p.key(),
+                Outcome::Dropped,
+                Problem::record(Reason::FetchFailed, &p.detail).severity(Severity::Error),
+            )
+        })
+        .collect();
+    if let Err(e) = replace_prefixed(pool, &[RECORD_PREFIX], &rows).await {
+        tracing::warn!(
+            error = %format!("{e:#}"),
+            "record_problem: could not record the records that would not fetch; \
+             the Manage row will not show them"
+        );
+    }
+}
+
 /// Delete every entity-scoped row whose key starts with one of
 /// `prefixes`, then write `rows`, in one transaction. A key that was
 /// there before keeps its `first_seen_at_utc`, so the screen can say
@@ -381,6 +454,69 @@ async fn replace_prefixed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record that would not fetch is a `problems` row keyed by the id
+    /// upstream uses, and the next run's report replaces it — so one
+    /// that fetches this time stops being a problem without anyone
+    /// deleting anything.
+    #[tokio::test]
+    async fn a_record_that_would_not_fetch_is_reported_until_it_does() {
+        use datalib_problems::Severity;
+        let d = tempfile::tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(&d.path().join("r.doltlite_db"), &[])
+            .await
+            .unwrap();
+        let rows = |pool: &sqlx::SqlitePool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, String, String)>(
+                    "SELECT scope_key, severity, sample FROM problems ORDER BY scope_key",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+
+        report_records(
+            &pool,
+            &[
+                RecordProblem::new("gmail_messages", "1a0b526fbb117cd1", "HTTP 403"),
+                RecordProblem::new("gmail_messages", "1a0ac00e42c0c4b8", "HTTP 500"),
+            ],
+        )
+        .await;
+        let first = rows(&pool).await;
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].0, "record:gmail_messages:1a0ac00e42c0c4b8");
+        assert_eq!(
+            first[0].1,
+            Severity::Error.as_str(),
+            "the record is missing from the mirror, not stale"
+        );
+        assert_eq!(first[0].2, "HTTP 500");
+
+        // The next run gets one of them.
+        report_records(
+            &pool,
+            &[RecordProblem::new(
+                "gmail_messages",
+                "1a0b526fbb117cd1",
+                "HTTP 403",
+            )],
+        )
+        .await;
+        let second = rows(&pool).await;
+        assert_eq!(
+            second.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["record:gmail_messages:1a0b526fbb117cd1"],
+            "the one that fetched is no longer a problem"
+        );
+
+        // And a clean run clears the lot.
+        report_records(&pool, &[]).await;
+        assert!(rows(&pool).await.is_empty());
+    }
 
     /// A run's report replaces the last one's: an entry the config no
     /// longer names, or that upstream now has, is gone the next run.
