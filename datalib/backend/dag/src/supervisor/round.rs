@@ -873,12 +873,18 @@ mod tests {
     }
 
     /// A source that counts its runs, and holds each run until `go` is set
-    /// — or until it is asked to stop, when it reports a cancel.
-    fn source(id: &str, runs: Arc<AtomicU32>, go: Arc<AtomicBool>) -> StepSpec {
+    /// — or until it is asked to stop, when it sets `stopped` and reports a
+    /// cancel.
+    fn source(
+        id: &str,
+        runs: Arc<AtomicU32>,
+        go: Arc<AtomicBool>,
+        stopped: Arc<AtomicBool>,
+    ) -> StepSpec {
         StepSpec::new(
             id,
             StepRun::in_process(move |ctx: StepCtx| {
-                let (runs, go) = (runs.clone(), go.clone());
+                let (runs, go, stopped) = (runs.clone(), go.clone(), stopped.clone());
                 async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     let mut stop = ctx.stop.clone();
@@ -888,6 +894,7 @@ mod tests {
                         }
                         if ctx.stop.is_requested() {
                             stop.requested().await;
+                            stopped.store(true, Ordering::SeqCst);
                             return Err(StepError::new(
                                 FailureKind::Cancelled,
                                 anyhow::anyhow!("stopped"),
@@ -907,6 +914,7 @@ mod tests {
     struct Fixture {
         root: tempfile::TempDir,
         runs: [Arc<AtomicU32>; 2],
+        stopped: [Arc<AtomicBool>; 2],
         go: Arc<AtomicBool>,
         graph: Arc<Graph>,
     }
@@ -914,15 +922,20 @@ mod tests {
     fn fixture() -> Fixture {
         let root = tempfile::tempdir().unwrap();
         let runs = [Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0))];
+        let stopped = [
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ];
         let go = Arc::new(AtomicBool::new(false));
         let graph = Graph::build(vec![
-            source("a/raw", runs[0].clone(), go.clone()),
-            source("b/raw", runs[1].clone(), go.clone()),
+            source("a/raw", runs[0].clone(), go.clone(), stopped[0].clone()),
+            source("b/raw", runs[1].clone(), go.clone(), stopped[1].clone()),
         ])
         .unwrap();
         Fixture {
             root,
             runs,
+            stopped,
             go,
             graph: Arc::new(graph),
         }
@@ -978,14 +991,10 @@ mod tests {
         .await;
 
         other.request_stop(&a, "claude").await.unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while outcome(&other, &a).await.is_none() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "a's request never closed"
-            );
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        until("the stop to reach a's step", || {
+            f.stopped[0].load(Ordering::SeqCst)
+        })
+        .await;
         f.go.store(true, Ordering::SeqCst);
 
         let report = running.await.unwrap().unwrap();
