@@ -733,7 +733,9 @@ pub async fn load_blake3_index(
 pub struct CasEdgeAccumulator {
     bundle: BlobBundle,
     edges: Vec<EdgePending>,
-    errors: Vec<(String, String)>,
+    /// Per blob: why it has no bytes. A failure and a deliberate skip
+    /// both land here, and they are told apart by the `Reason`.
+    errors: Vec<BlobNotFetched>,
     seen: std::collections::HashSet<(String, String)>,
     known_blake3: HashMap<String, String>,
 }
@@ -741,6 +743,16 @@ pub struct CasEdgeAccumulator {
 struct EdgePending {
     owning_id: String,
     ref_id: String,
+}
+
+/// One blob that ended the run without bytes, and why.
+#[derive(Debug, Clone)]
+pub struct BlobNotFetched {
+    pub ref_id: String,
+    pub detail: String,
+    /// `FetchFailed` for something that went wrong; anything else is a
+    /// rule we applied on purpose.
+    pub reason: datalib_problems::Reason,
 }
 
 impl CasEdgeAccumulator {
@@ -797,8 +809,35 @@ impl CasEdgeAccumulator {
 
     pub fn add_failed(&mut self, owning_id: &str, ref_id: &str, err: impl Into<String>) {
         self.push_edge(owning_id, ref_id);
-        self.errors.push((ref_id.to_string(), err.into()));
+        self.errors.push(BlobNotFetched {
+            ref_id: ref_id.to_string(),
+            detail: err.into(),
+            reason: datalib_problems::Reason::FetchFailed,
+        });
         self.bundle.add_error(ref_id, "fetch failed");
+    }
+
+    /// A blob the download declined to fetch, because a rule in the
+    /// config said not to. Not a failure: nothing went wrong, and the
+    /// Manage screen should not colour it as though it had.
+    ///
+    /// The bookkeeping is a failure's, which is deliberate — it is what
+    /// makes the blob eligible again if the rule is relaxed. See
+    /// `doltlite_raw::record_object_skipped`.
+    pub fn add_skipped(
+        &mut self,
+        owning_id: &str,
+        ref_id: &str,
+        reason: datalib_problems::Reason,
+        detail: impl Into<String>,
+    ) {
+        self.push_edge(owning_id, ref_id);
+        self.errors.push(BlobNotFetched {
+            ref_id: ref_id.to_string(),
+            detail: detail.into(),
+            reason,
+        });
+        self.bundle.add_error(ref_id, "not fetched");
     }
 
     pub async fn flush<T, F>(
@@ -840,11 +879,14 @@ impl CasEdgeAccumulator {
             .zip(self.edges.iter())
             .map(|(row, edge)| (row.id().to_string(), edge.ref_id.clone()))
             .collect();
-        let mut error_stamps: Vec<(String, String)> = Vec::new();
-        for (ref_id, err) in &self.errors {
+        let mut error_stamps: Vec<BlobNotFetched> = Vec::new();
+        for problem in &self.errors {
             for (row_id, edge_ref_id) in &row_id_by_index {
-                if edge_ref_id == ref_id {
-                    error_stamps.push((row_id.clone(), err.clone()));
+                if *edge_ref_id == problem.ref_id {
+                    error_stamps.push(BlobNotFetched {
+                        ref_id: row_id.clone(),
+                        ..problem.clone()
+                    });
                 }
             }
         }
@@ -870,7 +912,7 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
     cas: &BlobCas,
     cas_inserts: &[CasInsert<'_>],
     rows: &[T],
-    errors: &[(String, String)],
+    errors: &[BlobNotFetched],
 ) -> Result<()> {
     if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
         return Ok(());
@@ -886,8 +928,28 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .await
         .with_context(|| format!("begin flush_cas_edges {} tx", T::TABLE))?;
     crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
-    for (id, err) in errors {
-        crate::doltlite_raw::record_object_attempt(&mut tx, T::TABLE, id, Some(err)).await?;
+    for problem in errors {
+        match problem.reason {
+            datalib_problems::Reason::FetchFailed => {
+                crate::doltlite_raw::record_object_attempt(
+                    &mut tx,
+                    T::TABLE,
+                    &problem.ref_id,
+                    Some(&problem.detail),
+                )
+                .await?
+            }
+            reason => {
+                crate::doltlite_raw::record_object_skipped(
+                    &mut tx,
+                    T::TABLE,
+                    &problem.ref_id,
+                    reason,
+                    &problem.detail,
+                )
+                .await?
+            }
+        }
     }
     tx.commit()
         .await

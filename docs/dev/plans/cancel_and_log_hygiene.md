@@ -1,10 +1,12 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: proposal (2026-09-22). Nothing here has landed.** §1 is what
-a real data root actually contained — every number in it was read out
-of `/Users/thad/datalib/z14` at build `787c1a4c`, not inferred. §2 is
-the proposed work, one section per change. Where this doc and the tree
-disagree, the tree wins.
+**Status: PRs 1 to 4 landed (#682, #686, #692, #697, #700); 5 is void
+and 6 and 7 are open. PRs 3, 4 and 5 were none of them what this doc
+first said they were — each says so in its own section. Last read against the tree
+2026-09-23.** §1 is what a real data root actually contained — every
+number in it was read out of `/Users/thad/datalib/z14` at build
+`787c1a4c`, not inferred. §2 is the work, one section per change.
+Where this doc and the tree disagree, the tree wins.
 
 This came out of the first careful read of a live log store. The root
 had been running for about forty minutes: three sync runs over Slack,
@@ -23,9 +25,9 @@ anywhere that it happened.
 
 Around that, six smaller things: a "Slack sync failure" that is really
 a size limit the user configured, a Gmail fetch failure that reaches
-only the log, a store guard that cannot read the one store it was
-written to check, and three sources of volume that make the log harder
-to read than it needs to be.
+only the log, a store guard that warns about a root being created, and
+three sources of volume that make the log harder to read than it needs
+to be.
 
 ## 1. What the store actually contained
 
@@ -161,9 +163,10 @@ One trap for whoever fixes it: the warn actually caught in this root was
 `interrupted while waiting to retry`, which is a cancel, not a failure.
 A naive fix mints a false problem row on every cancel.
 
-### 1.4 The downgrade guard cannot read the run store
+### 1.4 The downgrade guard warned about the run store once
 
-The first warning in the file, on every launch:
+**Corrected 2026-09-23. The first reading of this, below, was wrong;
+what is left is much smaller.** The first warning in the file:
 
 ```
 downgrade guard: could not read this store's _datalib_meta; not counting it
@@ -171,16 +174,29 @@ downgrade guard: could not read this store's _datalib_meta; not counting it
   error: probe _datalib_meta: (code: 26) file is not a database
 ```
 
-[`guard.rs:124`](../../../datalib/backend/store_meta/src/guard.rs)
-deliberately appends `runs.sqlite` to the list of stores to inspect.
-[`guard.rs:88`](../../../datalib/backend/store_meta/src/guard.rs) then
-opens it with `datalib_pin::open_reader` — the doltlite reader — on a
-plain SQLite file. So the guard skips the one store it was explicitly
-told to include, deterministically, forever, and the warning goes
-nowhere.
+It was read as an engine mismatch —
+[`guard.rs`](../../../datalib/backend/store_meta/src/guard.rs) appends
+`runs.sqlite` to the stores it inspects and opens it with
+`datalib_pin::open_reader`, the doltlite reader, on a plain SQLite file —
+and so as something that failed on every launch. **Doltlite's default
+engine reads a plain SQLite file perfectly well**, measured both ways
+against this very file:
+
+```sh
+datalib-doltlite -readonly .../runs.sqlite "select count(*) from _datalib_meta"  # 6
+datalib-doltlite -readonly "file:.../runs.sqlite?doltlite_engine=sqlite" "…"      # 6
+```
+
+What the timestamps say instead: the warning is at `13:04:10.727`, two
+milliseconds after `data root: /Users/thad/datalib/z14 (created)`. The
+guard probed the run store in the instant it was being created. This log
+covers one server launch, so "on every launch" was never supported by
+it.
 
 The file is perfectly readable and its `_datalib_meta` is well formed:
 `schema_version = 9`, `store_kind = runs`, `datalib_version = 0.35.2`.
+The remaining fault is only that a root being created warns about
+itself.
 
 ### 1.5 Sealing, incremental render and the index do work
 
@@ -322,35 +338,85 @@ Today both cancelled runs are open forever and `unified_index/qmd_index`
 reads `running` in a store whose process has been dead for an hour.
 That is what the Manage screen joins against.
 
-### PR 3 — A size-limit skip is not a fetch failure
+### PR 3 — A size-limit skip is not a fetch failure — **done**
 
-- Add `Reason::OverSizeLimit` to the `closed_vocabulary!` in
-  [`problems/src/lib.rs:111`](../../../datalib/backend/problems/src/lib.rs).
-  Additive; no migration.
-- Report the skip as `Outcome::Ok` with
-  `Severity::default_for(Outcome::Ok)`, which is already `Info`. The
-  rule exists; this path just does not use it.
+`Reason::OverSizeLimit`, and a skip reaches the `problems` table as
+`Outcome::Ok` / `Severity::Info` with that reason, where a failure on a
+never-fetched record still reads `Dropped` / `Error`.
+
+**The bookkeeping is deliberately unchanged**, which is the part worth
+knowing. A skip still writes `last_error`, and `failed_ids` selects on
+`last_error IS NOT NULL` — so the blob stays eligible and raising
+`blob_size_limit_bytes` picks the file up on the next run. That was the
+open question, and the answer is that the retry behaviour was already
+right; only the label was wrong.
+
+`record_object_attempt` keeps its 20 callers. The reason arrives through
+`CasEdgeAccumulator::add_skipped` beside `add_failed`, and
+`record_object_skipped` beside `record_object_error`; the bookkeeping
+half is now `record_object_bookkeeping`, shared by both.
 
 The `media` provider has the same shape
-(`the_payload_ceiling_leaves_null_and_is_counted`) and is worth checking
-in the same pass.
+(`the_payload_ceiling_leaves_null_and_is_counted`) and is still worth
+checking.
 
-### PR 4 — A Gmail fetch failure reaches the `problems` table
+### PR 4 — A Gmail fetch failure reaches the `problems` table — **done**
 
-Push `gmail_message_failed` and `gmail_ingest_failed` into
-`summary.problems` as `Stage::Fetch` / `Reason::FetchFailed`, scoped to
-the message id. Check the stop flag first and skip the row when the
-cause was a cancel, per §1.3.
+**No schema change, which this doc twice got wrong.** It first said
+`summary.problems`, which is the wrong channel — `DownloadProblem` is
+keyed on `setting` / `value` and describes a *configured entry* upstream
+does not have. It then said a `gmail_messages_bookkeeping` sidecar and a
+minor version bump. Neither was needed:
 
-This is one concrete instance of the per-provider fetch tail that
-[`problem_visibility.md`](problem_visibility.md) §3 lists as still open.
+- An absent table is simply created on open; only the store's cursors
+  are cleared, so the next run walks from the start (`etl/README.md`
+  §"Schema self-healing"). No refusal, no ladder rung, no bump.
+- But `gmail_messages` is the wrong table for a sidecar anyway. Its own
+  comment calls it "Gmail's own message id → the row it produced", and
+  it is filed under *cursor table*, deliberately outside `DATA_TABLES`,
+  which is what gets bookkeeping. A sidecar there would model a mapping
+  as a fetched entity.
 
-### PR 5 — The downgrade guard can read the run store
+So `download_problems::report_records` writes the row directly, keyed
+`record:gmail_messages:<id>`, through the same `replace_prefixed` the
+other two reporters use — this run's set replaces the last one's, and a
+message that fetches this time stops being a problem without anyone
+deleting a row.
 
-Open `runs.sqlite` with the `doltlite_engine=sqlite` URI param — the
-same way the log store's own writer does. Add a test that `inspect_root`
-on a root whose run store was written by a newer build actually refuses;
-today that case passes silently.
+That is a second way to say "a record did not fetch", beside
+`record_object_error`. The two are for different situations and the
+choice between them is not free: use `record_object_error` wherever the
+record has a `_bookkeeping` sidecar to stamp, and this only where a
+fetch fails before an id in our own keyspace exists.
+
+A cancel that lands mid-backoff arrives as an ordinary error, so both
+sites check the stop flag first and write no row — "you stopped this" is
+not a fetch failure.
+
+### PR 5 — ~~The downgrade guard can read the run store~~ (void)
+
+**The premise was wrong.** §1.4 said the guard hands a plain-SQLite file
+to doltlite's reader and so can never read the run store. Doltlite's
+default engine reads a plain SQLite file perfectly well — measured both
+ways against the real z14 store:
+
+```sh
+datalib-doltlite -readonly .../runs.sqlite "select count(*) from _datalib_meta"   # 6
+datalib-doltlite -readonly "file:.../runs.sqlite?doltlite_engine=sqlite" "…"       # 6
+```
+
+and a test that plants a newer-versioned plain-SQLite run store is
+refused by `inspect_root` with or without an engine change.
+
+What actually happened in z14 is a boot race: the warning is stamped
+`13:04:10.727`, two milliseconds after `data root: … (created)`, so the
+guard probed the run store in the instant it was being made. That log
+holds one server launch, so it is no evidence the warning repeats — the
+"every launch" in §1.4 is not supported and should be read as "once, on
+a root being created".
+
+What is left is small and cosmetic: do not warn about a store that does
+not meaningfully exist yet, or run the guard after the stores are made.
 
 ### PR 6 — Stop the log eating itself
 
@@ -369,9 +435,27 @@ today that case passes silently.
 - Give `disk_usage` a retention knob beside the others in
   `[run_history]`, or downsample anything older than a day.
 
-### Not yet a PR — Gmail's quota ceiling
+### Decided, no PR — Gmail's quota ceiling
 
-§1.6. Needs a decision about intent before anyone writes a patch.
+§1.6 asked whether the ratchet converging to its floor every run was
+intended. **It is (decided 2026-09-23).** The cut is cheap, and the
+per-run reset is right because the limit is per-user-per-minute and a
+fresh run has no memory of the last one. No recovery path, no lowered
+default. Leave it alone.
+
+### Decided, no PR — SIGQUIT
+
+#682 gave each step a process group, so a terminal signal no longer
+reaches steps directly and the runner has to forward what it cares
+about. It forwards SIGINT, SIGTERM and SIGHUP; SIGQUIT is deliberately
+left, because Ctrl-\\ asks for a core dump rather than a graceful stop.
+It will orphan steps the way SIGHUP did. That is the accepted trade.
+
+### Decided, no PR — this doc is not in the doc map
+
+A plan that has not landed does not go in `AGENTS.md`'s doc map. Add it
+when it becomes something a contributor has to read before touching the
+cancel path, not before.
 
 ### Folded in wherever nearest
 

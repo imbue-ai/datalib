@@ -358,7 +358,7 @@ struct PendingAttachments {
     /// Per-row error messages to record in
     /// `chat_item_attachments_bookkeeping` after the entity-table
     /// bulk flush. Keyed by the attachment row id.
-    errors: Vec<(String, String)>,
+    errors: Vec<datalib_etl::blob_cas::BlobNotFetched>,
 }
 
 struct DecryptedCas {
@@ -441,9 +441,10 @@ fn ingest_attachment(
                 ref_id: media_name,
                 blake3: None,
             });
-            pending
-                .errors
-                .push((attachment_id, format!("read {}: {e}", enc_path.display())));
+            pending.errors.push(blob_failed(
+                attachment_id,
+                format!("read {}: {e}", enc_path.display()),
+            ));
             summary.blob_errors += 1;
             return;
         }
@@ -466,7 +467,7 @@ fn ingest_attachment(
             });
             pending
                 .errors
-                .push((attachment_id, format!("decrypt: {e}")));
+                .push(blob_failed(attachment_id, format!("decrypt: {e}")));
             summary.blob_errors += 1;
             return;
         }
@@ -510,6 +511,16 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
         &pending.errors,
     )
     .await
+}
+
+/// A blob this provider could not read or decrypt. Signal has no
+/// deliberate skips, so every one of its blob problems is a failure.
+fn blob_failed(ref_id: String, detail: String) -> datalib_etl::blob_cas::BlobNotFetched {
+    datalib_etl::blob_cas::BlobNotFetched {
+        ref_id,
+        detail,
+        reason: datalib_problems::Reason::FetchFailed,
+    }
 }
 
 fn pick_latest_snapshot(root: &Path) -> Result<PathBuf> {

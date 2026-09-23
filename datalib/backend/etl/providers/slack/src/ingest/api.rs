@@ -278,9 +278,13 @@ async fn download_one_file(
                 limit = limit,
                 "a file is over the size limit; skipped it"
             );
-            attach.add_failed(
+            // Not `add_failed`: the config asked for this. Raising
+            // `blob_size_limit_bytes` picks the file up next run, which
+            // is what the bookkeeping behind this is for.
+            attach.add_skipped(
                 message_uuid,
                 file_id,
+                datalib_problems::Reason::OverSizeLimit,
                 format!("size {size} > limit {limit}"),
             );
             return Ok("too_large");
