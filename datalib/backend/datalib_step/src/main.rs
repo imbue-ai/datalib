@@ -285,6 +285,17 @@ async fn main() {
         }
     });
 
+    // The runner holds the other end of stdin. A runner that dies
+    // without running any code of its own — SIGKILL, an abort, the OOM
+    // killer — signals nothing, and nothing else ever signals a step, so
+    // the step notices the pipe close itself and raises the SIGINT the
+    // runner would have sent. Installed after the handler above, which
+    // is what then seals and exits.
+    if let Err(e) = datalib_parent_watch::exit_with_parent(interrupt_own_group) {
+        datalib_obs::status_line!("error: {e}");
+        std::process::exit(2);
+    }
+
     let now = cli
         .now
         .clone()
@@ -497,4 +508,26 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
         env.step
     );
     Ok(())
+}
+
+/// SIGINT this process' own group — itself and whatever it spawned,
+/// because the runner starts every step as its own group leader, so this
+/// reaches a `node qmd embed` the step would otherwise leave behind.
+fn interrupt_own_group() {
+    // `report`, not `eprintln!`: by now stderr is a pipe to the dead
+    // runner, and `eprintln!` panics on the failed write — which would
+    // leave this process running, one line from the exit that ends it.
+    //
+    // Safety: plain getpgrp/getpid/kill(2). Group 0 is the caller's own
+    // group; racing a member that has already exited is benign (ESRCH).
+    let group_leader = unsafe { libc::getpgrp() == libc::getpid() };
+    if !group_leader {
+        // Only the runner sets the variable that got us here, and it
+        // makes every step a leader. Signalling group 0 from anywhere
+        // else would reach an unrelated group — a terminal's, say.
+        datalib_parent_watch::report("the runner is gone; exiting");
+        std::process::exit(130);
+    }
+    datalib_parent_watch::report("the runner is gone; stopping this step and what it spawned");
+    unsafe { libc::kill(0, libc::SIGINT) };
 }

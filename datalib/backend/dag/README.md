@@ -118,8 +118,17 @@ as it lands, and staleness keeps them from running when nothing new has.
 A producer waiting on its own upstream holds nobody back, so a fan-in
 never waits for its slowest source.
 
+**A step that reads its inputs off disk never overlaps a writer of
+them.** The loader marks the built-in ones (`UNPINNED_BUILTINS` in
+`config.rs`: the qmd index, which globs render trees' `.md` files, and
+perseus's render, which reads its TEI files): such a step waits for a
+running producer even if it streams, and a writer of what it reads waits
+for it to finish.
+
 Until everything a step reads has settled, its row reads Running between
-passes: the step is not finished, it is waiting for the next seal. Each
+passes: the step is not finished, it is waiting for the next seal. A
+producer that is itself between passes has not settled, so the index
+behind a render reads Running for as long as the download does. Each
 pass's process is closed with a `PassEnd`; the `StepFinish` comes once
 its producers are done.
 
@@ -233,10 +242,17 @@ naming no step) looks exactly like one it did.
 
 ## Two locks, two files
 
-- **One runner per data root.** The scheduler rewrites a single JSON state
-  file after every terminal step, and the steps it spawns write raw stores
-  whose doltlite working set is shared across every connection on the
-  branch, in any process. Two runners on one root interleave both.
+- **One loop per data root** (`system/runner-lock`). The loop rewrites a
+  single JSON state file after every terminal step, and the steps it
+  spawns write raw stores whose doltlite working set is shared across
+  every connection on the branch, in any process; two loops on one root
+  would interleave both. A second `datalib-dag` is not refused for it: a
+  sync is a request row in `system/supervisor.sqlite`, so it writes its
+  row and follows it while whoever holds the lock runs it, trying the
+  lock again every half second in case that loop ends first
+  (`supervisor/store.rs`, `docs/dev/plans/supervisor.md` §2.8). Only
+  `--reset`, which empties stores, needs the root to itself and is
+  refused while a loop runs.
 - **One server per data root**, which `datalib-http` takes for its own
   reasons (the API token, the job and feedback stores).
 
@@ -265,6 +281,13 @@ asking — a caller on a timer would rewrite the file every few seconds, and a
 root that had never run would sprout a lock file from being looked at. It is
 racy by nature: the holder may let go a microsecond later. Don't build an
 invariant on it.
+
+Read-only does not mean invisible. `flock(2)` has no way to ask without
+taking, so the probe holds the lock for an instant, and the server probes on
+every change under the root — most often just as a run starts. A
+`--reset` that finds the lock held therefore keeps trying for two seconds
+before it refuses; a sync that meets a probe follows for half a second and
+takes the lock on its next try.
 
 ## Progress: the store takes positions, never deltas
 

@@ -293,14 +293,16 @@ so the larger budget costs nothing.
 [`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
 is the one spec that watches a sync *while it runs*, and the place to
 look when the question is "does streaming actually reach the screen".
-Two API-backed sources (`chatgpt`, `claude`) replay playback tapes with a
-delay on every request, so each download lasts about ten seconds and
-seals checkpoints on the way. The spec records the Pipeline table frame
-by frame and asserts that a download's render and the index behind it
-read Running *while the download is still Running*, and that the Explore
-grid — opened before the sync and never touched again — shows rows before
-the download that produced them has finished. Its console output is the
-table's every frame, so a run can be read without the trace viewer:
+Two API-backed sources (`chatgpt`, `claude`) replay playback tapes
+behind an after-seal hold: each download runs to its first checkpoint
+and parks there until the spec releases it. While they are parked the
+spec waits for the Explore grid — opened before the sync and never
+touched again — to show rows, and for the Pipeline table to show every
+download, the render behind it and the index behind both reading Running
+in one reading. Nothing upstream can finish while the hold is in place,
+so both are states to wait for rather than frames to catch. A delay on
+every request cannot promise that: on a busy runner a download can end
+before its first rows reach the grid.
 
 ```bash
 bazelisk run //datalib/ui:e2e -- --project chromium-data-sources-streaming
@@ -318,6 +320,9 @@ Three pieces make that possible, and each is small:
   a download in flight (`data-sources-control.spec.ts` adds and stops
   sources beside one) — a hold is released when the spec is done, where
   a delay is a window that a slow runner can miss.
+  `DATALIB_HTTP_PLAYBACK_HOLD_SEALED` is the same, except a request waits
+  only once its process has sealed a checkpoint, so a download publishes
+  something before it parks; the streaming spec uses it.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.

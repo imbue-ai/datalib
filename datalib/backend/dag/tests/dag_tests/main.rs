@@ -3,3 +3,5 @@
 
 mod newer_root;
 mod parent_gone;
+mod shared_root;
+mod verbs;

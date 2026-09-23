@@ -63,14 +63,11 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const msgCell = dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]');
   const msg = (await msgCell.textContent()) ?? "";
   expect(msg.trim(), "the first line should have a message").not.toBe("");
-  // The click and the menu are retried as a pair: a right-click that
-  // lands while the tail is replacing the row it is on opens nothing,
-  // and waiting alone would then wait forever.
+  // One right-click is enough: the panel holds the tail back while a
+  // button is down on the grid, so the row is not re-rendered under it.
+  await msgCell.click({ button: "right" });
   const keepOnly = menuEntry(page, `Keep only Message=${msg}`);
-  await expect(async () => {
-    if (!(await keepOnly.isVisible())) await msgCell.click({ button: "right", timeout: 2_000 });
-    await expect(keepOnly).toBeVisible({ timeout: 2_000 });
-  }, "the cell's menu never opened").toPass({ timeout: 15_000, intervals: [250, 500] });
+  await expect(keepOnly).toBeVisible();
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 

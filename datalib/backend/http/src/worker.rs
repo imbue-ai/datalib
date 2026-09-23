@@ -475,7 +475,7 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     if let Some(binary_dir) = cfg.binary_dir.as_ref() {
         command.arg("--binary-dir").arg(binary_dir);
     }
-    command.args(selection_args(&job));
+    command.args(selection_args(&job)).args(["--by", "ui"]);
     // Make ~/.datalib/bin resolvable from the config's `command:` lines
     // (step processes inherit the runner's env). Prepended even when
     // the dir doesn't exist yet — an agent may create it between runs,
@@ -495,7 +495,7 @@ pub async fn run_job(repo: &DynAppRepo, cfg: &WorkerConfig, job: SyncJobRow) -> 
     // that has to record how it ended.
     command
         .stdin(Stdio::piped())
-        .env(datalib_parent_watch::ENV_VAR, "1")
+        .env(datalib_parent_watch::ENV_VAR, "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

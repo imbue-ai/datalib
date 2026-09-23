@@ -1,6 +1,7 @@
 //! `StepRun::Subprocess` execution.
 
 use std::collections::BTreeMap;
+use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -11,6 +12,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::events::{Event, EventSink, LogLevel, Stream};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
+
+/// Where a step finds the runner's pipe, named to the child in
+/// `datalib_parent_watch::ENV_VAR`. Deliberately not stdin: a step is an
+/// arbitrary program, and one that reads stdin expecting `/dev/null`'s
+/// immediate end-of-file would block forever on a pipe nobody writes to.
+const PARENT_PIPE_FD: libc::c_int = 3;
 
 pub const ENV_STEP: &str = "DATALIB_DAG_STEP";
 /// The run this invocation belongs to — the id every row of
@@ -35,6 +42,8 @@ pub const ENV_FUNCTION: &str = "DATALIB_DAG_FUNCTION";
 pub const ENV_DATA_ROOT: &str = "DATALIB_DAG_DATA_ROOT";
 pub const ENV_INPUTS: &str = "DATALIB_DAG_INPUTS";
 pub const ENV_CHANGED_INPUTS: &str = "DATALIB_DAG_CHANGED_INPUTS";
+/// `StepCtx::reads` as a JSON object: input path → version.
+pub const ENV_READS: &str = "DATALIB_READS";
 /// Run-wide pinned timestamp (RFC 3339), set by the runner on every
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
@@ -184,22 +193,63 @@ pub(crate) async fn run_subprocess(
         .env(ENV_DATA_ROOT, &ctx.data_root)
         .env(ENV_INPUTS, inputs.join("\n"))
         .env(ENV_CHANGED_INPUTS, changed.join("\n"))
+        .env(
+            ENV_READS,
+            serde_json::to_string(&ctx.reads).expect("a string map is JSON"),
+        )
         // Run-wide env from the runner (PATH with binary_dir
         // prepended, the pinned DATALIB_DAG_NOW, …); the step's
         // own `env:` entries win on key collision.
         .envs(extra_env)
         .envs(env)
-        // The runner's own parent pipe is not the step's: with the
-        // variable inherited and stdin `/dev/null`, a step that watches
-        // its parent would refuse to start.
-        .env_remove(datalib_parent_watch::ENV_VAR)
         .current_dir(&ctx.data_root)
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
+
+    // Every step is handed the runner's pipe, and reading EOF on it is
+    // how a step notices a runner that died without running any code — a
+    // SIGKILL, an abort, the OOM killer — the one case `kill_children`
+    // cannot reach. A step that wants that watches the descriptor named
+    // by `DATALIB_PARENT_PIPE` (`datalib_parent_watch::exit_with_parent`
+    // does it in one call); a step that ignores it just carries one extra
+    // open descriptor, which costs nothing.
+    //
+    // Not on stdin, though `Stdio::piped()` is how the pipe gets made: a
+    // step is an arbitrary program, and one that reads stdin expecting
+    // the immediate end-of-file `/dev/null` gives would block forever on
+    // a pipe nobody writes to. The child moves the pipe to
+    // `PARENT_PIPE_FD` and restores `/dev/null` on stdin before exec, so
+    // a step that reads stdin sees exactly what it always did.
+    //
+    // The write end stays on the child handle: take it and the step reads
+    // EOF at once and exits, believing the runner is already gone.
+    cmd.env(datalib_parent_watch::ENV_VAR, PARENT_PIPE_FD.to_string())
+        .stdin(Stdio::piped());
+    let devnull = std::ffi::CString::new("/dev/null").expect("no interior nul");
+    // Safety: only async-signal-safe calls may run between fork and exec.
+    // `dup2`, `open` and `close` are; the `CString` is allocated above,
+    // before the fork, and only its pointer is read here.
+    unsafe {
+        cmd.as_std_mut().pre_exec(move || {
+            if libc::dup2(0, PARENT_PIPE_FD) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let null = libc::open(devnull.as_ptr(), libc::O_RDONLY);
+            if null < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::dup2(null, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if null != 0 {
+                libc::close(null);
+            }
+            Ok(())
+        });
+    }
     // Its own process group, so a signal aimed at the step reaches what
     // the step spawned. A step is often a wrapper around something else
     // — `qmd_index` runs `node qmd embed` — and a `kill(pid)` the step
@@ -572,9 +622,12 @@ pub fn interrupt_children() {
 /// SIGKILL every running step and what it spawned. For the exits
 /// `std::process::exit` takes, where no `kill_on_drop` runs: a step that
 /// ignored its SIGINT must not outlive the runner, holding its store
-/// open. Nothing else ever signals a step, so whoever stops the runner
-/// has to reach this — a SIGKILL at the runner runs no Rust and leaves
-/// the steps behind.
+/// open.
+///
+/// A runner that is itself SIGKILLed never reaches this. What covers
+/// that is the other end: each step holds a pipe from the runner and
+/// stops itself when it reads EOF, so this is the tidy path rather than
+/// the only one.
 pub fn kill_children() {
     #[cfg(unix)]
     signal_children(libc::SIGKILL);
@@ -649,6 +702,47 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// Every step gets `/dev/null` on stdin and the runner's pipe on fd
+    /// 3. Both halves matter.
+    ///
+    /// Stdin, because a step is an arbitrary program: one that reads it
+    /// expecting the immediate end-of-file `/dev/null` gives would block
+    /// forever on a pipe nobody writes to, and a hung step holding its
+    /// store open is worse than the orphan the pipe prevents. The `cat`
+    /// is that assertion — if stdin were the pipe it never returns, the
+    /// step never finishes, and this times out rather than failing on the
+    /// recorded line.
+    ///
+    /// Fd 3, because that is what `datalib_parent_watch` is pointed at,
+    /// and it refuses to start if the variable names something that is
+    /// not a pipe — so the number and the descriptor have to agree.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_step_gets_dev_null_on_stdin_and_the_parent_pipe_beside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "g/out",
+            sh(r#"
+                out="$DATALIB_DAG_DATA_ROOT/g/out"
+                mkdir -p "$out"
+                cat > /dev/null
+                if [ -p /dev/fd/0 ]; then stdin=pipe; else stdin=not-a-pipe; fi
+                if [ -p /dev/fd/3 ]; then watch=pipe; else watch=no-pipe; fi
+                echo "$stdin $watch ${DATALIB_PARENT_PIPE:-unset}" > "$out/fds"
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let data_root = root.path().to_path_buf();
+        Runner::new(data_root).run(&g).await.expect("the run");
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("g/out/fds"))
+                .expect("the step wrote what it saw")
+                .trim(),
+            "not-a-pipe pipe 3",
+        );
     }
 
     /// A signal aimed at a step reaches what the step spawned, because
@@ -752,6 +846,40 @@ mod tests {
         for id in ["a/raw", "b/raw", "a/rendered"] {
             assert_eq!(rep.step(id).status, cancelled, "{id}: {rep:#?}");
         }
+    }
+
+    /// A step is told the version of each input it was started against, as
+    /// the runner recorded it — which is how the qmd index versions itself
+    /// by what it indexed.
+    #[tokio::test]
+    async fn a_step_is_told_the_versions_it_was_started_against() {
+        let root = tempfile::tempdir().unwrap();
+        let producer = StepSpec::new(
+            "src/raw",
+            sh(r#"mkdir -p src/raw && echo data > src/raw/f
+                  echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v7"}]}'"#),
+        );
+        let consumer = StepSpec::new(
+            "src/rendered",
+            sh(r#"mkdir -p src/rendered && printf '%s' "$DATALIB_READS" > src/rendered/reads.json"#),
+        )
+        .input("src/raw");
+        let g = Graph::build(vec![producer, consumer]).unwrap();
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
+        assert!(rep.all_ok(), "{rep:#?}");
+
+        let reads: BTreeMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("src/rendered/reads.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reads,
+            BTreeMap::from([(
+                "src/raw".to_string(),
+                rep.step("src/raw").outputs[0].1.clone()
+            )])
+        );
+        assert!(reads["src/raw"].ends_with(":v7"), "{reads:?}");
     }
 
     /// Params reach the child as a file only its owner can read, named

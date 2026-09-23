@@ -69,6 +69,9 @@ pub struct StepShape {
     /// The hash of the step's own definition; a change makes it stale.
     pub fingerprint: String,
     pub class: Class,
+    /// False for a step that reads its inputs off disk rather than at a
+    /// pinned commit: it and a writer of what it reads never overlap.
+    pub pins_reads: bool,
 }
 
 /// What people have asked for: the open requests and the paused steps.
@@ -190,6 +193,9 @@ pub enum Wait {
     Upstream(StepIx),
     /// Another writer of its sink is running.
     Sink(SinkIx),
+    /// A step that reads its sink unpinned is running, and would read a
+    /// write in progress.
+    Reader(StepIx),
     Budget(Class),
 }
 
@@ -306,6 +312,13 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
             states[i] = StepState::Waiting(Wait::Sink(step.writes));
             continue;
         }
+        if let Some(&r) = readers[step.writes]
+            .iter()
+            .find(|&&r| busy[r] && !shape.steps[r].pins_reads)
+        {
+            states[i] = StepState::Waiting(Wait::Reader(r));
+            continue;
+        }
         let in_use = used.entry(step.class).or_default();
         if *in_use >= budgets.of(step.class) {
             states[i] = StepState::Waiting(Wait::Budget(step.class));
@@ -394,10 +407,11 @@ fn nothing_to_read(step: &StepShape, facts: &Facts, writers: &[Vec<StepIx>]) -> 
 
 /// A producer of something `i` reads that `i` must wait for. Two reasons,
 /// and only two: it is running and does not stream, so its sink may be
-/// half-written; or it is about to run, held only by a budget or its sink,
-/// and will rewrite what `i` would read. A producer that is itself waiting
-/// on something upstream may not run for a long time, and a fan-in that
-/// waited on it would wait for its slowest source.
+/// half-written; or it is about to run, held only by a budget, its sink or
+/// a reader, and will rewrite what `i` would read. A producer that is
+/// itself waiting on something upstream may not run for a long time, and a
+/// fan-in that waited on it would wait for its slowest source. A step that
+/// reads unpinned treats even a streaming producer as half-written.
 fn blocking_producer(
     i: StepIx,
     shape: &Shape,
@@ -412,8 +426,10 @@ fn blocking_producer(
         .find(|&w| {
             w != i
                 && match states[w] {
-                    StepState::Running => !facts.steps[w].streams_output,
-                    StepState::Waiting(Wait::Budget(_) | Wait::Sink(_)) => true,
+                    StepState::Running => {
+                        !facts.steps[w].streams_output || !shape.steps[i].pins_reads
+                    }
+                    StepState::Waiting(Wait::Budget(_) | Wait::Sink(_) | Wait::Reader(_)) => true,
                     _ => false,
                 }
         })
@@ -445,6 +461,7 @@ mod tests {
                 } else {
                     Class::Cpu
                 },
+                pins_reads: true,
             })
             .collect();
         Shape {
@@ -807,6 +824,44 @@ mod tests {
         let t = tick(&s, &request(&[1], 5), &facts, &budgets);
         assert_eq!(t.states[1], StepState::Waiting(Wait::Budget(Class::Cpu)));
         assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+    }
+
+    /// The qmd index globs a render's `.md` files off disk, so it must not
+    /// read while the render writes — streaming or not — and the render
+    /// must not write while it reads.
+    #[test]
+    fn an_unpinned_reader_waits_for_a_streaming_producer_to_finish() {
+        let mut s = chain();
+        s.steps[2].pins_reads = false;
+        let mut facts = all_fresh(&s, 1);
+        facts.steps[1].streams_output = true;
+        run(&mut facts, 1, 6);
+        facts.sinks[1] = Some("v1-sealed".into());
+
+        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
+
+        s.steps[2].pins_reads = true;
+        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        assert_eq!(started(&t), vec![2], "a pinned reader reads each seal");
+    }
+
+    #[test]
+    fn a_writer_waits_while_an_unpinned_reader_of_its_sink_runs() {
+        let mut s = chain();
+        s.steps[2].pins_reads = false;
+        let mut facts = all_fresh(&s, 1);
+        facts.sinks[0] = Some("v0-new".into());
+        run(&mut facts, 2, 6);
+
+        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Reader(2)));
+
+        s.steps[2].pins_reads = true;
+        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        assert_eq!(started(&t), vec![1], "a pinned reader holds nobody back");
     }
 
     /// A first sync whose download fails has written nothing. Its render
