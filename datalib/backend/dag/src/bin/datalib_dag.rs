@@ -27,6 +27,7 @@ use datalib_dag::runs_sink::RunStoreSink;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
+use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -68,7 +69,15 @@ async fn main() -> Result<()> {
          A sync is a request in <root>/system/supervisor.sqlite, tagged --by (default \
          `cli`). If another process is already running the loop on this root — the app, \
          or another datalib-dag — this one hands it the request and follows it; either \
-         way it exits with the request's outcome. Ctrl-C asks for this request to stop.";
+         way it exits with the request's outcome. Ctrl-C asks for this request to stop.\n\n\
+         datalib-dag status <config.toml>                          open requests and pauses\n\
+         datalib-dag stop <config.toml> <request-id> [--by WHO]    ask a request to stop\n\
+         datalib-dag pause <config.toml> <step-id> [--by WHO]      keep a step from running\n\
+         datalib-dag resume <config.toml> <step-id>                lift a pause\n\n\
+         Each writes a row and returns; whoever runs the loop acts on it within a second.";
+    if let Some(verb) = std::env::args().nth(1).as_deref().and_then(Verb::parse) {
+        return run_verb(verb, std::env::args().skip(2).collect(), USAGE).await;
+    }
     let mut config_path: Option<PathBuf> = None;
     let mut binary_dir: Option<PathBuf> = None;
     let mut sync_only: Vec<String> = Vec::new();
@@ -511,4 +520,124 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
         Some(RequestOutcome::Stopped) => 130,
         _ => 2,
     }
+}
+
+/// The steering verbs: each writes intent into the store and returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+enum Verb {
+    Status,
+    Stop,
+    Pause,
+    Resume,
+}
+
+impl Verb {
+    fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
+    let mut positional: Vec<String> = Vec::new();
+    let mut by = "cli".to_string();
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--by" => by = args.next().context("--by needs a name")?,
+            _ if a.starts_with("--") => bail!("unexpected argument {a:?}\n\n{usage}"),
+            _ => positional.push(a),
+        }
+    }
+    let wants = if verb == Verb::Status { 1 } else { 2 };
+    if positional.len() != wants {
+        bail!(
+            "{} takes {wants} argument(s)\n\n{usage}",
+            <&str>::from(verb)
+        );
+    }
+    let (checked, data_root) = config::load_graded(Path::new(&positional[0]))?;
+    if checked.is_fatal() {
+        bail!(
+            "{} is not a config: nothing in it could be read",
+            positional[0]
+        );
+    }
+    let store = Store::open(&data_root).await?;
+    let said = match verb {
+        Verb::Status => status_lines(&store).await?,
+        Verb::Stop => {
+            let id = &positional[1];
+            match store.request(id).await?.map(|r| r.closed) {
+                None => bail!("no request {id} in {}", data_root.display()),
+                Some(Some(outcome)) => vec![format!(
+                    "request {id} is already over: {}",
+                    outcome.map(RequestOutcome::as_str).unwrap_or("closed")
+                )],
+                Some(None) => {
+                    store.request_stop(id, &by).await?;
+                    vec![format!("asked request {id} to stop")]
+                }
+            }
+        }
+        Verb::Pause => {
+            let step = &positional[1];
+            if !checked.graph.by_id.contains_key(step) {
+                let mut ids: Vec<&str> = checked.graph.by_id.keys().map(String::as_str).collect();
+                ids.sort();
+                bail!(
+                    "no step {step:?} in this config; its steps: {}",
+                    ids.join(", ")
+                );
+            }
+            match store.paused().await?.get(step) {
+                Some(who) => vec![format!("{step} is already paused, by {who}")],
+                None => {
+                    store.pause(step, &by).await?;
+                    vec![format!("paused {step}")]
+                }
+            }
+        }
+        Verb::Resume => {
+            let step = &positional[1];
+            match store.paused().await?.get(step) {
+                None => vec![format!("{step} was not paused")],
+                Some(who) => {
+                    store.resume(step).await?;
+                    vec![format!("resumed {step}, which {who} had paused")]
+                }
+            }
+        }
+    };
+    store.close().await;
+    #[allow(clippy::disallowed_macros)]
+    for line in said {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// One line per open request and per pause, in a shape a script can split
+/// on two spaces.
+async fn status_lines(store: &Store) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    for r in store.open_requests().await? {
+        let stopping = r
+            .stop_requested_by
+            .map(|who| format!("  stopping (asked by {who})"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "request {}  by {}  roots {}{stopping}",
+            r.id,
+            r.opened_by,
+            r.roots.join(",")
+        ));
+    }
+    for (step, who) in store.paused().await? {
+        lines.push(format!("paused {step}  by {who}"));
+    }
+    if lines.is_empty() {
+        lines.push("nothing open, nothing paused".to_string());
+    }
+    Ok(lines)
 }

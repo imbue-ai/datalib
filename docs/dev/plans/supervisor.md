@@ -788,7 +788,9 @@ last.
    than first written:* the store holds `requests` and `pauses` only
    (steps' states and invocations come with 4c), the facts stay in
    `dag_state.json`, and the verbs (`stop`, `pause`, `resume` as
-   commands) follow separately — the store takes them already. The
+   commands) follow separately — the store takes them already. *Since
+   built:* `datalib-dag status | stop | pause | resume`, each a row
+   written and a return. The
    server is untouched but for tagging its requests `--by ui`: its
    worker still runs one job at a time, so the UI's own syncs overlap
    from 4b, and a job whose `datalib-dag` joined a CLI's loop has no run

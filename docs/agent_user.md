@@ -151,6 +151,22 @@ says who asked (`sqlite3 system/supervisor.sqlite 'select * from
 requests'`). `--reset` is the exception: it empties stores, so it
 refuses while anything else is syncing.
 
+To steer what is running — yours, the app's, anyone's — without SQL:
+
+```sh
+datalib-dag status <data_root>/config.toml                    # open requests and pauses
+datalib-dag stop   <data_root>/config.toml <request-id> --by claude
+datalib-dag pause  <data_root>/config.toml slack/ingest --by claude
+datalib-dag resume <data_root>/config.toml slack/ingest
+```
+
+Each writes a row and returns at once; whatever is running the loop acts
+on it within a second (a pause stops a running step and keeps it from
+starting until resumed; it does not hold a sync open). `status` prints a
+line per open request (`request <id>  by <who>  roots <ids>`) and per
+pause (`paused <step>  by <who>`). **Don't resume what a person paused
+without saying so** — `status` says who did.
+
 Via the server instead: `POST /api/sync/jobs` enqueues —
 `{"kind":"all"}` with an optional comma-separated `source_ids`, or
 `{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
