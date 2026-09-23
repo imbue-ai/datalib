@@ -507,7 +507,11 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(r, idx) in rows" :key="idx" :class="{ 'row-selected': selected.has(r.id) }">
+            <tr
+              v-for="(r, idx) in rows"
+              :key="`${r.id}@${r.start}`"
+              :class="{ 'row-selected': selected.has(r.id) }"
+            >
               <td class="check-cell">
                 <input
                   type="checkbox"
