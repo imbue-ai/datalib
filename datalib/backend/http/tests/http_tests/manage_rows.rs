@@ -125,6 +125,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "chips",
             "count",
             "timestamp",
+            "timestamp",
             "timeseries"
         ]
     );
@@ -277,10 +278,12 @@ async fn a_finished_run_reaches_the_rows() {
                     "finished_at": "2026-08-31T10:00:09+01:00",
                     "status": "succeeded",
                     "attempts": 1
-                  }
+                  },
+                  "last_success_at": "2026-08-31T10:00:09+01:00"
                 },
                 "slack/render_markdown": {
                   "succeeded": false,
+                  "last_success_at": "2026-08-24T10:00:11+01:00",
                   "last_run": {
                     "run_id": "r1",
                     "started_at": "2026-08-31T10:00:09+01:00",
@@ -309,6 +312,7 @@ async fn a_finished_run_reaches_the_rows() {
     let ingest = &rows["slack/ingest"];
     assert_eq!(ingest["status"]["key"], "succeeded");
     assert_eq!(ingest["last_synced"], "2026-08-31T10:00:09+01:00");
+    assert_eq!(ingest["last_success"], "2026-08-31T10:00:09+01:00");
     assert_eq!(ingest["last_run_id"], "r1");
     assert_eq!(ingest["live_run_id"], serde_json::Value::Null);
 
@@ -316,6 +320,8 @@ async fn a_finished_run_reaches_the_rows() {
     // where to read it.
     let render = &rows["slack/render_markdown"];
     assert_eq!(render["status"]["key"], "failed");
+    assert_eq!(render["last_synced"], "2026-08-31T10:00:11+01:00");
+    assert_eq!(render["last_success"], "2026-08-24T10:00:11+01:00");
     assert_eq!(
         render["status"]["detail"],
         "double-click to open the log at the error"
@@ -329,6 +335,13 @@ async fn a_finished_run_reaches_the_rows() {
         "slack/render_markdown: double-click to open the log at the error"
     );
     assert_eq!(slack["last_synced"], "2026-08-31T10:00:09+01:00");
+    // The status is the render's; the last success is still the
+    // ingest step's, not the failed render's older one.
+    assert_eq!(slack["last_success"], "2026-08-31T10:00:09+01:00");
+    assert_eq!(
+        slack["status"]["last_success_at"],
+        "2026-08-31T10:00:09+01:00"
+    );
     assert!(slack["status"].get("segments").is_none(), "{slack}");
 }
 

@@ -298,14 +298,38 @@ async fn checkout_writer_branch(
         .execute(&mut *conn)
         .await
     {
-        Ok(_) => Ok(()),
-        Err(e) if is_missing_function(&e) => Ok(()),
-        Err(_) => sqlx::query("SELECT dolt_checkout('-b', ?)")
-            .bind(WRITER_BRANCH)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ()),
+        Ok(_) => {}
+        // No doltlite: there are no branches to be on, and every read of
+        // this store is as unpinned as every write.
+        Err(e) if is_missing_function(&e) => return Ok(()),
+        Err(_) => {
+            sqlx::query("SELECT dolt_checkout('-b', ?)")
+                .bind(WRITER_BRANCH)
+                .execute(&mut *conn)
+                .await?;
+        }
     }
+    // Read it back, because a selection that quietly did nothing is the
+    // one failure this whole construction cannot survive: a fresh
+    // connection is on the file's default branch, so a writer that
+    // thinks it moved and did not writes to `main` — visible to every
+    // reader, mid-batch, which is what the branch exists to prevent.
+    // Measured in #691: a failed `dolt_checkout` is silent and the rows
+    // land on the wrong branch. `fsindex::checkout_branch` reads back
+    // for the same reason.
+    let active: String = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_one(&mut *conn)
+        .await?;
+    if active != WRITER_BRANCH {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "opened a writer on branch {active:?}, not {WRITER_BRANCH:?}: \
+                 its rows would be visible to every reader before they are sealed"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The commit a branch names, or `None` when this build has no doltlite
@@ -1378,9 +1402,9 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
 /// --hard`, it restores tracked tables and ignores an untracked one, and a
 /// writer that died after `CREATE TABLE` and before its first commit leaves
-/// exactly that. Every commit here is `-Am`, so anything still dirty after
-/// this rides into the schema commit a few lines later — which is why the
-/// untracked tables are dropped rather than left for the DDL pass to adopt.
+/// exactly that. `dolt_clean` takes those, the way `git clean` does. Every
+/// commit here is `-Am`, so anything still dirty after this rides into the
+/// schema commit a few lines later — which is why both halves run.
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
@@ -1405,29 +1429,16 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         .execute(pool)
         .await
         .context("dolt_reset --hard")?;
-    let untracked: Vec<String> =
-        sqlx::query_scalar("SELECT table_name FROM dolt_status WHERE status = 'new table'")
-            .fetch_all(pool)
-            .await
-            .context("list untracked tables")?;
-    for table in &untracked {
-        // The name comes from doltlite's own status table, not from data;
-        // quoted anyway, since a provider may mirror upstream table names.
-        let quoted = format!("\"{}\"", table.replace('"', "\"\""));
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {quoted}")))
-            .execute(pool)
-            .await
-            .with_context(|| format!("drop untracked table {table}"))?;
-    }
+    sqlx::query("SELECT dolt_clean()")
+        .execute(pool)
+        .await
+        .context("dolt_clean")?;
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
         .fetch_one(pool)
         .await
         .context("re-probe dolt_status")?;
     if left != 0 {
-        bail!(
-            "{left} entries still dirty after dolt_reset --hard and dropping {} untracked table(s)",
-            untracked.len()
-        );
+        bail!("{left} entries still dirty after dolt_reset --hard and dolt_clean");
     }
     Ok(())
 }
@@ -4306,6 +4317,54 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(at_head, vec!["w1".to_string(), "w2".to_string()]);
+        pool.close().await;
+    }
+
+    /// A writer's pool is on [`WRITER_BRANCH`], every connection of it.
+    ///
+    /// The guard against the quiet failure: a fresh connection is on the
+    /// file's default branch, so a selection that does nothing leaves the
+    /// writer on `main`, where every row it writes is visible to every
+    /// reader the moment it lands rather than when it is sealed. Nothing
+    /// else would notice — the rows are all there, the commits all
+    /// happen, and only the isolation is gone.
+    #[tokio::test]
+    async fn a_writers_pool_is_on_the_writer_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("entities.doltlite_db");
+        let pool = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            active, WRITER_BRANCH,
+            "a writer is on {active:?}; anything it writes is unsealed and \
+             visible to every reader"
+        );
+        pool.close().await;
+
+        // And the second open of the same file, where the branch already
+        // exists and `dolt_connect_branch` is what puts us on it.
+        let pool = open(
+            &path,
+            &["CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY)"],
+        )
+        .await
+        .unwrap();
+        let active: String = sqlx::query_scalar("SELECT active_branch()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(active, WRITER_BRANCH, "reopen landed on {active:?}");
         pool.close().await;
     }
 

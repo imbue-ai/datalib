@@ -421,19 +421,17 @@ mod tests {
     /// the render rather than being logged and left out.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
-        let dir = std::env::temp_dir().join(format!("contact-common-sink-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = tempfile::tempdir().unwrap();
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
         let err = render_all(
             &mk_profile(),
             &[mk_contact()],
-            &dir,
+            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut refuse,
         )
         .expect_err("a refused document fails the render");
         assert!(format!("{err:#}").contains("no room"), "{err:#}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

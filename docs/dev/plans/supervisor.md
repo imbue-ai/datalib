@@ -1,14 +1,16 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: greenfield proposal (2026-09-19, revised 2026-09-21); its
-slice 0 is built, the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slice 0 is built, slice
+1 (the tick) is being written, the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
-as it stands at `692f59bd`, after #600 (a writer's `open` discards the
-working set; no commit on SIGINT) and #606 (a stop ends a download at
-its next consistent point) landed; nothing else here describes the
-tree. Where this doc and the tree disagree, the tree wins.
+as it stands at `b216a993`, after #600 and #606 (a writer's `open`
+discards the working set; a stop ends a download at its next consistent
+point), #682 and #686 (a process group per step), #687 (the run store
+takes several writers) and #690 (writers work on a branch and publish to
+`main`); nothing else here describes the tree. Where this doc and the
+tree disagree, the tree wins.
 
 ## 0. The claim
 
@@ -76,7 +78,29 @@ Checked against the tree. Most of the storage-side work is done.
   on death. The etl README says outright that this is per file, not per
   root, "so two sources with nothing in common can be written by two
   runners at once (#247)". The storage layer permits exactly the
-  concurrency the scheduler forbids.
+  concurrency the scheduler forbids. #691 measured the one alternative
+  worth asking about — two writers on one file, each on a branch of its
+  own — and most of their operations fail with `database is locked` or
+  `commit conflict`. One writer at a time stays the rule, for a shared
+  sink (§2.1) as much as for anything else.
+- **A reader on `main` sees only sealed states** (#690). Every writer
+  works on the `datalib_writer` branch and fast-forwards `main` when it
+  seals (`publish_to_main`, inside `commit_run`). A reader pins a commit
+  on `main`, so a writer's uncommitted batch — and a table it has
+  created but not sealed — is invisible to it. A crash between the
+  commit and the fast-forward leaves the branch ahead of `main`, and the
+  *next writer's `open`* finishes the publish.
+- **A step is a process group, and a stop reaches all of it** (#682,
+  #686). `subprocess.rs` spawns each step as its group's leader through
+  `process-wrap`, so the group id is the step's pid and a signal to the
+  group reaches `node qmd embed` under `qmd_index` as well as the step;
+  the wrapper reaps the group when the step exits. The worker's cancel
+  is a three-rung ladder (`next_stage`: ask, tell the runner to give up
+  on its steps, kill), and the runner forwards SIGHUP and its parent's
+  death to the steps itself, because a group of its own no longer gets
+  the kernel's. What is still shaped for one batch run: the pids live in
+  one process-wide set (`CHILD_PIDS`), and the only operations on it
+  are "interrupt all" and "kill all".
 - **A reader pins a commit and is correct at any pin.** That is the
   streaming design's whole safety argument: "a missed notification
   must make a consumer slow, not wrong" — doltlite is a log of states,
@@ -88,7 +112,10 @@ Checked against the tree. Most of the storage-side work is done.
   step allowed to produce it.
 - **The run store is SQLite and already carries what a step is doing**
   (`system/runs/runs.sqlite`: `step_runs`, `log`, `metrics`; pushed to the UI
-  as `table_changed` frames by `watch.rs`). `logs_and_metrics` moved
+  as `table_changed` frames by `watch.rs`). It takes several writing
+  processes at once without losing a line (#687, with
+  `runs_two_process_test` as the measurement), so the batch CLI can
+  write it while a server does. `logs_and_metrics` moved
   progress and logs there, but not the scheduler's memory: versions,
   fingerprints and `current_run` are still `system/dag_state.json`,
   rewritten by `scheduler.rs` on every dispatch and terminal state,
@@ -172,7 +199,7 @@ How the sinks we have meet them:
 
 | sink | version | atomic publish | writer lock | on a crash |
 |---|---|---|---|---|
-| a doltlite store (raw, render) | head commit | `dolt_commit` at a seal; readers pin a commit | `flock` on the sibling `.lock` | the next `open` discards the working set |
+| a doltlite store (raw, render) | `main`'s head — the last *published* seal, not the writer branch's | `commit_run` at a seal: commit on `datalib_writer`, fast-forward `main`; readers pin a commit on `main` | `flock` on the sibling `.lock` | the next `open` discards the working set, and publishes a commit the crash left unpublished |
 | a plain SQLite file (qmd's `index.sqlite`, `runs.sqlite`) | a version the writer records *in the same transaction* as the data — a row in a `versions` table, or `PRAGMA user_version` | the transaction; readers open read-only | SQLite's own writer lock, plus the supervisor's scheduling | the transaction rolls back by itself |
 | a file tree indexed by a store (the markdown documents) | the version of the store that indexes it: a `.md` file is reachable only through a committed `markdowns` row, so the tree has no version of its own | write the file, then commit the row that names it; a file no committed row names is unreachable | the indexing store's | orphan files are junk the next writer may remove; readers never saw them |
 | a plain file tree (perseus's TEI XML, written by `curl -o`) | a content hash of the tree, computed by the supervisor **once, when its writer finishes** — the runner's hash today — and held until the next writer finishes | none of its own: a reader listing the tree mid-write sees a half-written file, so the supervisor starts no writer while a reader of the sink runs (or the step writes beside and renames) | the supervisor's scheduling alone | the next completed write re-hashes the whole tree, half-written files included, so nothing is adopted silently |
@@ -188,10 +215,14 @@ SQLite file, gets a `versions` row). Either way the supervisor
 computes or reads a version **once per completed invocation** and the
 tick compares cached strings; nothing is ever hashed inside the tick.
 
-For a doltlite sink the version is read by the supervisor after any
-writer finishes (`datalib_history` already reads a store's log without
-linking `etl`). The step's `outcome` line keeps working unchanged; it
-is just no longer the *only* way a sink's version can move.
+For a doltlite sink the version is `main`'s head, read by the
+supervisor after **every** writer invocation ends — success, failure or
+interrupt — because a writer's `open` can publish its crashed
+predecessor's last commit, so a sink can move at the *start* of an
+invocation that then fails (`datalib_history` already reads a store's
+log without linking `etl`). The step's `outcome` line keeps working
+unchanged; it is just no longer the *only* way a sink's version can
+move.
 
 ### 2.2 Intent: requests, and what they put in scope
 
@@ -206,15 +237,19 @@ made a first-class thing the supervisor holds many of at once.
 |---|---|
 | **Sync** on a source | a request with that source as its root |
 | **Sync everything** | a request with every source as a root |
-| a schedule (`every: 15m` on a source) | a request the supervisor creates when it comes due |
 | `datalib-dag <config>` | a request with every source, and "exit when it closes" |
 | **Stop** on a request | interrupts its running steps and closes it; a step also in another open request's scope stays in scope |
 | **Pause** on a step | sticky; the step never starts and is interrupted if running, whatever requests want it. **Resume** lifts it |
 
-A request is **open** until every step in its scope is fresh and not
-running, then **done**; if a step in its scope exhausts its retries the
-request is **failed** and says which step. A request that is closed is
-history: nothing in the graph is in scope of it any more.
+A request is **open** until nothing in its scope is running or due to
+run, then **done** — or **failed**, naming the step, if a step in its
+scope exhausted its retries (§2.3 has the exact rules). A request that
+is closed is history: nothing in the graph is in scope of it any more.
+
+Root staleness below compares *when* things happened: an invocation
+that started after a request opened. The supervisor orders those
+events with a sequence number it hands out itself, not with wall-clock
+stamps, so the comparison is exact and a test can write it down.
 
 This is the answer to #225 by construction rather than by care: a
 render that has been stale since yesterday sits with its row saying
@@ -234,6 +269,10 @@ that invocation ends it does not count (it started earlier), the root
 is still stale for the new request, and it runs once more. One more
 pass, no bookkeeping.
 
+**Scheduled syncs are out of scope.** A schedule would be one more
+thing that opens requests, so it can be added later without touching
+the tick; nothing here depends on it.
+
 Requests and pauses are stored, not inferred: rows in the supervisor's
 store, so a restart picks up the open requests where it left them, and
 a paused source stays paused across app launches — which today has no
@@ -243,26 +282,61 @@ representation at all.
 
 One loop, one function, run on every event (a step finished, a
 checkpoint arrived, a request opened or was stopped, a step was paused,
-the config changed, a schedule came due) and on a slow timer as the
+the config changed) and on a slow timer as the
 fallback:
 
 ```
 scope = union of closure(r.roots) for r in open requests
 for step in graph, in topological order:
-    if running(step):                       continue
-    if paused(step):                        state = paused;          continue
-    if step not in scope:                   state = idle | stale;    continue
-    if not stale(step, requests wanting it): state = fresh;          continue
-    if sink_busy(step.writes):              state = waiting(sink);   continue
-    if budget_exhausted(step.class):        state = waiting(budget); continue
+    if running(step):                        state = running
+                                             stop it if paused or out of scope
+                                             continue
+    if paused(step):                         state = paused;            continue
+    if step not in scope:                    state = idle | stale | failed; continue
+    if failed for every request wanting it:  state = failed;            continue
+    if not stale(step, requests wanting it): state = fresh;             continue
+    if a producer it reads is pending:       state = waiting(upstream); continue
+    if sink_busy(step.writes):               state = waiting(sink);     continue
+    if budget_exhausted(step.class):         state = waiting(budget);   continue
     start(step, consumed = versions of step.reads right now)
-close every open request whose scope is all fresh and none running
+close every open request with nothing in its scope running or due
 ```
 
 `stale(step)` for a derived step is today's predicate, unchanged in
 substance: never succeeded, or some read sink's version differs from
 what its last successful invocation consumed, or its own fingerprint
 changed. For a root it is the request-relative rule of §2.2.
+
+Three rules the loop needs that the runner got for free from having a
+run:
+
+- **A consumer waits for a pending producer.** A producer is *pending*
+  when it is in scope and running, or due to start (stale, not paused,
+  not failed, held only by a budget). A consumer does not start while
+  one of its producers is pending — starting a render against a store
+  its ingest is about to rewrite is a pass thrown away — with one
+  exception, which is streaming: a producer that is running, declares
+  `streams_output`, and has published a version since its invocation
+  began lets its consumers start against that version. A producer that
+  failed or is paused is not pending, and its consumers run against
+  what it committed (§2.5).
+- **A failure is not retried by the tick.** Retries happen inside an
+  invocation, as today (`invoke_with_retry`), so a retrying step reads
+  `running`. Once they are exhausted the step is **failed for** every
+  request opened before that invocation started, and the tick does not
+  start it again for them — until what it reads moves (a producer
+  sealed more; a new version is a new question) or its definition
+  changes. A new request, **Retry** included, is a new question too.
+- **A paused step does not hold a request open.** A request closes when
+  nothing in its scope is running or due; a paused step is neither, and
+  the request's `request_steps` row records it as paused. Otherwise one
+  paused source would keep "Sync everything" open until someone resumed
+  it, and the batch CLI would never exit.
+
+A request's outcome when it closes: **failed**, naming the first step
+in topological order that failed for it, if any did; **done** otherwise.
+A failure does not end a request early. The rest of its scope runs to
+completion, the way a failed source today does not stop the others.
 
 **The tick is the functional core** in the sense of
 [`style.md`](../style.md): it takes values — the graph, the open
@@ -395,7 +469,7 @@ which it alone writes:
 | table | rows |
 |---|---|
 | `requests` | id, roots, `by`, created_at_utc, closed_at_utc, `state` (open · done · failed · stopped), failed_step |
-| `steps` | id, paused_by, schedule, class, fingerprint, `state` (idle · stale · fresh · waiting(sink/budget) · running · paused · failed), state_detail |
+| `steps` | id, paused_by, class, fingerprint, `state` (idle · stale · fresh · waiting(sink/budget) · running · paused · failed), state_detail |
 | `sinks` | path, version, updated_at_utc, by_invocation |
 | `invocations` | id, step, started/finished, exit, failure_kind, error, pid, consumed (json), produced (json) |
 | `request_steps` | request → step, for every step in the request's scope, with the step's state as of the request's close |
@@ -414,16 +488,51 @@ invocation.
 
 ### 2.8 Where it runs, and the CLI
 
-The supervisor is a library (`datalib_dag` grows into it; the name can
-follow). **`datalib-http` hosts it**, in place of `worker.rs`; the
-server's own per-root lock is the one-supervisor guarantee, and
-`runner-lock` is retired. `datalib-dag <config>` keeps working as
-**batch mode**: open one request rooted at every source, tick until it
-closes, exit 0 or 1 — which is what the fixture genrule and CI need,
-and is the same loop with a termination condition. When a server holds
-the root the CLI forwards to it (`POST /api/requests`, which is how "a
-sync you start from a terminal shows up here too" stays true); when
-none does, it embeds.
+The supervisor is **one library** (`datalib_dag` grows into it; the
+name can follow), and both ways of running it run that library, the
+same loop, unmodified:
+
+| host | what it adds around the loop |
+|---|---|
+| `datalib-dag <config>` | opens one request rooted at every source (or at the `--sync` roots); exits 0 or 1 when that request closes |
+| `datalib-http` | in place of `worker.rs`: requests arrive over HTTP, it keeps ticking when idle, and the UI reads the store it writes |
+
+There are no modes. `datalib-dag` runs **one round** of what the
+server keeps open: the same tick over the same facts, stopping when
+the request it opened closes. There is no resident CLI host; a
+supervisor that stays up is the server.
+
+A per-root lock makes a supervisor the only one on its root; it
+replaces `runner-lock`. When the server holds the root, `datalib-dag`
+forwards to it (`POST /api/requests`, which is how "a sync you start
+from a terminal shows up here too" stays true) instead of running a
+round of its own; when nothing holds it, the CLI runs the round
+itself.
+
+**The host owns the steps' processes**, and the library is where that
+lives, so no host does it differently:
+
+- **A handle per invocation, not a set of pids.** Stop on one row
+  signals that step's process group (#686) and no other. `CHILD_PIDS`
+  and its "interrupt all / kill all" become the library's shutdown
+  path, not its only way to reach a step.
+- **The cancel ladder is per invocation.** Today's three rungs
+  (`worker.rs::next_stage`) are aimed at the whole `datalib-dag`
+  process; they move down to one step's group: SIGINT, SIGINT again
+  after the grace, SIGKILL after that. `next_stage` stays the pure
+  function it is.
+- **The host's own death takes its steps with it.** The batch runner
+  already forwards SIGHUP and its parent's death (#682); the server
+  needs the same, because the runner that used to sit between it and
+  the steps is gone. A step that
+  outlives its supervisor is the orphan #682 fixed, with nobody to
+  record its end.
+- **An invocation left open by a dead supervisor is closed by the next
+  one** at startup: its row is `running`, its process group is gone,
+  so it is marked `stopped`. This is the cancel plan's "a cancelled run
+  closes its own books" (PR 2 of
+  [`cancel_and_log_hygiene.md`](cancel_and_log_hygiene.md)), absorbed
+  rather than built twice.
 
 ### 2.9 Two operators: a person at the screen, an agent at a shell
 
@@ -447,8 +556,10 @@ shows is computed in the browser from something the shell cannot see.
 steps, `clear <sink>` on sinks (§2.10) — exposed identically as
 `POST /api/requests` and `/api/requests/<id>/stop`,
 `POST /api/steps/<id>/{pause,resume}`, `POST /api/sinks/<path>/clear`, and
-as `datalib-dag <verb> …` (the CLI forwards to the server that holds
-the root, and acts directly when none does). Every request, pause and
+as `datalib-dag <verb> …`. The CLI forwards to the server when one
+holds the root. When none does, `request` runs a round itself, and
+`pause`, `resume` and `clear` act on the store directly — a pause is a
+row, and the next round honours it. Every request, pause and
 clear records `by` — `ui`, `cli`, or a name an agent passes
 (`--by claude`) — so each operator sees the other's hand on the wheel:
 a source paused by an agent reads "paused by claude" on the screen,
@@ -484,7 +595,8 @@ scope is its readers' closure), so the emptiness propagates the way any
 change does — the render's diff sees every bucket deleted and removes
 its documents, the index drops the rows — and stops there. Refilling
 is not part of it; that is the next Sync, which finds no cursor and
-starts from the beginning. `datalib-dag --reset` is `clear`, and
+starts from the beginning. `datalib-dag --reset` (built,
+`doltlite_raw::reset_store`) is `clear`, and
 `--reset X --sync X` is `clear` followed by `request`; the ingest code
 has no reset branch: a download never wipes, it only downloads.
 
@@ -511,7 +623,7 @@ supervisor cannot know its shape.
 - **Scope is the only thing between a tick and #225.** Nothing runs
   outside an open request's closure, so a stale render from yesterday
   cannot start on its own — but a request rooted at *every* source (Sync
-  everything, the batch CLI, a schedule on a wide source) does reach
+  everything, the batch CLI) does reach
   it, honestly, and the row says which request. The test to write
   first: a tick over a graph with stale steps and no open request
   starts nothing.
@@ -567,7 +679,7 @@ supervisor cannot know its shape.
 | clear a store | a flag on the download | its own verb, its own button, reverted from the history |
 | streaming | the existing special cases | the ordinary rule |
 | "queued" on screen | inferred from jobs + state file + timestamps | a column the supervisor wrote |
-| an agent steering it | `POST /api/sync/jobs`, then read three stores | the same four verbs the buttons use; one plain-SQLite store, with `by` |
+| an agent steering it | `POST /api/sync/jobs`, then read three stores | the same five verbs the buttons use; one plain-SQLite store, with `by` |
 | what it keeps | everything; adds ~7 slices | step protocol, graph, versions, retry, run store, etl locks |
 | what it removes | `parent_job_id` | `Runner::run`, `dag_state.json` (the half `logs_and_metrics` left), `worker.rs`, `sync_jobs`, `status.rs`'s inference, `runner-lock` |
 | size | ~1.5 weeks | ~4 weeks, most of it deleting |
@@ -578,7 +690,9 @@ already pretending the batch runner was.
 
 ## 5. Order of work, if this is the way
 
-Each slice lands green and the app works after each.
+Each slice lands green and the app works after each. The core comes
+first; the shared sink, the feature that needs the most of it, comes
+last.
 
 0. ~~**The rescue commit goes**~~ **Done: #600, #606.** `RawDb::open`
    discards a dirty working set instead of sealing it, and the
@@ -588,39 +702,48 @@ Each slice lands green and the app works after each.
    committed the blob CAS — the next run's rescue had been doing it —
    and that jmap saved its state token before its enumeration finished.
    Both fixed there.
-1. **Sinks in the graph.** `writes`/`reads` in the config with the
-   defaults above; `Graph` bipartite; the loader allows a shared sink.
-   No scheduler change yet: the current runner treats a shared sink as
-   a diagnostic-level warning and runs as now. Tests: today's configs
-   load identically; a shared sink loads.
-2. **Sink versions from the sink.** A doltlite sink's version is its
-   head commit, read by the framework; the step's report is checked
-   against it in tests, then becomes optional for doltlite sinks. The
-   qmd index gets a `versions` row written in the transaction that
-   updates it. A plain tree keeps the tree hash, computed on writer
-   completion and cached; the supervisor learns which sinks' readers do
-   not pin, so it never starts a writer on one while a reader runs.
-3. **The supervisor library**, batch mode only: the tick of §2.3 as a
-   pure function over values, with its tests written first and
-   synchronous — the two hazards in §3 that say "the first test
-   written" are the first two — then the thin shell that feeds it
-   events and runs its starts, with one request rooted at every
-   source, run until it closes. It passes the scheduler's existing
-   tests re-expressed against requests and invocations (the semantics
-   they pin — subset sync, not-selected history, unselected trees
-   never hashed — are exactly what scope means, and hold), and most
-   of them stop needing tokio to say so. `datalib-dag` switches to
-   it; the fixture genrule is the proof.
-4. **Resident mode in `datalib-http`**, replacing `worker.rs`: the
-   `requests` and `request_steps` tables, `POST /api/requests`,
-   `/api/requests/<id>/stop`, `/api/steps/<id>/{pause,resume}`, live
-   frames.
-   `sync_jobs` and `dag_state.json` go; `status.rs` shrinks to a read
-   of `steps.state`.
+1. **The tick** (`dag/src/supervisor/tick.rs`): §2.3 as a pure
+   function over values, with nothing else in the change. Its tests are
+   synchronous and come first; the two hazards in §3 that say "the
+   first test written" are the first two. The graph it takes already
+   names sinks (`writes`, `reads`), but only in the shape the tree has
+   today: each step writes the sink its id names. Nothing calls it yet.
+2. **The batch host.** The thin shell around the tick: it turns a step
+   exiting and a checkpoint arriving into new facts, calls the tick,
+   spawns its starts and signals its stops, per invocation (§2.8). Its
+   facts come from `dag_state.json` for now, the file the runner
+   already keeps, so this slice changes how steps are scheduled and
+   nothing about where that is recorded. `datalib-dag <config>`
+   switches to it: one request rooted at every source (or at the
+   `--sync` roots), run until it closes. It passes the scheduler's
+   existing tests re-expressed against requests and invocations (the
+   semantics they pin — subset sync, not-selected history, unselected
+   trees never hashed — are exactly what scope means, and hold), and
+   most of them stop needing tokio to say so. `Runner::run` is
+   deleted; the fixture genrule is the proof.
+3. **Sink versions from the sink.** A doltlite sink's version is
+   `main`'s head, read by the host after every writer invocation
+   (§2.1); the step's report is checked against it in tests, then
+   becomes optional for doltlite sinks. The qmd index gets a `versions`
+   row written in the transaction that updates it. A plain tree keeps
+   the tree hash, computed on writer completion and cached; the
+   supervisor learns which sinks' readers do not pin, so it never
+   starts a writer on one while a reader runs.
+4. **The server hosts it.** The run store gains `requests`,
+   `request_steps`, `steps`, `sinks` and `invocations`, and the
+   supervisor's facts move there from `dag_state.json`, which goes.
+   `datalib-http` runs the same library `datalib-dag` does (§2.8), and
+   keeps it running; the server's `worker.rs` and `sync_jobs` go.
+   `POST /api/requests`, `/api/requests/<id>/stop`,
+   `/api/steps/<id>/{pause,resume}`, the CLI verbs that forward to
+   them, live frames. `status.rs` shrinks to a read of `steps.state`.
+   Startup closes the invocations a dead supervisor left open.
 5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
-   request and the wave under each, the schedule field, and Clear on
+   request and the wave under each, and Clear on
    a sink with the wording of §2.10. The help text is rewritten around rows, not runs.
-6. **A shared-sink provider**: the email import beside the live pull.
+6. **Shared sinks.** `writes`/`reads` in the config with the defaults
+   of §2.1, the loader allowing two steps to name one sink, and the
+   first provider that uses it: the email import beside the live pull.
    The reason §2.1 exists, landed last because everything before it is
    needed for it to be safe.
 7. **Docs.** The dag README is rewritten around the tick;

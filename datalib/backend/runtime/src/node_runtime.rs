@@ -493,13 +493,73 @@ pub fn is_bundled(cmd: &Command) -> bool {
 mod tests {
     use super::*;
 
+    /// Owns the process environment while a test changes it.
+    ///
+    /// A test binary runs its tests as threads of one process, so an
+    /// environment variable is shared state twice over: `set_var` races
+    /// another thread's read of it, and a variable left set outlives
+    /// the test that set it. Every test here that touches one goes
+    /// through this guard, which serializes them and puts the previous
+    /// values back on drop — a panicking test included.
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        restore: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            Self {
+                // A test that panicked poisons the lock, and its
+                // variables were restored on the way out: that panic
+                // must not fail every test after it.
+                _lock: LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+                restore: Vec::new(),
+            }
+        }
+
+        fn set(&mut self, key: &'static str, value: &OsStr) {
+            self.swap(key, Some(value));
+        }
+
+        fn unset(&mut self, key: &'static str) {
+            self.swap(key, None);
+        }
+
+        fn swap(&mut self, key: &'static str, value: Option<&OsStr>) {
+            self.restore.push((key, std::env::var_os(key)));
+            write_env(key, value);
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            while let Some((key, previous)) = self.restore.pop() {
+                write_env(key, previous.as_deref());
+            }
+        }
+    }
+
+    /// SAFETY: the caller holds [`EnvGuard`]'s lock, so no other test is
+    /// in the environment. That is as far as a test binary can get —
+    /// `set_var` is only unconditionally safe before a process has a
+    /// second thread — and it rules out the collision that actually
+    /// bites: two tests disagreeing about one variable.
+    fn write_env(key: &str, value: Option<&OsStr>) {
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
     /// End-to-end resolution against a synthetic staged tree, driven
     /// through `$DATALIB_RUNTIME_DIR`.
     #[test]
     fn bundled_command_resolves_staged_tree() {
-        let base =
-            std::env::temp_dir().join(format!("datalib-runtime-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
         let node = base.join(NODE_REL);
         std::fs::create_dir_all(node.parent().unwrap()).unwrap();
         std::fs::write(&node, b"#!/bin/sh\n").unwrap();
@@ -507,8 +567,8 @@ mod tests {
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
         std::fs::write(&entry, b"// cli\n").unwrap();
 
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::set_var(RUNTIME_DIR_ENV, &base) };
+        let mut env = EnvGuard::new();
+        env.set(RUNTIME_DIR_ENV, base.as_os_str());
 
         let cmd = bundled_command("latchkey", "1.2.3", "node_modules/latchkey/dist/src/cli.js")
             .expect("staged tree should resolve");
@@ -530,8 +590,7 @@ mod tests {
 
         // A miss with the fallback off is an error that names the
         // override directory, not a silent `npx`.
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::remove_var(ALLOW_NPX_ENV) };
+        env.unset(ALLOW_NPX_ENV);
         let err = tool_command(
             "latchkey",
             "9.9.9",
@@ -544,10 +603,6 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("latchkey@9.9.9"), "{text}");
         assert!(text.contains(ALLOW_NPX_ENV), "{text}");
-
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::remove_var(RUNTIME_DIR_ENV) };
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -627,9 +682,8 @@ mod tests {
     /// node) falls back to PATH resolution.
     #[test]
     fn node_beside_prefers_the_npx_sibling() {
-        let base = std::env::temp_dir().join(format!("datalib-nodebeside-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
         std::fs::write(base.join("node"), b"#!/bin/sh\n").unwrap();
         std::fs::write(base.join("npx"), b"#!/bin/sh\n").unwrap();
 
@@ -644,7 +698,5 @@ mod tests {
             node_beside(base.join("sub/npx").as_os_str()),
             OsString::from("node")
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

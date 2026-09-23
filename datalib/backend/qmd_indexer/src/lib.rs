@@ -6,6 +6,7 @@
 //! that pass runs a small script of ours against qmd's SDK instead and
 //! reads progress back as NDJSON. See [`EmbedEvent`].
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -185,13 +186,20 @@ impl std::fmt::Debug for IndexOptions {
 /// `MODEL_CACHE_DIR`), so a standalone `qmd` run and a build-driven run
 /// share one cache instead of each downloading their own copy.
 pub fn default_models_dir() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+    models_dir_under(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+/// Split out from the environment so the choice between the two roots
+/// can be tested as what it is — a decision over two values — rather
+/// than by setting variables the whole test process shares.
+fn models_dir_under(xdg_cache_home: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    if let Some(xdg) = xdg_cache_home {
         return PathBuf::from(xdg).join("qmd").join("models");
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".cache").join("qmd").join("models")
+    PathBuf::from(home.unwrap_or_else(|| ".".into()))
+        .join(".cache")
+        .join("qmd")
+        .join("models")
 }
 
 /// The pinned models `qmd embed` needs, by the on-disk names
@@ -692,22 +700,23 @@ mod tests {
     /// our half of the contract.
     #[test]
     fn default_models_dir_matches_qmd_default() {
-        // XDG_CACHE_HOME branch: $XDG/qmd/models.
-        // Use the temp dir as a stand-in so we don't depend on the
-        // host's actual XDG_CACHE_HOME value (which CI may or may not
-        // set). `set_var` here is fine — Rust tests in a crate share a
-        // process, but no other test in this file touches the env.
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/qmd-test-xdg") };
-        let dir = default_models_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-xdg/qmd/models"));
+        // XDG_CACHE_HOME wins where it is set.
+        assert_eq!(
+            models_dir_under(Some("/x/cache".into()), Some("/home/u".into())),
+            PathBuf::from("/x/cache/qmd/models")
+        );
 
         // HOME fallback: $HOME/.cache/qmd/models.
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
-        unsafe { std::env::set_var("HOME", "/tmp/qmd-test-home") };
-        let dir = default_models_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-home/.cache/qmd/models"));
+        assert_eq!(
+            models_dir_under(None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.cache/qmd/models")
+        );
+
+        // Neither set — relative to wherever this is running.
+        assert_eq!(
+            models_dir_under(None, None),
+            PathBuf::from("./.cache/qmd/models")
+        );
     }
 
     /// The exact lines a real embed produced, pasted from a run of the
@@ -941,25 +950,22 @@ mod tests {
 
     #[test]
     fn models_present_requires_every_named_model_nonempty() {
-        let base = std::env::temp_dir().join(format!("qmd-models-present-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
         let names = embed_model_names();
         assert_eq!(names, ["hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"]);
 
         // Nothing there yet → absent.
-        assert!(!models_present(&base, &names));
+        assert!(!models_present(base, &names));
 
         // Every named model present + non-empty → present.
         for name in &names {
             std::fs::write(base.join(name), b"gguf").unwrap();
         }
-        assert!(models_present(&base, &names));
+        assert!(models_present(base, &names));
 
         // A zero-byte (partial/truncated) model doesn't count.
         std::fs::write(base.join(&names[0]), b"").unwrap();
-        assert!(!models_present(&base, &names));
-
-        let _ = std::fs::remove_dir_all(&base);
+        assert!(!models_present(base, &names));
     }
 }

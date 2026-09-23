@@ -121,6 +121,12 @@ pub struct StepState {
     /// source it named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<LastRun>,
+    /// When a run last left this step current: succeeded, or checked
+    /// and found up to date. Kept here rather than read from the run
+    /// store, which ages runs out — and a source that has been failing
+    /// for longer than that is the one whose last success matters most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<String>,
 }
 
 impl DagState {
@@ -173,6 +179,7 @@ mod tests {
                     attempts: 1,
                     error: None,
                 }),
+                last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
             },
         );
         st.current_run = Some(CurrentRun {
@@ -189,6 +196,10 @@ mod tests {
         assert!(step.succeeded);
         assert_eq!(step.output_versions["slack/raw"], "abc");
         assert_eq!(step.fingerprint, "fp-1");
+        assert_eq!(
+            step.last_success_at.as_deref(),
+            Some("2026-08-31T10:00:09+01:00")
+        );
         let last = step.last_run.as_ref().expect("last_run survives the trip");
         assert_eq!(last.status, "succeeded");
         assert_eq!(last.attempts, 1);

@@ -113,15 +113,13 @@ shared across every connection on that branch in any process. Two
 facts, two rules, both built into `doltlite_raw` rather than left to
 convention.
 
-"Per file *and branch*" is the whole of the qualifier, and it is worth
-saying because leaving it off makes the rules below sound wrong.
-Measured on doltlite 0.50.3: a connection that checks out `alt` and
-inserts without committing leaves `main`'s `dolt_status` clean and its
-rows invisible to the next connection, which opens on `main` — the
-active branch is not written down in the file. Two long-lived writers
-on one file, each pinned to its own branch, do keep their content
-apart. **They still must not share a file**, for the reason in the next
-paragraph but one: they contend.
+"Per file *and branch*" is the whole of the qualifier, and it is what
+§"A writer works on its own branch" below is built on. Measured on
+doltlite 0.50.3: a connection on one branch that inserts without
+committing leaves another branch's `dolt_status` clean and its rows
+invisible to a connection there. A connection's own branch is not
+written into the file, so the next one lands on the file's stored
+default.
 
 ### Every pool is size 1 and never recycled
 
@@ -144,21 +142,10 @@ and each takes the file's writer lock — `flock(2)` on the sibling
 connection, which holds it until it closes. A second writer on the same
 file, in another process or in this one, is refused at open with the
 holder named (`<program> (pid N)`) instead of sharing the first's
-working set: every store's writer is on `main`, so an `-Am` commit
+working set: both land on the writer branch below, so an `-Am` commit
 through either pool sweeps up whatever the other has in flight, and two
 mid-write pools contend for a lock `dolt_commit` takes without waiting.
-
-Putting the second writer on its own branch does not rescue this, which
-is worth knowing before anyone proposes it. Measured the same day, two
-processes each holding one connection on its own branch, 60 commits
-each: the content did stay apart (`main` ended with all of the first
-writer's rows and none of the second's, `alt` the reverse), and about
-three quarters of the operations failed — `database is locked by
-another connection` from doltlite's own lock on the file, and `commit
-conflict: another connection committed to this branch. Please retry
-your transaction`. A writer that reconnects per operation fares worse
-still: a fresh connection opens on `main`, a failed `dolt_checkout` is
-silent, and the rows land on the wrong branch. The kernel releases the lock when
+The kernel releases the lock when
 the holder dies, so a killed run leaves no stale claim; the next `open`
 finds its dirty rows and **discards them** (`dolt_reset --hard`, then
 any table the dead writer created and never committed), so the store
@@ -220,6 +207,16 @@ commits nothing, so an untouched store stays byte-identical.
 `dolt_checkout('-b', …)` is still what creates the branch, once per
 file.
 
+**Then it asks the connection back which branch it is on, and a wrong
+answer fails the open.** A selection that quietly did nothing is the one
+failure this construction cannot survive: the writer stays on the
+default branch and every row it writes is visible to every reader the
+moment it lands rather than when it is sealed — and nothing else would
+notice, because the rows are all there and the commits all happen. The
+silent failure below is measured, not hypothetical, and
+`fsindex::checkout_branch` reads back for the same reason.
+`a_writers_pool_is_on_the_writer_branch` is the guard.
+
 **The seal is the commit *and* its publication.** `commit_run` does
 `dolt_commit` on the branch and then `dolt_branch('-f', 'main', …)`.
 A force-move rather than a `dolt_merge`, because one writer per file
@@ -228,6 +225,20 @@ so a merge would be a fast-forward anyway, and `main`'s history stays
 linear — which is what `dolt_diff_<table>` between two of its commits
 rests on. Two writers on one store would need the real merge, and the
 lock above is what lets us skip it.
+
+**A branch each is not a way around the one-writer rule**, which is
+worth saying because the scheme above invites the question. Measured on
+doltlite 0.50.3: two processes, each holding one connection on a branch
+of its own, 60 commits each. Their content did stay apart — each
+branch ended with all of its own writer's rows and none of the other's
+— and about three quarters of the operations failed, with `database is
+locked by another connection` from doltlite's own lock on the file and
+`commit conflict: another connection committed to this branch. Please
+retry your transaction`. A writer that reconnects per operation fares
+worse still: a fresh connection lands on the default branch, a failed
+`dolt_connect_branch` is silent, and the rows go where nobody meant
+them to. Branches separate working sets; they do not separate the
+file.
 
 A crash between the commit and the publication leaves the branch ahead
 of `main`; that commit is a seal the last run meant to make, so the

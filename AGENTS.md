@@ -28,7 +28,7 @@ how the system works; when a completed plan stops being worth keeping,
 - [`docs/dev/plans/join_running_sync.md`](docs/dev/plans/join_running_sync.md) — proposal: a job enqueued while a run is in flight joins that run instead of waiting for it; keeps one runner per root.
 - [`docs/dev/plans/http_driven_e2e.md`](docs/dev/plans/http_driven_e2e.md) — proposal: the live e2e's first sync is crashed, then stopped, then finished, driven through `datalib-http`'s sync endpoints; a hermetic twin on the fixture first.
 - [`docs/dev/plans/writer_branches.md`](docs/dev/plans/writer_branches.md) — built: every writer works on its own doltlite branch and fast-forwards `main` when it seals, so a reader on `main` never sees half-built state. What it cost, what it bought, and what could now be deleted from `pin.rs`. Grew out of #647.
-- [`docs/dev/plans/supervisor.md`](docs/dev/plans/supervisor.md) — greenfield alternative to the join: one resident supervisor reconciles the graph, open requests (what someone asked for, and so what is in scope) and facts; sinks first-class with one writer at a time; the same verbs for a person at the screen and an agent at a shell.
+- [`docs/dev/plans/supervisor.md`](docs/dev/plans/supervisor.md) — chosen over the join, being built: one supervisor library reconciles the graph, open requests (what someone asked for, and so what is in scope) and facts; `datalib-http` keeps it running and `datalib-dag` runs one round of it; sinks first-class with one writer at a time; the same verbs for a person at the screen and an agent at a shell.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it (runner, steps, server, pages of the app), how to add a line from each, how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 - [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — the design record behind `logging.md`: why one store, why metrics are not log lines.
 - [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
@@ -325,12 +325,18 @@ The rules, none optional; the reasons and measurements are in
 `datalib/backend/etl/README.md` §"Connection pools":
 
 - **One writer per file.** Doltlite's working set lives in the *file*,
-  per branch, shared across processes; every store's writer is on
-  `main`, so a second writer commits the first's in-flight rows. Giving
-  it a branch of its own does not help — the two then contend for the
-  file instead (measured; `etl/README.md`). The `grid_index` step owns the index; `datalib-http`
+  per branch, shared across processes; two writers land on one branch
+  and each `-Am` commit captures the other's in-flight rows. Giving the
+  second one a branch of its own does not rescue it — the two then
+  contend for the file instead (measured; `etl/README.md`). The
+  `grid_index` step owns the index; `datalib-http`
   owns feedback, jobs and usage; the applet only reads. A download takes
   its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+- **A writer works on `datalib_writer`, never on `main`**, and
+  fast-forwards `main` when it seals, so a reader never sees a
+  half-written batch or a half-built schema. `commit_run` is the seal —
+  a bare `dolt_commit` publishes nothing and reaches no reader; use
+  `commit_all` for a handle that carries a blob CAS.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
@@ -464,13 +470,23 @@ makes every local run slower than it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
 names what never arrived rather than a timeout with no message.
 
-Two neighbours of the same mistake:
+Three neighbours of the same mistake:
 
 - **A fixed timestamp in a test is a bomb** wherever anything is
   measured from `now` — a retention window, a "recent" filter. Either
   derive the stamp from `now`, or set the window in the test so wide
   that the calendar cannot reach it (`process_log_days: 36500`, #567),
   and say which in a comment.
+- **A test binary runs its tests as threads of one process**, so
+  anything keyed on the process is shared between them. A temp path
+  built from `std::process::id()` is the common case: two tests get the
+  same file and one's cleanup deletes the other's. Take a
+  `tempfile::tempdir()`; in code that cannot reach for a dependency,
+  add a process-local counter to the pid. An environment variable is
+  the same trap — one test's `set_var` is every test's, and outlives
+  it. Prefer passing the value in (`models_dir_under` in
+  `qmd_indexer`); where the variable itself is what's under test, take
+  a lock and restore on drop (`EnvGuard` in `node_runtime.rs`).
 - **A test that takes more than a third of its timeout on CI is a
   flake waiting to happen** once the runner is busy. Tag it `cpu:N`
   or `exclusive` so bazel schedules it alone, or raise the timeout and
