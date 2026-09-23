@@ -240,17 +240,44 @@ pub async fn run(
     // does — one tag covers both indexes however they are ordered.
     datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(data_root));
 
-    // qmd's sqlite gets touched on every pass, so any version we could
-    // derive would move even when nothing was indexed. Report nothing:
-    // the step is a leaf (nothing consumes unified_index/qmd_index
-    // downstream), so the runner's fallback hash is never read by anyone
-    // and the imprecision costs nothing.
-    Ok(vec![])
+    // Not qmd's sqlite, which is touched on every pass: what was indexed.
+    // Exact, because the runner never lets a render write while this step
+    // globs its `.md` files. Run by hand, with nothing from the runner, it
+    // reports nothing and the runner, if any, hashes the tree.
+    let reads = std::env::var(datalib_dag::subprocess::ENV_READS).unwrap_or_default();
+    Ok(version_of_reads(&reads)
+        .map(|version| OutputClaim {
+            path: out_rel(),
+            version,
+            rows: None,
+        })
+        .into_iter()
+        .collect())
+}
+
+/// The runner writes `DATALIB_READS` from a sorted map, so the same
+/// render versions are the same bytes.
+fn version_of_reads(reads: &str) -> Option<String> {
+    let reads = reads.trim();
+    (!reads.is_empty() && reads != "{}")
+        .then(|| format!("reads:{}", blake3::hash(reads.as_bytes()).to_hex()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The index's version follows the render versions it indexed, and
+    /// nothing else: a run with nothing from the runner claims none.
+    #[test]
+    fn the_version_is_what_was_indexed() {
+        let a = r#"{"mail/render_markdown":"indexed_markdown.doltlite_db:aa"}"#;
+        let b = r#"{"mail/render_markdown":"indexed_markdown.doltlite_db:bb"}"#;
+        assert_eq!(version_of_reads(a), version_of_reads(a));
+        assert_ne!(version_of_reads(a), version_of_reads(b));
+        assert_eq!(version_of_reads(""), None);
+        assert_eq!(version_of_reads("{}"), None);
+    }
 
     fn at(bytes_processed: u64, total_bytes: u64, chunks_embedded: u64) -> EmbedProgress {
         EmbedProgress {

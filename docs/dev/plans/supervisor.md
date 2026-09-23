@@ -1,8 +1,8 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–2 are built —
-`datalib-dag` runs one round of the tick — and slice 3's doltlite half
-is; the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slices 0–3 are built —
+`datalib-dag` runs one round of the tick, with versions read from the
+sinks — and the rest is not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -465,7 +465,7 @@ for a commit between a truncate and its refill in any step.
 
 ### 2.6 What a step sees
 
-Unchanged, plus `DATALIB_READS`: a JSON map of sink → version this
+Unchanged, plus `DATALIB_READS` (built): a JSON map of sink → version this
 invocation was started against, so a consumer that pins does so at the
 version the supervisor recorded as *consumed*. `DATALIB_DAG_NOW` is
 pinned **per invocation**, not per run; one clock per run was a rule
@@ -739,17 +739,14 @@ last.
    only for a tree with no store. It fixed a waste nobody had seen: a
    step's checkpoints and its outcome spelled one commit differently
    (`<hash>` against `store:<hash>`), so every finishing ingest and
-   render made its consumers run one more pass over nothing. Still to
-   do from this slice: the qmd index gets a version cheaper than
-   hashing its tree after every pass, which is what it gets today (qmd
-   writes `index.sqlite` itself, so a `versions` row in qmd's own
-   transaction is not ours to add). A plain tree keeps the tree hash,
-   computed on writer completion. And the supervisor learns which sinks'
-   readers do not pin, so it never starts a writer on one while a
-   reader runs. Two readers do not pin today: `qmd_index`, which globs
-   each render tree's `.md` files off disk and so can index a file a
-   render has written but not yet committed; and perseus's render,
-   which reads its ingest's TEI tree directly.
+   render made its consumers run one more pass over nothing. **Also
+   built:** `DATALIB_READS` (§2.6), and the qmd index reports a hash of
+   it — the render versions it indexed — instead of having its tree
+   hashed. The two unpinned readers are marked by the loader
+   (`UNPINNED_BUILTINS`), and the tick keeps each apart from the writers
+   of what it reads, in both orders: the reader waits even for a
+   streaming producer, and a writer waits in `waiting(reader)`. The cost
+   is some streaming: the qmd index no longer runs while a render does.
 4. **The server hosts it.** The run store gains `requests`,
    `request_steps`, `steps`, `sinks` and `invocations`, and the
    supervisor's facts move there from `dag_state.json`, which goes.

@@ -118,6 +118,13 @@ as it lands, and staleness keeps them from running when nothing new has.
 A producer waiting on its own upstream holds nobody back, so a fan-in
 never waits for its slowest source.
 
+**A step that reads its inputs off disk never overlaps a writer of
+them.** The loader marks the built-in ones (`UNPINNED_BUILTINS` in
+`config.rs`: the qmd index, which globs render trees' `.md` files, and
+perseus's render, which reads its TEI files): such a step waits for a
+running producer even if it streams, and a writer of what it reads waits
+for it to finish.
+
 Until everything a step reads has settled, its row reads Running between
 passes: the step is not finished, it is waiting for the next seal. Each
 pass's process is closed with a `PassEnd`; the `StepFinish` comes once
