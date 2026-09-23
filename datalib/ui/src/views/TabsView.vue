@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Tabs layout host: one card at a time, full size, and a sidebar
 // listing every open card as a tree — each tab indented under the tab
-// that opened it, as in Firefox's Tree Style Tab. The tree is kept in
-// this browser's localStorage; the URL names only the selected tab, as
-// a one-column stack, so a copied link opens that card alone anywhere.
-// The decisions live in tabTree.ts; this file applies them.
+// that opened it, as in Firefox's Tree Style Tab. Each window has a
+// tree of its own (tabsWindow.ts); the URL names only the selected tab,
+// as a one-column stack, so a copied link opens that card alone
+// anywhere. The decisions live in tabTree.ts; this file applies them.
 import { computed, onBeforeUnmount, reactive, ref, watch, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
@@ -15,7 +15,7 @@ import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
-import { decodeColumns, type ColumnSpec } from "@/router/columns";
+import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
 import { DEFAULT_SPECS, pageTitle, pathFor, sameSpecs } from "@/views/millerStack";
 import {
   closeTab,
@@ -23,14 +23,14 @@ import {
   nextCounter,
   openChain,
   openStack,
-  parseStored,
   rows,
   selectAfterClose,
-  serialize,
+  startingTree,
   subtree,
   tabForSpec,
   type Tab,
 } from "@/views/tabTree";
+import { isMainWindow, readTrees, writeTree } from "@/views/tabsWindow";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const props = defineProps<{
@@ -45,37 +45,20 @@ const route = useRoute();
 const router = useRouter();
 const bus = createBus();
 
-const STORAGE_KEY = "datalib-tabs";
-
-function load(): { tabs: Tab[]; selectedId: string | null } | null {
-  try {
-    return parseStored(localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return null;
-  }
-}
-
-const stored = load();
-let counter = nextCounter(stored?.tabs ?? []);
+let counter = 1;
 const freshId = () => `t${counter++}`;
-
 const defaultTab = () => newTab(freshId(), DEFAULT_SPECS[0].code, null);
-const tabs = ref<Tab[]>(stored && stored.tabs.length > 0 ? stored.tabs : [defaultTab()]);
-const selectedId = ref<string>(
-  tabs.value.find((t) => t.id === stored?.selectedId)?.id ?? tabs.value[0].id,
-);
+
+// Empty until we know which window this is (see start below).
+const ready = ref(false);
+let mainWindow = false;
+const tabs = ref<Tab[]>([]);
+const selectedId = ref("");
 
 watch(
   [tabs, selectedId],
   () => {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        serialize({ tabs: tabs.value, selectedId: selectedId.value }),
-      );
-    } catch {
-      // Private window or blocked storage: the tabs last as long as the page.
-    }
+    if (ready.value) writeTree({ tabs: tabs.value, selectedId: selectedId.value }, mainWindow);
   },
   { deep: true },
 );
@@ -94,7 +77,7 @@ const sidebarRows = computed(() => rows(tabs.value));
 // A card mounts the first time its tab is shown and stays mounted
 // after, so switching back finds it as it was.
 const shown = reactive(new Set<string>());
-watch(selectedId, (id) => shown.add(id), { immediate: true });
+watch(selectedId, (id) => shown.add(id));
 
 // ---- URL sync ----
 
@@ -122,7 +105,7 @@ function entryTabId(): string | null {
 
 function writeUrl(mode: "push" | "replace") {
   const tab = selected.value;
-  if (!props.active || !tab) return;
+  if (!ready.value || !props.active || !tab) return;
   const specs = [specOfTab(tab)];
   if (written.tabId === tab.id && sameSpecs(specs, written.specs)) return;
   written = { tabId: tab.id, specs };
@@ -140,7 +123,7 @@ function writeUrl(mode: "push" | "replace") {
 // The URL changed under us — Back, Forward, a link, a hand-edited
 // address: show the tab it names, opening it if we have none.
 function adoptRoute() {
-  if (!props.active) return;
+  if (!ready.value || !props.active) return;
   const specs = effectiveSpecs(route.path);
   const entryId = entryTabId();
   written = { tabId: entryId, specs };
@@ -166,17 +149,32 @@ watch(
   },
 );
 
-if (props.openUrlOnMount) adoptRoute();
+// Back on screen: put the selected tab in the URL another layout wrote.
+function claimUrl() {
+  written = { tabId: entryTabId(), specs: effectiveSpecs(route.path) };
+  writeUrl("replace");
+}
 
 watch(
   () => props.active,
   (on) => {
-    if (!on) return;
-    written = { tabId: entryTabId(), specs: effectiveSpecs(route.path) };
-    writeUrl("replace");
+    if (on) claimUrl();
   },
-  { immediate: !props.openUrlOnMount },
 );
+
+void isMainWindow().then((main) => {
+  mainWindow = main;
+  const { own, saved } = readTrees();
+  const start = startingTree(own, saved, main);
+  counter = nextCounter(start?.tabs ?? []);
+  tabs.value = start?.tabs ?? [];
+  selectedId.value =
+    tabs.value.find((t) => t.id === start?.selectedId)?.id ?? tabs.value[0]?.id ?? "";
+  ready.value = true;
+  // A window with no tree of its own (a popped-out card) starts from its URL.
+  if (props.openUrlOnMount || tabs.value.length === 0) adoptRoute();
+  else claimUrl();
+});
 
 watchEffect(() => {
   if (!props.active) return;
@@ -313,6 +311,11 @@ function titleOf(tab: Tab): string {
   return displayTitle(tab.source, tab.title);
 }
 
+// The tab alone, at its current state: a new window with a stack of its own.
+function popOutHref(tab: Tab): string {
+  return encodeColumns([specOfTab(tab)]);
+}
+
 // ---- sidebar width ----
 
 const WIDTH_KEY = "datalib-tabs-sidebar-width";
@@ -405,6 +408,15 @@ function resetSidebarWidth() {
           </button>
           <span v-else class="tabs-twisty" />
           <span class="tabs-label">{{ titleOf(row.tab) }}</span>
+          <a
+            class="tabs-popout"
+            :href="popOutHref(row.tab)"
+            target="_blank"
+            rel="noopener"
+            title="pop out: open this card alone, in a new window"
+            @click.stop
+            >↗</a
+          >
           <button
             class="tabs-close"
             :title="row.tab.collapsed && row.hasChildren ? 'close this branch' : 'close'"
@@ -550,6 +562,7 @@ function resetSidebarWidth() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tabs-popout,
 .tabs-close {
   flex: 0 0 auto;
   visibility: hidden;
@@ -561,10 +574,18 @@ function resetSidebarWidth() {
   cursor: pointer;
   font-size: 11px;
 }
+.tabs-popout {
+  color: inherit;
+  text-decoration: none;
+  font-size: 12px;
+}
+.tabs-row:hover .tabs-popout,
 .tabs-row:hover .tabs-close,
+.tabs-row.is-selected .tabs-popout,
 .tabs-row.is-selected .tabs-close {
   visibility: visible;
 }
+.tabs-popout:hover,
 .tabs-close:hover {
   background: var(--datalib-hover);
 }

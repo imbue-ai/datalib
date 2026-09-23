@@ -9,6 +9,7 @@ import {
   rows,
   selectAfterClose,
   serialize,
+  startingTree,
   tabForSpec,
   type Tab,
 } from "@/views/tabTree";
@@ -145,6 +146,23 @@ describe("tabForSpec", () => {
 
   it("does not claim a tab whose state the URL contradicts", () => {
     expect(tabForSpec([g1], "t1", { code: "gridView()", state: "q=z" })).toBeNull();
+  });
+});
+
+describe("startingTree", () => {
+  const own = { tabs: [newTab("t5", "logView()", null)], selectedId: "t5" };
+  const saved = { tabs: [grid], selectedId: "t1" };
+
+  it("keeps a window's own tree across its reload", () => {
+    expect(startingTree(own, saved, false)).toBe(own);
+  });
+
+  it("restores the saved tree in the main window at launch", () => {
+    expect(startingTree(null, saved, true)).toBe(saved);
+  });
+
+  it("starts a popped-out window empty, so it is a stack of its own", () => {
+    expect(startingTree(null, saved, false)).toBeNull();
   });
 });
 

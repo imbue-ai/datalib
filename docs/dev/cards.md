@@ -310,8 +310,11 @@ reads or writes the URL; one switched back to puts its own stack back.
 One card at a time, full size, beside a sidebar listing every open
 card as a tree: each tab sits under the tab that opened it, as in
 Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
-pure functions. The tree is kept in `localStorage`, so it survives a
-reload but is not shared between browsers. The URL names only the
+pure functions. Each window has a tree of its own
+(`views/tabsWindow.ts`): a window popped out with a tab's or a card's
+↗ starts with that card alone, a stack of its own. The first window
+open is the main one; it also saves its tree to `localStorage`, and
+that is what the next launch restores. The URL names only the
 selected tab, as a one-column stack, so a copied link opens that card
 alone; the history entry also carries the tab's id, so Back finds the
 tab even after its state has moved on. A URL naming a card no tab

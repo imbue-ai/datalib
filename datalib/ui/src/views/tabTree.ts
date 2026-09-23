@@ -207,6 +207,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+// The tree a window starts with: its own, when a reload finds one; the
+// saved one, when this is the main window starting afresh (a launch);
+// and nothing — so the URL's card opens alone — for any other window.
+export function startingTree(
+  own: Stored | null,
+  saved: Stored | null,
+  mainWindow: boolean,
+): Stored | null {
+  if (own && own.tabs.length > 0) return own;
+  if (mainWindow && saved && saved.tabs.length > 0) return saved;
+  return null;
+}
+
 // The first counter value no stored id `t<n>` already uses.
 export function nextCounter(tabs: Tab[]): number {
   let max = 0;
