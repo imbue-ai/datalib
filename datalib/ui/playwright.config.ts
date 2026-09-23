@@ -169,13 +169,17 @@ const ROOT_OF: Record<string, (prefix: string) => string> = {
 // the user's shell.
 const PLAYBACK_DIR = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 const SANDBOX_ENV: Record<string, Record<string, string>> = {
-  // The streaming spec's two sources replay tapes rather than fetch,
-  // and each replayed request waits this long first: a download of a
-  // handful of conversations then lasts several seconds, long enough
-  // for it to seal checkpoints mid-run and for the spec to watch the
-  // rows arrive downstream while it is still going.
+  // The streaming spec's two sources replay tapes rather than fetch.
+  // While its hold file exists, a download that has sealed a checkpoint
+  // answers nothing more, so it stays in flight with rows already
+  // published for exactly as long as the spec is watching them flow
+  // downstream. A per-request delay is a race instead: on a busy runner
+  // the download can end before its first rows reach the grid.
   "data-sources-streaming": PLAYBACK_DIR
-    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_DELAY_MS: "1500" }
+    ? {
+        DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR,
+        DATALIB_HTTP_PLAYBACK_HOLD_SEALED: playbackHold("DATALIB_TEST_E2E_PLAYBACK_HOLD_SEALED"),
+      }
     : {},
   // The control spec starts, stops and restarts those same downloads
   // from the table, so each has to stay in flight until the spec has
@@ -184,18 +188,22 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // delay was a window — 2.5 s per request was eaten by a config save's
   // remount on a CI runner, 5 s made two tapes 75 s of sleeping.
   "data-sources-control": PLAYBACK_DIR
-    ? { DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR, DATALIB_HTTP_PLAYBACK_HOLD: playbackHold() }
+    ? {
+        DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR,
+        DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_PLAYBACK_HOLD"),
+      }
     : {},
 };
 
-// Where the control spec holds and releases its tapes. Cached in env
-// like the roots: the workers re-import this file and must name the
-// same file the backend was told about.
-function playbackHold(): string {
-  const existing = process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD;
+// Where a spec holds and releases its tapes, one file per spec, named
+// to it by `envName`. Cached in env like the roots: the workers
+// re-import this file and must name the same file the backend was told
+// about.
+function playbackHold(envName: string): string {
+  const existing = process.env[envName];
   if (existing) return existing;
   const hold = path.join(mintRoot("datalib-e2e-hold-"), "hold");
-  process.env.DATALIB_TEST_E2E_PLAYBACK_HOLD = hold;
+  process.env[envName] = hold;
   return hold;
 }
 

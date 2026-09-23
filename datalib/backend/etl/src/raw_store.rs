@@ -202,6 +202,7 @@ impl SealState {
         // so there is nothing to announce.
         if let Some(hash) = sealed {
             self.progress.checkpoint_rows(&hash, rows);
+            crate::http::record_seal();
         }
         Ok(())
     }
