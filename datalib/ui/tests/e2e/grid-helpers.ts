@@ -469,6 +469,25 @@ async function runIsClosed(page: Page): Promise<boolean> {
   return !dag.run || dag.run.finished_at != null;
 }
 
+/// A row's status and Last-synced stamp, read from one paint of it. Read
+/// one after the other, the two can come from different paints: a sync
+/// the loop takes on at once can finish between the reads, and "Stopped"
+/// from before it beside the stamp it just wrote reads as that sync
+/// having stopped.
+async function statusAndStampOf(
+  page: Page,
+  id: string,
+): Promise<{ status: string | null; stamp: string | null }> {
+  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
+    rows.slice(0, 1).map((row) => ({
+      status:
+        row.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null,
+      stamp: row.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
+    })),
+  );
+  return reading ?? { status: null, stamp: null };
+}
+
 /// Wait for a row to finish a run newer than the one it was showing.
 async function settleRowOnly(
   page: Page,
@@ -481,8 +500,9 @@ async function settleRowOnly(
     await expect
       .poll(
         async () => {
-          last = (await statusOf(page, id)) ?? "(no status)";
-          const stamp = await stampOf(page, id);
+          const reading = await statusAndStampOf(page, id);
+          last = reading.status ?? "(no status)";
+          const stamp = reading.stamp;
           const done = TERMINAL.test(last) && stamp !== before;
           // "Interrupted" is the one terminal status the UI INFERS rather
           // than reads: `stepStatus` reports it when a step says
@@ -523,7 +543,8 @@ async function settleRowOnly(
   return last;
 }
 
-/// Wait until no runner holds the data root, then remount so the page
+/// Wait until no sync is running — the server's loop is idle, or, before
+/// it has the lock, no `datalib-dag` holds it — then remount so the page
 /// is not a beat behind it.
 export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
   await expect
@@ -532,7 +553,7 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
         const dag = await (await page.request.get("/api/dag")).json();
         return dag.run?.live === true;
       },
-      { timeout, intervals: [200], message: "a runner still holds the data root" },
+      { timeout, intervals: [200], message: "a sync is still running" },
     )
     .toBe(false);
   await page.reload();

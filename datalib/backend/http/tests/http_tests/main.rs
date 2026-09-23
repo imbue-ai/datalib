@@ -21,6 +21,5 @@ mod remote_media;
 mod request_log;
 mod runs_endpoints;
 mod server_log;
+mod sync_loop;
 mod ui_events;
-mod worker_cancel;
-mod worker_failure_tail;

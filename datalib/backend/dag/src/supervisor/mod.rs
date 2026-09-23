@@ -21,5 +21,7 @@ pub enum RequestEvent {
         id: String,
         outcome: store::RequestOutcome,
         failed_step: Option<String>,
+        /// Who asked a stopped request to stop.
+        stopped_by: Option<String>,
     },
 }

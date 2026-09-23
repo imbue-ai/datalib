@@ -212,7 +212,7 @@ datalib/
     applets/       `datalib-applet`: the applet host.
     history/       a doltlite store's commit log, third-party deps only,
                    so datalib-http can serve it without linking `etl`.
-    http/          `datalib-http`: API server + sync worker + UI host +
+    http/          `datalib-http`: API server + sync loop + UI host +
                    applet gateway. Every route is behind a per-process
                    API token (src/auth.rs): read
                    `<root>/system/api-token`, send
@@ -256,8 +256,9 @@ share one transaction. Scheduler state is `system/dag_state.json`. A
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-dag --check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
-shows `ConfigErrorView`, live in both directions. The http server's sync
-worker shells out to `datalib-dag`; the Manage tab edits the config; a
+shows `ConfigErrorView`, live in both directions. The http server runs
+the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
+`runner-lock` for its life; the Manage tab edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
 for applets.

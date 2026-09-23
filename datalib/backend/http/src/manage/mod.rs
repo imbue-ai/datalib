@@ -239,7 +239,7 @@ pub async fn get_manage_rows(
     }
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let record = crate::dag_record(&s.root).await;
+    let record = crate::dag_record(&s.root, s.sync.running()).await;
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))

@@ -64,6 +64,24 @@ struct Open {
     request: Request,
 }
 
+/// A stopped request whose steps are still winding down.
+struct Winding {
+    id: String,
+    by: String,
+    scope: Vec<bool>,
+}
+
+impl Winding {
+    fn over(&self) -> RequestEvent {
+        RequestEvent::Closed {
+            id: self.id.clone(),
+            outcome: RequestOutcome::Stopped,
+            failed_step: None,
+            stopped_by: Some(self.by.clone()),
+        }
+    }
+}
+
 /// How often a loop with steps running looks for new rows. A loop with
 /// nothing running is not waiting on anything else, so it looks at the
 /// same pace.
@@ -137,9 +155,7 @@ impl Runner {
         // Each step's state the last time a request wanted it, which is
         // what its row settles on once none does.
         let mut last_states: Vec<Row> = vec![Row::Idle; n];
-        // Stopped requests whose steps are still winding down, with their
-        // scopes.
-        let mut winding: Vec<(String, Vec<bool>)> = Vec::new();
+        let mut winding: Vec<Winding> = Vec::new();
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
@@ -259,14 +275,10 @@ impl Runner {
                 }
             }
 
-            winding.retain(|(id, scope)| {
-                let still_stopping = t.stops.iter().any(|&i| scope[i]);
+            winding.retain(|w| {
+                let still_stopping = t.stops.iter().any(|&i| w.scope[i]);
                 if !still_stopping {
-                    self.tell(RequestEvent::Closed {
-                        id: id.clone(),
-                        outcome: RequestOutcome::Stopped,
-                        failed_step: None,
-                    });
+                    self.tell(w.over());
                 }
                 still_stopping
             });
@@ -311,6 +323,7 @@ impl Runner {
                         id: id.clone(),
                         outcome,
                         failed_step: step.map(str::to_string),
+                        stopped_by: None,
                     });
                 }
             }
@@ -385,12 +398,8 @@ impl Runner {
             }
             self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
         }
-        for (id, _) in winding {
-            self.tell(RequestEvent::Closed {
-                id,
-                outcome: RequestOutcome::Stopped,
-                failed_step: None,
-            });
+        for w in winding {
+            self.tell(w.over());
         }
 
         if let Some(run) = state.current_run.as_mut() {
@@ -435,7 +444,7 @@ impl Runner {
         paused: &mut BTreeSet<usize>,
         seq: &mut u64,
         ever_in_scope: &mut [bool],
-        winding: &mut Vec<(String, Vec<bool>)>,
+        winding: &mut Vec<Winding>,
     ) -> Result<()> {
         let mut admit = |id: Option<String>, roots: Vec<usize>, open: &mut Vec<Open>| {
             for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
@@ -479,22 +488,19 @@ impl Runner {
                 open.retain(|o| o.id.as_deref().is_none_or(|id| still_open.contains(id)));
                 for row in rows {
                     let known = open.iter().position(|o| o.id.as_deref() == Some(&row.id));
-                    if row.stop_requested_by.is_some() {
+                    if let Some(by) = row.stop_requested_by {
                         store
                             .close_request(&row.id, RequestOutcome::Stopped, None)
                             .await?;
-                        match known {
-                            Some(k) => {
-                                let stopped = open.remove(k);
-                                winding
-                                    .push((row.id, downstream_of(graph, &stopped.request.roots)));
-                            }
-                            None => self.tell(RequestEvent::Closed {
-                                id: row.id,
-                                outcome: RequestOutcome::Stopped,
-                                failed_step: None,
-                            }),
-                        }
+                        let stopped = Winding {
+                            id: row.id,
+                            by,
+                            scope: match known {
+                                Some(k) => downstream_of(graph, &open.remove(k).request.roots),
+                                None => vec![false; graph.steps.len()],
+                            },
+                        };
+                        winding.push(stopped);
                         continue;
                     }
                     if known.is_some() {
@@ -541,6 +547,7 @@ impl Runner {
                             id: row.id,
                             outcome: RequestOutcome::Failed,
                             failed_step: Some(unknown.clone()),
+                            stopped_by: None,
                         });
                         continue;
                     }
@@ -1211,7 +1218,8 @@ mod tests {
                 RequestEvent::Closed {
                     id,
                     outcome: RequestOutcome::Done,
-                    failed_step: None
+                    failed_step: None,
+                    stopped_by: None
                 }
             ]
         );
@@ -1283,7 +1291,8 @@ mod tests {
             [RequestEvent::Closed {
                 id,
                 outcome: RequestOutcome::Stopped,
-                failed_step: None
+                failed_step: None,
+                stopped_by: Some("ui".into())
             }]
         );
     }

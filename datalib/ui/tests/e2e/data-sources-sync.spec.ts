@@ -635,6 +635,13 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
+    // A stamp is to the second, and the server's loop takes the next
+    // sync on at once: two syncs inside one second carry one stamp, and
+    // Last synced moving could not be told from it staying put.
+    const settledIn = Math.floor(Date.now() / 1000);
+    await expect
+      .poll(() => Math.floor(Date.now() / 1000), { intervals: [50] })
+      .toBeGreaterThan(settledIn);
     await syncBtn(page, "soured/ingest").click();
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");
