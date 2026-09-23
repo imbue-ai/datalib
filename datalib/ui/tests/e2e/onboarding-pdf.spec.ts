@@ -251,9 +251,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await page.goto(`${BASE}/data_sources`);
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     // Re-read rather than reuse: this is a fresh page, and the numbers
-    // it shows are the ones the assertion below is about.
-    const beforeSecond = await bytesOf(page, "pdfs/ingest");
-    expect(beforeSecond).toBe(rawBytes);
+    // it shows are the ones the assertion below is about. Polled, since
+    // the button paints before the rows do.
+    await expect
+      .poll(() => bytesOf(page, "pdfs/ingest"), {
+        message: "the fresh page should show the size the first sync left",
+      })
+      .toBe(rawBytes);
 
     const secondRun = await stampsBefore(page, SYNCED_ROWS);
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();

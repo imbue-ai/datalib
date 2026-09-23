@@ -266,6 +266,12 @@ root that had never run would sprout a lock file from being looked at. It is
 racy by nature: the holder may let go a microsecond later. Don't build an
 invariant on it.
 
+Read-only does not mean invisible. `flock(2)` has no way to ask without
+taking, so the probe holds the lock for an instant, and the server probes on
+every change under the root — most often just as a run starts. A runner that
+finds the lock held therefore keeps trying for two seconds before it refuses;
+a real second runner holds it far longer than that.
+
 ## Progress: the store takes positions, never deltas
 
 The run store (`system/runs/runs.sqlite`, written through `runs_sink.rs`)
