@@ -1,5 +1,9 @@
 //! Datalib **app-state schema** crate — the tables that hold the
 //! application's own state rather than rendered/presentable data.
+//!
+//! Changing a table's shape: `datalib/backend/etl/README.md` §"Schema
+//! self-healing" and §"The migration ladder" say what survives and what
+//! refuses to open.
 
 pub mod feedback {
     include!("feedback.rs");

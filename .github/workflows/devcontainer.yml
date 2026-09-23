@@ -16,6 +16,8 @@
 # it can analyse the tree. To try a Dockerfile change before a release,
 # dispatch this workflow on the branch, then `test.yml` with the `sha-`
 # tag it prints. Old `sha-` versions are pruned after each push.
+#
+# Read docs/dev/ci.md before changing this file.
 name: devcontainer
 
 on:
