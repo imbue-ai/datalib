@@ -427,6 +427,28 @@ jobs:
           path: e2e-report/test.log
           retention-days: 14
 
+      # The fixture pipeline's full output, when the run is red. The test
+      # log keeps each pipeline run's last 40 lines of stderr, to stay
+      # under the 1 MB bazel prints (docs/dev/ci.md § Reading a run);
+      # every line of every run is in its `outputs.zip`.
+      - name: Keep the ingested_tng_test outputs
+        if: failure()
+        run: |
+          set -euo pipefail
+          flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
+          zip="$(bazel info bazel-testlogs "${flags[@]}")/tests/fixtures/ingested_tng_test/test.outputs/outputs.zip"
+          if [[ -f "${zip}" ]]; then
+            mkdir -p ingested-tng && cp -L "${zip}" ingested-tng/outputs.zip
+          else
+            echo "no ingested_tng_test outputs at ${zip} — it did not run here, or passed"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && hashFiles('ingested-tng/outputs.zip') != ''
+        with:
+          name: ingested-tng-outputs
+          path: ingested-tng/outputs.zip
+          retention-days: 7
+
       # Make the build downloadable: every shipped binary under its
       # public name (`//datalib/backend:bin` does the rename), in a
       # tarball laid out like the release's. Nearly free — the test
