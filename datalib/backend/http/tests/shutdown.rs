@@ -24,6 +24,24 @@ struct Server {
     stderr: mpsc::Receiver<String>,
 }
 
+/// The contents of `path` once it has some, or a failure naming what
+/// never arrived rather than a bare timeout.
+fn wait_for_file(path: &Path, what: &str) -> String {
+    let deadline = Instant::now() + STARTUP;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if !text.is_empty() {
+                return text;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "datalib-http never wrote its {what}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn start(root: &Path) -> Server {
     let url_file = root.parent().unwrap().join("url");
     let mut child =
@@ -48,26 +66,16 @@ fn start(root: &Path) -> Server {
         }
     });
 
-    let deadline = Instant::now() + STARTUP;
-    let url = loop {
-        if let Ok(url) = std::fs::read_to_string(&url_file) {
-            if !url.is_empty() {
-                break url;
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "datalib-http never wrote its url file"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let url = wait_for_file(&url_file, "url file");
     let origin = url
         .split_once("://")
         .and_then(|(_, rest)| rest.split(['/', '?']).next())
         .map(|host| format!("http://{host}"))
         .expect("url has a host");
-    let token = std::fs::read_to_string(root.join("system/api-token"))
-        .expect("api token")
+    // The url file is written before `build_state`, and `build_state` is
+    // what writes the token file — so the url arriving says nothing
+    // about the token. Under load the gap is wide enough to lose.
+    let token = wait_for_file(&root.join("system/api-token"), "api token")
         .trim()
         .to_string();
     let server = Server {
