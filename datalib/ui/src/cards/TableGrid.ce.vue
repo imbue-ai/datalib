@@ -23,7 +23,7 @@ import type {
 } from "@slickgrid-universal/common";
 import type { ColumnSpec } from "@/api";
 import { formatRelative } from "@/config/timeFormat";
-import { carryLayout, MIN_COLUMN_WIDTH } from "@/grid/columnLayout";
+import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
@@ -198,8 +198,6 @@ const api: TableGridApi<T> = { startEditing, selectedRows, refreshCells };
 defineExpose({ refreshCells, api: () => api });
 
 function buildColumns(): Column<T>[] {
-  // The typed floor is a column's declared width, there to stop a fit
-  // squeezing it; this grid never fits, so a person may go narrower.
   const typed = typedColumns<T>(props.columns, {
     rows: () => props.rows,
     tree: props.tree,
@@ -207,7 +205,7 @@ function buildColumns(): Column<T>[] {
     actions: props.actions,
     onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
-  }).map((c) => ({ ...c, minWidth: MIN_COLUMN_WIDTH }));
+  });
   if (!props.tree) return typed;
   return [
     ...typed,
@@ -246,11 +244,7 @@ function options(): GridOption {
     enableEmptyDataWarningMessage: false,
     darkMode: isDark(),
     enableAutoResize: true,
-    // The grid follows its box; its columns do not. A fit would run on
-    // every resize and every column update, undoing any width a person
-    // dragged.
-    enableAutoSizeColumns: false,
-    autoFitColumnsOnFirstLoad: false,
+    ...KEEP_COLUMN_WIDTHS,
     autoResize: {
       container: boxEl.value!.parentElement!,
       calculateAvailableSizeBy: "container",

@@ -1,16 +1,25 @@
-// What a person has done to a grid's columns — dragged a width, moved
-// a column — carried onto a fresh set of definitions, so a producer
-// re-declaring its columns does not undo it. Pure: columns in, columns
-// out; the grid applies the result.
+// How every grid here treats its columns: they keep the widths they
+// are given or dragged to, through a resize, a refresh and a rebuild.
+// The grid follows its box; its columns do not.
+import type { GridOption } from "@slickgrid-universal/common";
 
-/// A column narrower than this reads as nothing at all.
-export const MIN_COLUMN_WIDTH = 40;
+/// Options every grid spreads into its own. slickgrid's default fits
+/// the columns to the viewport on the first load, on every resize and
+/// on every column update, which undoes any width a person dragged.
+/// With no fit, a column needs no `minWidth` either: that only ever
+/// stopped the fit squeezing it, and it stops a person too.
+export const KEEP_COLUMN_WIDTHS = {
+  enableAutoSizeColumns: false,
+  autoFitColumnsOnFirstLoad: false,
+} satisfies GridOption;
 
 interface Laid {
   id: string | number;
   width?: number;
 }
 
+/// What a person did to the columns, carried onto a fresh set of
+/// definitions so a producer re-declaring them does not undo it:
 /// `fresh` in the order and at the widths of `current`, the columns the
 /// grid shows now. A column `current` lacks keeps its declared width
 /// and its declared place after the ones that are carried over.
