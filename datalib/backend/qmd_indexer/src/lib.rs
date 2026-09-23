@@ -6,8 +6,8 @@
 //! that pass runs a small script of ours against qmd's SDK instead and
 //! reads progress back as NDJSON. See [`EmbedEvent`].
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -186,13 +186,20 @@ impl std::fmt::Debug for IndexOptions {
 /// `MODEL_CACHE_DIR`), so a standalone `qmd` run and a build-driven run
 /// share one cache instead of each downloading their own copy.
 pub fn default_models_dir() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+    models_dir_under(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+/// Split out from the environment so the choice between the two roots
+/// can be tested as what it is — a decision over two values — rather
+/// than by setting variables the whole test process shares.
+fn models_dir_under(xdg_cache_home: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    if let Some(xdg) = xdg_cache_home {
         return PathBuf::from(xdg).join("qmd").join("models");
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".cache").join("qmd").join("models")
+    PathBuf::from(home.unwrap_or_else(|| ".".into()))
+        .join(".cache")
+        .join("qmd")
+        .join("models")
 }
 
 /// The pinned models `qmd embed` needs, by the on-disk names
@@ -501,26 +508,20 @@ struct EmbedScript(PathBuf);
 
 impl EmbedScript {
     fn write() -> Result<Self> {
+        // The pid alone is not unique enough: a crate's tests run as
+        // threads of one process, so two scripts would share a path and
+        // the first `Drop` would delete a file the other still needed.
+        static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // `.mjs` so node reads it as a module from the extension alone,
         // with no flag that a forked grandchild could inherit.
-        //
-        // The counter is what separates two wrappers, not the pid: two
-        // embeds in one process share a pid, and the first of them to
-        // drop deletes the file the other is still running. The pid
-        // separates processes, which the counter cannot.
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "datalib-qmd-embed-{}-{}.mjs",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            "datalib-qmd-embed-{}-{nth}.mjs",
+            std::process::id()
         ));
         std::fs::write(&path, EMBED_NDJSON_MJS)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(Self(path))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
     }
 }
 
@@ -555,7 +556,7 @@ fn run_embed(
     let mut cmd = std::process::Command::new(&node);
     // No node flags before the script. Anything here is inherited by
     // every process forked below us — see the script's header.
-    cmd.arg(script.path()).arg(&pkg_dir).arg(index_path);
+    cmd.arg(&script.0).arg(&pkg_dir).arg(index_path);
     // qmd writes this beside the index during `update`; it is where the
     // embedding model is pinned. Passing it keeps the SDK resolving the
     // same model the CLI would rather than falling back to qmd's default
@@ -699,22 +700,23 @@ mod tests {
     /// our half of the contract.
     #[test]
     fn default_models_dir_matches_qmd_default() {
-        // XDG_CACHE_HOME branch: $XDG/qmd/models.
-        // Use the temp dir as a stand-in so we don't depend on the
-        // host's actual XDG_CACHE_HOME value (which CI may or may not
-        // set). `set_var` here is fine — Rust tests in a crate share a
-        // process, but no other test in this file touches the env.
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/qmd-test-xdg") };
-        let dir = default_models_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-xdg/qmd/models"));
+        // XDG_CACHE_HOME wins where it is set.
+        assert_eq!(
+            models_dir_under(Some("/x/cache".into()), Some("/home/u".into())),
+            PathBuf::from("/x/cache/qmd/models")
+        );
 
         // HOME fallback: $HOME/.cache/qmd/models.
-        // SAFETY: single-threaded test, no concurrent env access.
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
-        unsafe { std::env::set_var("HOME", "/tmp/qmd-test-home") };
-        let dir = default_models_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-home/.cache/qmd/models"));
+        assert_eq!(
+            models_dir_under(None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.cache/qmd/models")
+        );
+
+        // Neither set — relative to wherever this is running.
+        assert_eq!(
+            models_dir_under(None, None),
+            PathBuf::from("./.cache/qmd/models")
+        );
     }
 
     /// The exact lines a real embed produced, pasted from a run of the
@@ -811,32 +813,16 @@ mod tests {
     fn nothing_we_pass_node_can_be_inherited_by_a_forked_grandchild() {
         let script = EmbedScript::write().unwrap();
         let mut cmd = std::process::Command::new("node");
-        cmd.arg(script.path()).arg("pkg").arg("db");
+        cmd.arg(&script.0).arg("pkg").arg("db");
         let first = cmd.get_args().next().unwrap();
         assert_eq!(
             first,
-            script.path().as_os_str(),
+            script.0.as_os_str(),
             "the script must be node's first argument, with no flags in front of it"
         );
         assert!(
-            script.path().extension().is_some_and(|e| e == "mjs"),
+            script.0.extension().is_some_and(|e| e == "mjs"),
             "the file is read as a module by its extension, not by a flag"
-        );
-    }
-
-    /// Two wrappers alive at once are two different files. The name used
-    /// to be the pid alone, and a test binary runs its tests as threads
-    /// of one process: whichever wrapper dropped first deleted the file
-    /// the other was still using.
-    #[test]
-    fn two_wrappers_alive_at_once_do_not_share_a_file() {
-        let first = EmbedScript::write().unwrap();
-        let second = EmbedScript::write().unwrap();
-        assert_ne!(first.path(), second.path());
-        drop(second);
-        assert!(
-            first.path().is_file(),
-            "dropping one wrapper must not remove the other's file"
         );
     }
 
@@ -847,11 +833,27 @@ mod tests {
     fn the_script_is_cleaned_up_and_lives_outside_any_data_root() {
         let path = {
             let script = EmbedScript::write().unwrap();
-            assert!(script.path().is_file());
-            assert!(script.path().starts_with(std::env::temp_dir()));
-            script.path().to_path_buf()
+            assert!(script.0.is_file());
+            assert!(script.0.starts_with(std::env::temp_dir()));
+            script.0.clone()
         };
         assert!(!path.exists(), "the script should be gone once dropped");
+    }
+
+    /// Two live scripts must not share a path. They did while the name
+    /// was the pid alone: `cargo`/bazel run a crate's tests as threads
+    /// of **one** process, so every test that wrote a script wrote the
+    /// same file, and the first one to drop deleted a file another was
+    /// still asserting on. It fails as a flake somewhere else, which is
+    /// the expensive kind.
+    #[test]
+    fn two_scripts_in_one_process_get_their_own_files() {
+        let a = EmbedScript::write().unwrap();
+        let b = EmbedScript::write().unwrap();
+        assert_ne!(a.0, b.0, "two scripts collided on one path");
+        assert!(a.0.is_file() && b.0.is_file());
+        drop(a);
+        assert!(b.0.is_file(), "dropping one script deleted the other's");
     }
 
     /// A stand-in for the wrapper: `sh` printing canned lines, then
