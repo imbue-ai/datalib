@@ -18,6 +18,7 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import type { ProbeItem, ProbeItemKind } from "@/api";
+import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { stampRowKeys } from "@/grid/rowKeys";
 
 const props = defineProps<{
@@ -57,7 +58,6 @@ const LABELS: Layout = {
       name: "Label",
       field: "path",
       width: 260,
-      minWidth: 200,
       formatter: (_r, _c, v) => text(v),
     },
     { id: "role", name: "Role", field: "role", width: 110, formatter: (_r, _c, v) => text(v) },
@@ -85,7 +85,6 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
         name: "Conversation",
         field: "path",
         width: 280,
-        minWidth: 220,
         formatter: (_r, _c, _v, _col, item) => ({ text: byTitle(item), toolTip: item.path ?? "" }),
       },
       // A Slack DM carries a `group` tag and a head-count, a Claude
@@ -116,7 +115,6 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
         name: "Channel",
         field: "path",
         width: 260,
-        minWidth: 200,
         formatter: (_r, _c, _v, _col, item) => ({ text: item ? `#${item.path}` : "" }),
       },
       { id: "role", name: "Notes", field: "role", width: 180, formatter: (_r, _c, v) => text(v) },
@@ -201,6 +199,7 @@ function options(): GridOption {
     enableEmptyDataWarningMessage: false,
     darkMode: document.documentElement.dataset.theme === "dark",
     enableAutoResize: true,
+    ...KEEP_COLUMN_WIDTHS,
     autoResize: {
       container: boxEl.value!.parentElement!,
       calculateAvailableSizeBy: "container",

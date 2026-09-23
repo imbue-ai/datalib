@@ -398,6 +398,9 @@ again, and the only ones that should know the grid's DOM or options:
   four places a grid is built.
 - `grid/menu.ts` and `grid/rowKeys.ts` — the row menu and the `data-key`
   a row carries; `grid/query.ts` knows no grid at all.
+- `grid/columnLayout.ts` — how every grid treats its columns: never
+  fitted to the viewport, so a width a person drags stays, and carried
+  across a rebuild. Each of the four spreads its `KEEP_COLUMN_WIDTHS`.
 - `cards/tableGrid.css` — every `.slick-*` rule; the theme itself comes
   in through `main.ts` and each card's `styleSources`.
 - `tests/e2e/grid-helpers.ts` — every selector the specs use to reach a

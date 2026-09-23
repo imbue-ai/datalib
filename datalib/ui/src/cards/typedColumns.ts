@@ -256,11 +256,7 @@ export function typedColumns<T extends Record<string, unknown>>(
       field: f as Column<T>["field"],
       name: spec.header,
       toolTip: spec.description,
-      // A column keeps its width when the grid fits itself to its box:
-      // the fit shrinks a column down to `minWidth`, and these are as
-      // narrow as they read. The tree column is the one that gives.
       width: WIDTH[spec.type],
-      minWidth: WIDTH[spec.type],
       hidden: !spec.default_visible,
       sortable: true,
       resizable: true,
@@ -293,7 +289,6 @@ export function typedColumns<T extends Record<string, unknown>>(
                   // The column the tree hangs off: the chevron and the
                   // indent, then this.
                   width: 340,
-                  minWidth: 300,
                   formatter: treeCell(inner),
                 }
               : { formatter: inner }),
@@ -421,7 +416,6 @@ export function typedColumns<T extends Record<string, unknown>>(
         plain;
       merged.formatter = treeCell(inner);
       merged.width = Math.max(merged.width ?? 0, 340);
-      merged.minWidth = Math.min(merged.minWidth ?? 300, 300);
     }
     return merged;
   });

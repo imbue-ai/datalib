@@ -383,6 +383,18 @@ fn browse_action(label: &str, blocked: Option<String>) -> Action {
     }
 }
 
+/// A step's rows are its source's rows, so its Browse is its group's:
+/// the same button, opening the same view, enabled or not for the same
+/// reason.
+fn inherit_browse(step: &mut ManageRow, group: &ManageRow) {
+    let Some(from) = group.actions.iter().find(|a| a.id == "browse") else {
+        return;
+    };
+    if let Some(to) = step.actions.iter_mut().find(|a| a.id == "browse") {
+        *to = from.clone();
+    }
+}
+
 /// The sentence the Status cell carries for an entry the loader dropped.
 fn not_in_pipeline(d: &Diagnostic) -> String {
     format!("Not in the pipeline: {}", dropped_detail(d))
@@ -435,6 +447,13 @@ impl Snapshot<'_> {
                 ctx.group_row(g, &children)
             })
             .collect();
+        for (g, group) in self.written.groups.iter().zip(&groups) {
+            for (e, r) in entry_rows.iter_mut() {
+                if matches!(e, Entry::Step(_)) && r.group.as_deref() == Some(g.id.as_str()) {
+                    inherit_browse(r, group);
+                }
+            }
+        }
         let mut rows = groups;
         rows.extend(entry_rows.drain(..).map(|(_, r)| r));
         rows.extend(self.system_rows());
@@ -919,13 +938,13 @@ impl RowCtx<'_> {
             Entry::Step(_) => self.snap.record.documents.get(&id).copied(),
             Entry::Applet(_) => None,
         };
-        // A source is browsed as one thing, from its group's row. A
-        // step's rows are not a separate view of the data; they are the
-        // same rows.
+        // A step under a group takes its group's Browse once the group
+        // row is built (`inherit_browse`); this is the answer for one
+        // outside any group.
         let browse = browse_action(
             "Browse this data",
             Some(match e {
-                Entry::Step(_) => "Browse a source from its group's row.".to_string(),
+                Entry::Step(_) => "A step outside any group has no source to browse.".to_string(),
                 Entry::Applet(_) => {
                     "An applet serves endpoints; it has no rows of its own.".to_string()
                 }

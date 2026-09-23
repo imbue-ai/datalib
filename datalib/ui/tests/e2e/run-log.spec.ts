@@ -234,3 +234,42 @@ test("grouped by a column, the lines fold under group rows", async ({ page }) =>
   await expect(group).toHaveText(/^Level: \w+ \(\d+\)$/);
   await expect(dialog.locator(".slick-group-toggle-all")).toContainText("Expand / collapse all");
 });
+
+test("a dragged column width outlives the panel resizing", async ({ page }) => {
+  const dialog = await openServerLog(page);
+  const level = dialog.locator('.rl-grid .slick-header-column[col-id="level"]');
+  const before = (await level.boundingBox())!.width;
+  // Under the column's declared 80px, which used to be its floor. The
+  // grab is on the header's own side of the handle: the half past the
+  // edge sits under the next header. Retried as a whole: a drag that
+  // lands while the header is still being built moves nothing.
+  await expect(async () => {
+    const grip = (await level.locator(".slick-resizable-handle").boundingBox())!;
+    const header = (await level.boundingBox())!;
+    const x = Math.min(grip.x + grip.width / 2, header.x + header.width - 2);
+    const y = grip.y + grip.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 35, y, { steps: 5 });
+    await page.mouse.up();
+    expect((await level.boundingBox())!.width).toBeLessThan(before - 25);
+  }, "the Level column never narrowed").toPass({ timeout: 10_000, intervals: [250, 500] });
+  const dragged = (await level.boundingBox())!.width;
+
+  // Drag the log's own column wider, the way a person does. The fit that
+  // ran on every resize of the grid used to put every column back.
+  const grid = dialog.locator(".rl-grid .slickgrid-container");
+  const gridBefore = (await grid.boundingBox())!.width;
+  const edge = (await dialog.locator(".miller-col-resize").boundingBox())!;
+  const ex = edge.x + edge.width / 2;
+  const ey = edge.y + edge.height / 2;
+  await page.mouse.move(ex, ey);
+  await page.mouse.down();
+  await page.mouse.move(ex + 100, ey);
+  await page.mouse.move(ex + 200, ey);
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await grid.boundingBox())!.width)
+    .toBeGreaterThan(gridBefore + 100);
+  expect((await level.boundingBox())!.width).toBe(dragged);
+});
