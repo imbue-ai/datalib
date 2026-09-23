@@ -18,7 +18,10 @@ both inside `ghcr.io/imbue-ai/datalib_devcontainer:latest`:
 - `bazel test //...` — the repo hygiene lint, then
   `bazel test -c opt --config=release --config=ci --nostamp --jobs=16 //...`,
   then a `bazel build //datalib/backend:bin` staged as a downloadable
-  tarball.
+  tarball. Everything but a `main` push adds `--config=pr-tests`, which
+  builds our own crates at opt-level 1 and leaves third-party crates and
+  doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
+  below); so a PR's tarball is not what a release ships.
 - `bazel build :dist (musl static)` — the fully static release leg,
   plus `doltlite_link_test` against those binaries. Separate job so
   its ~80 s is not on the other one's critical path.
@@ -209,8 +212,9 @@ push and a dispatch each get a group of their own
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
 and re-runs most of the suite. A rising median means cold runs got
-more frequent, not that anything got slower. Blast radius is the only
-lever on a cold run, and it can be measured before pushing:
+more frequent, not that anything got slower. The levers on a cold run
+are its blast radius, which can be measured before pushing, and what
+each rebuilt binary costs (the next paragraph):
 
 ```bash
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'
@@ -221,8 +225,12 @@ bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/schema:datalib_sc
 cost is.** A Rust test crate is not a `cc_test` linking prebuilt
 objects: rustc compiles the leaf crate, generates code for every
 generic it instantiates from tokio, sqlx, serde and axum, and links
-the whole stack — doltlite's C included — statically, in opt mode
-(the tests run in `-c opt` so the cache they warm is the release's).
+the whole stack — doltlite's C included — statically. On a `main` push
+that is all at opt-level 3, so the cache it warms is the release's. A
+PR run and the contributor-cache warm build our own crates at opt-level
+1 instead (`.bazelrc`'s `pr-tests`): on a 4-vCPU runner code generation
+is the bill, and a PR needs the code correct, not fast. An opt-only bug
+then shows on the `main` push rather than the PR.
 The rlibs underneath are cache hits; that last step is not, and a
 shared-crate edit repeats it once per test target. So one binary per
 `tests/*.rs` file is the expensive layout: `datalib/backend/http` paid
