@@ -144,21 +144,23 @@ and each takes the file's writer lock — `flock(2)` on the sibling
 connection, which holds it until it closes. A second writer on the same
 file, in another process or in this one, is refused at open with the
 holder named (`<program> (pid N)`) instead of sharing the first's
-working set: every store's writer is on `main`, so an `-Am` commit
-through either pool sweeps up whatever the other has in flight, and two
-mid-write pools contend for a lock `dolt_commit` takes without waiting.
+working set: two writers of one store land on one branch, so an `-Am`
+commit through either pool sweeps up whatever the other has in flight,
+and two mid-write pools contend for a lock `dolt_commit` takes without
+waiting.
 
-Putting the second writer on its own branch does not rescue this, which
-is worth knowing before anyone proposes it. Measured the same day, two
-processes each holding one connection on its own branch, 60 commits
-each: the content did stay apart (`main` ended with all of the first
-writer's rows and none of the second's, `alt` the reverse), and about
-three quarters of the operations failed — `database is locked by
-another connection` from doltlite's own lock on the file, and `commit
-conflict: another connection committed to this branch. Please retry
-your transaction`. A writer that reconnects per operation fares worse
-still: a fresh connection opens on `main`, a failed `dolt_checkout` is
-silent, and the rows land on the wrong branch. The kernel releases the lock when
+**Giving the second writer a branch of its own does not rescue this**,
+which is worth knowing before anyone proposes it — including anyone
+reasoning from the section below, where a branch is exactly what
+isolates one writer from every *reader*. Measured, two processes each
+holding one connection on its own branch, 60 commits each: the content
+did stay apart (`main` ended with all of the first writer's rows and
+none of the second's, `alt` the reverse), and about three quarters of
+the operations failed — `database is locked by another connection` from
+doltlite's own lock on the file, and `commit conflict: another
+connection committed to this branch. Please retry your transaction`.
+Branches separate *content*; they do not separate *contention*, and the
+lock is what keeps one writer per file. The kernel releases the lock when
 the holder dies, so a killed run leaves no stale claim; the next `open`
 finds its dirty rows and **discards them** (`dolt_reset --hard`, then
 any table the dead writer created and never committed), so the store
@@ -208,6 +210,16 @@ connection on `WRITER_BRANCH` (`datalib_writer`) in `after_connect`,
 not once at open: sqlx replaces a connection that breaks, and a
 replacement starting on the default branch would put half-finished work
 where every reader can see it.
+
+**The connection is asked back which branch it is on, and a wrong
+answer fails the open.** A selection that quietly did nothing is the one
+failure this construction cannot survive: a fresh connection is on the
+file's default branch, so a writer that thinks it moved and did not
+writes to `main`, where every row is visible to every reader the moment
+it lands rather than when it is sealed — and nothing else would notice,
+because the rows are all there and the commits all happen. Measured: a
+failed `dolt_checkout` is silent and the rows land on the wrong branch.
+`fsindex::checkout_branch` reads back for the same reason.
 
 It gets there with **`dolt_connect_branch`, never `dolt_checkout`**.
 Both leave the session on the branch, but `dolt_checkout` persists a

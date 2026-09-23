@@ -325,12 +325,17 @@ The rules, none optional; the reasons and measurements are in
 `datalib/backend/etl/README.md` §"Connection pools":
 
 - **One writer per file.** Doltlite's working set lives in the *file*,
-  per branch, shared across processes; every store's writer is on
-  `main`, so a second writer commits the first's in-flight rows. Giving
-  it a branch of its own does not help — the two then contend for the
-  file instead (measured; `etl/README.md`). The `grid_index` step owns the index; `datalib-http`
-  owns feedback, jobs and usage; the applet only reads. A download takes
-  its store as an input (`FetchOptions.db: RawDb`) and never opens one.
+  per branch, shared across processes, so two writers of one store
+  commit each other's in-flight rows. Giving the second a branch of its
+  own does not help — the content stays apart but the two then contend
+  for the file (measured; `etl/README.md`). The `grid_index` step owns
+  the index; `datalib-http` owns feedback, jobs and usage; the applet
+  only reads. A download takes its store as an input
+  (`FetchOptions.db: RawDb`) and never opens one.
+- **A writer works on `datalib_writer`, never on `main`**, and
+  fast-forwards `main` when it seals, so a reader on `main` never sees
+  a half-written batch or a half-built schema. `commit_run` is the
+  seal; a bare `dolt_commit` publishes nothing and reaches no reader.
 - **Every pool is `max_connections(1)`** with recycling off, and there is
   one open per file per pass. `close().await` before the next open, on
   the error path too — dropping the handle only schedules the close.
