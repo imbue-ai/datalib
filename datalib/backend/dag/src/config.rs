@@ -1757,6 +1757,60 @@ mod tests {
         );
     }
 
+    /// Who is handed the runner's parent pipe. `datalib-step` watches it,
+    /// so a built-in step opts in by default; an arbitrary `command` is
+    /// assumed not to, because a program that ignores the pipe gains
+    /// nothing from holding one and would hang if it read stdin. Either
+    /// default can be overridden, which is the only way a custom step can
+    /// ask for it.
+    #[test]
+    fn a_builtin_step_watches_the_runner_and_a_command_step_does_not() {
+        let cfg: DagConfig = toml::from_str(
+            r#"
+            [[groups]]
+            id = "slack"
+            type = "slack"
+
+            [[steps]]
+            group = "slack"
+            function = "ingest"
+
+            [[steps]]
+            id = "plain/step"
+            command = "my-program"
+
+            [[steps]]
+            id = "watching/step"
+            command = "my-watching-program"
+            watches_runner = true
+
+            [[steps]]
+            group = "slack"
+            function = "render_markdown"
+            inputs = ["slack/ingest"]
+            watches_runner = false
+            "#,
+        )
+        .unwrap();
+        let specs = to_specs(&cfg).unwrap();
+        let watches = |id: &str| match &specs
+            .iter()
+            .find(|s| s.id.as_str() == id)
+            .unwrap_or_else(|| panic!("no step {id}"))
+            .run
+        {
+            StepRun::Subprocess { watches_runner, .. } => *watches_runner,
+            other => panic!("expected subprocess, got {other:?}"),
+        };
+        assert!(watches("slack/ingest"), "a built-in step opts in");
+        assert!(!watches("plain/step"), "an arbitrary command does not");
+        assert!(watches("watching/step"), "and can say it does");
+        assert!(
+            !watches("slack/render_markdown"),
+            "a built-in step can opt back out"
+        );
+    }
+
     /// A built-in step writes no `command`: its argv is `datalib-step`
     /// plus the declared fields as JSON flags, and the function, group and
     /// type it dispatches on travel in the environment instead.
