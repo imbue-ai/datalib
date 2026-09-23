@@ -35,6 +35,7 @@ pub mod frontend;
 pub mod history;
 pub mod lock;
 pub mod logging;
+pub mod loop_guard;
 pub mod manage;
 pub mod remote_media;
 pub mod request_log;

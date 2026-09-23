@@ -62,16 +62,15 @@ const lineCount = (page: Page) =>
 /// delivered at the next frame, after the press has opened the menu, and
 /// the grid's context menu closes on any scroll of the grid. Scroll
 /// events are dispatched before a frame's animation callbacks, so one
-/// frame is enough. Retried until a menu is up: the server's log grows
-/// with every request, and a line arriving re-renders the row it holds.
-async function rightClick(target: Locator) {
-  const menu = target.page().locator(".slick-context-menu");
+/// frame is enough. Retried until `entry` shows, because a new line can
+/// re-render the row and detach the cell before the press.
+async function rightClick(target: Locator, entry: Locator) {
   await expect(async () => {
-    await target.scrollIntoViewIfNeeded();
+    await target.scrollIntoViewIfNeeded({ timeout: 1_000 });
     await target.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
-    await target.click({ button: "right" });
-    await expect(menu).toBeVisible({ timeout: 1_000 });
-  }, "no context menu opened").toPass({ timeout: 10_000 });
+    await target.click({ button: "right", timeout: 1_000 });
+    await expect(entry).toBeVisible({ timeout: 1_000 });
+  }).toPass();
 }
 
 test("a cell's right-click keeps only its value, and the query clears again", async ({ page }) => {
@@ -96,9 +95,8 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   expect(msg.trim(), "the first line should have a message").not.toBe("");
   // One right-click is enough: the panel holds the tail back while a
   // button is down on the grid, so the row is not re-rendered under it.
-  await rightClick(msgCell);
   const keepOnly = menuEntry(page, `Keep only Message=${msg}`);
-  await expect(keepOnly).toBeVisible();
+  await rightClick(msgCell, keepOnly);
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
@@ -118,8 +116,9 @@ test("a cell's right-click keeps only its value, and the query clears again", as
     })
     .toEqual([msg]);
 
-  await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'));
-  await menuEntry(page, "Clear the query").click();
+  const clear = menuEntry(page, "Clear the query");
+  await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
+  await clear.click();
   await expect(query).toHaveValue("");
   // With no query at all, every line this launch wrote.
   await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);

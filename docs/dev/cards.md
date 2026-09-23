@@ -7,13 +7,13 @@ bar. The host evaluates that source to produce the card's content.
 shape described here; this doc is the narrative version.
 
 A **layout** is what arranges cards on screen — a stack of miller
-columns, a 2D tree, a tiling window manager — selectable from the
-status bar (see `datalib/ui/src/views/CardsView.vue`). This doc is
+columns, tabs in a sidebar tree, a 2D tree, a tiling window manager —
+selectable from the status bar, and remembered in the browser (see `datalib/ui/src/views/CardsView.vue`). This doc is
 deliberately layout-agnostic: it describes the card contract and how a
 card interacts with whatever layout hosts it. The layouts differ only
 in *where* they put cards and what reshaping furniture they offer;
 those specifics live with each layout (`MillerView.vue`,
-`TreeView.vue`, `TilingView.vue`). What every layout guarantees a card
+`TabsView.vue`, `TreeView.vue`, `TilingView.vue`). What every layout guarantees a card
 is identical, and is the subject here.
 
 ## Card source
@@ -302,7 +302,31 @@ tab, a history menu and a bookmark say what it is. A `/chat/<uuid>`
 link — the shape every renderer writes into a document body — is
 routed to that document alone (`router/index.ts`), so the tab a
 modified click opens shows the document. The tree and tiling layouts
-are in memory only and get none of this.
+are in memory only and get none of this. Only the layout on screen
+reads or writes the URL; one switched back to puts its own stack back.
+
+## The tabs layout
+
+One card at a time, full size, beside a sidebar listing every open
+card as a tree: each tab sits under the tab that opened it, as in
+Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
+pure functions. Each window has a tree of its own
+(`views/tabsWindow.ts`): a window popped out with a tab's or a card's
+↗ starts with that card alone, a stack of its own. The first window
+open is the main one; it also saves its tree to `localStorage`, and
+that is what the next launch restores. The URL names only the
+selected tab, as a one-column stack, so a copied link opens that card
+alone; the history entry also carries the tab's id, so Back finds the
+tab even after its state has moved on. A URL naming a card no tab
+shows opens a new root tab (a miller link of several columns opens
+as a spine).
+
+A card a card opened is a **preview** (italic in the sidebar) until
+the person visits it from the sidebar or it opens something itself;
+the next card its opener opens replaces it. Without that, clicking
+down a grid's rows would leave a tab per row. Closing a tab hands its
+children to its own parent; closing a collapsed one closes its whole
+branch.
 
 ## Prebuilt views
 
