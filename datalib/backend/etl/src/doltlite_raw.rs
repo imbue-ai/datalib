@@ -1741,6 +1741,20 @@ pub async fn record_object_attempt(
     id: &str,
     result: Option<&str>,
 ) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, result).await?;
+    record_fetch_problem(tx, table, id, result.map(NotFetched::Failed)).await
+}
+
+/// The sidecar half of an attempt, without the `problems` row: the data
+/// stub, the attempt count, the stamps and `last_error`. Split out
+/// because a deliberate skip wants exactly this bookkeeping and a
+/// different problem (see [`record_object_skipped`]).
+async fn record_object_bookkeeping(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    result: Option<&str>,
+) -> Result<()> {
     // Keep the always-paired invariant: a failure recorded before any
     // successful fetch has no data row yet.
     let stub_sql = format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)");
@@ -1783,19 +1797,63 @@ pub async fn record_object_attempt(
     q.execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt {table}={id}"))?;
-    record_fetch_problem(tx, table, id, result).await
+    Ok(())
+}
+
+/// A record the download declined to fetch, because a limit in the
+/// config said not to.
+///
+/// The bookkeeping is a failed attempt's, deliberately: `last_error`
+/// carries what the rule measured, and it is what puts the record in
+/// [`failed_ids`], so raising the limit picks the file up on the next
+/// run. Only the `problems` row differs — nothing went wrong here, and
+/// a person reading the Manage screen should not be told it did.
+pub async fn record_object_skipped(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    reason: datalib_problems::Reason,
+    detail: &str,
+) -> Result<()> {
+    record_object_bookkeeping(tx, table, id, Some(detail)).await?;
+    record_fetch_problem(tx, table, id, Some(NotFetched::Skipped { reason, detail })).await
+}
+
+/// Why a record has no payload after this run touched it. A failure is
+/// something that went wrong and may not next time; a skip is a rule we
+/// applied on purpose. They must not read the same on the Manage
+/// screen, and they do not carry the same severity.
+#[derive(Debug, Clone, Copy)]
+pub enum NotFetched<'a> {
+    Failed(&'a str),
+    /// Declined on purpose — `reason` says which rule, `detail` says
+    /// what it measured.
+    Skipped {
+        reason: datalib_problems::Reason,
+        detail: &'a str,
+    },
+}
+
+impl NotFetched<'_> {
+    fn detail(&self) -> &str {
+        match self {
+            NotFetched::Failed(err) => err,
+            NotFetched::Skipped { detail, .. } => detail,
+        }
+    }
 }
 
 /// The `problems` row behind a failed attempt, or its absence behind a
 /// successful one. A failure on a record that has never fetched is a
 /// dropped record — an error; one on a record that fetched before
 /// leaves the earlier copy in place, and is a warning: what the reader
-/// sees is stale, not missing.
+/// sees is stale, not missing. A skip is neither: nothing was lost that
+/// was not meant to be, so it is `Ok` and `Info` whatever came before.
 async fn record_fetch_problem(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     id: &str,
-    result: Option<&str>,
+    result: Option<NotFetched<'_>>,
 ) -> Result<()> {
     use crate::bulk::BulkUpsertable;
     use datalib_problems::{
@@ -1819,9 +1877,10 @@ async fn record_fetch_problem(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
-    let Some(err) = result else {
+    let Some(not_fetched) = result else {
         return Ok(());
     };
+    let err = not_fetched.detail();
     // An earlier successful fetch — the sidecar's `fetched_at_utc`,
     // which every table has, payload-bearing or CAS edge — means the
     // reader still has something, just not the latest. The row above
@@ -1836,10 +1895,12 @@ async fn record_fetch_problem(
         .await
         .with_context(|| format!("probe {entity_id} for an earlier fetch"))?
         .unwrap_or(false);
-    let (outcome, severity) = if fetched_before {
-        (Outcome::Ok, Severity::Warning)
-    } else {
-        (Outcome::Dropped, Severity::Error)
+    let (outcome, severity, reason) = match not_fetched {
+        NotFetched::Skipped { reason, .. } => (Outcome::Ok, Severity::Info, reason),
+        NotFetched::Failed(_) if fetched_before => {
+            (Outcome::Ok, Severity::Warning, Reason::FetchFailed)
+        }
+        NotFetched::Failed(_) => (Outcome::Dropped, Severity::Error, Reason::FetchFailed),
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let row = ProblemRow {
@@ -1852,7 +1913,7 @@ async fn record_fetch_problem(
             Scope::Entity(&entity_id),
             None,
             outcome,
-            Problem::record(Reason::FetchFailed, err).severity(severity),
+            Problem::record(reason, err).severity(severity),
             None,
         )
     };
@@ -2722,6 +2783,63 @@ mod tests {
         assert!(base_v.get("updated").is_none());
         // ...but overlaying the sidecar reconstructs the wire payload.
         assert_eq!(overlay(&base_v, &vol_v), full);
+    }
+
+    /// A record the config told us not to fetch is not a failure. It
+    /// reads `info` / `ok` with the rule's own reason, where a failure
+    /// on a never-fetched record reads `error` / `dropped` — and it
+    /// stays in `failed_ids`, which is what picks the file up if the
+    /// limit is raised.
+    #[tokio::test]
+    async fn a_skip_the_config_asked_for_is_not_a_failed_fetch() {
+        use datalib_problems::{Reason, Severity};
+        let d = tempdir().unwrap();
+        let p = d.path().join("s.doltlite_db");
+        let pool = open_test(&p).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record_object_skipped(
+            &mut tx,
+            "widgets",
+            "w1",
+            Reason::OverSizeLimit,
+            "size 25107330 > limit 5000000",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let row = sqlx::query(
+            "SELECT severity, outcome, reason, sample FROM problems WHERE scope_key = ?",
+        )
+        .bind("widgets:w1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>(0), Severity::Info.as_str());
+        assert_eq!(row.get::<String, _>(1), "ok", "nothing was lost");
+        assert_eq!(row.get::<String, _>(2), Reason::OverSizeLimit.as_str());
+        assert_eq!(row.get::<String, _>(3), "size 25107330 > limit 5000000");
+
+        assert_eq!(
+            failed_ids(&pool, "widgets").await.unwrap(),
+            vec!["w1".to_string()],
+            "a skip stays eligible, so raising the limit picks it up"
+        );
+
+        // And a real failure on the same table still reads as one.
+        let mut tx = pool.begin().await.unwrap();
+        record_object_error(&mut tx, "widgets", "w2", "HTTP 500")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let failed = sqlx::query("SELECT severity, reason FROM problems WHERE scope_key = ?")
+            .bind("widgets:w2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(failed.get::<String, _>(0), Severity::Error.as_str());
+        assert_eq!(failed.get::<String, _>(1), Reason::FetchFailed.as_str());
     }
 
     /// A failed fetch is a `problems` row on the entity: an error

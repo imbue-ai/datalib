@@ -1,7 +1,7 @@
 # What a cancel leaves behind, and what the log says about it
 
-**Status: PRs 1 and 2 landed (#682, #686, #692, #697); 3 to 7 are
-open, and 3, 4 and 5 are not what this doc first said they were —
+**Status: PRs 1, 2 and 3 landed (#682, #686, #692, #697, #700); 4 to 7
+are open, and 4 and 5 were not what this doc first said they were —
 each says so in its own section. Last read against the tree
 2026-09-23.** §1 is what a real data root actually contained — every
 number in it was read out of `/Users/thad/datalib/z14` at build
@@ -338,31 +338,27 @@ Today both cancelled runs are open forever and `unified_index/qmd_index`
 reads `running` in a store whose process has been dead for an hour.
 That is what the Manage screen joins against.
 
-### PR 3 — A size-limit skip is not a fetch failure
+### PR 3 — A size-limit skip is not a fetch failure — **done**
 
-**Bigger than this doc first said, and it needs a decision first.** The
-enum variant is one line; getting it to the row is not.
+`Reason::OverSizeLimit`, and a skip reaches the `problems` table as
+`Outcome::Ok` / `Severity::Info` with that reason, where a failure on a
+never-fetched record still reads `Dropped` / `Error`.
 
-A skip reaches the `problems` table through
-`Attachments::add_failed` → `errors: Vec<(String, String)>` →
-`record_object_attempt`, which hardcodes `Reason::FetchFailed` and
-derives the severity from "was this fetched before?". Nothing on that
-path can say *why*. `add_failed` has 20 callers across 8 providers, so
-the reason has to arrive some other way — an `add_skipped` beside it,
-carrying a `Reason`, is the contained shape. `.errors()` has no callers
-outside `blob_cas.rs`, so the tuple can grow.
+**The bookkeeping is deliberately unchanged**, which is the part worth
+knowing. A skip still writes `last_error`, and `failed_ids` selects on
+`last_error IS NOT NULL` — so the blob stays eligible and raising
+`blob_size_limit_bytes` picks the file up on the next run. That was the
+open question, and the answer is that the retry behaviour was already
+right; only the label was wrong.
 
-**The decision, which belongs to whoever owns resume:** a blob skipped
-for its size has no `fetched_at_utc`, so the next run tries it again and
-skips it again, for ever. That is right if raising
-`blob_size_limit_bytes` should pick the file up, and wrong if a skip
-should be remembered. The answer decides whether the skip writes
-bookkeeping at all, and it is not a detail — it is the difference
-between a config change taking effect and not.
+`record_object_attempt` keeps its 20 callers. The reason arrives through
+`CasEdgeAccumulator::add_skipped` beside `add_failed`, and
+`record_object_skipped` beside `record_object_error`; the bookkeeping
+half is now `record_object_bookkeeping`, shared by both.
 
 The `media` provider has the same shape
-(`the_payload_ceiling_leaves_null_and_is_counted`) and is worth checking
-in the same pass.
+(`the_payload_ceiling_leaves_null_and_is_counted`) and is still worth
+checking.
 
 ### PR 4 — A Gmail fetch failure reaches the `problems` table
 

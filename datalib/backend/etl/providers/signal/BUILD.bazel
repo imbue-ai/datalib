@@ -25,6 +25,7 @@ rust_library(
     ],
     deps = [
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/etl/providers/signal_config:datalib_etl_signal_config",
         "//datalib/backend/signal-backup:datalib_signal_backup",
         "//datalib/backend/time:datalib_time",
