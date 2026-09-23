@@ -380,15 +380,27 @@ const preview = computed(() =>
     : "",
 );
 
-function listText(field: Field): string {
-  const v = values.value[field.target];
-  return Array.isArray(v) ? (v as string[]).join(", ") : "";
-}
-function setListText(field: Field, text: string) {
-  values.value[field.target] = text
+function parseList(text: string): string[] {
+  return text
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+/// What was typed, kept per field target: re-rendering the parsed array
+/// would swallow a trailing comma (or space) the moment it is typed. A
+/// draft that no longer parses to the array — the picker changed it —
+/// gives way to the array.
+const listDrafts = ref<Record<string, string>>({});
+function listText(field: Field): string {
+  const v = values.value[field.target];
+  const items = Array.isArray(v) ? (v as string[]) : [];
+  const draft = listDrafts.value[field.target];
+  if (draft !== undefined && parseList(draft).join("\0") === items.join("\0")) return draft;
+  return items.join(", ");
+}
+function setListText(field: Field, text: string) {
+  listDrafts.value[field.target] = text;
+  values.value[field.target] = parseList(text);
 }
 
 /// A path field gets a native picker in the desktop app and a bare
@@ -1335,6 +1347,7 @@ function submit() {
 .wiz-filter,
 .wiz-input {
   width: 100%;
+  box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--datalib-border);
   border-radius: 5px;
