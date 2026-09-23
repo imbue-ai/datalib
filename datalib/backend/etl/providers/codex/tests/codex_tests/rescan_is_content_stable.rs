@@ -37,8 +37,7 @@ async fn scan_and_commit(raw_path: &std::path::Path, cache: &FingerprintCache) -
     })
     .await
     .unwrap();
-    sqlx::query("SELECT dolt_commit('-Am', 'scan')")
-        .execute(db.pool())
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "scan")
         .await
         .ok();
     let head = datalib_etl::doltlite_raw::head_commit(db.pool())
@@ -68,8 +67,7 @@ async fn a_second_scan_of_one_home_moves_no_content_table() {
         .execute(db.pool())
         .await
         .unwrap();
-    sqlx::query("SELECT dolt_commit('-Am', 'forget the cursor')")
-        .execute(db.pool())
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "forget the cursor")
         .await
         .unwrap();
     let forgotten = datalib_etl::doltlite_raw::head_commit(db.pool())

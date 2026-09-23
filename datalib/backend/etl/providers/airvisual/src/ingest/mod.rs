@@ -515,10 +515,7 @@ mod tests {
         fetch(opts(&e, vec![device(&e.root, None, None)]))
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'first')")
-            .execute(e.db.pool())
-            .await
-            .unwrap();
+        dr::commit_run(e.db.pool(), "first").await.unwrap();
         fetch(opts(&e, vec![device(&e.root, None, None)]))
             .await
             .unwrap();

@@ -166,6 +166,72 @@ stores it is given through `datalib_pin::open_reader` and writes only
 its own scratch. `datalib-doltlite` is the raw shell and takes no lock:
 run it `-readonly` against a store a sync may be writing.
 
+### A writer works on its own branch and publishes when it seals
+
+Doltlite's working set belongs to a *branch* and lives in the file, so
+two connections on `main` share one working set the way two people
+editing one git checkout share a working tree. That is why a second
+writer's `dolt_commit('-Am', …)` captures the first's in-flight rows,
+and it is why a reader on `main` used to see a writer's uncommitted
+batch — including tables the writer had created but not committed.
+
+So a writer does not work on `main`. `connect_pool` puts every
+connection on `WRITER_BRANCH` (`datalib_writer`) in `after_connect`,
+not once at open: sqlx replaces a connection that breaks, and a
+replacement starting on the default branch would put half-finished work
+where every reader can see it.
+
+It gets there with **`dolt_connect_branch`, never `dolt_checkout`**.
+Both leave the session on the branch, but `dolt_checkout` persists a
+working set for the branch it leaves and the one it enters — a few
+hundred bytes on *every* open, including opens of a store nobody
+writes to. `dolt_connect_branch` only loads the branch's working set
+and sets the session's branch and head; it serializes no refs and
+commits nothing, so an untouched store stays byte-identical.
+`reopening_an_untouched_store_does_not_grow_it` holds that, and
+`dolt_checkout('-b', …)` is still what creates the branch, once per
+file.
+
+**The seal is the commit *and* its publication.** `commit_run` does
+`dolt_commit` on the branch and then `dolt_branch('-f', 'main', …)`.
+A force-move rather than a `dolt_merge`, because one writer per file
+means `main` only ever moves there: the branch is always a descendant,
+so a merge would be a fast-forward anyway, and `main`'s history stays
+linear — which is what `dolt_diff_<table>` between two of its commits
+rests on. Two writers on one store would need the real merge, and the
+lock above is what lets us skip it.
+
+A crash between the commit and the publication leaves the branch ahead
+of `main`; that commit is a seal the last run meant to make, so the
+next `open` finishes it.
+
+Two things deliberately stay off this path. `fsindex` keeps one branch
+per scan root and publishes none of them — the reserved branch name is
+the signal, so a connection on any other branch seals without touching
+`main`. And `core/app_store.rs` opens plain sqlx pools, so it never
+enters the scheme at all.
+
+`publish_to_main` is public for the one shape `commit_run` cannot
+express: a commit needing an argument of its own, such as the `--date`
+the yolink fixture generator pins so `dolt_log()` does not report build
+time. That caller commits by hand and then publishes — a commit nobody
+can see is not a seal.
+
+**A reader lands on the file's stored default branch**, which is `main`
+because seeding set it there and nothing moves it. That is the rule;
+"a connection starts on `main`" is only its consequence. In doltlite the
+default is `zDefaultBranch` in the persisted refs block, and
+`dolt_default_branch(x)` moves it — nothing here calls that, and if
+anything did, every reader would silently start on a writer's branch.
+`a_fresh_connection_starts_on_main` asserts the default itself for that
+reason.
+
+Costs, measured on doltlite 0.50.3: sealing on a branch is within noise
+of sealing on `main` in both time and bytes, and with
+`dolt_connect_branch` an open of an untouched store still writes
+nothing at all. `docs/dev/plans/writer_branches.md` has the numbers and
+what could now be deleted from `pin.rs`.
+
 ### A download takes the store; it never opens one
 
 Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
@@ -186,14 +252,23 @@ the `pinned_<table>` views installed, so every content read through
 [`Reads::At`] names one commit however long the pass runs. It hands
 back a `Reader`, or `None` when the store has nothing committed, which
 the caller must decide about (a consumer does nothing that pass) rather
-than fall through to the working set. The `pin.rs` `Pin` refuses `HEAD`
-by name, and the shared loaders take a mandatory `Reads`, so a call site
-has to say whose store it is reading.
+than fall through to the working set. **A file with no tables in it yet
+counts as nothing committed.** That is the shape an owner's `open`
+leaves behind between creating the file and its first `CREATE TABLE`,
+and under streaming a consumer opens there often enough to matter: no
+pinned view gets created, so without this the consumer's first read
+would fail with `no such table: pinned_<t>` over a producer doing
+nothing wrong. The `pin.rs` `Pin` refuses `HEAD` by name, and the
+shared loaders take a mandatory `Reads`, so a call site has to say
+whose store it is reading.
 
-The one unpinned reader is the blob CAS (`open_cas_reader`): most
-downloads never commit it, so a read at HEAD would find no blob, and
-content addressing is what makes the working-set read safe — a row is
-keyed by the blake3 of its own bytes.
+The one unpinned reader is the blob CAS (`open_cas_reader`), and that
+is a leftover rather than a design. The CAS *is* committed — at every
+checkpoint and again at the end, before the entities that name the
+blobs (`raw_store::SealState::seal`) — so a pinned read would find
+them. Until something moves it over, the unpinned read sees a writer's
+uncommitted blobs, which is harmless only because content addressing
+makes it so: a row is keyed by the blake3 of its own bytes.
 
 The two-process test measures what a read-only connection may issue
 beside a live writer — `dolt_hashof`, `sqlite_master`,

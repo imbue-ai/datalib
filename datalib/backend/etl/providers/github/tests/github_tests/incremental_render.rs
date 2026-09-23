@@ -81,9 +81,7 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     // On the same handle: reopening here would be a second connection
     // while this one is still alive, which is what makes a `dolt_commit`
     // fail with "commit conflict".
-    let _ = sqlx::query("SELECT dolt_commit('-Am', 'test: download')")
-        .execute(db.pool())
-        .await;
+    let _ = datalib_etl::doltlite_raw::commit_run(db.pool(), "test: download").await;
     let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log")
         .fetch_one(db.pool())
         .await
@@ -191,8 +189,7 @@ async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
         .execute(db.pool())
         .await
         .unwrap();
-    sqlx::query("SELECT dolt_commit('-Am', 'test: a PR went away')")
-        .execute(db.pool())
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: a PR went away")
         .await
         .unwrap();
     // Closed before the parse below reopens the file. Dropping only

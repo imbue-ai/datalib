@@ -158,6 +158,18 @@ async fn a_reset_and_resync_preserves_data_tables() {
         ..FetchOptions::new(db.clone())
     })
     .await;
+    // Seal before closing, as `session.finish` does in production. The
+    // read below opens its own pool, which lands on `main`; a download
+    // that never sealed left its rows on the writer's branch, where no
+    // reader can see them.
+    let first_hash = {
+        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "reset-test: first")
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::head_commit(db.pool())
+            .await
+            .unwrap()
+    };
     db.close().await;
     let s1 = s1.unwrap();
     assert_eq!(s1.fetched, 2, "first run should fetch 2 conversations");
@@ -179,14 +191,7 @@ async fn a_reset_and_resync_preserves_data_tables() {
     assert_eq!(before["projects"].len(), 1);
     assert_eq!(before["project_docs"].len(), 2);
 
-    // First commit (best-effort: stock libsqlite3 builds skip dolt).
     configure_committer(&pool).await;
-    let first_hash: Option<String> =
-        sqlx::query_scalar("SELECT dolt_commit('-Am', 'reset-test: first')")
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
-
     pool.close().await;
 
     // ── Run 2: reset, then re-download ────────────────────────────
@@ -204,6 +209,11 @@ async fn a_reset_and_resync_preserves_data_tables() {
         ..FetchOptions::new(db.clone())
     })
     .await;
+    // Sealed for the same reason as run 1's: the read below is its own
+    // pool on `main`.
+    datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "reset-test: second")
+        .await
+        .unwrap();
     db.close().await;
     let s2 = s2.unwrap();
     assert_eq!(
@@ -263,8 +273,7 @@ async fn a_reset_and_resync_preserves_data_tables() {
     if let Some(first_hash) = first_hash {
         configure_committer(&pool).await;
         let second_hash: Option<String> =
-            sqlx::query_scalar("SELECT dolt_commit('-Am', 'reset-test: second')")
-                .fetch_optional(&pool)
+            datalib_etl::doltlite_raw::commit_run(&pool, "reset-test: second")
                 .await
                 .unwrap();
         let messages: Vec<String> =

@@ -48,8 +48,7 @@ async fn ingest(raw: &Path, playback: &Path) {
     assert_eq!(s.errors, 0, "{}", s.line());
     // The ingest step commits at the end of its run; do the same here so
     // the render's pin has a HEAD to read at.
-    sqlx::query("SELECT dolt_commit('-Am', 'test ingest')")
-        .execute(db.pool())
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test ingest")
         .await
         .unwrap();
     db.close().await;
