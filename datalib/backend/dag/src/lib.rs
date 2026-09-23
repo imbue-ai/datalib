@@ -15,6 +15,7 @@ pub mod scheduler;
 pub mod state;
 pub mod step;
 pub mod subprocess;
+pub mod supervisor;
 pub mod version;
 pub mod written;
 
