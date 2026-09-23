@@ -17,6 +17,7 @@ use api::{call_slack, SlackCall, SlackError};
 use datalib_etl::download_problems::{self, DownloadProblem};
 use datalib_etl::events;
 use datalib_etl::http::LatchkeySettings;
+use datalib_etl::progress::RunBar;
 use datalib_etl::scope_config;
 pub use db::{
     block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
@@ -521,7 +522,7 @@ async fn export_channel(
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
-    progress: &datalib_etl::progress::Progress,
+    bar: &RunBar,
     latchkey: &LatchkeySettings,
 ) -> Result<()> {
     // Per-channel attachment accumulator: every (message, file)
@@ -570,7 +571,7 @@ async fn export_channel(
         totals,
         &mut attach,
         blake3_by_file,
-        progress,
+        bar,
         &mut collected,
         latchkey,
     )
@@ -607,7 +608,7 @@ async fn export_channel(
                     totals,
                     &mut attach,
                     blake3_by_file,
-                    progress,
+                    bar,
                     &mut collected,
                     latchkey,
                 )
@@ -659,7 +660,7 @@ async fn export_channel(
                     totals,
                     &mut attach,
                     blake3_by_file,
-                    progress,
+                    bar,
                     &mut collected,
                     latchkey,
                 )
@@ -685,7 +686,11 @@ async fn export_channel(
             Some(reply_count as u64)
         })
         .sum();
-    progress.set_length(Some(totals.messages as u64 + replies_to_fetch));
+    // Only the replies. Pass A announced its own messages page by page
+    // as it listed them.
+    if replies_to_fetch > 0 {
+        bar.expect(replies_to_fetch);
+    }
 
     for m in &collected {
         let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
@@ -715,9 +720,9 @@ async fn export_channel(
         )
         .await?;
         let fetched = totals.replies.saturating_sub(before) as u64;
-        progress.inc(fetched);
+        bar.did(fetched);
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
-        progress.set_message(&format!(
+        bar.doing(&format!(
             "msgs={} replies={} media={}",
             totals.messages, totals.replies, media_downloaded
         ));
@@ -761,7 +766,7 @@ async fn list_history(
     totals: &mut ChannelTotals,
     attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
-    progress: &datalib_etl::progress::Progress,
+    bar: &RunBar,
     collected: &mut Vec<Value>,
     latchkey: &LatchkeySettings,
 ) -> Result<Drained> {
@@ -806,13 +811,18 @@ async fn list_history(
             "fetched one page of history"
         );
 
+        // Announced before it is counted: Slack names no message count
+        // up front, so a page is the first moment this walk knows of
+        // more work, and ticking first would count it against a total
+        // that does not include it yet.
+        bar.expect(messages.len() as u64);
         let rows: Vec<MessageInput> = messages
             .iter()
             .filter_map(|m| history_message_input(team_id, channel_id, m))
             .collect();
         db.upsert_messages(&rows).await?;
         totals.messages += messages.len();
-        progress.inc(messages.len() as u64);
+        bar.did(messages.len() as u64);
 
         if download_blobs {
             let counts = api::download_files_for_messages(
@@ -833,7 +843,7 @@ async fn list_history(
         }
 
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
-        progress.set_message(&format!(
+        bar.doing(&format!(
             "listing  msgs={} media={}",
             totals.messages, media_downloaded
         ));
@@ -1154,7 +1164,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut channel_failures: usize = 0;
 
     let work = async {
-        let setup = opts.progress.child("setup");
+        // The step's own handle: setup only names what it is doing.
+        let setup = opts.progress.clone();
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
         let (team_id, self_user_id) = fetch_self(&db, &setup, &opts.latchkey).await?;
@@ -1231,7 +1242,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         );
         let targets = plan.targets;
 
-        opts.progress.set_length(Some(targets.len() as u64));
+        // Seeded with one tick per channel, so the bar reads as
+        // something before the first channel has listed anything.
+        let bar = RunBar::new(&opts.progress, targets.len() as u64);
         for (cid, name) in &targets {
             // Asked to stop: the channel that just finished sealed (a stop
             // makes every `wrote` a seal), so end here rather than start a
@@ -1240,11 +1253,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 info!(event = "slack_interrupted", next_channel = %name, "told to stop; leaving the rest for the next run");
                 break;
             }
-            opts.progress.set_message(name);
+            bar.doing(name);
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
-            let inner = opts.progress.child(&format!("slack: {name}"));
-            inner.set_message("listing");
+            bar.doing(&format!("{name}: listing"));
             let result = export_channel(
                 &db,
                 &team_id,
@@ -1260,18 +1272,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.blob_size_limit_bytes,
                 &mut totals,
                 &mut blake3_by_file,
-                &inner,
+                &bar,
                 &opts.latchkey,
             )
             .instrument(span)
             .await;
-            inner.finish(&format!(
-                "done msgs={} replies={} media={}",
-                totals.messages,
-                totals.replies,
-                totals.media.get("downloaded").copied().unwrap_or(0),
-            ));
-            opts.progress.inc(1);
+            info!(
+                event = "slack_channel_done",
+                channel = %name,
+                messages = totals.messages,
+                replies = totals.replies,
+                media = totals.media.get("downloaded").copied().unwrap_or(0),
+                "finished one channel",
+            );
+            bar.did(1);
             match result {
                 Ok(()) => {
                     grand.messages += totals.messages;
@@ -1297,6 +1311,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
             }
         }
+        bar.finish();
         Ok::<(), anyhow::Error>(())
     };
 

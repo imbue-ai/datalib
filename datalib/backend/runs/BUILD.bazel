@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # The run store: a plain-SQLite file the runner writes and anything can
 # read — step states, log lines and metrics, across runs — plus the app
@@ -15,6 +15,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
@@ -36,6 +37,41 @@ rust_test(
     size = "small",
     crate = ":datalib_runs",
     edition = "2021",
+)
+
+# One writer of the store, as its own process, for the test below; its
+# own file says why it is a process and not a thread. `testonly` and
+# under `tests/`: nothing shipped may link it, and cargo does not pick
+# it up as a bin of this crate.
+rust_binary(
+    name = "runs_two_process_writer",
+    testonly = True,
+    srcs = ["tests/bin/runs_two_process_writer.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_runs",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# Hermetic: the data root is a tempdir, and the only program it runs is
+# the writer above, from runfiles.
+rust_test(
+    name = "runs_two_process_test",
+    size = "medium",
+    srcs = ["tests/runs_two_process_test.rs"],
+    data = [":runs_two_process_writer"],
+    edition = "2021",
+    env = {
+        "HELPER_BIN": "$(rootpath :runs_two_process_writer)",
+    },
+    deps = [
+        ":datalib_runs",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
 )
 
 # Every hermetic run store test in one binary; the modules are listed in

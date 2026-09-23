@@ -43,7 +43,8 @@ the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per reque
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
 SQLite in WAL mode, written by both the runner (its runs) and the server
-(its own log), which SQLite's own locking makes ordinary.
+(its own log), which SQLite's own locking makes ordinary —
+`runs_two_process_test` is the measurement, not the argument.
 
 Who writes which line of it, how to add one, and how to read it is
 [`logging.md`](logging.md).

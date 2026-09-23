@@ -325,6 +325,10 @@ impl Label {
 pub struct MessagePage {
     pub ids: Vec<String>,
     pub next_page_token: Option<String>,
+    /// Google's guess at how many messages the whole walk will list,
+    /// repeated on every page. The only whole-walk number Gmail offers,
+    /// and an estimate — never what the walk decides to stop at.
+    pub result_size_estimate: Option<u64>,
 }
 
 // One label, not many: Gmail intersects repeated `labelIds`, so a
@@ -367,6 +371,7 @@ pub async fn list_messages(
             .map(|a| a.iter().filter_map(|m| str_field(m, "id")).collect())
             .unwrap_or_default(),
         next_page_token: str_field(&v, "nextPageToken"),
+        result_size_estimate: v.get("resultSizeEstimate").and_then(Value::as_u64),
     })
 }
 

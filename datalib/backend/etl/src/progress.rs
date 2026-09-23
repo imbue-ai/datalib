@@ -1,5 +1,6 @@
 //! Progress reporting hook for long-running download / render work.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Object-safe progress sink. Implementors do whatever rendering they
@@ -29,9 +30,6 @@ pub trait ProgressSink: Send + Sync {
     /// runner's store coalesces to the newest, and a dropped position
     /// costs nothing where a dropped delta is lost work.
     fn metric(&self, _name: &str, _labels: &[(&str, &str)], _value: i64) {}
-    fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(NoopSink)
-    }
 }
 
 /// Cheap-to-clone progress handle. Calls forward to the inner
@@ -75,9 +73,6 @@ impl Progress {
     pub fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
         self.sink.metric(name, labels, value);
     }
-    pub fn child(&self, prefix: &str) -> Progress {
-        Progress::new(self.sink.child(prefix))
-    }
 }
 
 impl Default for Progress {
@@ -94,6 +89,80 @@ impl std::fmt::Debug for Progress {
 
 struct NoopSink;
 impl ProgressSink for NoopSink {}
+
+/// One bar for a whole run, whose announced total only ever grows.
+///
+/// A step cannot have two independent progress bars: the runner sums
+/// every increment into one `done` and keeps only the last total, so a
+/// second bar announcing its own size pins the Manage screen's
+/// "N queued" at zero. `datalib/backend/dag/README.md` § "One bar per
+/// step" has the whole rule.
+///
+/// Shared and interior-mutable so it passes by reference the way
+/// [`Progress`] does. A phase that fans out ticks from its tasks and
+/// announces from the one that plans them.
+#[derive(Clone)]
+pub struct RunBar {
+    bar: Progress,
+    announced: Arc<AtomicU64>,
+}
+
+impl RunBar {
+    /// `fixed` is work the run already knows the size of, so the bar
+    /// reads as something other than 0/0 before the first response.
+    /// Zero announces nothing: an unknown total is not a total of zero,
+    /// which would read as finished.
+    pub fn new(progress: &Progress, fixed: u64) -> Self {
+        if fixed > 0 {
+            progress.set_length(Some(fixed));
+        }
+        Self {
+            bar: progress.clone(),
+            announced: Arc::new(AtomicU64::new(fixed)),
+        }
+    }
+
+    /// Another `more` items this run has committed to handling.
+    pub fn expect(&self, more: u64) {
+        let total = self.announced.fetch_add(more, Ordering::SeqCst) + more;
+        if total > 0 {
+            self.bar.set_length(Some(total));
+        }
+    }
+
+    /// Raise the total to `at_least` if it is not already there. For a
+    /// phase whose size is one number repeated or refined as it goes,
+    /// where adding each reading would count the same work twice.
+    pub fn expect_at_least(&self, at_least: u64) {
+        if self
+            .announced
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                (at_least > cur).then_some(at_least)
+            })
+            .is_ok()
+        {
+            self.bar.set_length(Some(at_least));
+        }
+    }
+
+    /// What has been announced so far, so a phase can raise the total to
+    /// "everything before me, plus my own size".
+    pub fn announced(&self) -> u64 {
+        self.announced.load(Ordering::SeqCst)
+    }
+
+    pub fn did(&self, n: u64) {
+        self.bar.inc(n);
+    }
+
+    pub fn doing(&self, what: &str) {
+        self.bar.set_message(what);
+    }
+
+    pub fn finish(&self) {
+        self.bar.finish_and_clear();
+    }
+}
 
 /// Structured-event sink: each progress call becomes a `tracing::info!`
 /// event with a fixed `event = "progress.*"` field plus a `source`
@@ -181,9 +250,6 @@ impl ProgressSink for TracingSink {
             "the progress bar finished"
         );
     }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(TracingSink::new(format!("{}/{}", self.source, prefix)))
-    }
 }
 
 /// Fan a single `Progress` call out to several sinks. Used by sync to
@@ -240,11 +306,6 @@ impl ProgressSink for FanOut {
             s.finish(msg);
         }
     }
-    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        Arc::new(FanOut {
-            sinks: self.sinks.iter().map(|s| s.child(prefix)).collect(),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -254,9 +315,7 @@ mod tests {
 
     /// A sink that just counts how many times `finish_and_clear` fired, so a
     /// test can assert a wrapping sink (e.g. `FanOut`) forwards the call
-    /// instead of silently hitting the no-op default trait method. Children
-    /// share the same counter — mirroring how a real leaf sink spawns its own
-    /// child bars — so the count survives nesting through `FanOut::child`.
+    /// instead of silently hitting the no-op default trait method..
     #[derive(Default, Clone)]
     struct RecordingSink {
         finish_and_clear: Arc<AtomicUsize>,
@@ -278,9 +337,6 @@ mod tests {
         }
         fn metric(&self, name: &str, _labels: &[(&str, &str)], value: i64) {
             self.metrics.lock().unwrap().push((name.to_string(), value));
-        }
-        fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
-            Arc::new(self.clone())
         }
     }
 
@@ -367,24 +423,5 @@ mod tests {
                 "FanOut must forward metric to its {name} sink",
             );
         }
-    }
-
-    // The same gap affected inner per-unit bars: providers call
-    // `inner.finish_and_clear()` on a `FanOut::child`, which is itself a
-    // `FanOut`, so the forward has to work through nesting too.
-    #[test]
-    fn fanout_child_forwards_finish_and_clear() {
-        let leaf = Arc::new(RecordingSink::default());
-        let sinks: Vec<Arc<dyn ProgressSink>> = vec![leaf.clone()];
-        let fan = FanOut::new(sinks);
-
-        let child = fan.child("inner");
-        child.finish_and_clear();
-
-        assert_eq!(
-            leaf.finish_and_clear.load(Ordering::SeqCst),
-            1,
-            "FanOut child must forward finish_and_clear down to the leaf sink",
-        );
     }
 }

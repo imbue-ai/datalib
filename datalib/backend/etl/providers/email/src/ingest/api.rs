@@ -19,15 +19,24 @@ const CALL_ID: &str = "a";
 /// reasonable `Email/get` page including bodyValues.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value> {
+/// The request one JMAP method call goes out as. Public because a
+/// playback fixture is keyed on its exact bytes, so a test that writes
+/// one builds it here rather than re-spelling the envelope.
+pub fn method_request(session: &Session, method: &str, args: Value) -> Result<HttpRequest> {
     let envelope = json!({
         "using": [CAP_CORE, CAP_MAIL],
         "methodCalls": [[method, args, CALL_ID]],
     });
     let body = serde_json::to_vec(&envelope).context("serialize JMAP envelope")?;
-    let req = HttpRequest::post_json(HttpService::Jmap, &session.api_url, body)
-        .latchkey(session.latchkey.clone())
-        .timeout(REQUEST_TIMEOUT);
+    Ok(
+        HttpRequest::post_json(HttpService::Jmap, &session.api_url, body)
+            .latchkey(session.latchkey.clone())
+            .timeout(REQUEST_TIMEOUT),
+    )
+}
+
+pub async fn call(session: &Session, method: &str, args: Value) -> Result<Value> {
+    let req = method_request(session, method, args)?;
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;
     if !(200..300).contains(&resp.status) {
         return Err(anyhow!(
