@@ -23,6 +23,7 @@ async fn state(root: &Path) -> AppState {
         .expect("open app stores");
     AppState {
         root: root.clone(),
+        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,

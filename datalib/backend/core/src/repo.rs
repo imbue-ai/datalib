@@ -65,19 +65,25 @@ pub trait AppRepo: Send + Sync {
         Err(RepoError::ReadOnly)
     }
 
-    // --- Worker-side job lifecycle ------------------------------------
+    // --- The job lifecycle, as the server's loop sees it -------------
 
-    /// Atomically claim the oldest [`JobState::Pending`] job: flip it
-    /// to [`JobState::Running`], stamp `started_at`, and return the
-    /// updated row. Returns `Ok(None)`
-    /// when the queue is empty. Single-worker by construction, so the
-    /// SELECT-then-UPDATE needs no extra locking beyond SQLite's
-    /// single-writer guarantee.
-    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
+    /// The loop has taken a job's request on in the run `run_id`: stamp
+    /// it started, name the run as its `parent_job_id`, and flip a
+    /// pending job to [`JobState::Running`] (a canceled one stays
+    /// canceled, and is now winding down). The row as written, or `None`
+    /// when there is no such job or it was already started.
+    async fn start_job(
+        &self,
+        _job_id: &str,
+        _run_id: &str,
+        _msg: Option<&str>,
+    ) -> Result<Option<SyncJobRow>, RepoError> {
         Err(RepoError::ReadOnly)
     }
 
-    async fn set_job_pid(&self, _job_id: &str, _pid: i64) -> Result<(), RepoError> {
+    /// Put a running job back in the queue, unstarted: the server that
+    /// ran it is gone, and its request is still open for the next loop.
+    async fn requeue_job(&self, _job_id: &str) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 
