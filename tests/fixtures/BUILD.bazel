@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
@@ -518,10 +519,13 @@ py_test(
 # The sync state machine under a storm (docs/dev/plans/http_driven_e2e.md
 # § 2): seeded clicks on the server's buttons and SIGKILLs of its steps,
 # then a full sync compared with a reset and a sync from nothing. One
-# case per shard; `TNG_FUZZ_SEED=<n>` replays one.
+# case per shard; `TNG_FUZZ_SEED=<n>` replays one. `manual` until the
+# Manage screen can start and stop single steps: its events join the
+# storm then, and the target joins CI.
 py_test(
     name = "tng_fuzz_test",
     size = "large",
+    tags = ["manual"],
     srcs = ["tng_fuzz_test.py"],
     args = [
         "$(rootpath //third-party/doltlite:doltlite)",
@@ -548,4 +552,11 @@ py_test(
         "//third-party/doltlite:doltlite",
     ],
     shard_count = 4,
+)
+
+# `manual` keeps `tng_fuzz_test` out of `bazel test //...`; this keeps
+# it built there, so it cannot rot unnoticed (scripts/lint_repo.py).
+build_test(
+    name = "manual_targets_build",
+    targets = [":tng_fuzz_test"],
 )

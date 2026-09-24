@@ -48,6 +48,11 @@ EVENTS = int(os.environ.get("TNG_FUZZ_EVENTS", "40"))
 # a wait for anything: nothing here is ordered, so no sleep orders it.
 GAPS = [0.0, 0.0, 0.05, 0.2, 0.5, 1.0]
 SETTLE_DEADLINE_SECS = 5 * 60
+# A paused step or a stopped request can leave nothing to start; then
+# the kill is skipped rather than waited for.
+VICTIM_DEADLINE_SECS = 3
+# After a step is found: at once, mid-write, or near its end.
+KILL_DELAYS = [0.0, 0.02, 0.1, 0.3]
 
 # Tables that record the runs rather than the data: a store that has
 # been through a storm has had more of them than one synced once.
@@ -144,13 +149,46 @@ def save_config_unchanged(c: Case):
     return (status if answer and answer.get("ok") else -1), {200}
 
 
-def kill_a_step(c: Case):
+def victim(c: Case) -> int | None:
+    """A running step, starting a sync to have one if none is running,
+    killed a seeded moment after it is found. The fixture syncs in
+    seconds, so a moment picked blind mostly finds nothing to kill."""
     victims = children(c.driver.proc.pid)
     if not victims:
+        roots = c.rng.sample(c.ingest_ids, c.rng.randint(1, 3))
+        c.driver.request("POST", "/api/requests", {"roots": roots})
+        deadline = time.monotonic() + VICTIM_DEADLINE_SECS
+        while not victims and time.monotonic() < deadline:
+            time.sleep(0.01)
+            victims = children(c.driver.proc.pid)
+    if not victims:
+        return None
+    time.sleep(c.rng.choice(KILL_DELAYS))
+    return c.rng.choice(victims)
+
+
+def kill_a_step(c: Case):
+    pid = victim(c)
+    if pid is None:
         return None, set()
-    pid = c.rng.choice(victims)
     try:
         os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return None, set()
+    return 0, {0}
+
+
+def kill_a_step_group(c: Case):
+    """The step and everything it started. Never a group the server is
+    in: that would take the server, and this test, with it."""
+    pid = victim(c)
+    if pid is None:
+        return None, set()
+    try:
+        group = os.getpgid(pid)
+        if group == os.getpgid(c.driver.proc.pid):
+            return None, set()
+        os.killpg(group, signal.SIGKILL)
     except ProcessLookupError:
         return None, set()
     return 0, {0}
@@ -164,8 +202,12 @@ EVENTS_BY_WEIGHT = [
     (resume_a_step, 2),
     (reset_some, 1),
     (save_config_unchanged, 1),
-    (kill_a_step, 3),
+    (kill_a_step, 2),
+    (kill_a_step_group, 1),
 ]
+
+# `closed` is an outcome a newer build wrote; never this one.
+REQUEST_STATES = {"open", "done", "failed", "stopped"}
 
 
 def q(step_id: str) -> str:
@@ -294,6 +336,9 @@ class FuzzTest(unittest.TestCase):
                 case.note(f"reset {len(targets)} steps, then sync from nothing")
                 driver.reset(targets)
                 driver.sync()
+                # A reset opens a sync of its own, of what reads the steps
+                # it emptied.
+                wait_all_closed(driver)
                 clean = snapshot(self.doltlite, fx.workspace)
             finally:
                 driver.close()
@@ -322,17 +367,25 @@ class FuzzTest(unittest.TestCase):
                     f"seed {c.seed}: {event.__name__} → {status}\n" + "\n".join(c.log),
                 )
             self.assertIsNone(c.driver.proc.poll(), f"seed {c.seed}: the server died")
+            states = {r["id"]: r["state"] for r in c.driver.requests()}
+            odd = {rid: st for rid, st in states.items() if st not in REQUEST_STATES}
+            self.assertEqual(odd, {}, f"seed {c.seed}: requests in no known state")
             time.sleep(c.rng.choice(GAPS))
 
     def settle(self, c: Case) -> None:
         """Lift every pause, let what is open finish, and sync everything."""
         for step in c.ingest_ids + c.render_ids:
             c.driver.call("POST", f"/api/steps/{q(step)}/resume")
-        for r in c.driver.requests():
-            if r["state"] == "open":
-                c.driver.wait_closed(r["id"], SETTLE_DEADLINE_SECS)
+        wait_all_closed(c.driver)
         c.note("settled; sync everything")
         c.driver.sync()
+        wait_all_closed(c.driver)
+
+
+def wait_all_closed(driver: HttpDriver) -> None:
+    for r in driver.requests():
+        if r["state"] == "open":
+            driver.wait_closed(r["id"], SETTLE_DEADLINE_SECS)
 
 
 def _test_for(seed: int, events: int):

@@ -1,6 +1,9 @@
 # The TNG fixture through the server, then a fuzzer over it
 
-**Status: step 1 is built; steps 2–4 are a proposal (2026-09-24).**
+**Status: steps 1 and 2 are built — the fixture goes through the
+server, and `tests/fixtures/tng_fuzz_test.py` plays the person's events
+and step deaths; server deaths and steps 3–4 are a proposal
+(2026-09-24).**
 Rewritten after the supervisor landed: the first version of this plan
 (#659) drove `/api/sync/jobs`, which no longer exists. Where this doc
 and the tree disagree, the tree wins.
@@ -44,8 +47,8 @@ Two tests, one harness.
 - qmd is off in the fixture's config, as a person turns it off from
   Manage; `:ingested_tng_qmd` embeds separately, as before.
 
-Measured on a warm mac: the whole script takes 7s through
-`datalib-dag` and 4s through the server. The two runs produced the same
+Measured on a warm mac: the whole script takes 4–7s through either
+door, the spread being run-to-run noise. The two runs produced the same
 markdown file for file and the same grid index row for row once commit
 hashes and wall-clock stamps are masked (those differ between any two
 runs of either door); the only other difference was ten Storage rows
@@ -53,7 +56,7 @@ one byte apart, which is store size on disk.
 
 ## 2. The fuzzer
 
-A `py_test` in `tests/fixtures/`, on the same prepared root and the
+`tests/fixtures/tng_fuzz_test.py`, on the same prepared root and the
 same `HttpDriver`. One seeded random schedule per case; the seed is
 printed first and taken from `TNG_FUZZ_SEED` when set, so a red run
 replays.
@@ -76,7 +79,7 @@ replays.
 |---|---|
 | a step dies | SIGKILL one child of the server (`pgrep -P`), whatever it is doing |
 | a step's whole group dies | SIGKILL its process group |
-| the server dies | SIGKILL `datalib-http` and start it again on the same root; the new one's `take_over` closes what the dead loop left open |
+| the server dies | not yet: SIGKILL `datalib-http` and start it again on the same root; the new one's `take_over` closes what the dead loop left open |
 | an upstream misbehaves | later: the hostile playback cases of #644 (empty 200, truncated page, 429 mid-walk) as events |
 
 Between events, a gap drawn from the seed — from nothing to about a
@@ -88,17 +91,57 @@ about sleeping applies to ordering, and nothing here is ordered.
 event killed it; every request `GET /api/requests` shows is open or
 closed with an outcome.
 
-**At the end**: resume every pause, sync everything, and require the
-request `done` and every step fresh. Snapshot: the content tables of
-every `*/ingest/*.doltlite_db`, every render store's documents, and
-`grid_rows`, with stamps and commit hashes masked as in §1. Then reset
-every ingest step `+blobs`, sync everything again, snapshot, and diff.
-Also: no process of ours outlives the server's shutdown.
+**At the end**: resume every pause, let every open request close, sync
+everything and require it `done`. Snapshot every table of every store
+and every document, with stamps, commit hashes and clock-minted (v7)
+uuids masked. Then reset every ingest step `+blobs` and every render
+step, sync everything again, snapshot, and diff, pairing rows by `id`
+so a changed row reads as its changed columns.
 
-**Budget**: at 4s per clean sync, a case with 40 events and the two
-closing syncs is well under a minute. CI runs a handful of fixed seeds
-(new schedules come from changing the list, on purpose); a `manual`
-target runs random seeds until stopped, for soaking.
+Left out of the comparison, each because it is about the runs rather
+than the data — a store that has been through a storm has had more of
+them than one synced once:
+
+- `sync_runs`, `_datalib_meta`, and the index's `source_cursors`;
+- `attempt_count` in a `*_bookkeeping` table;
+- `volatile_payload`, churn by construction;
+- datalib's measurements of its own stores (`source_measurements`, the
+  `datalib` grid rows, each source's `_datalib/storage.md`): a reset
+  keeps a store's history, so the file is bigger after one.
+
+Seed 0 plays no events: the comparison alone, so a red there is the
+oracle and not the storm. It is what these exclusions were calibrated
+on.
+
+**Budget**: a case with 40 events and the two closing syncs takes about
+30s on a warm mac. The target runs seeds 0–3, one per shard; new
+schedules come from changing the list, on purpose. `TNG_FUZZ_SEED=<n>`
+replays or explores one. It is `manual` for now — run it with
+`bazelisk test //tests/fixtures:tng_fuzz_test` — because starting and
+stopping single steps from the Manage screen is still being built; its
+events join the storm when it lands, and the target joins CI.
+
+**Kills often find nothing to kill.** A kill with no step running asks
+for a sync of a few sources and waits up to 3s for one to start; when
+those sources are already fresh nothing starts, and the kill is
+skipped (a quarter to a half land). Making it land every time — reset
+the source first, or pick a stale one — is the next thing to fix.
+
+**Found so far**:
+
+- Every `/api/…` path that named no endpoint answered 200 with the
+  app's page — the SPA fallback — so a mistyped call, or a step id with
+  its slash unencoded, read as success. Now a 404 (`embed.rs`).
+- **Open: a store killed before its first commit is wedged for good.**
+  An ingest SIGKILLed before it ever sealed leaves rows in the working
+  set and no commit. The next open's `discard_dirty_working_tree`
+  (`etl/src/doltlite_raw.rs`) runs `dolt_reset --hard`, which fails
+  with "no commit to reset to", and so does every run after. Seeds 2
+  and 3 hit it under `bazelisk test` (four shards at once slow each
+  ingest enough for the kill to land early), on `slack` and
+  `tng_calendar`; both seeds pass when run alone, where the first commit
+  comes sooner. This is §3's item 3 in a milder form: the store opens,
+  but nothing can write to it.
 
 ## 3. What it is likely to find
 
@@ -118,8 +161,9 @@ A red first run is a finding. Named in advance:
 ## 4. Plan of record
 
 1. **The fixture through the server.** Built (§1).
-2. **The fuzzer on the fixture**, the person's events and step deaths
-   first; server death once the first seeds are green.
+2. **The fuzzer on the fixture**: built, with the person's events and
+   step deaths. Next: server death, which needs a second server on the
+   same root after the first is killed.
 3. **Upstream faults as events**, sharing #644's hostile playback.
 4. **The live config**: the same driver pointed at the private config
    (`manual_e2e_live_sync_golden.rs` today), with a short fuzz before
