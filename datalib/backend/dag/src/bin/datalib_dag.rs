@@ -24,6 +24,7 @@ const VERSION_RESOLVED: &str = {
 };
 use datalib_dag::events::FanOutSink;
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
@@ -361,7 +362,8 @@ async fn main() -> Result<()> {
         let mut runner = Runner::new(&data_root)
             .sink(Arc::new(FanOutSink(sinks)))
             .child_env(child_env)
-            .stop_on(stop_rx);
+            .stop_on(stop_rx)
+            .reload_from(Arc::new(ConfigFile::new(&config_path)));
         if let Some(p) = parallelism {
             runner.budgets = Budgets::from_parallelism(p);
         }

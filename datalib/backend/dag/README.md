@@ -135,6 +135,16 @@ Retries re-invoke the step inside one invocation, which is safe because
 steps promise idempotency, and once they run out the step is not started
 again this run unless something it reads moves.
 
+**The loop re-reads the config while it runs.** A source added mid-sync
+starts beside the sync already going, and a step edited mid-sync runs
+under its new definition from its next start. A running step keeps the
+definition it started with and records that one, so the edit leaves it
+stale and it runs again if a request still wants it. A config that drops
+a step still running, or still named by an open request, is taken on once
+the loop is done with that step: a config saved mid-edit must not cost a
+long download. The step environment (`PATH`, log level, checkpoint
+cadence) stays the one the busy period started with.
+
 Which step starts when is one pure function, `supervisor/tick.rs`; a run
 is `supervisor/round.rs` calling it until the run's request closes. The
 design, and what comes next, is

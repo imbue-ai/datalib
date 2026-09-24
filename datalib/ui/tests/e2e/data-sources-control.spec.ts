@@ -305,22 +305,18 @@ test.describe("sources run independently", () => {
     await expect(stopBtn(page, `group:${CHATGPT.id}`)).toBeVisible();
 
     // ── 2. add a second source while the first is still going ─────────
-    // Saving the config rewrites the file under a live loop. The loop
-    // read it when this sync began and must not notice; the row must
+    // Saving the config rewrites the file under a live loop, which takes
+    // the new config on without disturbing the first sync: its row must
     // still say Running once the table is remounted from the new config
     // — and with the tape held, it can say nothing else.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
-    // The second source is taken on at once, and the first is not
-    // disturbed by it. It was added to the config after the loop loaded
-    // it, so it waits, Queued, for the next time the loop loads it — the
-    // end of the first source's sync; a source the loaded config already
-    // has runs beside it at once (the last test in this file).
-    await expect
-      .poll(() => statusOf(page, ingestOf(CLAUDE)), { timeout: 5_000 })
-      .toMatch(/^(Queued|Running)$/);
+    // Added to the config after this sync began, the second source still
+    // runs beside the first rather than behind it (plans/supervisor.md
+    // 4d), and the first is not disturbed by it.
+    await untilRunning(page, ingestOf(CLAUDE), 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     await expect(stopBtn(page, `group:${CLAUDE.id}`)).toBeVisible();
     console.log(
@@ -333,11 +329,9 @@ test.describe("sources run independently", () => {
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const pdfsWas = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS)]);
     await start(page, PDFS);
-    await expect
-      .poll(() => statusOf(page, ingestOf(PDFS)), { timeout: 5_000 })
-      .toMatch(/^(Queued|Running)$/);
+    await untilRunning(page, ingestOf(PDFS), 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
-    expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running)$/);
+    expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
 
     // ── every source finishes, in whatever order the loop took them ───
     release();

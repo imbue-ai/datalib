@@ -13,7 +13,7 @@ use crate::artifact::ArtifactPath;
 use crate::diagnostics::{Diagnostic, EntryRef, Severity};
 use crate::step::{StepId, StepSpec};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     pub steps: Vec<StepSpec>,
     /// Index into `steps` by id.

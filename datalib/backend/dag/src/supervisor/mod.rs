@@ -5,6 +5,7 @@
 
 pub mod host;
 pub mod record;
+pub mod reload;
 pub mod round;
 pub mod store;
 pub mod tick;

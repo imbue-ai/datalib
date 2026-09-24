@@ -23,6 +23,7 @@ use crate::scheduler::{
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
+use crate::supervisor::reload::GraphSource;
 use crate::version::UNKNOWN;
 
 /// How an invocation ended, held until the step runs again (it was a
@@ -55,7 +56,7 @@ impl Ended {
     }
 }
 
-type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
+type Done = (String, u32, Result<StepOutcome, StepError>);
 
 /// The record as the loop holds it, beside the one it last saved: a save
 /// writes the difference.
@@ -85,9 +86,12 @@ impl<'a> Recorded<'a> {
 struct Mailbox<'a> {
     store: &'a Store,
     seen: Option<i64>,
-    /// Requests naming a step this loop's graph lacks, left for the next
-    /// loop: it loads the config again, and may know them. Each with the
-    /// roots this graph lacks.
+    /// Whether the store has been read once: a request open before that
+    /// was open before the loop loaded its graph.
+    started: bool,
+    /// Requests naming a step this loop's graph lacks, set aside until a
+    /// config that has it is taken on, by this loop or the next. Each with
+    /// the roots this graph lacks.
     deferred: BTreeMap<String, Vec<String>>,
 }
 
@@ -130,6 +134,7 @@ impl Runner {
         let mut mailbox = Mailbox {
             store,
             seen: None,
+            started: false,
             deferred: BTreeMap::new(),
         };
         let plan: Vec<String> = graph
@@ -161,8 +166,12 @@ impl Runner {
         });
         record.save(&state).await?;
 
-        let n = graph.steps.len();
-        let shape = shape_of(graph);
+        let mut current = graph.clone();
+        let mut config_seen: Option<String> = None;
+        let mut next_graph: Option<Graph> = None;
+        let mut said_waiting_to_swap = false;
+        let mut n = graph.steps.len();
+        let mut shape = shape_of(graph);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
         let mut paused: BTreeMap<usize, String> = BTreeMap::new();
@@ -176,6 +185,8 @@ impl Runner {
         let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
         let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
         let mut invocations: Vec<Option<String>> = vec![None; n];
+        // What each running invocation was started against.
+        let mut consumed_by: Vec<Option<Consumed>> = vec![None; n];
         let mut warned_not_streaming = vec![false; n];
         let mut queue = QueueLedger::new(n);
         // Each step's state the last time a request wanted it, which is
@@ -199,6 +210,142 @@ impl Runner {
         let mut set: JoinSet<Done> = JoinSet::new();
 
         loop {
+            if !cancelled {
+                if let Some(source) = &self.reload {
+                    if let Some(next) = poll_config(&**source, &mut config_seen) {
+                        next_graph = Some(next);
+                    }
+                }
+            }
+            if let Some(next) = next_graph.take().filter(|_| !cancelled) {
+                let roots: BTreeSet<usize> = open
+                    .iter()
+                    .flat_map(|o| o.request.roots.iter().copied())
+                    .collect();
+                let still_needed: Vec<&str> = current
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, s)| {
+                        (facts.steps[i].running.is_some() || roots.contains(&i))
+                            && !next.by_id.contains_key(&s.id)
+                    })
+                    .map(|(_, s)| s.id.as_str())
+                    .collect();
+                if !still_needed.is_empty() {
+                    // Not interrupted: a step dropped by a config saved
+                    // mid-edit would lose hours of download to a typo.
+                    if !std::mem::replace(&mut said_waiting_to_swap, true) {
+                        for id in &still_needed {
+                            self.note(
+                                id,
+                                "the config no longer has this step; this sync takes the \
+                                 config on once it is done with it"
+                                    .into(),
+                            );
+                        }
+                    }
+                    next_graph = Some(next);
+                } else if !same_graph(&current, &next) {
+                    said_waiting_to_swap = false;
+                    let old = std::mem::replace(&mut current, next);
+                    let graph = &current;
+                    let from_old: Vec<Option<usize>> = graph
+                        .steps
+                        .iter()
+                        .map(|s| old.by_id.get(&s.id).copied())
+                        .collect();
+                    let to_new: HashMap<usize, usize> = from_old
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(new, o)| Some(((*o)?, new)))
+                        .collect();
+                    // A step the new graph lacks, done but for what it
+                    // reads settling, is done now, under the graph it ran in.
+                    for (i, slot) in ended.iter_mut().enumerate() {
+                        if to_new.contains_key(&i) {
+                            continue;
+                        }
+                        if let Some(e) = slot.take() {
+                            self.finish(
+                                &old,
+                                &mut state,
+                                &mut status,
+                                i,
+                                e.status,
+                                e.error,
+                                e.exit,
+                                e.attempts,
+                            );
+                        }
+                    }
+                    n = graph.steps.len();
+                    shape = shape_of(graph);
+                    status = carry(&mut status, &from_old);
+                    attempts_taken = carry(&mut attempts_taken, &from_old);
+                    errors = carry(&mut errors, &from_old);
+                    ended = carry(&mut ended, &from_old);
+                    stops = carry(&mut stops, &from_old);
+                    invocations = carry(&mut invocations, &from_old);
+                    warned_not_streaming = carry(&mut warned_not_streaming, &from_old);
+                    ever_in_scope = carry(&mut ever_in_scope, &from_old);
+                    consumed_by = carry(&mut consumed_by, &from_old)
+                        .into_iter()
+                        .map(|c| c.map(|c| remap_consumed(c, &to_new)))
+                        .collect();
+                    last_states = from_old
+                        .iter()
+                        .map(|o| o.map_or(Row::Idle, |o| remap_row(last_states[o], &to_new)))
+                        .collect();
+                    queue.remap(&from_old);
+                    // The record holds everything the facts are made of
+                    // but what is in flight, which carries over.
+                    let before = std::mem::replace(&mut facts, facts_of(graph, &state));
+                    for (f, o) in facts.steps.iter_mut().zip(&from_old) {
+                        let Some(was) = o.map(|o| &before.steps[o]) else {
+                            continue;
+                        };
+                        f.running = was.running.clone();
+                        f.streams_output = was.streams_output;
+                        f.last_attempt = was.last_attempt.clone().map(|a| Attempt {
+                            consumed: remap_consumed(a.consumed, &to_new),
+                            ..a
+                        });
+                    }
+                    // Every root is in the new graph: a swap waits until it is.
+                    for o in open.iter_mut() {
+                        for r in o.request.roots.iter_mut() {
+                            *r = to_new[r];
+                        }
+                        o.scope = downstream_of(graph, &o.request.roots);
+                        for (e, &s) in ever_in_scope.iter_mut().zip(&o.scope) {
+                            *e |= s;
+                        }
+                    }
+                    paused = paused_in(graph, store).await?;
+                    // Read the requests again: one left for want of a step
+                    // this graph has is taken on now.
+                    mailbox.seen = None;
+                    let mut added = Vec::new();
+                    for (i, o) in from_old.iter().enumerate() {
+                        let id = &graph.steps[i].id;
+                        match o {
+                            None => {
+                                added.push(id.clone());
+                                self.note(id, "added to the config during this sync".into());
+                            }
+                            Some(o) if old.fingerprints[*o] != graph.fingerprints[i] => {
+                                self.note(id, "changed in the config during this sync".into())
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    if !added.is_empty() {
+                        self.sink.emit(&Event::RunPlan { steps: added });
+                    }
+                }
+            }
+            let graph = &current;
             if !cancelled {
                 self.refresh(
                     graph,
@@ -298,6 +445,7 @@ impl Runner {
                 let (tx, rx) = watch::channel(false);
                 stops[i] = Some(tx);
                 let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
+                consumed_by[i] = Some(start.consumed);
                 let started_at = now_stamp();
                 mark_running(&mut state, &graph.steps[i].id, &started_at);
                 let invocation = InvocationRow {
@@ -316,11 +464,11 @@ impl Runner {
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
                 let child_env = self.child_env.clone();
-                let consumed = start.consumed;
+                let id = graph.steps[i].id.clone();
                 set.spawn(async move {
                     let (attempts, res) =
                         invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
-                    (i, attempts, res, consumed)
+                    (id, attempts, res)
                 });
             }
             for &i in &t.stops {
@@ -341,6 +489,11 @@ impl Runner {
                 store.close_request(&closed.id, outcome, step).await?;
             }
             if open.is_empty() && set.is_empty() {
+                // A config waiting on what just ended may bring requests
+                // of its own, which this loop takes on rather than the next.
+                if next_graph.is_some() {
+                    continue;
+                }
                 break;
             }
             let polling = !cancelled;
@@ -356,7 +509,7 @@ impl Runner {
                 biased;
                 Some(signal) = checkpoints.recv() => {
                     self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut warned_not_streaming).await;
+                        &mut queue, &mut warned_not_streaming, &consumed_by).await;
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
@@ -367,9 +520,12 @@ impl Runner {
                 }
                 _ = tokio::time::sleep(MAILBOX_POLL), if polling => {}
                 joined = set.join_next() => {
-                    let (i, attempts, res, consumed) = joined
+                    let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?;
+                    // A graph that drops a running step waits for it.
+                    let i = graph.by_id[&id];
+                    let consumed = consumed_by[i].take().expect("started with what it read");
                     stops[i] = None;
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
                     let e = self.on_ended(graph, i, attempts, res, &consumed, &mut facts,
@@ -390,6 +546,7 @@ impl Runner {
             }
         }
 
+        let graph = &current;
         for (i, slot) in ended.iter_mut().enumerate() {
             if let Some(e) = slot.take() {
                 self.finish(
@@ -485,6 +642,7 @@ impl Runner {
         let Mailbox {
             store,
             seen,
+            started,
             deferred,
         } = mailbox;
         {
@@ -496,7 +654,7 @@ impl Runner {
                 // Open before this loop loaded its graph, or so near it
                 // that the config it names cannot be newer than the one
                 // loaded.
-                let first = seen.is_none();
+                let first = !std::mem::replace(started, true);
                 *seen = Some(version);
                 let rows = store.open_requests().await?;
                 deferred.retain(|id, _| {
@@ -533,8 +691,8 @@ impl Runner {
                                     step: unknown.clone(),
                                     level: crate::events::LogLevel::Info,
                                     msg: format!(
-                                        "request {} names a step the config this loop loaded \
-                                         does not have; leaving it for the next loop",
+                                        "request {} names a step this loop's graph does not \
+                                         have; waiting for a config that has it",
                                         row.id
                                     ),
                                     ts: None,
@@ -564,6 +722,7 @@ impl Runner {
                             .await?;
                         continue;
                     }
+                    deferred.remove(&row.id);
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
@@ -593,6 +752,19 @@ impl Runner {
         let held = vec![false; graph.steps.len()];
         record_states(graph, &mut state, &t, &held, &paused, |_| None);
         record.save(&state).await
+    }
+
+    fn note(&self, step: &str, msg: String) {
+        self.sink.emit(&Event::Log {
+            step: step.to_string(),
+            level: crate::events::LogLevel::Info,
+            msg,
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        });
     }
 
     fn ctx_for(
@@ -667,6 +839,7 @@ impl Runner {
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
         warned_not_streaming: &mut [bool],
+        consumed_by: &[Option<Consumed>],
     ) {
         use crate::step::StepSignal;
         let (step, version, rows) = match signal {
@@ -697,7 +870,12 @@ impl Runner {
         // announced: it publishes before it says so.
         let qualified = match self.read_sink(graph, p).await {
             Some(read) => read,
-            None => format!("{}:{}", graph.fingerprints[p], version),
+            None => {
+                let fingerprint = consumed_by[p]
+                    .as_ref()
+                    .map_or(&graph.fingerprints[p], |c| &c.fingerprint);
+                format!("{fingerprint}:{version}")
+            }
         };
         let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
@@ -743,7 +921,7 @@ impl Runner {
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
-        let fingerprint = &graph.fingerprints[i];
+        let fingerprint = &consumed.fingerprint;
         let prior = state.steps.get(&spec.id).and_then(|s| s.version.clone());
         let exit = match &res {
             Ok(o) => o.exit,
@@ -919,8 +1097,8 @@ fn record_states(
     }
 }
 
-/// A step this loop's graph lacks reads as waiting while a request left
-/// for the next loop names it, and as nothing once none does.
+/// A step this loop's graph lacks reads as waiting while a request the
+/// loop has set aside names it, and as nothing once none does.
 fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String, Vec<String>>) {
     for root in deferred.values().flatten() {
         state.steps.entry(root.clone()).or_default();
@@ -935,9 +1113,7 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
             .map(|(r, _)| r.clone());
         st.state = request.as_ref().map(|_| super::tick::StateKind::Waiting);
         st.state_detail = request.as_ref().map(|_| {
-            "waiting for the sync in progress to end: it loaded the config before this \
-             step was in it"
-                .to_string()
+            "waiting for the sync in progress to take on a config that has this step".to_string()
         });
         st.request = request;
     }
@@ -968,6 +1144,62 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
         std::future::pending::<()>().await;
     }
     Some(())
+}
+
+/// The graph the config describes now, if it has changed since
+/// `seen`. One that does not load is waited out on the graph the loop
+/// has; the Manage screen already says the config is broken.
+fn poll_config(source: &dyn GraphSource, seen: &mut Option<String>) -> Option<Graph> {
+    let version = source.version().ok()?;
+    if seen.as_ref() == Some(&version) {
+        return None;
+    }
+    *seen = Some(version);
+    let (version, graph) = source.load().ok()?;
+    *seen = Some(version);
+    Some(graph)
+}
+
+/// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
+/// was in the old one. A step new to the graph starts from nothing.
+fn carry<T: Default>(v: &mut [T], from_old: &[Option<usize>]) -> Vec<T> {
+    from_old
+        .iter()
+        .map(|o| o.map(|o| std::mem::take(&mut v[o])).unwrap_or_default())
+        .collect()
+}
+
+fn remap_consumed(c: Consumed, to_new: &HashMap<usize, usize>) -> Consumed {
+    Consumed {
+        fingerprint: c.fingerprint,
+        reads: c
+            .reads
+            .into_iter()
+            .filter_map(|(p, v)| Some((*to_new.get(&p)?, v)))
+            .collect(),
+    }
+}
+
+/// A state naming a step the new graph lacks names nothing to wait on.
+fn remap_row(row: Row, to_new: &HashMap<usize, usize>) -> Row {
+    let to = |j: usize| to_new.get(&j).copied();
+    match row {
+        Row::Blocked(p) => to(p).map_or(Row::Idle, Row::Blocked),
+        Row::Waiting(Wait::Upstream(p)) => {
+            to(p).map_or(Row::Idle, |p| Row::Waiting(Wait::Upstream(p)))
+        }
+        Row::Waiting(Wait::Sink(s)) => to(s).map_or(Row::Idle, |s| Row::Waiting(Wait::Sink(s))),
+        Row::Waiting(Wait::Reader(r)) => to(r).map_or(Row::Idle, |r| Row::Waiting(Wait::Reader(r))),
+        other => other,
+    }
+}
+
+/// The same steps in the same places, each with the same definition:
+/// nothing a swap would move.
+fn same_graph(a: &Graph, b: &Graph) -> bool {
+    a.fingerprints == b.fingerprints
+        && a.steps.len() == b.steps.len()
+        && a.steps.iter().zip(&b.steps).all(|(x, y)| x.id == y.id)
 }
 
 /// Today's graph as the tick sees it: each step writes the sink its own
@@ -1072,6 +1304,7 @@ mod tests {
     use crate::step::{StepRun, StepSpec};
     use crate::supervisor::record::StepRecord;
     use crate::supervisor::tick::StateKind;
+    use crate::EventSink;
 
     /// Wait for what the next assertion is about, with a deadline that
     /// names what never came.
@@ -1267,6 +1500,232 @@ mod tests {
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
     }
 
+    /// A config a test rewrites while the loop runs.
+    struct Swappable(std::sync::Mutex<(u64, Graph)>);
+
+    impl Swappable {
+        fn new(graph: &Graph) -> Arc<Self> {
+            Arc::new(Self(std::sync::Mutex::new((0, graph.clone()))))
+        }
+
+        fn set(&self, specs: Vec<StepSpec>) {
+            let mut now = self.0.lock().unwrap();
+            *now = (now.0 + 1, Graph::build(specs).unwrap());
+        }
+    }
+
+    impl GraphSource for Swappable {
+        fn version(&self) -> Result<String> {
+            Ok(self.0.lock().unwrap().0.to_string())
+        }
+
+        fn load(&self) -> Result<(String, Graph)> {
+            let now = self.0.lock().unwrap();
+            Ok((now.0.to_string(), now.1.clone()))
+        }
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<Event>>);
+
+    impl EventSink for Recorder {
+        fn emit(&self, event: &Event) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    impl Recorder {
+        fn logged(&self, step: &str, text: &str) -> bool {
+            self.0.lock().unwrap().iter().any(
+                |e| matches!(e, Event::Log { step: s, msg, .. } if s == step && msg.contains(text)),
+            )
+        }
+    }
+
+    struct Three {
+        root: tempfile::TempDir,
+        runs: [Arc<AtomicU32>; 3],
+        go: Arc<AtomicBool>,
+        events: Arc<Recorder>,
+    }
+
+    impl Three {
+        fn new() -> Self {
+            Self {
+                root: tempfile::tempdir().unwrap(),
+                runs: std::array::from_fn(|_| Arc::new(AtomicU32::new(0))),
+                go: Arc::new(AtomicBool::new(false)),
+                events: Arc::default(),
+            }
+        }
+
+        fn step(&self, k: usize) -> StepSpec {
+            let id = ["a/raw", "b/raw", "c/raw"][k];
+            let stopped = Arc::new(AtomicBool::new(false));
+            source(id, self.runs[k].clone(), self.go.clone(), stopped)
+        }
+
+        fn runs(&self, k: usize) -> u32 {
+            self.runs[k].load(Ordering::SeqCst)
+        }
+
+        fn serve(
+            &self,
+            graph: Graph,
+            config: Arc<Swappable>,
+        ) -> tokio::task::JoinHandle<Result<RunReport>> {
+            let root = self.root.path().to_path_buf();
+            let events = self.events.clone();
+            tokio::spawn(async move {
+                let store = Store::open(&root).await?;
+                let report = Runner::new(&root)
+                    .sink(events)
+                    .reload_from(config)
+                    .serve(&graph, &store)
+                    .await;
+                store.close().await;
+                report
+            })
+        }
+    }
+
+    /// The calendars on 2026-09-24: added to the config during a long gmail
+    /// sync, they read Queued until it ended. The loop re-reads the config
+    /// and starts them beside it.
+    #[tokio::test]
+    async fn a_source_added_to_the_config_mid_loop_starts_at_once() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph, config.clone());
+        until("a to start", || t.runs(0) == 1).await;
+
+        config.set(vec![t.step(0), t.step(1), t.step(2)]);
+        let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
+        until("c to start while a runs", || t.runs(2) == 1).await;
+        assert_eq!(outcome(&other, &first).await, None, "a is still going");
+
+        t.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        for id in [&first, &later] {
+            assert_eq!(outcome(&other, id).await, Some(Some(RequestOutcome::Done)));
+        }
+        assert_eq!((t.runs(0), t.runs(1)), (1, 0));
+    }
+
+    /// A config saved mid-edit can drop a step that is downloading. It is
+    /// not interrupted: the loop keeps its graph until the step ends, and
+    /// what the new config adds waits with it.
+    #[tokio::test]
+    async fn a_config_that_drops_a_running_step_is_taken_on_once_it_ends() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph, config.clone());
+        until("a to start", || t.runs(0) == 1).await;
+
+        config.set(vec![t.step(1), t.step(2)]);
+        let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
+        let c = until_recorded(t.root.path(), "c/raw", "waiting", |st| {
+            st.state == Some(StateKind::Waiting)
+        })
+        .await;
+        assert_eq!(c.request.as_deref(), Some(later.as_str()));
+        assert_eq!(t.runs(2), 0, "c waits for the step the config dropped");
+
+        t.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert_eq!(
+            outcome(&other, &first).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        assert_eq!(
+            outcome(&other, &later).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        assert_eq!(t.runs(2), 1);
+    }
+
+    /// A step edited while it runs finishes on the definition it started
+    /// with, and its record says so: the next busy period reads that
+    /// record, and the new definition must read as out of date there too.
+    /// The request that still wants it then runs it again under the new one.
+    #[tokio::test]
+    async fn a_step_edited_while_it_runs_records_what_it_ran_and_runs_again() {
+        let root = tempfile::tempdir().unwrap();
+        let runs = Arc::new(AtomicU32::new(0));
+        let gates = [
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ];
+        let step = |code_version: &'static str| {
+            let (runs, gates) = (runs.clone(), gates.clone());
+            StepSpec::new(
+                "a/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (runs, gates) = (runs.clone(), gates.clone());
+                    async move {
+                        let run = runs.fetch_add(1, Ordering::SeqCst) as usize;
+                        while !gates[run.min(1)].load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("f"), code_version).unwrap();
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .code_version(code_version)
+        };
+        let graph = Graph::build(vec![step("1")]).unwrap();
+        let ran_with = graph.fingerprints[0].clone();
+        let config = Swappable::new(&graph);
+        let events = Arc::new(Recorder::default());
+        let other = Store::open(root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = {
+            let (root, config, events) =
+                (root.path().to_path_buf(), config.clone(), events.clone());
+            tokio::spawn(async move {
+                let store = Store::open(&root).await?;
+                let report = Runner::new(&root)
+                    .sink(events)
+                    .reload_from(config)
+                    .serve(&graph, &store)
+                    .await;
+                store.close().await;
+                report
+            })
+        };
+        until("a to start", || runs.load(Ordering::SeqCst) == 1).await;
+
+        config.set(vec![step("2")]);
+        let edited = config.load().unwrap().1.fingerprints[0].clone();
+        assert_ne!(edited, ran_with);
+        until("the loop to take the edit on", || {
+            events.logged("a/raw", "changed in the config")
+        })
+        .await;
+        gates[0].store(true, Ordering::SeqCst);
+        until("a to run again", || runs.load(Ordering::SeqCst) == 2).await;
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(record.steps["a/raw"].fingerprint, ran_with);
+
+        gates[1].store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert_eq!(
+            outcome(&other, &first).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(record.steps["a/raw"].fingerprint, edited);
+    }
+
     /// A step's record as the loop last saved it, once `ready` holds.
     async fn until_recorded(
         root: &std::path::Path,
@@ -1418,9 +1877,10 @@ mod tests {
         );
     }
 
-    /// A source added to the config while a loop runs is not in the graph
-    /// that loop loaded. Its request waits for the next loop, which loads
-    /// the config again, rather than failing as a step that does not exist.
+    /// A loop with nowhere to re-read its graph cannot take on a source
+    /// added to the config while it runs. Its request waits for the next
+    /// loop, which loads the config again, rather than failing as a step
+    /// that does not exist.
     #[tokio::test]
     async fn a_request_the_loop_cannot_place_mid_loop_is_left_for_the_next() {
         let f = fixture();
