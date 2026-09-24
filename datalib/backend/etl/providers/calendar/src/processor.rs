@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use datalib_etl::download_run::DownloadRun;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -58,6 +59,23 @@ pub struct CalendarIngest {
     method: Method,
 }
 
+impl CalendarIngest {
+    fn run_config(&self) -> serde_json::Value {
+        match &self.method {
+            Method::Google { calendars } => {
+                serde_json::json!({"method": "google", "calendars": calendars})
+            }
+            Method::Caldav {
+                server_url,
+                calendars,
+            } => serde_json::json!({
+                "method": "caldav", "server_url": server_url, "calendars": calendars
+            }),
+            Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
+        }
+    }
+}
+
 #[async_trait]
 impl DataProcessor for CalendarIngest {
     fn id(&self) -> &str {
@@ -68,7 +86,11 @@ impl DataProcessor for CalendarIngest {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let summary = match &self.method {
+        let pool = db.pool().clone();
+        // The run's own record in `sync_runs`: its summary, and what it
+        // changed in each table.
+        let run = DownloadRun::start(&pool, &self.run_config()).await?;
+        let result = match &self.method {
             Method::Google { calendars } => {
                 ingest::google::fetch(ingest::google::FetchOptions {
                     db,
@@ -77,7 +99,7 @@ impl DataProcessor for CalendarIngest {
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
             Method::Caldav {
                 server_url,
@@ -91,20 +113,24 @@ impl DataProcessor for CalendarIngest {
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
             Method::Ics { path } => {
+                let cache =
+                    FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
                 ingest::ics_dir::fetch(ingest::ics_dir::FetchOptions {
                     db,
                     input_path: path.clone(),
-                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                        .await?,
+                    cache,
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
         };
+        let summary = result.as_ref().cloned().unwrap_or_default();
+        run.finish(&result, &summary).await;
+        let summary = result?;
         session.finish(ctx, summary.line()).await
     }
 }

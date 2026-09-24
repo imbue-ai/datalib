@@ -16,8 +16,9 @@ use datalib_etl::download_problems;
 
 pub use db::{db_path_for, RawDb};
 
-/// What one run did, for the step's summary line.
-#[derive(Debug, Default, Clone)]
+/// What one run did: the step's summary line, and the run's `sync_runs`
+/// record.
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct FetchSummary {
     pub calendars: usize,
     pub events_new: usize,
