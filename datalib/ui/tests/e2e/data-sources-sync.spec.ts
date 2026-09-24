@@ -11,12 +11,16 @@
 //     like nothing had happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
-// it carries this spec: an `ingest -> render_markdown` edge is what makes
-// "everything downstream is queued too" a real assertion about the DAG
-// rather than a contrived one. `fsindex` (download-only) is the
-// unrelated second source — the one whose history must not move.
+// it carries most of this spec: an `ingest -> render_markdown` edge is
+// what makes "everything downstream is queued too" a real assertion
+// about the DAG rather than a contrived one. `fsindex` (download-only)
+// is the unrelated second source — the one whose history must not move.
+// Watching a run in flight needs a run that cannot finish before it is
+// seen, so that test syncs a replayed ChatGPT download instead, held
+// while it watches.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
@@ -45,6 +49,39 @@ declare const process: { env: Record<string, string | undefined> };
 
 const STEP_BIN = process.env.DATALIB_TEST_E2E_DATALIB_STEP;
 const PDF_DIR = process.env.DATALIB_TEST_E2E_PDF_FIXTURE_DIR;
+const PLAYBACK = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
+const HOLD = process.env.DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD;
+
+/// Park every replayed request of this spec's backend until `release`.
+function hold() {
+  writeFileSync(HOLD!, "");
+}
+/// Let a held download run to its end at fixture speed.
+function release() {
+  if (HOLD) rmSync(HOLD, { force: true });
+}
+
+/// A source that replays a tape, so it can be held in flight.
+const TAPED = "chatgpt-replay";
+const TAPED_UP = `${TAPED}/ingest`;
+const TAPED_DOWN = `${TAPED}/render_markdown`;
+const TAPED_STANZA = `
+[[groups]]
+id = "${TAPED}"
+type = "chatgpt"
+
+[[steps]]
+group = "${TAPED}"
+function = "ingest"
+command = "'${STEP_BIN}'"
+[steps.params.api]
+
+[[steps]]
+group = "${TAPED}"
+function = "render_markdown"
+command = "'${STEP_BIN}'"
+inputs = ["${TAPED_UP}"]
+`;
 
 /// This spec's own data root, asked of the backend rather than read
 /// from the environment.
@@ -106,6 +143,7 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  release();
   if (!original) return;
   await writeConfig(page, original);
 });
@@ -213,76 +251,96 @@ ${applets()}`;
   });
 
   test("the row shows the sync happening, and never goes backwards", async ({ page }) => {
-    await writeConfigAndOpenGroups(page, config());
+    test.skip(
+      !PLAYBACK || !HOLD,
+      "needs DATALIB_TEST_E2E_PLAYBACK_DIR + DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD from run_e2e.sh",
+    );
+    // A replayed download rather than `pdfs`: on this root a re-walk of
+    // the PDF folder finds nothing new and goes Queued → Running →
+    // Succeeded between two repaints, so the in-flight frame this test
+    // is about was there to see only when the runner was slow. The tape
+    // is held from before the click until that frame has been seen,
+    // then let go.
+    await writeConfig(page, `${config()}${TAPED_STANZA}`);
+    for (const id of [TAPED, "docs"]) await expandGroup(page, id);
 
     // Watch the row the way the grid paints it, from before the click
     // until it settles. This is the real sequence — the unit suite
     // replays a synthetic one through the same state machine.
-    await recordStatuses(page, ["pdfs/ingest", "pdfs/render_markdown"]);
+    await recordStatuses(page, [TAPED_UP, TAPED_DOWN]);
     // Whatever the rows say before the click. The recorder seeds itself
     // with the current value, so this is 1 for a row with a status and
     // 0 for one still painting; everything past it is what the click
     // caused.
-    const beforeUp = (await statusLog(page, "pdfs/ingest")).length;
-    const beforeDown = (await statusLog(page, "pdfs/render_markdown")).length;
+    const beforeUp = (await statusLog(page, TAPED_UP)).length;
+    const beforeDown = (await statusLog(page, TAPED_DOWN)).length;
+    const since = async (id: string, before: number) => (await statusLog(page, id)).slice(before);
 
-    const was = await stampsBefore(page, ["pdfs/ingest", "pdfs/render_markdown"]);
+    const was = await stampsBefore(page, [TAPED_UP, TAPED_DOWN]);
     // From the click to the run's end the rows move under a still
     // pointer; they should move in place.
     const paints = await watchPaints(page.locator(".tg-grid").first());
-    await syncBtn(page, "pdfs/ingest").click();
-    // Gate on the queue having accepted before *asserting*. `click()`
-    // resolves when the event is dispatched, not when the async handler
-    // behind it finishes, so an assertion straight after it races the
-    // enqueue. The banner is set by `runSource` between the POST
-    // returning and the rows being refetched, which is exactly the
-    // moment this test is about: the queue has the job, and the
-    // question is what the rows say. (The recorder was already running,
-    // so nothing is missed while this resolves — that is the point of
-    // starting it before the click.)
+    hold();
+    await syncBtn(page, TAPED_UP).click();
+    // `click()` resolves when the event is dispatched, not when the
+    // POST behind it returns; the banner is set once it has.
     await expect(page.getByText(/Queued a sync for/)).toBeVisible();
 
-    // Syncing a source takes on everything downstream of it, and the
-    // POST answers only once the loop has, so the render step is in
-    // flight from the first frame after it: Queued behind its download,
-    // or Running on what the download has already published, since
-    // the download streams. This is the assertion a download-only
-    // provider could not support, and the reason this spec is built on
-    // `pdf`. The rows are the server's, refetched after the banner goes
-    // up, so the first frame is waited for rather than read off the
-    // banner — what is asserted is what that frame says.
+    // The download cannot finish while the tape is held, so its row
+    // reaching Running is a state to wait for, not a frame to catch.
     await expect
-      .poll(async () => (await statusLog(page, "pdfs/render_markdown")).length, {
+      .poll(async () => (await since(TAPED_UP, beforeUp)).map(statusWord), {
+        timeout: 30_000,
+        intervals: [100],
+        message: `${TAPED_UP} never showed the run in flight`,
+      })
+      .toContain("Running");
+
+    // Syncing a source takes on everything downstream of it, so the
+    // render is in flight too: Queued behind its download, or Running on
+    // what the download has published, since the download streams.
+    // This is the assertion a download-only source could not support.
+    await expect
+      .poll(async () => (await since(TAPED_DOWN, beforeDown)).length, {
         timeout: 10_000,
         intervals: [50],
         message: "the render row never repainted after the click",
       })
-      .toBeGreaterThan(beforeDown);
-    const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
+      .toBeGreaterThan(0);
+    const downstream = await since(TAPED_DOWN, beforeDown);
     expect(
       statusWord(downstream[0]),
       `downstream sequence was ${JSON.stringify(downstream)}`,
     ).toMatch(/^(Queued|Running)$/);
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
+    // Only the hold keeps it here; if the step has finished anyway, the
+    // frames above were caught by luck and the next slow run will miss them.
+    expect(await statusOf(page, TAPED_UP), "the download finished while its tape was held").toBe(
+      "Running",
+    );
 
+    release();
     // `settleRow`, not `settle`: the log lives in the page, and
     // `settle` remounts, which would throw it away. The before-stamp is
     // still passed — a terminal status on its own is answerable by the
     // *previous* run's frame, which is what #237 fixed.
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    const seen = (await statusLog(page, "pdfs/ingest")).slice(beforeUp);
+    await settleRow(page, TAPED_UP, was[TAPED_UP]);
+    const seen = await since(TAPED_UP, beforeUp);
+    expect(
+      seen.length,
+      `the row never showed the run in flight: sequence was ${JSON.stringify(seen)}`,
+    ).toBeGreaterThan(0);
 
     // What the sequence must contain: a frame from before the run was
     // over, which used to be missing entirely — the click produced no
-    // visible change until the whole run was done. Which frame it is
-    // depends on how far the loop has got when the rows repaint: Queued
-    // if it has taken the request on and not yet started this step,
-    // Running if it has.
+    // visible change until the whole run was done.
     expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
       /^(Queued|Running)$/,
     );
-    expect(statusWord(seen[seen.length - 1])).toBe("Succeeded");
+    expect(statusWord(seen[seen.length - 1]), `sequence was ${JSON.stringify(seen)}`).toBe(
+      "Succeeded",
+    );
 
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
@@ -319,16 +377,10 @@ ${applets()}`;
     }
 
     // The render step follows the download it depends on: it may not
-    // reach a terminal state before its input does. `pdfs/ingest` is
+    // reach a terminal state before its input does. The download is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settleRow(page, "pdfs/render_markdown", was["pdfs/render_markdown"])).toMatch(
-      /^(Succeeded|Up to date)$/,
-    );
-    const downstreamFinal = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
-    expect(
-      statusWord(downstreamFinal[0]),
-      `downstream did not start in flight: ${JSON.stringify(downstreamFinal)}`,
-    ).toMatch(/^(Queued|Running)$/);
+    expect(await settleRow(page, TAPED_DOWN, was[TAPED_DOWN])).toMatch(/^(Succeeded|Up to date)$/);
+    const downstreamFinal = await since(TAPED_DOWN, beforeDown);
     expect(
       statusWord(downstreamFinal[downstreamFinal.length - 1]),
       `downstream never finished: ${JSON.stringify(downstreamFinal)}`,

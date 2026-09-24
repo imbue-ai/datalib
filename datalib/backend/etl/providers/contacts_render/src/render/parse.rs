@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use datalib_etl_contacts::ingest::api::{
-    vcard_all, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid, VcardProp,
+    vcard_all, vcard_created, vcard_fn, vcard_is_group, vcard_members, vcard_n_family_given,
+    vcard_rev, vcard_uid, VcardProp,
 };
 use datalib_etl_contacts::ingest::db::{LoadedRawContact, RawDb};
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
@@ -14,9 +15,10 @@ use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
 /// out so render doesn't have to re-walk the text.
 #[derive(Debug, Clone)]
 pub struct ParsedContact {
-    /// Stable identifier from the vCard's `UID:`. Falls back to a
-    /// deterministic UUIDv5 derived from `(addressbook, file_path,
-    /// block_index)` when a card omits it.
+    /// Stable identifier from the vCard's `UID:`. A card without one
+    /// (every card of a Google export) takes the id its download gave
+    /// its row, from the name or the file position; that id is the
+    /// card's alone, where the row's href is shared by a whole file.
     pub uid: String,
     /// Addressbook label — the file stem of the `.vcf` this contact
     /// came from. Shows up on grid rows as `channel` and groups
@@ -31,6 +33,11 @@ pub struct ParsedContact {
     /// `REV:` (revision timestamp). Render uses it for `modified_at`;
     /// null when absent.
     pub revision: Option<String>,
+    /// `CREATED:`, which Fastmail writes; render's `created_at`.
+    pub created: Option<String>,
+    /// A contact group, whose `members` name the cards in it.
+    pub is_group: bool,
+    pub members: Vec<String>,
     /// Multi-valued properties surfaced in document order.
     pub emails: Vec<VcardProp>,
     pub phones: Vec<VcardProp>,
@@ -124,13 +131,15 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
             blocks
         };
         for (idx, block) in iter.into_iter().enumerate() {
-            match parse_block(&block, &source_path, &row.addressbook_label, idx) {
+            match parse_block(&block, &source_path, &row.addressbook_label) {
                 Ok(mut c) => {
                     if c.uid.is_empty() {
-                        c.uid = if idx == 0 {
-                            row.uid.clone()
-                        } else {
-                            format!("{}:{idx}", row.uid)
+                        c.uid = match idx {
+                            _ if row.uid.is_empty() => {
+                                derive_uid_from_path(&row.addressbook_label, &source_path, idx)
+                            }
+                            0 => row.uid.clone(),
+                            _ => format!("{}:{idx}", row.uid),
                         };
                     }
                     c.inputs.push(Input::new("contacts", &row.id));
@@ -204,14 +213,8 @@ fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Opti
         .or_else(|| extract_single(block, "ORG").and_then(|o| nonblank(o.replace(';', " — "))))
 }
 
-fn parse_block(
-    block: &str,
-    source_path: &Path,
-    addressbook: &str,
-    block_index: usize,
-) -> Result<ParsedContact> {
-    let uid = vcard_uid(block)
-        .unwrap_or_else(|| derive_uid_from_path(addressbook, source_path, block_index));
+fn parse_block(block: &str, source_path: &Path, addressbook: &str) -> Result<ParsedContact> {
+    let uid = vcard_uid(block).unwrap_or_default();
     let emails = vcard_all(block, "EMAIL");
     let phones = vcard_all(block, "TEL");
     let addresses = vcard_all(block, "ADR");
@@ -224,6 +227,9 @@ fn parse_block(
         source_path: source_path.to_path_buf(),
         display_name: display_name(block, &emails, &phones),
         revision: vcard_rev(block),
+        created: vcard_created(block),
+        is_group: vcard_is_group(block),
+        members: vcard_members(block),
         emails,
         phones,
         addresses,
@@ -333,6 +339,40 @@ mod tests {
     /// the file would collapse onto one id and all but one would
     /// vanish from the grid.
     #[test]
+    fn cards_without_a_uid_keep_the_id_their_row_was_given() {
+        // As the `.vcf` download writes a Google export: one row per card,
+        // `Borg.vcf#<n>` hrefs, and an id it chose from the name or, for a
+        // nameless card, the file position.
+        let row = |href: &str, uid: &str, vcard: &str| LoadedRawContact {
+            id: format!("Borg#{uid}"),
+            addressbook_id: Some("Borg".into()),
+            uid: uid.into(),
+            href: href.into(),
+            addressbook_label: "Borg".into(),
+            vcard: vcard.into(),
+        };
+        let parsed = parse_loaded(vec![
+            row(
+                "Borg.vcf",
+                "name:hugh",
+                "BEGIN:VCARD\r\nFN:Hugh\r\nEND:VCARD\r\n",
+            ),
+            row(
+                "Borg.vcf#1",
+                "name:seven",
+                "BEGIN:VCARD\r\nFN:Seven of Nine\r\nEND:VCARD\r\n",
+            ),
+            row(
+                "Borg.vcf#2",
+                "Borg:Borg:2",
+                "BEGIN:VCARD\r\nitem1.EMAIL;TYPE=INTERNET:drone@borg.test\r\nEND:VCARD\r\n",
+            ),
+        ]);
+        let uids: Vec<&str> = parsed.contacts.iter().map(|c| c.uid.as_str()).collect();
+        assert_eq!(uids, vec!["Borg:Borg:2", "name:hugh", "name:seven"]);
+    }
+
+    #[test]
     fn nameless_cards_keyed_by_an_href_fragment_stay_distinct() {
         let row = |href: &str| LoadedRawContact {
             id: format!("contacts:{href}"),
@@ -360,7 +400,7 @@ mod tests {
     #[test]
     fn nameless_card_is_titled_by_what_it_does_have() {
         let name = |block: &str| {
-            parse_block(block, Path::new("x.vcf"), "book", 0)
+            parse_block(block, Path::new("x.vcf"), "book")
                 .unwrap()
                 .display_name
         };

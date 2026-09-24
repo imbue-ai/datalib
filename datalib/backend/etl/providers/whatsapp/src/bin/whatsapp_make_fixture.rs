@@ -40,6 +40,24 @@ struct Spec {
     reactions: Vec<ReactionSpec>,
     #[serde(default)]
     media_files: Vec<MediaFileSpec>,
+    /// `wa.db`'s `wa_contacts` rows, written as `Backups/wa.db.crypt15`.
+    /// Empty: no `wa.db` at all, as in a backup copied without `Backups/`.
+    #[serde(default)]
+    wa_contacts: Vec<WaContactSpec>,
+}
+
+/// One `wa_contacts` row: an address-book entry for a WhatsApp jid.
+#[derive(Debug, Deserialize)]
+struct WaContactSpec {
+    jid: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    given_name: Option<String>,
+    #[serde(default)]
+    family_name: Option<String>,
+    #[serde(default)]
+    wa_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +89,9 @@ struct ChatSpec {
     subject: Option<String>,
     #[serde(default)]
     group_type: i64,
+    /// The last message the account has read here. Absent: all of them.
+    #[serde(default)]
+    last_read_message_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +187,17 @@ fn main() -> Result<()> {
     std::fs::write(&crypt_path, &encrypted)
         .with_context(|| format!("write {}", crypt_path.display()))?;
 
+    if !spec.wa_contacts.is_empty() {
+        let plaintext = rt.block_on(build_wa_db(&spec.wa_contacts))?;
+        let encrypted =
+            encrypt_to_crypt15(&plaintext, &root_key, &iv).context("encrypt wa.db to crypt15")?;
+        let backups = backup_dir.join("Backups");
+        std::fs::create_dir_all(&backups)
+            .with_context(|| format!("mkdir -p {}", backups.display()))?;
+        let path = backups.join("wa.db.crypt15");
+        std::fs::write(&path, &encrypted).with_context(|| format!("write {}", path.display()))?;
+    }
+
     // Materialize placeholder media files.
     for mf in &spec.media_files {
         let p = backup_dir.join("Media").join(&mf.relative_path);
@@ -205,11 +237,66 @@ async fn build_msgstore(spec: &Spec) -> Result<Vec<u8>> {
         insert_jid_map(&pool, &spec.jid_map, &spec.lid_display_names).await?;
         insert_chats(&pool, &spec.chats).await?;
         let msg_id_to_pk = insert_messages(&pool, &spec.messages).await?;
+        set_chat_pointers(&pool, &spec.chats).await?;
         insert_reactions(&pool, &spec.reactions, &msg_id_to_pk).await?;
         pool.close().await;
     }
     let bytes = std::fs::read(&path).context("read fixture msgstore back")?;
     Ok(bytes)
+}
+
+/// `wa.db` with `wa_contacts` exactly as a real one declares it
+/// (measured 2026-09-24), holding the spec's rows.
+async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
+    let tmp = tempfile::Builder::new()
+        .prefix("wa-fixture-wadb-")
+        .suffix(".db")
+        .tempfile()
+        .context("create tempfile for fixture wa.db")?;
+    let path = tmp.path().to_path_buf();
+    {
+        let pool = open_writable_sqlite(&path).await?;
+        for stmt in [
+            "CREATE TABLE wa_contacts(_id INTEGER PRIMARY KEY AUTOINCREMENT,jid TEXT NOT NULL,\
+             is_whatsapp_user BOOLEAN NOT NULL,status TEXT,status_timestamp INTEGER,number TEXT,\
+             raw_contact_id INTEGER,display_name TEXT,phone_type INTEGER,phone_label TEXT,\
+             photo_ts INTEGER,thumb_ts INTEGER,photo_id_timestamp INTEGER,given_name TEXT,\
+             family_name TEXT,wa_name TEXT,sort_name TEXT,nickname TEXT,company TEXT,title TEXT,\
+             status_autodownload_disabled INTEGER,keep_timestamp INTEGER,is_spam_reported INTEGER,\
+             is_sidelist_synced BOOLEAN DEFAULT 0,is_business_synced BOOLEAN DEFAULT 0,\
+             disappearing_mode_duration INTEGER,disappearing_mode_timestamp LONG,\
+             disappearing_mode_support_disabled INTEGER,history_sync_initial_phash TEXT,\
+             is_starred BOOLEAN,is_wa_created_contact BOOLEAN,sync_policy INTEGER,\
+             status_emoji TEXT,is_contact_synced INTEGER,is_reachable INTEGER,\
+             external_user_state INTEGER)",
+            "CREATE INDEX jid_index ON wa_contacts (jid)",
+        ] {
+            sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .context("create wa_contacts")?;
+        }
+        for c in contacts {
+            let number = c.jid.split_once('@').map(|(user, _)| user.to_string());
+            sqlx::query(
+                "INSERT INTO wa_contacts (jid, is_whatsapp_user, number, display_name, \
+                    given_name, family_name, wa_name, sort_name) \
+                 VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&c.jid)
+            .bind(number)
+            .bind(&c.display_name)
+            .bind(&c.given_name)
+            .bind(&c.family_name)
+            .bind(&c.wa_name)
+            .bind(&c.display_name)
+            .execute(&pool)
+            .await
+            .context("insert wa_contacts")?;
+        }
+        pool.close().await;
+    }
+    std::fs::read(&path).context("read fixture wa.db back")
 }
 
 async fn open_writable_sqlite(path: &Path) -> Result<SqlitePool> {
@@ -255,6 +342,11 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             hidden INTEGER,
             subject TEXT,
             created_timestamp INTEGER,
+            display_message_row_id INTEGER,
+            last_message_row_id INTEGER,
+            last_read_message_row_id INTEGER,
+            last_read_receipt_sent_message_row_id INTEGER,
+            last_important_message_row_id INTEGER,
             archived INTEGER,
             sort_timestamp INTEGER,
             mod_tag INTEGER,
@@ -266,6 +358,7 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             unseen_row_count INTEGER,
             plaintext_disabled INTEGER,
             vcard_ui_dismissed INTEGER,
+            change_number_notified_message_row_id INTEGER,
             show_group_description INTEGER,
             ephemeral_expiration INTEGER,
             ephemeral_setting_timestamp INTEGER,
@@ -273,10 +366,16 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             ephemeral_disappearing_messages_initiator INTEGER,
             unseen_important_message_count INTEGER NOT NULL DEFAULT 0,
             group_type INTEGER NOT NULL DEFAULT 0,
+            last_message_reaction_row_id INTEGER,
+            last_seen_message_reaction_row_id INTEGER,
             unseen_message_reaction_count INTEGER,
             unseen_comment_message_count INTEGER,
             growth_lock_level INTEGER,
             growth_lock_expiration_ts INTEGER,
+            last_read_message_sort_id INTEGER,
+            display_message_sort_id INTEGER,
+            last_message_sort_id INTEGER,
+            last_read_receipt_sent_message_sort_id INTEGER,
             has_new_community_admin_dialog_been_acknowledged INTEGER NOT NULL DEFAULT 0,
             history_sync_progress INTEGER,
             chat_lock INTEGER,
@@ -473,6 +572,45 @@ async fn insert_chats(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
             .execute(pool)
             .await
             .context("insert chat")?;
+    }
+    Ok(())
+}
+
+/// The per-chat message pointers WhatsApp keeps, filled the way a real
+/// backup has them (measured 2026-09-24): the last and display message
+/// are the newest, the read mark is where reading stopped, the read
+/// receipt went out at the read mark, sort ids equal row ids, and the
+/// unseen counters count the incoming messages past the mark. A chat
+/// with no message keeps them all NULL.
+async fn set_chat_pointers(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
+    for c in chats {
+        let newest: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(_id) FROM message WHERE chat_row_id = ?")
+                .bind(c.id)
+                .fetch_one(pool)
+                .await
+                .context("newest message")?;
+        let Some(newest) = newest else { continue };
+        let read = c.last_read_message_id.unwrap_or(newest);
+        sqlx::query(
+            "UPDATE chat SET \
+                display_message_row_id = ?1, display_message_sort_id = ?1, \
+                last_message_row_id = ?1, last_message_sort_id = ?1, \
+                last_read_message_row_id = ?2, last_read_message_sort_id = ?2, \
+                last_read_receipt_sent_message_row_id = ?2, \
+                last_read_receipt_sent_message_sort_id = ?2, \
+                unseen_message_count = u.n, unseen_row_count = u.n, \
+                unseen_earliest_message_received_time = u.earliest \
+             FROM (SELECT COUNT(*) AS n, MIN(timestamp) AS earliest FROM message \
+                    WHERE chat_row_id = ?3 AND from_me = 0 AND _id > ?2) AS u \
+             WHERE chat._id = ?3",
+        )
+        .bind(newest)
+        .bind(read)
+        .bind(c.id)
+        .execute(pool)
+        .await
+        .context("set chat pointers")?;
     }
     Ok(())
 }

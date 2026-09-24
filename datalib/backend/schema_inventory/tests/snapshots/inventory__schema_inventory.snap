@@ -1437,6 +1437,9 @@ transcripts
     rel_path
 
 == whatsapp/raw ==
+wa_db_contacts
+    jid
+    rows
 wa_media_files
     blake3
     relative_path

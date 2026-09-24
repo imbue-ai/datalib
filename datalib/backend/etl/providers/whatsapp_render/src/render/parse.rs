@@ -100,11 +100,21 @@ async fn parse_async(
 
     // 1) Chats, with their display label. Group chats use `subject`; 1:1
     //    chats fall back to what the JID resolves to.
-    let chat_rows =
-        sqlx::query("SELECT _id, jid_row_id, subject FROM pinned_chat chat ORDER BY _id")
-            .fetch_all(&pool)
-            .await
-            .context("select chat")?;
+    //    `last_read_message_row_id` is the read mark: an incoming message
+    //    with a greater `_id` is unread. On a real backup that rule gives
+    //    back each chat's `unseen_message_count` exactly; a chat nothing
+    //    was read in points it at the seed row, `_id` 1.
+    let has_read_mark =
+        datalib_etl::doltlite_raw::column_exists(&pool, "chat", "last_read_message_row_id").await?;
+    let chat_sql = if has_read_mark {
+        "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+    } else {
+        "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+    };
+    let chat_rows = sqlx::query(chat_sql)
+        .fetch_all(&pool)
+        .await
+        .context("select chat")?;
     let mut chats: Vec<ChatHeader> = Vec::with_capacity(chat_rows.len());
     let mut chat_idx_by_rowid: HashMap<i64, usize> = HashMap::with_capacity(chat_rows.len());
     for r in &chat_rows {
@@ -130,6 +140,7 @@ async fn parse_async(
         chats.push(ChatHeader {
             chat_jid,
             display,
+            last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
             inputs,
         });
@@ -332,6 +343,9 @@ async fn parse_async(
             chats[idx].inputs.read("jid", &i.to_string());
         }
         let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i).cloned());
+        let rowid: i64 = r.get("_id");
+        let unread =
+            key.from_me == 0 && chats[idx].last_read_rowid.is_some_and(|mark| rowid > mark);
         let item = build_item(
             source_id,
             key,
@@ -341,6 +355,7 @@ async fn parse_async(
             &chats[idx].inputs,
             media_by_msg.remove(key).unwrap_or_default(),
             reactions_by_parent.remove(key).unwrap_or_default(),
+            unread,
         );
         let period_key = match r.get::<Option<i64>, _>("timestamp") {
             Some(ts) => period.key_for_ms(ts),
@@ -452,6 +467,7 @@ fn build_item(
     inputs: &Inputs,
     attachments: Vec<NormalizedAttachment>,
     reactions: Vec<NormalizedReaction>,
+    unread: bool,
 ) -> NormalizedChatItem {
     let timestamp: Option<i64> = r.get("timestamp");
     let message_type: Option<i64> = r.get("message_type");
@@ -513,7 +529,7 @@ fn build_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
-        unread: false,
+        unread,
         problems: Vec::new(),
     }
 }
@@ -521,6 +537,7 @@ fn build_item(
 struct ChatHeader {
     chat_jid: String,
     display: String,
+    last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
     inputs: Inputs,
 }
@@ -552,16 +569,24 @@ async fn has_table(pool: &SqlitePool, table: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// What msgstore knows about who a JID is. A `…@lid` (linked id) is an
-/// opaque number; `lid_display_name` may name it and `jid_map` may say
-/// which phone number it stands for. Neither table is total — the
-/// measured backup mapped 5 of 6 `@lid` chats and named none — so the
-/// raw JID stays as the last resort, and `label_from_jid` is what makes
-/// a phone-number JID dialable.
+/// Who a JID is. A `…@lid` (linked id) is an opaque number;
+/// `lid_display_name` may name it and `jid_map` may say which phone
+/// number it stands for. Neither table is total — the measured backup
+/// mapped 5 of 6 `@lid` chats and named none. The names a person sees
+/// in WhatsApp come from `wa.db` (`wa_db_contacts`): the address-book
+/// name, and the name someone gave themselves. So: address book, then
+/// `lid_display_name`, then their own name, then the phone number
+/// (`label_from_jid` makes it dialable), then the raw JID.
 #[derive(Default)]
 struct JidNames {
     display_name: HashMap<String, String>,
     phone_jid: HashMap<String, String>,
+    /// `wa_contacts.display_name`, by jid: the phone's address book.
+    book_name: HashMap<String, String>,
+    /// `wa_contacts.wa_name`, by jid: the name the person set themselves.
+    own_name: HashMap<String, String>,
+    /// Whether the store has `wa_db_contacts` to declare reads of.
+    has_contacts: bool,
     /// `jid` string → its row id, so a name lookup can declare the
     /// `lid_display_name` and `jid_map` rows it consulted (both keyed by
     /// the linked id's `jid._id`), found or not.
@@ -590,6 +615,32 @@ impl JidNames {
                 }
             }
         }
+        if has_table(pool, "wa_db_contacts").await? {
+            out.has_contacts = true;
+            let rows: Vec<(String, String)> =
+                sqlx::query_as("SELECT jid, rows FROM pinned_wa_db_contacts wa_db_contacts")
+                    .fetch_all(pool)
+                    .await
+                    .context("select wa_db_contacts")?;
+            for (jid, contact_rows) in rows {
+                let contact_rows: Vec<serde_json::Value> =
+                    serde_json::from_str(&contact_rows).unwrap_or_default();
+                let first = |field: &str| {
+                    contact_rows
+                        .iter()
+                        .filter_map(|r| r.get(field)?.as_str())
+                        .map(str::trim)
+                        .find(|n| !n.is_empty())
+                        .map(String::from)
+                };
+                if let Some(n) = first("display_name") {
+                    out.book_name.insert(jid.clone(), n);
+                }
+                if let Some(n) = first("wa_name") {
+                    out.own_name.insert(jid, n);
+                }
+            }
+        }
         if has_table(pool, "jid_map").await? {
             let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM pinned_jid_map jid_map")
                 .fetch_all(pool)
@@ -612,8 +663,27 @@ impl JidNames {
             inputs.read("lid_display_name", &rowid);
             inputs.read("jid_map", &rowid);
         }
+        let phone = self.phone_jid.get(jid).map(String::as_str);
+        let this_or_phone = [Some(jid), phone];
+        if self.has_contacts {
+            for j in this_or_phone.iter().flatten() {
+                inputs.read("wa_db_contacts", j);
+            }
+        }
+        let from = |names: &HashMap<String, String>| {
+            this_or_phone
+                .iter()
+                .flatten()
+                .find_map(|j| names.get(*j).cloned())
+        };
+        if let Some(name) = from(&self.book_name) {
+            return name;
+        }
         if let Some(name) = self.display_name.get(jid) {
             return name.clone();
+        }
+        if let Some(name) = from(&self.own_name) {
+            return name;
         }
         let jid = match self.phone_jid.get(jid) {
             Some(phone) => {
@@ -670,5 +740,42 @@ mod jid_names_tests {
             "+17015550105"
         );
         assert_eq!(names.label("bridge-crew@g.us", &inputs), "bridge-crew@g.us");
+    }
+
+    /// `wa.db`'s names: the address book first — over a linked id's own
+    /// `lid_display_name` too, since it is what the phone shows — then
+    /// `lid_display_name`, then the name someone set themselves, each
+    /// found through the linked id's phone number as well as the id.
+    #[test]
+    fn address_book_then_lid_name_then_own_name() {
+        let mut names = JidNames {
+            has_contacts: true,
+            ..JidNames::default()
+        };
+        let phone = |n: u8| format!("170155501{n:02}@s.whatsapp.net");
+        names.phone_jid.insert("7@lid".into(), phone(3));
+        names.phone_jid.insert("9@lid".into(), phone(5));
+        names
+            .display_name
+            .insert("9@lid".into(), "Worf, Son of Mogh".into());
+        names.book_name.insert(phone(3), "Data".into());
+        names.book_name.insert(phone(5), "Worf".into());
+        names.own_name.insert(phone(4), "Geordi La Forge".into());
+        names.own_name.insert(phone(3), "Commander Data".into());
+        let inputs = Inputs::default();
+        assert_eq!(names.label("7@lid", &inputs), "Data", "through the phone");
+        assert_eq!(names.label("9@lid", &inputs), "Worf", "book over lid name");
+        assert_eq!(names.label(&phone(4), &inputs), "Geordi La Forge");
+        assert_eq!(names.label(&phone(6), &inputs), "+17015550106");
+        let declared: Vec<String> = inputs
+            .declared()
+            .into_iter()
+            .filter(|i| i.table == "wa_db_contacts")
+            .map(|i| i.id)
+            .collect();
+        assert!(
+            declared.contains(&phone(6)),
+            "a jid with no contact is still declared, so one added later re-renders: {declared:?}"
+        );
     }
 }

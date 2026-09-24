@@ -131,6 +131,30 @@ pub fn vcard_rev(vcard: &str) -> Option<String> {
     extract_property(vcard, "REV")
 }
 
+/// `CREATED`, which Fastmail writes on every card; not in RFC 6350.
+pub fn vcard_created(vcard: &str) -> Option<String> {
+    extract_property(vcard, "CREATED")
+}
+
+/// A contact group rather than a person: vCard 4's `KIND:group`, or the
+/// `X-ADDRESSBOOKSERVER-KIND:GROUP` Apple and Fastmail write in 3.0.
+pub fn vcard_is_group(vcard: &str) -> bool {
+    ["KIND", "X-ADDRESSBOOKSERVER-KIND"]
+        .iter()
+        .filter_map(|name| extract_property(vcard, name))
+        .any(|kind| kind.eq_ignore_ascii_case("group"))
+}
+
+/// A group's members as written: `urn:uuid:<the member's UID>` from
+/// Apple and Fastmail, sometimes a `mailto:` in vCard 4.
+pub fn vcard_members(vcard: &str) -> Vec<String> {
+    ["MEMBER", "X-ADDRESSBOOKSERVER-MEMBER"]
+        .iter()
+        .flat_map(|name| vcard_all(vcard, name))
+        .map(|p| p.value)
+        .collect()
+}
+
 /// Pull the structured `N:` (name) line as `(family, given)`. RFC 6350
 /// §6.2.2 orders the semicolon-separated components
 /// `Family;Given;Additional;Prefixes;Suffixes`; we keep the first two
@@ -150,6 +174,14 @@ pub fn vcard_n_family_given(vcard: &str) -> Option<(String, String)> {
 /// render cares about each one individually.
 pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
     let unfolded = unfold_vcard_lines(vcard);
+    let ab_labels: Vec<(&str, &str)> = unfolded
+        .lines()
+        .filter(|line| property_name(line).eq_ignore_ascii_case("X-ABLabel"))
+        .filter_map(|line| {
+            let (head, value) = line.split_once(':')?;
+            Some((property_group(head)?, value.trim()))
+        })
+        .collect();
     let mut out = Vec::new();
     for line in unfolded.lines() {
         if !property_name(line).eq_ignore_ascii_case(name) {
@@ -174,7 +206,17 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
                 params.push(("TYPE".into(), chunk.trim().to_string()));
             }
         }
-        out.push(VcardProp { value, params });
+        let ab_label = property_group(head).and_then(|group| {
+            ab_labels
+                .iter()
+                .find(|(g, _)| g.eq_ignore_ascii_case(group))
+                .map(|(_, label)| label.to_string())
+        });
+        out.push(VcardProp {
+            value,
+            params,
+            ab_label,
+        });
     }
     out
 }
@@ -186,6 +228,10 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
 pub struct VcardProp {
     pub value: String,
     pub params: Vec<(String, String)>,
+    /// The `X-ABLabel` sharing this property's group (`item1.TEL` and
+    /// `item1.X-ABLabel`): Apple and Google name a phone or address
+    /// that way instead of with a `TYPE`.
+    pub ab_label: Option<String>,
 }
 
 impl VcardProp {
@@ -196,8 +242,38 @@ impl VcardProp {
             .map(|(_, v)| v.as_str())
     }
 
-    pub fn type_label(&self) -> Option<String> {
-        self.param("TYPE").map(|s| s.to_ascii_lowercase())
+    /// What kind of address this is, for a person to read: its
+    /// `X-ABLabel`, else every `TYPE` value — Google repeats the
+    /// parameter (`TYPE=INTERNET;TYPE=WORK`), Fastmail lists them
+    /// (`TYPE=HOME,PREF`). `pref` is a ranking and `internet` is every
+    /// email, so neither names anything.
+    pub fn label(&self) -> Option<String> {
+        if let Some(label) = self.ab_label.as_deref().and_then(apple_label) {
+            return Some(label);
+        }
+        let types: Vec<String> = self
+            .params
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("TYPE"))
+            .flat_map(|(_, v)| v.split(','))
+            .map(|t| t.trim().to_ascii_lowercase())
+            .filter(|t| !t.is_empty() && t != "pref" && t != "internet")
+            .collect();
+        (!types.is_empty()).then(|| types.join(", "))
+    }
+}
+
+/// An `X-ABLabel` as a person reads it: Apple's built-in labels are
+/// written `_$!<Mobile>!$_` and read `mobile`; a label someone typed
+/// (`Google Voice`) stays as typed. Blank is no label.
+fn apple_label(label: &str) -> Option<String> {
+    let label = label.trim();
+    match label
+        .strip_prefix("_$!<")
+        .and_then(|l| l.strip_suffix(">!$_"))
+    {
+        Some(builtin) => Some(builtin.to_ascii_lowercase()),
+        None => (!label.is_empty()).then(|| label.to_string()),
     }
 }
 
@@ -209,6 +285,12 @@ fn property_name(line: &str) -> &str {
     let head_end = line.find([':', ';']).unwrap_or(line.len());
     let head = &line[..head_end];
     head.rsplit_once('.').map_or(head, |(_, name)| name)
+}
+
+/// The `item1` of `item1.EMAIL;TYPE=…`.
+fn property_group(head: &str) -> Option<&str> {
+    let name_end = head.find(';').unwrap_or(head.len());
+    head[..name_end].rsplit_once('.').map(|(group, _)| group)
 }
 
 fn extract_property(vcard: &str, name: &str) -> Option<String> {
@@ -421,6 +503,48 @@ END:VCARD&#13;
             deleted,
             vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf".to_string()]
         );
+    }
+
+    /// Each flavor's way of saying what an address is, as seen in real
+    /// exports: Google's repeated TYPE and blank or typed `X-ABLabel`,
+    /// Fastmail's listed TYPE with `PREF`, Apple's built-in label.
+    #[test]
+    fn labels_read_every_flavor() {
+        let card = "BEGIN:VCARD\r\n\
+            EMAIL;TYPE=INTERNET;TYPE=WORK:a@borg.test\r\n\
+            item1.EMAIL;TYPE=INTERNET:b@borg.test\r\n\
+            item1.X-ABLabel:\r\n\
+            item2.TEL:+1-555-0100\r\n\
+            item2.X-ABLabel:Subspace relay\r\n\
+            EMAIL;PROP-ID=e1;PREF=1;TYPE=HOME,PREF:c@enterprise.test\r\n\
+            item3.TEL;type=CELL:+1-555-0101\r\n\
+            item3.X-ABLabel:_$!<Mobile>!$_\r\n\
+            END:VCARD\r\n";
+        let labels = |name| -> Vec<Option<String>> {
+            vcard_all(card, name).iter().map(VcardProp::label).collect()
+        };
+        assert_eq!(
+            labels("EMAIL"),
+            vec![Some("work".into()), None, Some("home".into())]
+        );
+        assert_eq!(
+            labels("TEL"),
+            vec![Some("Subspace relay".into()), Some("mobile".into())]
+        );
+    }
+
+    #[test]
+    fn groups_and_their_members() {
+        let group = "BEGIN:VCARD\nX-ADDRESSBOOKSERVER-KIND:GROUP\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:tng-picard\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:tng-riker\nEND:VCARD\n";
+        assert!(vcard_is_group(group));
+        assert_eq!(
+            vcard_members(group),
+            vec!["urn:uuid:tng-picard", "urn:uuid:tng-riker"]
+        );
+        assert!(vcard_is_group("BEGIN:VCARD\nKIND:group\nEND:VCARD\n"));
+        assert!(!vcard_is_group(
+            "BEGIN:VCARD\nX-ADDRESSBOOKSERVER-KIND:INDIVIDUAL\nEND:VCARD\n"
+        ));
     }
 
     /// Fastmail's listing, verified against a live account: unprefixed

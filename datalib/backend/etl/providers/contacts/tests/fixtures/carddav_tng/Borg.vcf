@@ -1,0 +1,34 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Seven of Nine
+N:of Nine;Seven;;;
+EMAIL;TYPE=INTERNET;TYPE=WORK:seven.of.nine@unimatrix01.borg
+item1.EMAIL;TYPE=INTERNET:annika.hansen@raven.fed
+item1.X-ABLabel:
+TEL;TYPE=HOME:+1-555-TERTIARY
+CATEGORIES:myContacts
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Locutus of Borg
+N:of Borg;Locutus;;;
+item1.EMAIL;TYPE=INTERNET:locutus@unicomplex.borg
+item1.X-ABLabel:
+item2.TEL:+1-555-FUTILE
+item2.X-ABLabel:Subspace relay
+CATEGORIES:myContacts
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Hugh
+N:;Hugh;;;
+EMAIL;TYPE=INTERNET;TYPE=WORK:third.of.five@unimatrix01.borg
+TEL;TYPE=WORK:+1-555-THIRD-OF-5
+CATEGORIES:myContacts
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+item1.EMAIL;TYPE=INTERNET:drone.4.of.12@unimatrix01.borg
+item1.X-ABLabel:
+CATEGORIES:myContacts
+END:VCARD

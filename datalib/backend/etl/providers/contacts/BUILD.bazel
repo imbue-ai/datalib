@@ -47,3 +47,19 @@ rust_test(
         "@datalib_crates//:tempfile",
     ],
 )
+
+rust_test(
+    name = "contacts_tests",
+    srcs = glob(["tests/contacts_tests/*.rs"]),
+    compile_data = glob(["tests/fixtures/carddav_tng*/*.vcf"]),
+    crate_root = "tests/contacts_tests/main.rs",
+    edition = "2021",
+    env = {"RUST_TEST_THREADS": "1"},
+    deps = [
+        ":datalib_etl_contacts",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
