@@ -22,6 +22,10 @@ use tokio::time::Instant;
 /// How long to hold a burst of filesystem events before publishing.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// How often the loop's record is looked at for a commit, as the loop
+/// itself looks for new requests.
+const RECORD_POLL: Duration = Duration::from_millis(250);
+
 /// The least time between two `manage.rows` frames. While a step runs
 /// the runner records its progress several times a second, and every
 /// frame is a refetch by every Manage card open; a row redrawn once a
@@ -137,7 +141,8 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Moved {
     Config,
-    /// The loop's record and its mailbox, `system/supervisor.sqlite`.
+    /// The loop's record and its mailbox, `system/supervisor.sqlite`:
+    /// seen by [`watch_record`], not by the filesystem.
     Supervisor,
     RunStore,
     Frontend,
@@ -161,13 +166,6 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     // watch, and macOS reports that creation once the stream is live.
     if path.starts_with(&frontend) && path != frontend {
         return Some(Moved::Frontend);
-    }
-    // The database and its WAL are one write; `-shm` is only readers'
-    // bookkeeping.
-    if path.parent() == Some(system.as_path())
-        && (name == "supervisor.sqlite" || name == "supervisor.sqlite-wal")
-    {
-        return Some(Moved::Supervisor);
     }
     // `runs.sqlite-wal` / `-journal` are the same write as the
     // database itself, so match on the stem rather than equality.
@@ -449,6 +447,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
+    tokio::spawn(watch_record(root.clone(), raw_tx.clone()));
     let watch_root = root.clone();
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -556,6 +555,36 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     });
 }
 
+/// The loop's record is not a file whose writes the filesystem reports:
+/// the loop holds its connection open, so a commit is an append to a WAL
+/// already open, which macOS never announces. `PRAGMA data_version` on a
+/// connection of our own moves on every other connection's commit,
+/// whichever process made it.
+async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<Moved>) {
+    let store = match datalib_dag::supervisor::store::Store::open(&root).await {
+        Ok(store) => store,
+        Err(e) => {
+            tracing::warn!(
+                "watch: cannot open the loop's record, so the UI will not see it move: {e:#}"
+            );
+            return;
+        }
+    };
+    let mut seen = None;
+    loop {
+        match store.data_version().await {
+            Ok(version) => {
+                if seen.is_some_and(|s| s != version) && moved.send(Moved::Supervisor).is_err() {
+                    return;
+                }
+                seen = Some(version);
+            }
+            Err(e) => tracing::warn!("watch: could not read the record's version: {e:#}"),
+        }
+        tokio::time::sleep(RECORD_POLL).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,13 +596,6 @@ mod tests {
             classify(root, &root.join("config.toml")),
             Some(Moved::Config)
         );
-        for record in ["system/supervisor.sqlite", "system/supervisor.sqlite-wal"] {
-            assert_eq!(
-                classify(root, &root.join(record)),
-                Some(Moved::Supervisor),
-                "{record}"
-            );
-        }
         assert_eq!(
             classify(root, &root.join("system/runs/runs.sqlite-wal")),
             Some(Moved::RunStore)
@@ -766,7 +788,8 @@ mod tests {
             "system/jobs.doltlite_db",
             "system/feedback.doltlite_db",
             "system/api-token",
-            "system/supervisor.sqlite-shm",
+            "system/supervisor.sqlite",
+            "system/supervisor.sqlite-wal",
             "slack/raw/blobs.doltlite_db",
             "config.yaml",
         ] {
@@ -825,18 +848,19 @@ mod tests {
 
     /// The same for the loop's record — the case the sync-job stream
     /// structurally cannot cover, because a `datalib-dag` run started from
-    /// a terminal has no job row behind it.
+    /// a terminal has no job row behind it. The store is opened before the
+    /// watch starts, as a running loop's is: its file appearing once is not
+    /// what a subscriber needs to hear, its every commit is.
     #[tokio::test]
     async fn a_terminal_loops_record_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
+        let store = datalib_dag::supervisor::store::Store::open(td.path())
+            .await
+            .unwrap();
         let (tx, mut rx) = broadcast::channel(64);
         spawn(td.path().to_path_buf(), tx);
 
-        let root = td.path().to_path_buf();
         let writer = tokio::spawn(async move {
-            let store = datalib_dag::supervisor::store::Store::open(&root)
-                .await
-                .unwrap();
             loop {
                 store.pause("a/raw", "loop").await.unwrap();
                 store.resume("a/raw").await.unwrap();
