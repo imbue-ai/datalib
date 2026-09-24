@@ -64,9 +64,9 @@ async function groupOrder(page: Page): Promise<string[]> {
 test("a dragged column width outlives a sync", async ({ page }) => {
   test.setTimeout(120_000);
   await openSources(page);
-  const col = header(page, "last_synced");
+  // Near the left, so its grip is on screen at Playwright's 1280px.
+  const col = header(page, "status");
   const before = (await col.boundingBox())!.width;
-  // Well under the column's declared 150px.
   const grip = (await col.locator(".slick-resizable-handle").boundingBox())!;
   const x = grip.x + grip.width / 2;
   const y = grip.y + grip.height / 2;
@@ -76,7 +76,6 @@ test("a dragged column width outlives a sync", async ({ page }) => {
   await page.mouse.up();
   const dragged = (await col.boundingBox())!.width;
   expect(dragged).toBeLessThan(before - 40);
-  expect(dragged).toBeLessThan(100);
 
   await syncEverything(page);
   expect((await col.boundingBox())!.width).toBe(dragged);
