@@ -27,7 +27,6 @@ import {
   settleRow,
   settleRunner,
   stampOf as lastSyncedOf,
-  untilTheSecondTurns,
   stampsBefore,
   statusLog,
   statusWord,
@@ -36,6 +35,7 @@ import {
   TABLE_ROWS,
   MANAGE_WITH_CONFIG,
 } from "./grid-helpers";
+import { expectSanePaints, watchPaints } from "./paint-watch";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -226,6 +226,9 @@ ${applets()}`;
     const beforeDown = (await statusLog(page, "pdfs/render_markdown")).length;
 
     const was = await stampsBefore(page, ["pdfs/ingest", "pdfs/render_markdown"]);
+    // From the click to the run's end the rows move under a still
+    // pointer; they should move in place.
+    const paints = await watchPaints(page.locator(".tg-grid").first());
     await syncBtn(page, "pdfs/ingest").click();
     // Gate on the queue having accepted before *asserting*. `click()`
     // resolves when the event is dispatched, not when the async handler
@@ -267,16 +270,21 @@ ${applets()}`;
     await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
     const seen = (await statusLog(page, "pdfs/ingest")).slice(beforeUp);
 
-    // What the sequence must contain: a frame from before the run was
-    // over, which used to be missing entirely — the click produced no
-    // visible change until the whole run was done. Which frame it is
-    // depends on how fast the loop takes the job on: Queued if the rows
-    // repaint first, Running if the loop does. The render row above is
-    // the one that is always Queued first, because it waits on this one.
-    expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
-      /^(Queued|Running)$/,
-    );
+    // What the sequence must contain. "Queued" is the frame that used
+    // to be missing entirely — the click produced no visible change
+    // until the whole run was over.
+    expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toBe("Queued");
     expect(statusWord(seen[seen.length - 1])).toBe("Succeeded");
+
+    // "Running" stays optional, and recording the transitions is what
+    // settled *why*.
+    //
+    // The sampler this replaces guessed: "a scan of a small tree can
+    // finish inside one sample". It could not tell a status that never
+    // appeared from one it blinked past, so it had to allow both. The
+    // recorder can, and the answer is the first: on this fixture the
+    // sequence is `["Queued","Succeeded"]` — the row never paints
+    // Running at all.
 
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
@@ -327,6 +335,7 @@ ${applets()}`;
       statusWord(downstreamFinal[downstreamFinal.length - 1]),
       `downstream never finished: ${JSON.stringify(downstreamFinal)}`,
     ).toMatch(/^(Succeeded|Up to date)$/);
+    expectSanePaints(await paints(), "the Pipeline table, through a sync");
 
     // The run itself has to be over before the next test writes a
     // config into this root — the half of `settleRows` that `settleRow`
@@ -631,7 +640,6 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(succeeded).not.toBeNull();
     expect(await lastSuccessOf(page, "soured/ingest")).toBe(succeeded);
 
-    await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
     expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");

@@ -5,6 +5,10 @@
 //! the long one, and the CLI reports its progress only to a terminal, so
 //! that pass runs a small script of ours against qmd's SDK instead and
 //! reads progress back as NDJSON. See [`EmbedEvent`].
+//!
+//! What qmd actually does, measured — where its CLI and its SDK differ,
+//! and that `embed` exits 0 when it did nothing — is
+//! `docs/dev/qmd_behaviour.md`. Read it before changing how qmd is driven.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

@@ -391,63 +391,57 @@ impl AppRepo for AppStore {
         // No DOLT_COMMIT — see the note in `enqueue_job`.
         Ok(())
     }
-    async fn start_job(
-        &self,
-        job_id: &str,
-        run_id: &str,
-        msg: Option<&str>,
-    ) -> Result<Option<SyncJobRow>, RepoError> {
+    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
         let mut conn = self
             .jobs_pool
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let (started_at_utc, tz_offset) =
-            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let started = sqlx::query(
-            "UPDATE sync_jobs SET state = CASE WHEN state = ? THEN ? ELSE state END, \
-             started_at_utc = ?, tz_offset = ?, parent_job_id = ?, progress_msg = ? \
-             WHERE id = ? AND started_at_utc IS NULL AND state IN (?, ?)",
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM sync_jobs WHERE state = ? \
+             ORDER BY created_at_utc ASC, id ASC LIMIT 1",
         )
         .bind(JobState::Pending.as_str())
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("claim select: {e}")))?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let (started_at_utc, tz_offset) =
+            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        sqlx::query(
+            "UPDATE sync_jobs SET state = ?, started_at_utc = ?, tz_offset = ?, \
+             progress_msg = 'starting…' WHERE id = ? AND state = ?",
+        )
         .bind(JobState::Running.as_str())
         .bind(&started_at_utc)
         .bind(&tz_offset)
-        .bind(run_id)
-        .bind(msg)
-        .bind(job_id)
+        .bind(&id)
         .bind(JobState::Pending.as_str())
-        .bind(JobState::Canceled.as_str())
         .execute(&mut *conn)
         .await
-        .map_err(|e| RepoError::Internal(format!("start job: {e}")))?
-        .rows_affected();
+        .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
         // No DOLT_COMMIT — see the note in `enqueue_job`.
-        if started == 0 {
-            return Ok(None);
-        }
+        // Re-read so the caller gets the row exactly as persisted.
         let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
                           started_at_utc, finished_at_utc, tz_offset, error, pid, \
                           progress_pct, progress_msg \
                    FROM sync_jobs WHERE id = ? LIMIT 1";
         let row = sqlx::query(sql)
-            .bind(job_id)
+            .bind(&id)
             .fetch_optional(&mut *conn)
             .await
-            .map_err(|e| RepoError::Internal(format!("start job refetch: {e}")))?;
+            .map_err(|e| RepoError::Internal(format!("claim refetch: {e}")))?;
         Ok(row.as_ref().map(row_to_sync_job))
     }
-    async fn requeue_job(&self, job_id: &str) -> Result<(), RepoError> {
-        sqlx::query(
-            "UPDATE sync_jobs SET state = ?, started_at_utc = NULL, parent_job_id = NULL, \
-             progress_pct = NULL, progress_msg = NULL WHERE id = ? AND state = ?",
-        )
-        .bind(JobState::Pending.as_str())
-        .bind(job_id)
-        .bind(JobState::Running.as_str())
-        .execute(&self.jobs_pool)
-        .await
-        .map_err(|e| RepoError::Internal(format!("requeue job: {e}")))?;
+    async fn set_job_pid(&self, job_id: &str, pid: i64) -> Result<(), RepoError> {
+        sqlx::query("UPDATE sync_jobs SET pid = ? WHERE id = ?")
+            .bind(pid)
+            .bind(job_id)
+            .execute(&self.jobs_pool)
+            .await
+            .map_err(|e| RepoError::Internal(format!("set pid: {e}")))?;
         Ok(())
     }
     async fn update_job_progress(
@@ -458,7 +452,7 @@ impl AppRepo for AppStore {
     ) -> Result<(), RepoError> {
         // No DOLT_COMMIT here on purpose: progress ticks are high-frequency
         // and would flood `dolt log`. Only the lifecycle transitions
-        // (start / finish) are versioned.
+        // (claim / finish) are versioned.
         sqlx::query("UPDATE sync_jobs SET progress_pct = ?, progress_msg = ? WHERE id = ?")
             .bind(pct)
             .bind(msg)

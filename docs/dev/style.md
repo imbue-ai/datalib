@@ -129,4 +129,4 @@ them, because a shell has few branches. If a shell test is asserting
 on a decision, the decision is on the wrong side of the line.
 
 The audit that measured the tree against this rule and lists what to
-move is [`audit_2026-09-21_fcis.md`](audit_2026-09-21_fcis.md).
+move is [`audits/2026-09-21_fcis.md`](audits/2026-09-21_fcis.md).

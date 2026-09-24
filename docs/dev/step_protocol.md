@@ -87,7 +87,7 @@ its id, which arrives in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-dag` as `--run-id`; a UI job names it as its `parent_job_id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the runner mints, or whatever the caller passed as `--run-id` (the app passes its job id). Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
 | `DATALIB_DAG_ATTEMPT` | which invocation of this step within the run, starting at `1`; a retry or a streaming pass counts up |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |

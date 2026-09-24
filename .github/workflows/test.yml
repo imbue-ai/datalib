@@ -2,6 +2,10 @@
 # BuildBuddy as the action cache. Gates merges on PRs and warms the
 # BuildBuddy cache on main pushes.
 #
+# Read docs/dev/ci.md before changing this file: how it, `devcontainer.yml`,
+# `.bazelrc`'s CI configs and BuildBuddy fit together, what each cache is
+# for, and what has already been measured.
+#
 # Why a separate workflow (and not a step in `release.yml`): an earlier
 # `bazel test //...` step lived in `release.yml` and was removed because
 # the `bazel-contrib/setup-bazel` GHA disk cache kept tripping "Lost

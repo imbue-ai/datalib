@@ -6,7 +6,10 @@
 //!
 //! The rules you need before changing anything here — primary keys,
 //! bookkeeping sidecars, volatile fields, JSONB, why pools are size 1, why
-//! DDL runs in two passes — are in `datalib/backend/etl/README.md`.
+//! DDL runs in two passes — are in `datalib/backend/etl/README.md`. Before
+//! changing a `schema_raw.rs` struct or [`open`], read its §"Schema
+//! self-healing" and §"The migration ladder": a change `ADD COLUMN`
+//! cannot absorb is refused at open until a rung handles it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -66,13 +66,6 @@ impl EffectiveRun {
     }
 }
 
-/// Whether `job` was served by the run `run_id`. A job's run is the busy
-/// period of the loop that took it on, named by its `parent_job_id`; a
-/// job from before the server ran the loop itself was its own run.
-pub fn belongs_to(job: &SyncJobRow, run_id: &str) -> bool {
-    job.id == run_id || job.parent_job_id.as_deref() == Some(run_id)
-}
-
 pub fn effective_run(
     fetched: Option<&DagRunInfo>,
     live_job: Option<&SyncJobRow>,
@@ -80,10 +73,11 @@ pub fn effective_run(
     let Some(job) = live_job.filter(|j| j.state == "running") else {
         return fetched.map(EffectiveRun::reported);
     };
-    // A record for this job's run is the real thing even if the queue
-    // and the record disagree on whether it has finished.
+    // The job's id *is* the run id (the worker passes it as `--run-id`),
+    // so a record for this job's run is the real thing even if the
+    // queue and the record disagree on whether it has finished.
     if let Some(r) = fetched {
-        if belongs_to(job, &r.run_id) || r.finished_at.is_none() {
+        if r.run_id == job.id || r.finished_at.is_none() {
             return Some(EffectiveRun::reported(r));
         }
     }
@@ -92,7 +86,7 @@ pub fn effective_run(
         .clone()
         .unwrap_or_else(|| job.created_at_utc.clone());
     Some(EffectiveRun {
-        run_id: job.parent_job_id.clone().unwrap_or_else(|| job.id.clone()),
+        run_id: job.id.clone(),
         started_at: started,
         finished_at: None,
         live: true,
@@ -311,8 +305,8 @@ pub fn waiting_on(
     out
 }
 
-/// A sync's request is rooted at each of its comma-separated
-/// `source_ids`, and a reset takes them all; empty means the whole
+/// The worker splits `source_ids` on commas and passes each as its own
+/// `--sync`, or all of them as one `--reset`; empty means the whole
 /// config. A reset's `+blobs` suffix is a part of a step's tree, so
 /// the step is what it claims.
 pub fn job_seeds(job: &SyncJobRow) -> Vec<String> {
@@ -450,11 +444,10 @@ fn current_status(args: StatusArgs<'_>) -> StatusView {
     // Claimed, and the runner hasn't reached it. `current` being set at
     // all means it has — including `not_selected`, which is the runner
     // saying this row is out of scope after all. But only the claiming
-    // job's own run can say so: while a run the job does not belong to
-    // is in flight, its `not_selected` means that run left this step
-    // alone — not that the job queued behind it did.
-    let spoken_for =
-        |claim: &SyncJobRow| run_in_flight.is_none_or(|r| belongs_to(claim, &r.run_id));
+    // job's own run can say so: a job's id is its run's id, and while
+    // some *other* job's run is in flight, its `not_selected` means that
+    // run left this step alone — not that the job queued behind it did.
+    let spoken_for = |claim: &SyncJobRow| run_in_flight.is_none_or(|r| r.run_id == claim.id);
     if let Some(claim) = args
         .claim
         .filter(|c| !(spoken_for(c) && current.is_some()) && !reached_since(last, c))
@@ -647,7 +640,7 @@ mod tests {
         assert_eq!(s.at, None);
     }
 
-    /// Nothing is running yet — the loop has not even taken on the
+    /// Nothing is running yet — the worker has not even claimed the
     /// job. This is the window that used to show nothing at all.
     #[test]
     fn a_pending_job_queues_the_step_it_names_and_everything_downstream() {
@@ -749,7 +742,7 @@ mod tests {
     /// claimed through that window — under a Stopping face, not a Sync
     /// one.
     #[test]
-    fn a_job_told_to_stop_holds_its_claim_until_it_is_stamped_finished() {
+    fn a_job_told_to_stop_holds_its_claim_until_the_worker_stamps_it_finished() {
         let mut stopping = job("canceled", true);
         stopping.id = "job-a".into();
         assert!(stopping.is_active());
@@ -807,7 +800,7 @@ mod tests {
         finished_job.finished_at_utc = Some(RUN_END.into());
         vec![
             (
-                "clicked: the job exists, the loop has not taken it on, and the record is still last run's",
+                "clicked: the job exists, the worker has not claimed it, and the record is still last run's",
                 Frame {
                     jobs: vec![job("pending", false)],
                     run: Some(run("older", YESTERDAY, Some(YESTERDAY), false)),
@@ -815,7 +808,7 @@ mod tests {
                 },
             ),
             (
-                "the loop took the job on; it has opened a record but reached nothing",
+                "worker claimed the job; the runner has opened a record but reached nothing",
                 Frame {
                     jobs: vec![job("running", true)],
                     run: Some(live_run()),
@@ -1047,36 +1040,6 @@ mod tests {
             assert!(!got.synthesized);
         }
 
-        /// The server's loop serves many jobs in one run, which each job
-        /// names as its parent. Its record, closed a beat before the job
-        /// row is, is still that job's; read as some other run's, the
-        /// rows would drop back to Queued for the length of the beat.
-        #[test]
-        fn recognises_the_record_by_the_jobs_parent_run() {
-            let closed = run("busy-period", RUN_START, Some(RUN_END), false);
-            let mut j = job("running", true);
-            j.parent_job_id = Some("busy-period".into());
-            let got = effective_run(Some(&closed), Some(&j)).unwrap();
-            assert_eq!(got, EffectiveRun::reported(&closed));
-
-            // And a step it reaches in that run is spoken for.
-            let finished = rec(Some("succeeded"), None);
-            let view = step_status(StatusArgs {
-                id: "a/ingest",
-                step: Some(&finished),
-                run: Some(&EffectiveRun::reported(&run(
-                    "busy-period",
-                    RUN_START,
-                    None,
-                    true,
-                ))),
-                claim: Some(&j),
-                waiting_on: &[],
-                dropped: None,
-            });
-            assert_ne!(view.key, "queued");
-        }
-
         #[test]
         fn never_goes_backwards_across_the_live_sequence() {
             let running = rec(Some("running"), None);
@@ -1128,7 +1091,7 @@ mod tests {
 
     /// "Queued" on its own says a row will run without saying what it
     /// is behind — and a render step waiting on its download is a
-    /// different situation from a download waiting for the loop.
+    /// different situation from a download waiting for the worker.
     mod queued_detail {
         use super::*;
 
@@ -1259,7 +1222,7 @@ mod tests {
         /// The failing frame: the job is running; the record has not
         /// been rewritten yet, so everything it says is about yesterday.
         #[test]
-        fn stays_queued_once_the_loop_starts_it_before_the_record_catches_up() {
+        fn stays_queued_once_the_worker_starts_it_before_the_record_catches_up() {
             let got = paint(&[job("running", true)], &previous(), &already_succeeded());
             assert_eq!(got.key, "queued");
         }

@@ -33,14 +33,24 @@ export type RootEvent = (
 
 export const CAUSE_HEADER = "X-Datalib-Cause";
 
-/// The chain of the frame being handled right now, for the fetch
-/// wrapper in `telemetry.ts`. Only a fetch started synchronously inside
-/// a handler sees it; one started after an await or a timer does not,
-/// and counts as nobody's echo.
+/// The chain of the frame being handled right now (0 for a frame that
+/// carries none), for the fetch wrapper in `telemetry.ts`: a fetch that
+/// sends it is a live refetch, which the server logs at `debug`. Only a
+/// fetch started synchronously inside a handler sees it; one started
+/// after an await or a timer does not, and counts as nobody's echo.
 let handlingChain: number | undefined;
 
 export function chainOfFrameBeingHandled(): number | undefined {
   return handlingChain;
+}
+
+function handling(e: RootEvent, deliver: (e: RootEvent) => void) {
+  handlingChain = e.chain ?? 0;
+  try {
+    deliver(e);
+  } finally {
+    handlingChain = undefined;
+  }
 }
 
 /// Whether a frame says `table` should be fetched again.
@@ -62,6 +72,58 @@ export type LiveHandlers = {
 };
 
 export type Unsubscribe = () => void;
+
+export type LiveOptions = {
+  /// Deliver `root` frames and resyncs only while this element is on
+  /// screen. A card in a hidden tab or layout stays mounted, and without
+  /// this it refetches on every frame for nobody to see.
+  onScreen?: Element;
+};
+
+/// `inner`, holding back what arrives while it is off screen and
+/// delivering it on the way back: each frame once however often it came,
+/// or one resync in place of them all, since that refetches everything.
+/// Job events always pass: they patch state rather than fetch.
+export function holdWhileOffScreen(inner: LiveHandlers): {
+  handlers: LiveHandlers;
+  setOnScreen: (onScreen: boolean) => void;
+} {
+  let onScreen = true;
+  const frames = new Map<string, RootEvent>();
+  let resync = false;
+  const root = inner.root;
+  const handlers: LiveHandlers = {
+    job: inner.job,
+    root:
+      root &&
+      ((e) => {
+        if (onScreen) return root(e);
+        const event = { ...e };
+        delete event.chain;
+        frames.set(JSON.stringify(event), event);
+      }),
+    resync:
+      inner.resync &&
+      (() => {
+        if (onScreen) inner.resync?.();
+        else resync = true;
+      }),
+  };
+  function setOnScreen(next: boolean) {
+    if (next === onScreen) return;
+    onScreen = next;
+    if (!onScreen) return;
+    const held = [...frames.values()];
+    frames.clear();
+    if (resync) {
+      resync = false;
+      inner.resync?.();
+      return;
+    }
+    for (const e of held) handling(e, (f) => root?.(f));
+  }
+  return { handlers, setOnScreen };
+}
 
 /// How long without any frame counts as a dead stream. The server beats
 /// every 10 s (`watch::HEARTBEAT`), so this is three missed beats — long
@@ -137,12 +199,7 @@ function connect() {
     }
     // The heartbeat's whole job was rearming the watchdog above.
     if (ev.kind === "heartbeat") return;
-    handlingChain = ev.chain;
-    try {
-      fanOut((h) => h.root?.(ev));
-    } finally {
-      handlingChain = undefined;
-    }
+    handling(ev, (e) => fanOut((h) => h.root?.(e)));
   });
 
   es.onerror = () => {
@@ -182,13 +239,25 @@ function connect() {
 /// connection when the last subscriber leaves — so a component can call
 /// this in `onMounted` and the teardown in `onUnmounted` without
 /// knowing whether anyone else is listening.
-export function subscribeLive(handlers: LiveHandlers): Unsubscribe {
+export function subscribeLive(handlers: LiveHandlers, opts: LiveOptions = {}): Unsubscribe {
+  let observer: IntersectionObserver | null = null;
+  if (opts.onScreen && typeof IntersectionObserver !== "undefined") {
+    const held = holdWhileOffScreen(handlers);
+    handlers = held.handlers;
+    // `display: none` — a hidden tab or layout — never intersects.
+    observer = new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1];
+      if (last) held.setOnScreen(last.isIntersecting);
+    });
+    observer.observe(opts.onScreen);
+  }
   subscribers.add(handlers);
   connect();
   let done = false;
   return () => {
     if (done) return;
     done = true;
+    observer?.disconnect();
     subscribers.delete(handlers);
     if (subscribers.size === 0) {
       if (watchdog) clearTimeout(watchdog);

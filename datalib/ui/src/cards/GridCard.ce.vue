@@ -781,14 +781,21 @@ onMounted(async () => {
 // streaming happens many times per sync, as each source's rows arrive.
 // Every cached answer is stale, so drop them all and ask the shown query
 // again; the row set updates in place while the download is still going.
-const unsubscribeLive = subscribeLive({
-  root: (e) => {
-    if (e.kind !== "index_changed") return;
-    searchCache.clear();
-    void runSearch(query.value);
-  },
+const cardEl = ref<HTMLElement | null>(null);
+let unsubscribeLive: (() => void) | null = null;
+onMounted(() => {
+  unsubscribeLive = subscribeLive(
+    {
+      root: (e) => {
+        if (e.kind !== "index_changed") return;
+        searchCache.clear();
+        void runSearch(query.value);
+      },
+    },
+    { onScreen: cardEl.value ?? undefined },
+  );
 });
-onBeforeUnmount(unsubscribeLive);
+onBeforeUnmount(() => unsubscribeLive?.());
 
 function docSource(md: string, anchor: string | null): string {
   const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
@@ -1439,7 +1446,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid-column">
+  <div ref="cardEl" class="grid-column">
     <div class="search-input-wrap">
       <input
         v-model="query"

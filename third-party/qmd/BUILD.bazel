@@ -1,4 +1,5 @@
-# Vendored qmd snapshot. Kept in sync with the version pinned in
+# Vendored qmd snapshot: a reference, not what we run
+# (docs/dev/qmd_vendored.md). Kept in sync with the version pinned in
 # `datalib/backend/runtime/src/qmd.rs::DEFAULT_QMD_VERSION`.
 # Parity is enforced by `//tools:qmd_model_cache_path_test`, which
 # also asserts that the model cache path matches what `.bazelrc` and

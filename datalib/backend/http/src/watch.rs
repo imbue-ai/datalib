@@ -9,7 +9,7 @@
 //! (`datalib_runs::versions`); this module turns both into the datasets
 //! to fetch again.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,9 +17,16 @@ use datalib_runs::StorePart;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 
 /// How long to hold a burst of filesystem events before publishing.
 const DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// The least time between two `manage.rows` frames. While a step runs
+/// the runner records its progress several times a second, and every
+/// frame is a refetch by every Manage card open; a row redrawn once a
+/// second is live enough.
+const MANAGE_ROWS_EVERY: Duration = Duration::from_secs(1);
 
 /// How often to publish a [`RootEvent::Heartbeat`] on an otherwise
 /// silent stream.
@@ -259,6 +266,87 @@ fn frames(
         .collect()
 }
 
+/// The least time between two frames of this event, when it has one.
+fn min_interval(event: RootEvent) -> Option<Duration> {
+    match event {
+        RootEvent::TableChanged {
+            table: Table::ManageRows,
+        } => Some(MANAGE_ROWS_EVERY),
+        _ => None,
+    }
+}
+
+/// Holds back a frame that comes sooner than [`min_interval`] after the
+/// last one of its event, and lets it out when that interval is up. The
+/// first frame after a quiet spell goes at once; a stream of them goes
+/// once per interval, the last one included, so nothing is lost.
+#[derive(Default)]
+struct Throttle {
+    last_sent: HashMap<RootEvent, Instant>,
+    /// Held frames' events, with the chain they would carry.
+    held: HashMap<RootEvent, Option<u32>>,
+}
+
+impl Throttle {
+    /// `Some` to send now; `None` when held.
+    fn offer(&mut self, frame: RootFrame, now: Instant) -> Option<RootFrame> {
+        let Some(every) = min_interval(frame.event) else {
+            return Some(frame);
+        };
+        let chain = match self.held.remove(&frame.event) {
+            Some(held) => merge_chain(held, frame.chain),
+            None => frame.chain,
+        };
+        let open = self
+            .last_sent
+            .get(&frame.event)
+            .is_none_or(|&at| now >= at + every);
+        if open {
+            self.last_sent.insert(frame.event, now);
+            Some(RootFrame {
+                event: frame.event,
+                chain,
+            })
+        } else {
+            self.held.insert(frame.event, chain);
+            None
+        }
+    }
+
+    /// The held frames whose interval is up by `now`.
+    fn due(&mut self, now: Instant) -> Vec<RootFrame> {
+        let ready: Vec<RootEvent> = self
+            .held
+            .keys()
+            .filter(|e| self.release_at(**e).is_some_and(|at| now >= at))
+            .copied()
+            .collect();
+        ready
+            .into_iter()
+            .map(|event| {
+                let chain = self.held.remove(&event).flatten();
+                self.last_sent.insert(event, now);
+                RootFrame { event, chain }
+            })
+            .collect()
+    }
+
+    /// When the next held frame is due; `None` when nothing is held.
+    fn next_due(&self) -> Option<Instant> {
+        self.held.keys().filter_map(|e| self.release_at(*e)).min()
+    }
+
+    fn release_at(&self, event: RootEvent) -> Option<Instant> {
+        Some(*self.last_sent.get(&event)? + min_interval(event)?)
+    }
+}
+
+/// Two frames of one event folded into one. A frame with no chain is one
+/// something other than a request would have sent anyway, so it wins.
+fn merge_chain(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    Some(a?.max(b?))
+}
+
 /// The grid index's HEAD, or `None` when there is no store or nothing
 /// committed in it. Opened read-only for the look and closed again: a
 /// handle held across a rebuild would point at a file that is gone. A
@@ -411,13 +499,27 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         // Started from the stores so the first burst reports only what
         // moved in them, not everything they already held.
         let mut seen = Seen::now(&root).await;
+        let mut throttle = Throttle::default();
         loop {
+            // Wait for a file to move, or for a held frame to come due.
+            let first = match throttle.next_due() {
+                Some(at) => tokio::select! {
+                    moved = raw_rx.recv() => moved,
+                    _ = tokio::time::sleep_until(at) => {
+                        for frame in throttle.due(Instant::now()) {
+                            let _ = tx.send(frame);
+                        }
+                        continue;
+                    }
+                },
+                None => raw_rx.recv().await,
+            };
+            let Some(first) = first else {
+                return;
+            };
             // Open a window on the first event, then coalesce
             // everything that lands inside it. One burst → one message
             // per kind.
-            let Some(first) = raw_rx.recv().await else {
-                return;
-            };
             let mut pending = HashSet::from([first]);
             let deadline = tokio::time::Instant::now() + DEBOUNCE;
             // Ends on the window closing (`Err`) or the sender going
@@ -435,8 +537,15 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
                     .watch(&grid_index, RecursiveMode::NonRecursive)
                     .is_ok();
             }
-            for event in expand(&root, &pending, &mut seen).await {
-                let _ = tx.send(event);
+            let now = Instant::now();
+            let fresh = expand(&root, &pending, &mut seen).await;
+            let mut sent: Vec<RootFrame> = fresh
+                .into_iter()
+                .filter_map(|f| throttle.offer(f, now))
+                .collect();
+            sent.extend(throttle.due(now));
+            for frame in sent {
+                let _ = tx.send(frame);
             }
         }
     });
@@ -499,6 +608,79 @@ mod tests {
         assert_eq!(
             with_a_run,
             HashSet::from([RootFrame::from(log), RootFrame::from(runs)])
+        );
+    }
+
+    /// A sync's progress moves the run store every few hundred
+    /// milliseconds; without the throttle every Manage card open refetched
+    /// its rows on each move, and each refetch was a line in the log.
+    #[test]
+    fn manage_rows_frames_go_once_a_second_and_the_last_is_not_lost() {
+        let rows = RootFrame::from(RootEvent::TableChanged {
+            table: Table::ManageRows,
+        });
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut throttle = Throttle::default();
+
+        assert_eq!(
+            throttle.offer(rows, ms(0)),
+            Some(rows),
+            "the first goes at once"
+        );
+        assert_eq!(throttle.offer(rows, ms(300)), None);
+        assert_eq!(throttle.offer(rows, ms(600)), None);
+        assert_eq!(throttle.next_due(), Some(ms(1_000)));
+        assert!(throttle.due(ms(999)).is_empty());
+        assert_eq!(throttle.due(ms(1_000)), [rows], "held ones go as one");
+        assert_eq!(throttle.next_due(), None);
+
+        assert_eq!(
+            throttle.offer(rows, ms(1_300)),
+            None,
+            "a second after the last sent"
+        );
+        assert_eq!(
+            throttle.offer(rows, ms(2_000)),
+            Some(rows),
+            "folds in the held one"
+        );
+        assert!(throttle.due(ms(5_000)).is_empty());
+    }
+
+    #[test]
+    fn other_frames_are_not_throttled() {
+        let dag = RootFrame::from(RootEvent::TableChanged { table: Table::Dag });
+        let t0 = Instant::now();
+        let mut throttle = Throttle::default();
+        assert_eq!(throttle.offer(dag, t0), Some(dag));
+        assert_eq!(throttle.offer(dag, t0), Some(dag));
+        assert_eq!(throttle.next_due(), None);
+    }
+
+    #[test]
+    fn a_held_frame_keeps_a_chain_only_if_every_frame_it_folds_had_one() {
+        let rows = RootEvent::TableChanged {
+            table: Table::ManageRows,
+        };
+        let t0 = Instant::now();
+        let later = t0 + MANAGE_ROWS_EVERY;
+        let mut throttle = Throttle::default();
+        throttle.offer(rows.into(), t0);
+        let chained = |c| RootFrame {
+            event: rows,
+            chain: Some(c),
+        };
+        throttle.offer(chained(2), t0);
+        throttle.offer(chained(4), t0);
+        assert_eq!(throttle.due(later), [chained(4)]);
+
+        let t1 = later + MANAGE_ROWS_EVERY / 2;
+        throttle.offer(chained(3), t1);
+        throttle.offer(rows.into(), t1);
+        assert_eq!(
+            throttle.due(later + MANAGE_ROWS_EVERY),
+            [RootFrame::from(rows)]
         );
     }
 

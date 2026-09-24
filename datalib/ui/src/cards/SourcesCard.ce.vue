@@ -1400,6 +1400,7 @@ function mergeJob(e: JobProgressEvent) {
 }
 
 let unsubscribe: (() => void) | null = null;
+const cardEl = ref<HTMLElement | null>(null);
 
 /// Everything this table shows, refetched together — which is the point, and
 /// why this is one function rather than three calls at three cadences. Rows come
@@ -1417,27 +1418,30 @@ onMounted(async () => {
   window.addEventListener("keydown", onWindowKeydown);
 
   // Two push channels, and the split matters.
-  unsubscribe = subscribeLive({
-    job: onJobEvent,
-    root: (e) => {
-      if (changed(e, "manage.rows")) {
-        // Deliberately *not* a fresh walk: this fires a few times a second
-        // while a run is going. The sampler is already walking on its own
-        // cadence; this just reads what it found.
-        void loadRows();
-      }
-      // The runner's record moving is the nearest thing to "a step
-      // committed" — nothing watches the stores themselves.
-      if (changed(e, "dag")) refreshHistory();
-      if (e.kind === "config_changed") {
-        // Config and record together, for the "Never run" reason above.
-        void reloadAll();
-      }
+  unsubscribe = subscribeLive(
+    {
+      job: onJobEvent,
+      root: (e) => {
+        if (changed(e, "manage.rows")) {
+          // Deliberately *not* a fresh walk: this fires once a second while
+          // a run is going. The sampler is already walking on its own
+          // cadence; this just reads what it found.
+          void loadRows();
+        }
+        // The runner's record moving is the nearest thing to "a step
+        // committed" — nothing watches the stores themselves.
+        if (changed(e, "dag")) refreshHistory();
+        if (e.kind === "config_changed") {
+          // Config and record together, for the "Never run" reason above.
+          void reloadAll();
+        }
+      },
+      // A reconnect means we may have slept through a whole run, and the
+      // sampler's own last walk with it. Ask for a fresh one.
+      resync: () => void reloadAll(true),
     },
-    // A reconnect means we may have slept through a whole run, and the
-    // sampler's own last walk with it. Ask for a fresh one.
-    resync: () => void reloadAll(true),
-  });
+    { onScreen: cardEl.value ?? undefined },
+  );
 });
 
 onUnmounted(() => {
@@ -1449,7 +1453,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="m2 m2-card">
+  <section ref="cardEl" class="m2 m2-card">
     <header class="m2-head">
       <div class="m2-head-actions">
         <button

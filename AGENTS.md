@@ -8,79 +8,63 @@ custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 
 ## Doc map
 
-One line per doc. Each doc's own banner says how current it is; read
-that rather than a summary here. Only the docs directly under `docs/dev/`
-describe the tree: [`plans/`](docs/dev/plans/) is intended work and
-[`plans/completed/`](docs/dev/plans/completed/) is landed work kept as the
-record of what was decided. A landed plan moves to `completed/`, or is
-rewritten as reference under `docs/dev/` if someone would read it to learn
-how the system works; when a completed plan stops being worth keeping,
-**delete it** — git has it.
+Where to start for each area. Only the docs directly under `docs/dev/`
+and the READMEs beside the code describe the tree as it is; those are
+what this map lists. Three directories hold records instead, and each
+file there opens with a banner saying what it is and how current:
+
+- [`docs/dev/plans/`](docs/dev/plans/) — intended work, some of it
+  partly built. `head -n 8 docs/dev/plans/*.md` reads every banner.
+- [`docs/dev/plans/completed/`](docs/dev/plans/completed/) — landed
+  plans, kept as the record of what was decided. A landed plan moves
+  here, or is rewritten as reference under `docs/dev/` if someone would
+  read it to learn how the system works; when it stops being worth
+  keeping, **delete it** — git has it.
+- [`docs/dev/audits/`](docs/dev/audits/) — dated reads of the tree
+  against the rules, with what was fixed and what is still open.
+
+**Don't add a plan, a completed plan or an audit to this map**, and
+don't add a line for a new reference doc unless it is where someone
+starts on an area. "Read X before touching Y" goes in Y's header, where
+the person touching Y will see it. A list every PR appends to is a
+merge conflict waiting to happen.
 
 **Pipeline / sync engine**
 
-- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks, progress (why a download gets one `RunBar` and not a bar per unit of work). **Start here.**
+- [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks, progress. **Start here.**
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
-- [`datalib/backend/dag/src/diagnostics.rs`](datalib/backend/dag/src/diagnostics.rs) — why config validation returns diagnostics, not an error; read before changing validation.
-- [`configs/dag_example.toml`](configs/dag_example.toml) — a complete, commented config.
-- [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. Read before touching step ids, the wizard, or `datalib-step`'s dispatch.
-- [`docs/dev/plans/streaming_steps.md`](docs/dev/plans/streaming_steps.md), [`streaming_steps_plan.md`](docs/dev/plans/streaming_steps_plan.md) — a consumer starting before its producer finishes; partly built. Read §"The hazard" and §"The sink contract" before any consumer reads a store or deletes on an empty read.
-- [`docs/dev/plans/join_running_sync.md`](docs/dev/plans/join_running_sync.md) — proposal: a job enqueued while a run is in flight joins that run instead of waiting for it; keeps one runner per root.
-- [`docs/dev/plans/http_driven_e2e.md`](docs/dev/plans/http_driven_e2e.md) — proposal: the live e2e's first sync is crashed, then stopped, then finished, driven through `datalib-http`'s sync endpoints; a hermetic twin on the fixture first.
-- [`docs/dev/plans/writer_branches.md`](docs/dev/plans/writer_branches.md) — built: every writer works on its own doltlite branch and fast-forwards `main` when it seals, so a reader on `main` never sees half-built state. What it cost, what it bought, and what could now be deleted from `pin.rs`. Grew out of #647.
-- [`docs/dev/plans/supervisor.md`](docs/dev/plans/supervisor.md) — chosen over the join, being built: one supervisor library reconciles the graph, open requests (what someone asked for, and so what is in scope) and facts; intent is rows in one store, so the UI and an agent's CLI steer the same root at once, and whoever holds the lock runs the loop; sinks first-class with one writer at a time; the same verbs for a person at the screen and an agent at a shell.
-- [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it (runner, steps, server, pages of the app), how to add a line from each, how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
-- [`docs/dev/plans/completed/logs_and_metrics.md`](docs/dev/plans/completed/logs_and_metrics.md) — the design record behind `logging.md`: why one store, why metrics are not log lines.
-- [`docs/dev/plans/data_lib_as_a_library/`](docs/dev/plans/data_lib_as_a_library/) — proposals about datalib as something others build on; `data_handling_practices.md` first.
+- [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
+- [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it, how to add a line from each writer and how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 
 **Data architecture**
 
-- [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the shared ingest machinery: keys, sidecars, volatile fields, **the doltlite pool rules**, the blob CAS. Read before opening any store.
+- [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the shared ingest machinery: keys, sidecars, volatile fields, **the doltlite pool rules**, schema changes and the migration ladder, the blob CAS. Read before opening any store.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
-- [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider.
-- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality. There is no parse step; a record that "fails to parse" is re-rendered, never re-fetched.
-- Provider notes: [`media`](datalib/backend/etl/providers/media/INGEST.md) (`payload_blake3`), [`lightroom`](datalib/backend/etl/providers/lightroom/INGEST.md) (the SQLite mirror engine), [`apple_photos`](datalib/backend/etl/providers/apple_photos/INGEST.md), [`apple_messages`](datalib/backend/etl/providers/apple_messages/INGEST.md), [`whatsapp`](datalib/backend/etl/providers/whatsapp/INGEST.md), [`airvisual`](datalib/backend/etl/providers/airvisual/INGEST.md) (time series), [`facebook`](datalib/backend/etl/providers/facebook/INGEST.md) (export-shaped), [`claude_code`](datalib/backend/etl/providers/claude_code/INGEST.md) and [`codex`](datalib/backend/etl/providers/codex/INGEST.md) (agent transcripts; a Codex line has no id of its own), [`claude`](datalib/backend/etl/providers/claude/INGEST.md) (api and export methods share one store).
+- [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
+- [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
-- [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column. Check its mapping tables against the `schema_inventory` golden, which is generated and so cannot be stale.
+- [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
 - [`docs/dev/doltlite.md`](docs/dev/doltlite.md) — inspecting `.doltlite_db` files, exporting to plain SQLite; tutorial in [`doltlite_codelab.md`](docs/dev/doltlite_codelab.md).
-- [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns (feedback, jobs, usage) and where every store lives under a data root.
-- [`docs/dev/plans/multimodal_retrieval.md`](docs/dev/plans/multimodal_retrieval.md) — proposal; measures bytes at rest (§4) before you touch how text is stored.
-- [`docs/dev/plans/problem_visibility.md`](docs/dev/plans/problem_visibility.md) — the design record of the `problems` table: per-instance ids, severity, the copy downstream into the index, the Manage counts and the document banner. Built through its PR 5; still in `plans/` because the per-provider fetch tail is open.
-- [`docs/dev/plans/completed/diff_renderer.md`](docs/dev/plans/completed/diff_renderer.md) — built: a diff group renders what changed in a source between two commits of its raw store; `config_model.md` is the reference.
-- [`docs/dev/plans/completed/schema_migrations.md`](docs/dev/plans/completed/schema_migrations.md) — built: how a store survives a schema change. `_datalib_meta` in every store, a build refusing a root a newer one wrote, a raw store refusing a non-additive change it cannot absorb by `ADD COLUMN`, the migration ladder. The reference is `etl/README.md` §"Schema self-healing" and §"The migration ladder"; read those before changing a `schema_raw.rs` struct, `app_schema`, or `doltlite_raw::open`.
+- [`docs/dev/app_stores.md`](docs/dev/app_stores.md) — the stores `datalib-http` owns and where every store lives under a data root.
 
 **UI**
 
-- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system; the dactal view bridge.
-- [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout, `LAYOUT_VERSION`, the render preview golden, and the sanitizer allowlist every emitted tag must be in. Read before changing how a message looks.
-- [`docs/dev/plans/completed/data_centric_ui.md`](docs/dev/plans/completed/data_centric_ui.md) — built: the typed table viewer and live `table_changed` frames.
-- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field offers a native picker; read before adding a source to the wizard. Its design record — what shipped, what is still open — is [`plans/source_wizard.md`](docs/dev/plans/source_wizard.md).
-- [`docs/dev/plans/qmd_index_ui.md`](docs/dev/plans/qmd_index_ui.md) — the grid's index-state columns (built) and selective re-indexing (proposal).
-- [`docs/dev/plans/browser_navigation.md`](docs/dev/plans/browser_navigation.md) — built: the miller stack rides the browser's history (push structure, replace state, one write queue, reconcile on Back); the reference is `cards.md` § "The miller layout and the browser". Read before adding a history of any kind.
+- [`docs/dev/cards.md`](docs/dev/cards.md), [`docs/dev/dactal.md`](docs/dev/dactal.md) — the card system, the miller layout and the browser's history; the dactal view bridge.
+- [`datalib/backend/etl/chat-common/README.md`](datalib/backend/etl/chat-common/README.md) — the one chat layout and the sanitizer allowlist. Read before changing how a message looks.
+- [`docs/dev/wizard_file_pickers.md`](docs/dev/wizard_file_pickers.md) — a path field in the source wizard offers a native picker.
 - [`docs/dev/applets.md`](docs/dev/applets.md) — how to write an applet, and the secret every applet requires.
 
 **Dev workflow**
 
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
-- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell — decisions as pure functions over values, I/O in a thin layer around them; the templates already in the tree.
+- [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md).
-- [`docs/dev/ci.md`](docs/dev/ci.md) — **read before touching `test.yml`, `devcontainer.yml`, `.bazelrc`'s CI configs or BuildBuddy**: how they fit, what each cache is for, reading a run, what has been measured, flaky tests.
-- [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — **read before touching `release.yml`**: the steps that assemble a release are scripts under `scripts/release/`, tested on every `bazel test //...` and on Linux from a mac by `bazelisk run //tools:release_steps_docker`; what stays release-only.
-- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md) — the Chrome-impersonating curl and the router in front of it, fetched from `latchkey-curl-shims`; read before touching `latchkey.rs` or the pin.
-- [`docs/dev/qmd_vendored.md`](docs/dev/qmd_vendored.md) — `third-party/qmd` is a reference snapshot, not what we run.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd 2.8.3, and where its CLI and its SDK differ (the CLI cannot scope `update` and its SDK can; `embed` exits 0 when it did nothing); read before driving `qmd embed`.
-- [`docs/dev/runtime_fetch.md`](docs/dev/runtime_fetch.md) — where the Node runtime `qmd` and `latchkey` run from comes from: staged beside the binaries, or fetched sha256-pinned on first use. Read before touching `node_runtime.rs`, `stage_runtime.sh` or the release's runtime job.
-- [`docs/dev/docker.md`](docs/dev/docker.md) — the container image.
-- [`docs/dev/plans/completed/provider_crate_split.md`](docs/dev/plans/completed/provider_crate_split.md) — built: download and render are separate crates.
-
-**Audits and history**
-
-- [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you (the two placeholder git identities and who they were). Add a paragraph when you learn one.
-- [`docs/dev/audit_2026-09-17.md`](docs/dev/audit_2026-09-17.md) — a dated whole-repo audit with what #504 fixed and what is still open. A record, not reference.
-- [`docs/dev/audit_2026-09-18.md`](docs/dev/audit_2026-09-18.md) — the week of #418–#570 read against the four rule docs; what #573/#574/#575/#578 fixed and what is still open. A record, not reference.
-- [`docs/dev/audit_2026-09-21_fcis.md`](docs/dev/audit_2026-09-21_fcis.md) — the tree read against `style.md`'s functional-core rule: where the split exists, where it doesn't, and the todo list. A record, not reference.
-- [`docs/dev/audit_2026-09-23_live_updates.md`](docs/dev/audit_2026-09-23_live_updates.md) — where the UI redraws, rescrolls or remounts what is under the pointer while a sync runs, and the three rules that would stop it. A record, not reference.
+- [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
+- [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
+- [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
+- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md), [`qmd_vendored.md`](docs/dev/qmd_vendored.md) — measured facts about qmd; `third-party/qmd` is a reference snapshot, not what we run.
+- [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you. Add a paragraph when you learn one.
 
 **User-facing**
 
@@ -213,7 +197,7 @@ datalib/
     applets/       `datalib-applet`: the applet host.
     history/       a doltlite store's commit log, third-party deps only,
                    so datalib-http can serve it without linking `etl`.
-    http/          `datalib-http`: API server + sync loop + UI host +
+    http/          `datalib-http`: API server + sync worker + UI host +
                    applet gateway. Every route is behind a per-process
                    API token (src/auth.rs): read
                    `<root>/system/api-token`, send
@@ -257,9 +241,8 @@ share one transaction. Scheduler state is `system/dag_state.json`. A
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-dag --check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
-shows `ConfigErrorView`, live in both directions. The http server runs
-the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; the Manage tab edits the config; a
+shows `ConfigErrorView`, live in both directions. The http server's sync
+worker shells out to `datalib-dag`; the Manage tab edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
 for applets.
