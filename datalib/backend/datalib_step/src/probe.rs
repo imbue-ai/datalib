@@ -28,6 +28,13 @@ pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<
             let report = datalib_etl_chatgpt::probe::probe(&config).await?;
             Ok(serde_json::to_value(report)?)
         }
+        SourceType::Calendar => {
+            let config: datalib_etl_calendar_config::CalendarConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse the params as a calendar download config")?;
+            let report = datalib_etl_calendar::probe::probe(&config).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         SourceType::Slack => {
             let config: datalib_etl_slack_config::SlackConfig =
                 serde_json::from_value(params.clone())
@@ -37,8 +44,8 @@ pub async fn run(source_type: SourceType, params: &serde_json::Value) -> Result<
         }
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
-             account can reach; only `email`, `claude`, `chatgpt` and `slack` implement it so \
-             far."
+             account can reach; only `calendar`, `email`, `claude`, `chatgpt` and `slack` implement \
+             it so far."
         ),
     }
 }

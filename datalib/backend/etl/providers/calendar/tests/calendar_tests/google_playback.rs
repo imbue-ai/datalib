@@ -156,6 +156,23 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
     fixture(&two, &events_url(AWAY, Some("a1"), None), gone);
     fixture(&two, &events_url(AWAY, None, None), away_all);
 
+    std::env::set_var(PLAYBACK_ENV, &one);
+    let config: datalib_etl_calendar_config::CalendarConfig =
+        serde_json::from_value(json!({"google": {}})).unwrap();
+    let report = datalib_etl_calendar::probe::probe(&config).await;
+    std::env::remove_var(PLAYBACK_ENV);
+    let report = report.expect("probe under playback");
+    assert_eq!(report.account.address.as_deref(), Some(PRIMARY));
+    let items: Vec<(&str, Option<&str>)> = report
+        .items
+        .iter()
+        .map(|i| (i.path.as_str(), i.role.as_deref()))
+        .collect();
+    assert_eq!(
+        items,
+        vec![("Away team", Some("read-only")), (PRIMARY, Some("primary"))]
+    );
+
     let first = run(&one, &store).await;
     assert_eq!(
         (first.calendars, first.events_new, first.errors),

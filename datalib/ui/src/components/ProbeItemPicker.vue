@@ -128,6 +128,24 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       },
     ],
   },
+  // A calendar is named by the name the filter matches; its id rides in
+  // `title`, shown on hover, and Google's `primary` / `read-only` in role.
+  calendar: {
+    placeholder: "Search these calendars…",
+    columns: [
+      {
+        id: "path",
+        name: "Calendar",
+        field: "path",
+        width: 280,
+        formatter: (_r, _c, _v, _col, item) => ({
+          text: item?.path ?? "",
+          toolTip: item?.title ?? "",
+        }),
+      },
+      { id: "role", name: "Notes", field: "role", width: 120, formatter: (_r, _c, v) => text(v) },
+    ],
+  },
 };
 
 /// Every list a probe returns is one kind throughout (`labels` mixes

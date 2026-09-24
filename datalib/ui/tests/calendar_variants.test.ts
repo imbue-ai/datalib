@@ -23,6 +23,16 @@ describe("the catalog's calendar variants", () => {
     ]);
   });
 
+  it("offers a picker of the account's calendars wherever there is an account", () => {
+    for (const key of ["google", "fastmail", "caldav"]) {
+      const entry = byKey(key);
+      const field = entry.fields!.find((f) => f.target === `${key}.calendars`)!;
+      expect(entry.canProbe, key).toBe(true);
+      expect(field.kind === "string_list" && field.probe, key).toBe("calendars");
+    }
+    expect(byKey("ics").canProbe).toBeFalsy();
+  });
+
   it("names the latchkey services latchkey actually ships", () => {
     expect(byKey("google").credentialService).toBe("google-calendar");
     expect(byKey("fastmail").credentialService).toBe("fastmail-dav");

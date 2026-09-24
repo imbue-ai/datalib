@@ -40,10 +40,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     let list = list_calendars(lk, &mut summary).await?;
-    let login = list
-        .iter()
-        .find(|c| c.get("primary").and_then(Value::as_bool) == Some(true))
-        .and_then(|c| str_of(c, "id"));
+    let login = primary_id(&list);
     db.upsert_account(&AccountRow {
         id: "google".into(),
         method: "google".into(),
@@ -83,7 +80,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-async fn list_calendars(lk: &LatchkeySettings, summary: &mut FetchSummary) -> Result<Vec<Value>> {
+pub(crate) async fn list_calendars(
+    lk: &LatchkeySettings,
+    summary: &mut FetchSummary,
+) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     let mut page: Option<String> = None;
     loop {
@@ -105,6 +105,13 @@ async fn list_calendars(lk: &LatchkeySettings, summary: &mut FetchSummary) -> Re
     }
 }
 
+/// The primary calendar's id, which is the account's address.
+pub(crate) fn primary_id(list: &[Value]) -> Option<String> {
+    list.iter()
+        .find(|c| c.get("primary").and_then(Value::as_bool) == Some(true))
+        .and_then(|c| str_of(c, "id"))
+}
+
 pub fn calendar_list_url(page: Option<&str>) -> String {
     let mut url = format!("{BASE}/users/me/calendarList?maxResults=250&showHidden=true");
     if let Some(p) = page {
@@ -113,7 +120,7 @@ pub fn calendar_list_url(page: Option<&str>) -> String {
     url
 }
 
-fn calendar_row(c: &Value) -> Option<CalendarRow> {
+pub(crate) fn calendar_row(c: &Value) -> Option<CalendarRow> {
     Some(CalendarRow {
         id: str_of(c, "id")?,
         account_id: "google".into(),

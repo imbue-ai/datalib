@@ -6,4 +6,5 @@
 
 pub mod ical;
 pub mod ingest;
+pub mod probe;
 pub mod processor;

@@ -68,6 +68,9 @@ pub enum ProbeItemKind {
     Conversation,
     /// A Slack channel, public or private. `path` is its bare name.
     Channel,
+    /// A calendar. `path` is its name, which a `calendars` filter
+    /// matches without regard to case.
+    Calendar,
 }
 
 impl ProbeItemKind {

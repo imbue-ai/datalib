@@ -179,6 +179,22 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
             resource(&format!("{BRIDGE}staff.ics"), "\"s2\"", &staff_v2),
         ))));
 
+    // "Test connection" reaches the same account the way the download
+    // does, and offers its one calendar — not the scheduling boxes.
+    std::env::set_var(PLAYBACK_ENV, &one);
+    let config: datalib_etl_calendar_config::CalendarConfig =
+        serde_json::from_value(serde_json::json!({"caldav": {"server_url": format!("{HOST}/")}}))
+            .unwrap();
+    let report = datalib_etl_calendar::probe::probe(&config).await;
+    std::env::remove_var(PLAYBACK_ENV);
+    let report = report.expect("probe under playback");
+    assert_eq!(
+        report.account.address.as_deref(),
+        Some("picard@enterprise.test")
+    );
+    let names: Vec<&str> = report.items.iter().map(|i| i.path.as_str()).collect();
+    assert_eq!(names, vec!["Bridge Duty"]);
+
     let first = run(&one, &store).await;
     assert_eq!(
         (first.calendars, first.events_new, first.errors),

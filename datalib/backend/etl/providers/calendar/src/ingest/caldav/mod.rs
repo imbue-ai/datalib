@@ -42,11 +42,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let lk = &opts.latchkey;
 
-    let found = discover(&opts.server_url, lk, &mut summary).await?;
-    let account_id = dav::origin(&found.home_url)
-        .and_then(|o| o.split("://").nth(1))
-        .unwrap_or("caldav")
-        .to_string();
+    let Reached {
+        found,
+        account_id,
+        calendars,
+    } = reach(&opts.server_url, lk, &mut summary).await?;
     db.upsert_account(&AccountRow {
         id: account_id.clone(),
         method: "caldav".into(),
@@ -62,11 +62,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "discovered the principal and its calendar home"
     );
 
-    summary.requests += 1;
-    let listing = dav::propfind(&found.home_url, "1", dav::BODY_LIST_CALENDARS, lk)
-        .await
-        .map_err(|e| anyhow::anyhow!("list calendars: {e}"))?;
-    let calendars = calendars_in(&account_id, &found.home_url, &listing);
     db.upsert_calendars(&calendars.iter().map(|c| c.row.clone()).collect::<Vec<_>>())
         .await?;
 
@@ -102,10 +97,40 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-struct Discovered {
+/// What discovery and the calendar listing found: everything a run
+/// needs before it syncs, and all a probe reports.
+pub(crate) struct Reached {
+    pub(crate) found: Discovered,
+    pub(crate) account_id: String,
+    pub(crate) calendars: Vec<Calendar>,
+}
+
+pub(crate) async fn reach(
+    server_url: &str,
+    lk: &LatchkeySettings,
+    summary: &mut FetchSummary,
+) -> Result<Reached> {
+    let found = discover(server_url, lk, summary).await?;
+    let account_id = dav::origin(&found.home_url)
+        .and_then(|o| o.split("://").nth(1))
+        .unwrap_or("caldav")
+        .to_string();
+    summary.requests += 1;
+    let listing = dav::propfind(&found.home_url, "1", dav::BODY_LIST_CALENDARS, lk)
+        .await
+        .map_err(|e| anyhow::anyhow!("list calendars: {e}"))?;
+    let calendars = calendars_in(&account_id, &found.home_url, &listing);
+    Ok(Reached {
+        found,
+        account_id,
+        calendars,
+    })
+}
+
+pub(crate) struct Discovered {
     principal_url: String,
     home_url: String,
-    login: Option<String>,
+    pub(crate) login: Option<String>,
 }
 
 /// `current-user-principal` from the configured URL, falling back to the
@@ -174,8 +199,8 @@ async fn discover(
     })
 }
 
-struct Calendar {
-    row: CalendarRow,
+pub(crate) struct Calendar {
+    pub(crate) row: CalendarRow,
     url: String,
 }
 
