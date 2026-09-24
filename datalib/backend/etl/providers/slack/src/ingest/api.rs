@@ -25,7 +25,15 @@ pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 pub enum SlackError {
     #[error("{0}")]
     Permanent(String),
+    /// Slack answered, and said this credential may not call `method`:
+    /// the token is the wrong kind, lacks the scope, or the method does
+    /// not exist for it. Asking again will not help; a different token
+    /// would.
+    #[error("{method}: ok=false error={error:?}")]
+    Refused { method: String, error: String },
 }
+
+const REFUSAL_CODES: &[&str] = &["not_allowed_token_type", "missing_scope", "unknown_method"];
 
 /// Slack-specific retry classifier. Slack signals a rate limit either as a
 /// plain HTTP 429 (newer Web API tiers — covered by the default classifier)
@@ -116,6 +124,12 @@ async fn call_slack_once(
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
+        if REFUSAL_CODES.contains(&err) {
+            return Err(SlackError::Refused {
+                method: method.to_string(),
+                error: err.to_string(),
+            });
+        }
         return Err(SlackError::Permanent(format!(
             "{}: ok=false error={:?}",
             method, err

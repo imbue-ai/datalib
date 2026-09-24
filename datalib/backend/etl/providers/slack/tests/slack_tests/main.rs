@@ -5,6 +5,7 @@
 //! file-local mutex for exactly that, which stops working once they
 //! share a process.
 
+mod account_state;
 mod config_change_backfill;
 mod dm_ingest;
 mod history_prune;

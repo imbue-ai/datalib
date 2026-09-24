@@ -12,6 +12,13 @@ thread root comes back with `reply_count` advanced, so the sync
 re-walks it through `conversations.replies`, whose tape here has the
 first sync's three messages plus a fourth from Worf.
 
+The account moves too. `client.counts` has the captain read `#bridge`
+through the red alert — a change only to `channel_read_states`' volatile
+sidecar, so the content tables see nothing. In `saved.list` Worf's
+recommendation has moved from saved to completed. `#bridge`'s bookmarks
+are not asked again: the first sync listed them less than
+`MANIFEST_TTL` ago.
+
 What a re-sync cannot carry is a deletion — an incremental
 `conversations.history` returns only what is newer than `oldest` — so
 that fate is exercised by the contacts fixture instead.
