@@ -29,6 +29,9 @@
                                                   started (plain SQLite; anyone writes
                                                   intent, only the loop's holder writes
                                                   the record)
+<data_root>/system/supervisor-bells/             one FIFO per process listening for
+                                                  writes to supervisor.sqlite; every
+                                                  writer rings them all (`bell.rs`)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
 ```

@@ -22,6 +22,7 @@ use crate::scheduler::{
     QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
+use crate::supervisor::bell::Listener;
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::supervisor::reload::GraphSource;
 use crate::version::UNKNOWN;
@@ -102,11 +103,6 @@ struct Open {
     request: Request,
     scope: Vec<bool>,
 }
-
-/// How often a loop with steps running looks for new rows. A loop with
-/// nothing running is not waiting on anything else, so it looks at the
-/// same pace.
-const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// A request for every source, served until it closes: what a test that
 /// is not about requests wants of the loop.
@@ -205,6 +201,9 @@ impl Runner {
         )
         .await?;
 
+        // Every write to the store rings it, and so does a config edit the
+        // server sees; the loop wakes for both.
+        let mut listener = Listener::new(store, "the sync loop").await;
         let (cp_tx, mut checkpoints) = tokio::sync::mpsc::unbounded_channel();
         let checkpoint = crate::step::CheckpointSink::new(cp_tx);
         let mut set: JoinSet<Done> = JoinSet::new();
@@ -518,7 +517,7 @@ impl Runner {
                     cancelled = true;
                     open.clear();
                 }
-                _ = tokio::time::sleep(MAILBOX_POLL), if polling => {}
+                _ = listener.next(store), if polling => {}
                 joined = set.join_next() => {
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
@@ -1500,27 +1499,37 @@ mod tests {
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
     }
 
-    /// A config a test rewrites while the loop runs.
-    struct Swappable(std::sync::Mutex<(u64, Graph)>);
+    /// A config a test rewrites while the loop runs. A rewrite rings the
+    /// bell, as the server's file watch does for `config.toml`.
+    struct Swappable {
+        now: std::sync::Mutex<(u64, Graph)>,
+        bells: std::path::PathBuf,
+    }
 
     impl Swappable {
-        fn new(graph: &Graph) -> Arc<Self> {
-            Arc::new(Self(std::sync::Mutex::new((0, graph.clone()))))
+        fn new(graph: &Graph, root: &std::path::Path) -> Arc<Self> {
+            Arc::new(Self {
+                now: std::sync::Mutex::new((0, graph.clone())),
+                bells: crate::supervisor::bell::bells_dir(root),
+            })
         }
 
         fn set(&self, specs: Vec<StepSpec>) {
-            let mut now = self.0.lock().unwrap();
-            *now = (now.0 + 1, Graph::build(specs).unwrap());
+            {
+                let mut now = self.now.lock().unwrap();
+                *now = (now.0 + 1, Graph::build(specs).unwrap());
+            }
+            crate::supervisor::bell::ring(&self.bells);
         }
     }
 
     impl GraphSource for Swappable {
         fn version(&self) -> Result<String> {
-            Ok(self.0.lock().unwrap().0.to_string())
+            Ok(self.now.lock().unwrap().0.to_string())
         }
 
         fn load(&self) -> Result<(String, Graph)> {
-            let now = self.0.lock().unwrap();
+            let now = self.now.lock().unwrap();
             Ok((now.0.to_string(), now.1.clone()))
         }
     }
@@ -1596,7 +1605,7 @@ mod tests {
     async fn a_source_added_to_the_config_mid_loop_starts_at_once() {
         let t = Three::new();
         let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
-        let config = Swappable::new(&graph);
+        let config = Swappable::new(&graph, t.root.path());
         let other = Store::open(t.root.path()).await.unwrap();
         let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
         let running = t.serve(graph, config.clone());
@@ -1622,7 +1631,7 @@ mod tests {
     async fn a_config_that_drops_a_running_step_is_taken_on_once_it_ends() {
         let t = Three::new();
         let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
-        let config = Swappable::new(&graph);
+        let config = Swappable::new(&graph, t.root.path());
         let other = Store::open(t.root.path()).await.unwrap();
         let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
         let running = t.serve(graph, config.clone());
@@ -1684,7 +1693,7 @@ mod tests {
         };
         let graph = Graph::build(vec![step("1")]).unwrap();
         let ran_with = graph.fingerprints[0].clone();
-        let config = Swappable::new(&graph);
+        let config = Swappable::new(&graph, root.path());
         let events = Arc::new(Recorder::default());
         let other = Store::open(root.path()).await.unwrap();
         let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();

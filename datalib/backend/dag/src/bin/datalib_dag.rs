@@ -23,6 +23,7 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::events::FanOutSink;
+use datalib_dag::supervisor::bell::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
@@ -426,17 +427,18 @@ async fn main() -> Result<()> {
 
 enum Taken {
     /// This process runs the loop.
-    Lock(datalib_dag::lock::FileLock),
+    Lock(datalib_dag::lock::RunnerLock),
     /// Another process ran it, and the request is over.
     Closed(Option<RequestOutcome>),
 }
 
 /// Take the loop, or follow the request while someone else runs it. The
-/// lock is tried again on every beat, not just once: the loop that was
+/// lock is tried again at every ring, not just once: the loop that was
 /// running may end between our look and our request landing, and then
-/// nobody is left to serve it but us.
+/// nobody is left to serve it but us. Closing a request rings, and so
+/// does letting the lock go.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    const BEAT: std::time::Duration = std::time::Duration::from_millis(500);
+    let mut listener = Listener::new(store, "datalib-dag following a request").await;
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -464,14 +466,14 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     }
                     return Ok(Taken::Closed(closed));
                 }
-                tokio::time::sleep(BEAT).await;
+                listener.next(store).await;
             }
             Err(e) => return Err(e.into()),
         }
     }
 }
 
-fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::FileLock> {
+fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::RunnerLock> {
     datalib_dag::lock::acquire_runner(data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(

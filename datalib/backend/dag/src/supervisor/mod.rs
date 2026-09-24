@@ -3,6 +3,7 @@
 //! [`tick::tick`], a pure function; the hosts that feed it events and
 //! act on its answer live beside it. Design: `docs/dev/plans/supervisor.md`.
 
+pub mod bell;
 pub mod host;
 pub mod record;
 pub mod reload;

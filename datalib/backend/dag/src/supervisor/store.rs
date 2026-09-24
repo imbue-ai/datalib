@@ -7,7 +7,7 @@
 //! `docs/dev/plans/supervisor.md` §2.7–§2.8.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -93,6 +93,9 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
+    /// Rung after every write, so a listener hears it at once
+    /// (`bell.rs`).
+    bells: PathBuf,
 }
 
 impl Store {
@@ -110,7 +113,10 @@ impl Store {
             .connect_with(options(&path))
             .await
             .with_context(|| format!("open {}", path.display()))?;
-        let store = Store { pool };
+        let store = Store {
+            pool,
+            bells: super::bell::bells_dir(data_root),
+        };
         store.refuse_if_newer(&path).await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
         for stmt in ddl() {
@@ -168,6 +174,15 @@ impl Store {
         &self.pool
     }
 
+    /// Where a listener for this store's writes makes its FIFO.
+    pub fn bells(&self) -> &Path {
+        &self.bells
+    }
+
+    pub(super) fn ring(&self) {
+        super::bell::ring(&self.bells);
+    }
+
     pub async fn close(self) {
         self.pool.close().await;
     }
@@ -194,6 +209,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.ring();
         Ok(id)
     }
 
@@ -210,6 +226,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.ring();
         Ok(())
     }
 
@@ -231,6 +248,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.ring();
         Ok(())
     }
 
@@ -281,6 +299,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.ring();
         Ok(())
     }
 
@@ -289,6 +308,7 @@ impl Store {
             .bind(step)
             .execute(&self.pool)
             .await?;
+        self.ring();
         Ok(())
     }
 

@@ -45,6 +45,7 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
         "@datalib_crates//:walkdir",
     ],

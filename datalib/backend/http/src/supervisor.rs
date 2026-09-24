@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use datalib_dag::config::ConfigCheck;
 use datalib_dag::scheduler::ResetTarget;
+use datalib_dag::supervisor::bell::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
@@ -131,10 +132,6 @@ pub struct HostConfig {
     pub now: Option<String>,
 }
 
-/// How often an idle host looks for intent nobody woke it for: a request
-/// or a pause a `datalib-dag` client wrote.
-const IDLE_POLL: Duration = Duration::from_secs(1);
-
 pub async fn run(cfg: HostConfig) {
     let control = cfg.control.clone();
     host(&cfg).await;
@@ -153,7 +150,8 @@ async fn host(cfg: &HostConfig) {
             return;
         }
     };
-    let Some(_lock) = take_the_lock(cfg, &mut stop).await else {
+    let mut listener = Listener::new(&store, "the idle host").await;
+    let Some(_lock) = take_the_lock(cfg, &store, &mut listener, &mut stop).await else {
         return;
     };
     cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
@@ -212,7 +210,7 @@ async fn host(cfg: &HostConfig) {
         }
         tokio::select! {
             _ = cfg.control.wake.notified() => {}
-            _ = tokio::time::sleep(IDLE_POLL) => {}
+            _ = listener.next(&store) => {}
             _ = stop.changed() => {}
         }
     }
@@ -223,8 +221,10 @@ async fn host(cfg: &HostConfig) {
 /// runs the loop, and serves the UI's requests too.
 async fn take_the_lock(
     cfg: &HostConfig,
+    store: &Store,
+    listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
-) -> Option<datalib_dag::lock::FileLock> {
+) -> Option<datalib_dag::lock::RunnerLock> {
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(&cfg.control.root) {
@@ -247,7 +247,7 @@ async fn take_the_lock(
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep(IDLE_POLL) => {}
+            _ = listener.next(store) => {}
             _ = stop.changed() => return None,
         }
     }
