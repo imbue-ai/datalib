@@ -613,7 +613,7 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       await pauseRows(targets, action === "pause");
       return;
     case "edit":
-      if (first.editGroup) openEdit(first.editGroup);
+      if (first.editGroup) await openEdit(first.editGroup);
       return;
     case "compare":
       compareFor.value = { id: first.id, name: first.name.label };
@@ -955,7 +955,11 @@ function openAdd() {
 
 /// Open the wizard on a source: its group, with both its steps' values
 /// in one form.
-function openEdit(groupId: string) {
+/// The form reads the config as the server has it: a save from the
+/// editor reaches this card by a pushed frame, and an Edit clicked before
+/// that lands would open on the text from before it.
+async function openEdit(groupId: string) {
+  await loadConfig();
   const group = configGroups.value.find((g) => g.id === groupId);
   if (!group) return;
   const steps = sourceStepsOf(group.id, sources.value);
