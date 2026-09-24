@@ -81,6 +81,42 @@ rust_binary(
     ],
 )
 
+# A doltlite writer that can be stopped at a named point inside a batch, for
+# doltlite_interrupt_test. `testonly`, like the helper below.
+rust_binary(
+    name = "doltlite_interrupt_writer",
+    testonly = True,
+    srcs = ["tests/bin/doltlite_interrupt_writer.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_etl",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# A writer killed inside a batch — mid-transaction, applied, committed but
+# not published, published — leaves it whole or not at all, and the next
+# writer's open settles it. Storage's atomicity; the loop's process
+# management is //datalib/backend/dag:supervisor_harness_test.
+rust_test(
+    name = "doltlite_interrupt_test",
+    size = "medium",
+    srcs = ["tests/doltlite_interrupt.rs"],
+    data = [":doltlite_interrupt_writer"],
+    edition = "2021",
+    env = {
+        "WRITER_BIN": "$(rootpath :doltlite_interrupt_writer)",
+    },
+    deps = [
+        ":datalib_etl",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 # Can a reader pin an earlier commit while another process holds the store
 # open and commits — in both orders of opening? Hermetic: the store is a
 # tempdir, and the only program it runs is the helper above, from runfiles.
