@@ -3,7 +3,6 @@ import {
   closeTab,
   makeTopLevel,
   newTab,
-  nextCounter,
   openChain,
   openStack,
   parseStored,
@@ -190,7 +189,7 @@ describe("startingTree", () => {
 
 describe("storage", () => {
   it("round-trips", () => {
-    const tabs = [grid, { ...newTab("t2", "a()", "t1"), title: "A", collapsed: true }];
+    const tabs = [grid, { ...newTab("t2", "a()", "t1"), name: "A", collapsed: true }];
     expect(parseStored(serialize({ tabs, selectedId: "t2" }))).toEqual({
       tabs,
       selectedId: "t2",
@@ -204,7 +203,8 @@ describe("storage", () => {
     expect(parseStored(JSON.stringify({ v: 1, tabs: [{ id: 3 }] }))).toBeNull();
   });
 
-  it("numbers new tabs past every stored one", () => {
-    expect(nextCounter([grid, newTab("t41", "a()", null), newTab("x", "b()", null)])).toBe(42);
+  it("keeps a name the person gave, marked as theirs", () => {
+    const tabs = [{ ...grid, name: "Slack, last week", renamed: true }];
+    expect(parseStored(serialize({ tabs, selectedId: "t1" }))?.tabs).toEqual(tabs);
   });
 });

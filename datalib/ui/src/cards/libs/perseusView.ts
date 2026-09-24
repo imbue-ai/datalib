@@ -9,7 +9,7 @@
 // the panels as columns to the right of this one (and re-clicking swaps
 // them out), which is the scaife "open the same passage side-by-side in
 // every version" gesture.
-import { fetchSearch } from "@/api";
+import { cardApi } from "../cardApi";
 import type { CardRender } from "../types";
 
 // A "version" is one published edition/translation, keyed by its
@@ -90,6 +90,7 @@ function docSource(md: string, anchor: string | null): string {
 
 export function perseusView(): CardRender {
   return (root, ctx) => {
+    const { fetchSearch } = cardApi(ctx);
     ctx.setTitle("Perseus reader");
     const style = document.createElement("style");
     style.textContent = `

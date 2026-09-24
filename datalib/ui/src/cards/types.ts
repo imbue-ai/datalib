@@ -58,7 +58,12 @@ export type HostCommands = {
 };
 
 export type CardCtx = {
+  // A UUIDv7 minted when the card opened (cardId.ts), kept for the
+  // card's life and across reloads of its window.
   cardId: string;
+  // What the card's current source calls (cardId.ts cardType); follows
+  // host.setSource.
+  readonly cardType: string;
   // The card's persisted state string, as read from the URL at load
   // (or "" when absent). Opaque to the host; same string the card
   // last passed to host.setState.
@@ -112,7 +117,7 @@ export type EdgeHoverPayload = {
 // CardRender. These are the names in scope when card source is
 // evaluated; `gridView()` in a card's source calls ViewLibs.gridView.
 export type ViewLibs = {
-  gridView: (opts?: { q?: string; columns?: string[] }) => CardRender;
+  gridView: (opts?: { q?: string; columns?: string[]; name?: string }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
   // rendered document (the unified_index applet's /docs) and, on

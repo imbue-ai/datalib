@@ -7,10 +7,12 @@
 // back as the loader's message rather than a broken root; a reload
 // never overwrites unsaved text.
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { fetchConfig, fetchConfigScaffold, saveConfig } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
+
+const { fetchConfig, fetchConfigScaffold, saveConfig } = useApi();
 
 const props = defineProps<{ ctx: CardCtx }>();
 

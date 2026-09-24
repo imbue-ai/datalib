@@ -12,9 +12,11 @@ export type Tab = {
   state: string;
   // The tab this one was opened from; null for a root.
   parentId: string | null;
-  // The title the card last set, kept so a tab that has not been
-  // mounted since a reload still shows its name.
-  title: string | null;
+  // The tab's name: the one its card gives it, until the person
+  // renames it. Kept so a tab not mounted since a reload still has it.
+  name: string | null;
+  // The person renamed the tab, so the card no longer names it.
+  renamed: boolean;
   collapsed: boolean;
   // Opened by a card and not visited since: the next card its parent
   // opens replaces it rather than piling up beside it, so clicking
@@ -25,7 +27,16 @@ export type Tab = {
 export type Row = { tab: Tab; depth: number; hasChildren: boolean };
 
 export function newTab(id: string, source: string, parentId: string | null, state = ""): Tab {
-  return { id, source, state, parentId, title: null, collapsed: false, preview: false };
+  return {
+    id,
+    source,
+    state,
+    parentId,
+    name: null,
+    renamed: false,
+    collapsed: false,
+    preview: false,
+  };
 }
 
 export function childrenOf(tabs: Tab[], id: string | null): Tab[] {
@@ -209,7 +220,8 @@ export function parseStored(text: string | null): Stored | null {
       source: t.source,
       state: typeof t.state === "string" ? t.state : "",
       parentId: typeof t.parentId === "string" ? t.parentId : null,
-      title: typeof t.title === "string" ? t.title : null,
+      name: typeof t.name === "string" ? t.name : null,
+      renamed: t.renamed === true,
       collapsed: t.collapsed === true,
       preview: t.preview === true,
     });
@@ -233,14 +245,4 @@ export function startingTree(
   if (own && own.tabs.length > 0) return own;
   if (mainWindow && saved && saved.tabs.length > 0) return saved;
   return null;
-}
-
-// The first counter value no stored id `t<n>` already uses.
-export function nextCounter(tabs: Tab[]): number {
-  let max = 0;
-  for (const t of tabs) {
-    const m = t.id.match(/^t(\d+)$/);
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return max + 1;
 }

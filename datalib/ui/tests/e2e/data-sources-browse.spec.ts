@@ -106,6 +106,11 @@ test("a source's row opens that source, with its type's columns", async ({ page 
   // bookmarkable and shareable rather than a transient view.
   await expect(page).toHaveURL(/source_id%3Aslack/);
 
+  // The card is named for what it holds, not for its query, and keeps
+  // that name while the person searches inside it (checked below).
+  const name = page.locator(".miller-col-title").last();
+  await expect(name).toHaveText(/ documents$/);
+
   // Every row came from this source, and every row is a document: one
   // per thread, not the messages inside them. Both facts leave one
   // value in their column — Source, Kind — and the adaptive rule drops
@@ -131,6 +136,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
     })
     .toBe(true);
   expect(await columnValues(page, "kind")).toContain("Slack Message");
+  await expect(name).toHaveText(/ documents$/);
 
   // Slack's preset: a channel and an author, and no Project — Slack has
   // no such thing, and a column of empty cells is what a preset exists

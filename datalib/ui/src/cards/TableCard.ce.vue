@@ -5,10 +5,13 @@
 // a table of somebody else's rows can be read, not driven.
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import TableGrid from "./TableGrid.ce.vue";
-import { fetchTable, type ColumnSpec } from "@/api";
+import { type ColumnSpec } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { subscribeLive } from "@/live";
 import { refetchesOn } from "./tableRefetch";
 import type { CardCtx } from "./types";
+
+const { fetchTable } = useApi();
 
 const props = defineProps<{ url: string; title?: string; ctx: CardCtx }>();
 

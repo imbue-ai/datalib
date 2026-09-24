@@ -13,6 +13,7 @@ import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
+import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
@@ -21,7 +22,6 @@ import {
   closeTab,
   makeTopLevel,
   newTab,
-  nextCounter,
   openChain,
   openStack,
   rows,
@@ -32,6 +32,7 @@ import {
   type Tab,
 } from "@/views/tabTree";
 import { isMainWindow, readTrees, writeTree } from "@/views/tabsWindow";
+import { track } from "@/telemetry";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const props = defineProps<{
@@ -46,9 +47,7 @@ const route = useRoute();
 const router = useRouter();
 const bus = createBus();
 
-let counter = 1;
-const freshId = () => `t${counter++}`;
-const defaultTab = () => newTab(freshId(), DEFAULT_SPECS[0].code, null);
+const defaultTab = () => newTab(newCardId(), DEFAULT_SPECS[0].code, null);
 
 // Empty until we know which window this is (see start below).
 const ready = ref(false);
@@ -135,7 +134,7 @@ function adoptRoute() {
   } else if (bySpec) {
     selectedId.value = bySpec.id;
   } else {
-    const opened = openStack(tabs.value, specs, freshId);
+    const opened = openStack(tabs.value, specs, newCardId);
     tabs.value = opened.tabs;
     selectedId.value = opened.lastId;
   }
@@ -167,7 +166,6 @@ void isMainWindow().then((main) => {
   mainWindow = main;
   const { own, saved } = readTrees();
   const start = startingTree(own, saved, main);
-  counter = nextCounter(start?.tabs ?? []);
   tabs.value = start?.tabs ?? [];
   selectedId.value =
     tabs.value.find((t) => t.id === start?.selectedId)?.id ?? tabs.value[0]?.id ?? "";
@@ -180,7 +178,7 @@ void isMainWindow().then((main) => {
 watchEffect(() => {
   if (!props.active) return;
   const tab = selected.value;
-  document.title = pageTitle(tab ? [displayTitle(tab.source, tab.title)] : []);
+  document.title = pageTitle(tab ? [nameOf(tab)] : []);
 });
 onBeforeUnmount(() => {
   if (props.active) document.title = pageTitle([]);
@@ -204,14 +202,14 @@ function openFrom(parentId: string, sources: string[]): string[] {
   if (sources.length === 0) return [];
   const caller = tabById(parentId);
   if (caller) caller.preview = false;
-  const { tabs: next, ids } = openChain(tabs.value, parentId, sources, freshId);
+  const { tabs: next, ids } = openChain(tabs.value, parentId, sources, newCardId);
   tabs.value = next;
   select(ids[ids.length - 1]);
   return ids;
 }
 
 function openRoot(source: string) {
-  const tab = newTab(freshId(), source, null);
+  const tab = newTab(newCardId(), source, null);
   tabs.value = [...tabs.value, tab];
   select(tab.id);
 }
@@ -296,12 +294,15 @@ function ctxFor(tab: Tab): CardCtx {
     };
     ctx = {
       cardId,
+      get cardType() {
+        return cardType(tabById(cardId)?.source ?? "");
+      },
       get initialState() {
         return tabById(cardId)?.state ?? "";
       },
       setTitle: (title) => {
         const t = tabById(cardId);
-        if (t) t.title = title;
+        if (t && !t.renamed) t.name = title;
       },
       setHelp: (html) => setCardHelp(cardId, html),
       bus,
@@ -312,9 +313,65 @@ function ctxFor(tab: Tab): CardCtx {
   return ctx;
 }
 
-function titleOf(tab: Tab): string {
-  return displayTitle(tab.source, tab.title);
+function nameOf(tab: Tab): string {
+  return displayTitle(tab.source, tab.name);
 }
+
+// ---- naming ----
+
+// The right-click menu on a sidebar row, at the pointer.
+const menu = ref<{ tabId: string; x: number; y: number } | null>(null);
+const menuTab = computed(() => (menu.value ? tabById(menu.value.tabId) : undefined));
+const renamingId = ref<string | null>(null);
+
+function openMenu(tab: Tab, ev: MouseEvent) {
+  menu.value = { tabId: tab.id, x: ev.clientX, y: ev.clientY };
+  window.addEventListener("pointerdown", onPointerOutsideMenu, true);
+  window.addEventListener("keydown", onMenuKey, true);
+  window.addEventListener("blur", closeMenu);
+}
+
+function closeMenu() {
+  menu.value = null;
+  window.removeEventListener("pointerdown", onPointerOutsideMenu, true);
+  window.removeEventListener("keydown", onMenuKey, true);
+  window.removeEventListener("blur", closeMenu);
+}
+onBeforeUnmount(closeMenu);
+
+function onPointerOutsideMenu(ev: PointerEvent) {
+  if (!(ev.target as Element | null)?.closest?.(".tabs-menu")) closeMenu();
+}
+
+function onMenuKey(ev: KeyboardEvent) {
+  if (ev.key === "Escape") closeMenu();
+}
+
+function startRename(id: string) {
+  closeMenu();
+  renamingId.value = id;
+}
+
+// Enter commits, and so does leaving the field; Escape, or a blank,
+// drops the edit.
+function commitRename(tab: Tab, typed: string) {
+  if (renamingId.value !== tab.id) return;
+  renamingId.value = null;
+  const name = typed.trim();
+  if (name === "" || name === nameOf(tab)) return;
+  tab.name = name;
+  tab.renamed = true;
+  // A tab the person named is one they mean to keep.
+  tab.preview = false;
+  track("card_rename", { card: tab.id, card_type: cardType(tab.source), name });
+}
+
+const vFocusSelect = {
+  mounted(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  },
+};
 
 // The tab alone, at its current state: a new tab or window with a stack of its own.
 function popOutHref(tab: Tab): string {
@@ -399,8 +456,9 @@ function resetSidebarWidth() {
           :aria-expanded="row.hasChildren ? !row.tab.collapsed : undefined"
           :data-tab-id="row.tab.id"
           :style="{ paddingLeft: 0.3 + row.depth * 0.9 + 'rem' }"
-          :title="titleOf(row.tab)"
+          :title="nameOf(row.tab)"
           @click="visit(row.tab)"
+          @contextmenu.prevent="openMenu(row.tab, $event)"
           @auxclick.prevent="(e: MouseEvent) => e.button === 1 && close(row.tab.id)"
         >
           <button
@@ -412,7 +470,22 @@ function resetSidebarWidth() {
             {{ row.tab.collapsed ? "▸" : "▾" }}
           </button>
           <span v-else class="tabs-twisty" />
-          <span class="tabs-label">{{ titleOf(row.tab) }}</span>
+          <input
+            v-if="renamingId === row.tab.id"
+            v-focus-select
+            class="tabs-rename"
+            aria-label="tab name"
+            :value="nameOf(row.tab)"
+            @click.stop
+            @keydown.enter.prevent="
+              commitRename(row.tab, ($event.target as HTMLInputElement).value)
+            "
+            @keydown.esc.prevent="renamingId = null"
+            @blur="commitRename(row.tab, ($event.target as HTMLInputElement).value)"
+          />
+          <span v-else class="tabs-label" @dblclick.stop="startRename(row.tab.id)">{{
+            nameOf(row.tab)
+          }}</span>
           <button
             v-if="row.tab.parentId !== null"
             class="tabs-action"
@@ -447,16 +520,24 @@ function resetSidebarWidth() {
         @pointerdown="onSidebarResize"
         @dblclick="resetSidebarWidth"
       />
+      <ul
+        v-if="menu && menuTab"
+        class="tabs-menu"
+        role="menu"
+        :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
+      >
+        <li role="menuitem" @click="startRename(menuTab.id)">Rename…</li>
+      </ul>
     </nav>
     <section v-if="selected" class="tabs-main">
       <div class="tabs-chrome" :class="{ 'tabs-chrome--title': !devMode }">
         <button
           v-if="parentOfSelected"
           class="tabs-from"
-          :title="`opened from ${titleOf(parentOfSelected)}`"
+          :title="`opened from ${nameOf(parentOfSelected)}`"
           @click="visit(parentOfSelected)"
         >
-          ↰ {{ titleOf(parentOfSelected) }}
+          ↰ {{ nameOf(parentOfSelected) }}
         </button>
         <textarea
           v-if="devMode"
@@ -469,7 +550,7 @@ function resetSidebarWidth() {
           @input="growSourceBox($event.target as HTMLTextAreaElement)"
           @keydown.enter.exact.prevent="commitSource(selected, $event)"
         />
-        <div v-else class="tabs-title">{{ titleOf(selected) }}</div>
+        <div v-else class="tabs-title">{{ nameOf(selected) }}</div>
         <CardControls :key="selected.id" :source="selected.source" :ctx="ctxFor(selected)" />
       </div>
       <template v-for="tab in tabs" :key="tab.id">
@@ -567,6 +648,37 @@ function resetSidebarWidth() {
   color: inherit;
   cursor: pointer;
   font-size: 11px;
+}
+.tabs-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  padding: 0 0.2rem;
+  border: 1px solid var(--datalib-accent);
+  border-radius: 3px;
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+}
+.tabs-menu {
+  position: fixed;
+  z-index: 10;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  min-width: 11rem;
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  border: 1px solid color-mix(in srgb, var(--datalib-fg) 25%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  font-weight: normal;
+}
+.tabs-menu li {
+  padding: 0.2rem 0.8rem;
+  cursor: pointer;
+}
+.tabs-menu li:hover {
+  background: var(--datalib-hover);
 }
 .tabs-label {
   flex: 1 1 auto;

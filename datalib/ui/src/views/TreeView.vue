@@ -13,6 +13,7 @@ import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { layoutTree, type Rect } from "./treeLayout";
+import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { setCardHelp } from "@/cards/help";
@@ -49,10 +50,9 @@ const V_GAP = 32;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 2;
 
-let nextId = 1;
 function newNode(source: string, parentId: string | null): TreeNode {
   return {
-    id: `card-${nextId++}`,
+    id: newCardId(),
     source,
     state: "",
     parentId,
@@ -404,6 +404,9 @@ function ctxFor(node: TreeNode): CardCtx {
     };
     ctx = {
       cardId,
+      get cardType() {
+        return cardType(node.source);
+      },
       get initialState() {
         return node.state;
       },

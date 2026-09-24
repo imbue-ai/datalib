@@ -3,13 +3,16 @@
 // the fields as a tree, where in the source it came from, and the
 // process that wrote it. Opened beside the log by a selection there.
 import { computed, onMounted, ref, watch } from "vue";
-import { fetchLogLine, type ProcessInfo, type RunLogLine } from "@/api";
+import { type ProcessInfo, type RunLogLine } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { copyToClipboard } from "@/clipboard";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { filterToken, quoteValue } from "@/grid/query";
 import { sourceLabel, sourceOf, sourceUrl, SOURCE_REPO } from "@/components/runLogSource";
 import JsonTree from "./JsonTree.ce.vue";
 import type { CardCtx } from "./types";
+
+const { fetchLogLine } = useApi();
 
 const props = defineProps<{ ctx: CardCtx; seq: number }>();
 

@@ -2,7 +2,7 @@
 // safe to be generous, and the one silent-degradation trap.
 
 import { describe, expect, it } from "vitest";
-import { browseColumns, browsePresetTypes, browseQuery } from "./browsePresets";
+import { browseColumns, browseName, browsePresetTypes, browseQuery } from "./browsePresets";
 import { catalogFor } from "./catalog";
 
 describe("browseColumns", () => {
@@ -87,5 +87,13 @@ describe("browseQuery", () => {
     const cols = browseColumns("diff")!;
     expect(cols.slice(0, 2)).toEqual(["diff_status", "diff_changed_columns"]);
     expect(cols.at(-1)).toBe("snippet");
+  });
+});
+
+describe("browseName", () => {
+  it("names a Browse card for the source's documents, or a diff's changes", () => {
+    expect(browseName("Slack")).toBe("Slack documents");
+    expect(browseName("Slack", "slack")).toBe("Slack documents");
+    expect(browseName("Weekly diff", "diff")).toBe("Weekly diff changes");
   });
 });

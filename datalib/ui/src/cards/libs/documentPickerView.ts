@@ -7,10 +7,11 @@
 // via ctx.host.setSource, so the picker acts as a transient "new card"
 // step rather than a lingering column.
 import type { CardRender } from "../types";
-import { fetchDocs } from "@/api";
+import { cardApi } from "../cardApi";
 
 export function documentPickerView(): CardRender {
   return (root, ctx) => {
+    const { fetchDocs } = cardApi(ctx);
     ctx.setTitle("Open document");
     const style = document.createElement("style");
     style.textContent = `

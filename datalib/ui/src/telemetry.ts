@@ -10,13 +10,15 @@ import { START_LOCATION, type Router } from "vue-router";
 import { decodeColumns } from "@/router/columns";
 import { isDesktopApp } from "@/desktop";
 import { CAUSE_HEADER, chainOfFrameBeingHandled } from "@/live";
+import { CARD_HEADER, CARD_TYPE_HEADER, cardBeingServed, type CardTag } from "@/cards/cardScope";
 
 export const PAGE_HEADER = "X-Datalib-Page";
 
 /// The events the UI reports. A closed set on this side so a callsite
 /// cannot misspell one; the server takes any word and files it as
 /// `ui.<name>`, so an older server never refuses a newer page.
-export type PageEventName = "page_load" | "page_hide" | "navigate" | "error";
+export type PageEventName =
+  "page_load" | "page_hide" | "navigate" | "card_open" | "card_rename" | "error";
 
 export type PageEventLevel = "info" | "warn" | "error";
 
@@ -123,21 +125,36 @@ export function navigateEvent(path: string, from: string | null): PageEvent {
   return { at: nowIso(), name: "navigate", msg: path, fields };
 }
 
-/// Wire the page up: the id on every same-origin request (and the
-/// chain of the `root` frame that caused it, if one did), the load and
-/// unload events, uncaught errors, and every route change. Once, at boot.
+/// What a same-origin request says about where it came from: the page,
+/// the chain of the `root` frame that caused it, and the card it is for.
+export function stampRequest(
+  headers: Headers,
+  chain: number | undefined,
+  card: CardTag | null,
+): Headers {
+  headers.set(PAGE_HEADER, page.process_id);
+  if (chain !== undefined) headers.set(CAUSE_HEADER, String(chain));
+  if (card) {
+    headers.set(CARD_HEADER, card.id);
+    headers.set(CARD_TYPE_HEADER, card.type);
+  }
+  return headers;
+}
+
+/// Wire the page up: `stampRequest` on every same-origin request, the
+/// load and unload events, uncaught errors, and every route change.
+/// Once, at boot.
 export function installTelemetry(router: Router, app: App): void {
   const origin = window.location.origin;
   const nativeFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (isSameOrigin(url, origin)) {
-      const headers = new Headers(
-        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      const headers = stampRequest(
+        new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
+        chainOfFrameBeingHandled(),
+        cardBeingServed(),
       );
-      headers.set(PAGE_HEADER, page.process_id);
-      const chain = chainOfFrameBeingHandled();
-      if (chain !== undefined) headers.set(CAUSE_HEADER, String(chain));
       init = { ...init, headers };
     }
     return nativeFetch(input, init);
