@@ -49,7 +49,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 Backend row shapes are defined as hand-written Rust structs in two crates —
 **`datalib/backend/schema`** (the *render schema*: `grid_rows` / `edges`
 / `markdowns`) and **`datalib/backend/app_schema`** (app-state tables:
-`feedback` / `sync_jobs`). Each row struct derives its portable
+`feedback` / `disk_usage` / `remote_media`). Each row struct derives its portable
 `CREATE TABLE` DDL via `#[derive(PortableTable)]` (in
 `datalib/backend/etl/macros`). The struct is the single source of truth —
 there is no codegen step.
@@ -63,7 +63,7 @@ there is no codegen step.
 └── datalib/
     ├── backend/              Cargo workspace
     │   ├── schema/           render schema: grid_rows / edges / markdowns structs
-    │   ├── app_schema/       app-state schema: feedback / sync_jobs structs
+    │   ├── app_schema/       app-state schema: feedback / usage structs
     │   ├── core/             query engine + deeplink grammar
     │   ├── etl/              shared render/load framework
     │   ├── etl/providers/*/  per-provider download/render crates
@@ -158,7 +158,7 @@ being bound — useful behind a reverse proxy).
 
 Every backend route requires a per-process API token — Jupyter's scheme,
 and for Jupyter's reason: loopback does not keep a *web page* out, and
-`PUT /api/config` + `POST /api/sync/jobs` runs arbitrary `command:`
+`PUT /api/config` + `POST /api/requests` runs arbitrary `command:`
 strings (issue #138). See
 [`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs)
 for the design.
@@ -308,7 +308,7 @@ edit the struct directly:
 
 - render-schema tables (`grid_rows` / `edges` / `markdowns`) in
   `datalib/backend/schema/src/`,
-- app-state tables (`feedback` / `sync_jobs`) in
+- app-state tables (`feedback` / `disk_usage` / `remote_media`) in
   `datalib/backend/app_schema/src/`.
 
 Give each field a `#[col(sql = "…")]` portable type;

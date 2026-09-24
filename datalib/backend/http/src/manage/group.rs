@@ -68,13 +68,14 @@ pub struct ChildStatus {
 }
 
 /// The status a group row shows, and which child it is read from.
-/// Running if any child is running; failed if any child failed;
-/// stopped if any child was; otherwise the last step in pipeline order
+/// Running if any child is running; paused if any child is; failed if
+/// any child failed; stopped if any child was; otherwise the last step
+/// in pipeline order
 /// — the one whose state says how far the group's data got. A group
 /// with only applets reads its last applet. `children` must already be
 /// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "failed", "stopped"] {
+    for key in ["running", "paused", "failed", "stopped"] {
         if let Some(child) = children.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }

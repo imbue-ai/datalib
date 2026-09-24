@@ -55,13 +55,4 @@ describe("holdWhileOffScreen", () => {
     setOnScreen(true);
     expect(resync).toHaveBeenCalledTimes(1);
   });
-
-  it("delivers job events off screen", () => {
-    const job = vi.fn();
-    const { handlers, setOnScreen } = holdWhileOffScreen({ job });
-    setOnScreen(false);
-    const e = { id: "j1", state: "running" } as never;
-    handlers.job!(e);
-    expect(job).toHaveBeenCalledWith(e);
-  });
 });

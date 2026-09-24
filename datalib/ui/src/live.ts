@@ -1,15 +1,12 @@
 // The page's one live connection to the server.
 //
-// Every consumer used to call `openJobStream` and get an `EventSource`
-// of its own. The toolbar's sync indicator is always mounted, the open
+// Every consumer used to open an `EventSource` of its own. The toolbar's sync indicator is always mounted, the open
 // view has one, and each `sourceDagView` card adds another — so three
 // or four connections to the same origin, each holding a socket open
 // forever. Browsers allow six per origin over HTTP/1.1, and an SSE
 // connection never returns one. The app was two DAG cards away from
 // starving its own `fetch` calls with no symptom but hanging requests.
 // Here there is one connection however many subscribers there are.
-
-import type { JobProgressEvent } from "@/api";
 
 /// A dataset the server serves, named by what serves it. Mirrors
 /// `watch::Table` by hand. A consumer names the ones it reads and
@@ -59,8 +56,6 @@ export function changed(e: RootEvent, table: LiveTable): boolean {
 }
 
 export type LiveHandlers = {
-  /// A sync job moved.
-  job?: (e: JobProgressEvent) => void;
   /// Something in the data root moved. Heartbeats are handled here and
   /// are not delivered — a subscriber never has to know about them.
   root?: (e: RootEvent) => void;
@@ -83,7 +78,6 @@ export type LiveOptions = {
 /// `inner`, holding back what arrives while it is off screen and
 /// delivering it on the way back: each frame once however often it came,
 /// or one resync in place of them all, since that refetches everything.
-/// Job events always pass: they patch state rather than fetch.
 export function holdWhileOffScreen(inner: LiveHandlers): {
   handlers: LiveHandlers;
   setOnScreen: (onScreen: boolean) => void;
@@ -93,7 +87,6 @@ export function holdWhileOffScreen(inner: LiveHandlers): {
   let resync = false;
   const root = inner.root;
   const handlers: LiveHandlers = {
-    job: inner.job,
     root:
       root &&
       ((e) => {
@@ -177,17 +170,6 @@ function connect() {
   if (source || subscribers.size === 0) return;
   const es = new EventSource("/api/sync/stream");
   source = es;
-
-  es.onmessage = (m) => {
-    armWatchdog();
-    let ev: JobProgressEvent;
-    try {
-      ev = JSON.parse(m.data) as JobProgressEvent;
-    } catch {
-      return; // malformed frame
-    }
-    fanOut((h) => h.job?.(ev));
-  };
 
   es.addEventListener("root", (m) => {
     armWatchdog();

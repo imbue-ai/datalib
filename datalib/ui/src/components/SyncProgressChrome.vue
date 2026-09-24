@@ -1,64 +1,44 @@
 <script setup lang="ts">
 // Lightweight sync indicator for the toolbar: a pulsing dot +
-// "syncing" while any job is active, sitting in the toolbar's flexible
-// space so it never shifts the page layout. Per-job progress lives on
+// "syncing" while any request is open, sitting in the toolbar's flexible
+// space so it never shifts the page layout. Per-row progress lives on
 // the sources card; this only answers "is something running?". Click
-// reveals that card; the tooltip lists the active jobs.
+// reveals that card; the tooltip lists the open requests and who opened
+// each.
 import { computed, ref, onMounted, onUnmounted } from "vue";
-import { type SyncJob, type JobProgressEvent } from "@/api";
+import { type SyncRequest } from "@/api";
 import { useApi } from "@/cards/cardApi";
-import { subscribeLive } from "@/live";
+import { changed, subscribeLive } from "@/live";
 import { showDataSources } from "@/surface";
 
-const { fetchActiveJobs } = useApi();
+const { fetchRequests } = useApi();
 
-// Active jobs, keyed by id for O(1) patching from the SSE stream.
-const active = ref<Map<string, SyncJob>>(new Map());
+const open = ref<SyncRequest[]>([]);
 let unsubscribe: (() => void) | null = null;
 
-const count = computed(() => active.value.size);
+const count = computed(() => open.value.length);
 const tooltip = computed(() =>
-  [...active.value.values()].map((j) => `${j.source_ids || "all"} (${j.kind})`).join(", "),
+  open.value.map((r) => `${r.roots.join(", ")}${r.by === "ui" ? "" : ` (by ${r.by})`}`).join("; "),
 );
 
-// Seed from the API (covers jobs already running when this mounts), and
-// again whenever the live stream says it may have missed something.
-// This used to run on a 15 s timer as well, unconditionally — see
-// `@/live` for what replaced that.
-async function seed() {
+async function load() {
   try {
-    const list = await fetchActiveJobs();
-    const m = new Map<string, SyncJob>();
-    for (const j of list) m.set(j.id, j);
-    active.value = m;
+    open.value = (await fetchRequests()).filter((r) => r.state === "open");
   } catch {
     // best effort — chrome stays silent on errors
   }
 }
 
-function onProgress(ev: JobProgressEvent) {
-  const m = active.value;
-  if (!ev.active) {
-    m.delete(ev.id);
-  } else {
-    const prev = m.get(ev.id);
-    if (prev) {
-      prev.state = ev.state;
-      prev.progress_msg = ev.progress_msg;
-    } else {
-      // Newly-started job we haven't seen: pull the full active set so it
-      // shows up with its kind/source fields.
-      seed();
-      return;
-    }
-  }
-  // Reassign to trigger reactivity on the Map.
-  active.value = new Map(m);
-}
-
 onMounted(() => {
-  seed();
-  unsubscribe = subscribeLive({ job: onProgress, resync: seed });
+  void load();
+  // The requests live beside the loop's record, and a change to either
+  // is a `dag` frame.
+  unsubscribe = subscribeLive({
+    root: (e) => {
+      if (changed(e, "dag")) void load();
+    },
+    resync: load,
+  });
 });
 
 onUnmounted(() => {

@@ -138,11 +138,6 @@ onMounted(() => {
       // read between its samples.
       if (changed(e, "storage")) void load();
     },
-    // A job ending is the last chance for a while: the backend's own
-    // tick stops as soon as the run lets go of the root.
-    job: (e) => {
-      if (e.state !== "pending" && e.state !== "running") void load(true);
-    },
     resync: () => void load(true),
   });
 });

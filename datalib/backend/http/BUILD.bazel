@@ -159,12 +159,8 @@ rust_test(
     env = {
         "DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE": "1",
     },
-    proc_macro_deps = [
-        "@datalib_crates//:async-trait",
-    ],
     deps = [
         ":datalib_http",
-        "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/etl/render:datalib_etl_render",

@@ -101,45 +101,11 @@ function modifyWayfinder(name: string, cardSource: string, state: string): strin
   ].join("\n");
 }
 
-function configWayfinder(configPath: string): string {
-  const origin = window.location.origin;
-  return [
-    `Modify the datalib data-source config — the user has its editor`,
-    `open in a card right now.`,
-    ``,
-    `Read the guide first: ${origin}/agent/config.md (no token needed)`,
-    ``,
-    `The config is TOML — an array of [[steps]] tables.`,
-    ``,
-    ...authLines(),
-    `Fetch the current config:`,
-    `  GET ${origin}/api/config   → {"text": "<current text>", …}`,
-    `Save the modified config with:`,
-    `  PUT ${origin}/api/config   (JSON body {"text": "<full new text>"})`,
-    ``,
-    `PUT validates with the real config loader before writing anything;`,
-    `an invalid config comes back as {"ok": false, "error": "…"} and the`,
-    `file is left untouched — fix and re-PUT. The file on disk is`,
-    `${configPath} if you want to look at it directly, but save through`,
-    `the PUT so validation runs. The user's editor reloads automatically`,
-    `after every successful save.`,
-    ``,
-    `A step's \`command\` can run any program, including new ones you`,
-    `write. Install such a program (binary or symlink) into`,
-    `~/.datalib/bin — that dir is prepended to PATH when the pipeline`,
-    `runs. Details in the guide.`,
-    ``,
-    `This is the user's request:`,
-    ``,
-  ].join("\n");
-}
-
 // ---- instructions dialog store ---------------------------------------------
 
 export type AgentHandoff = {
-  kind: "modify" | "config";
-  // Shown under the dialog title: the component name, or the config
-  // file path for the config kind.
+  kind: "modify";
+  // Shown under the dialog title: the component name.
   subject: string;
   wayfinder: string;
 };
@@ -156,8 +122,7 @@ export function dismissHandoff(): void {
 
 // "Don't show the instructions again": once set, the corresponding 🤖
 // button copies the wayfinder immediately. Persisted per browser like
-// devMode; one flag per surface (cards / config editor) so opting out
-// on one doesn't silently mute the other.
+// devMode.
 function persistedFlag(key: string) {
   const flag = ref(localStorage.getItem(key) === "1");
   watch(flag, (on) => {
@@ -166,7 +131,6 @@ function persistedFlag(key: string) {
   return flag;
 }
 export const skipModifyInstructions = persistedFlag("datalib-agent-skip-card-instructions");
-export const skipConfigInstructions = persistedFlag("datalib-agent-skip-config-instructions");
 
 // Copy a wayfinder to the clipboard. Clipboard can be blocked (insecure
 // origin / no focus); fall back to showing the text so the user can
@@ -226,18 +190,5 @@ export function modifyComponentWithAgent(name: string, cardSource: string, state
       wayfinder: modifyWayfinder(name, cardSource, state),
     },
     skipModifyInstructions.value,
-  );
-}
-
-// The 🤖 button on the config editor: hand the config file
-// to an agent for modification.
-export function modifyConfigWithAgent(configPath: string): void {
-  handOff(
-    {
-      kind: "config",
-      subject: configPath,
-      wayfinder: configWayfinder(configPath),
-    },
-    skipConfigInstructions.value,
   );
 }

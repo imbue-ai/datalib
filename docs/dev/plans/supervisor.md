@@ -1,9 +1,9 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–3 and 4a are
-built — `datalib-dag` runs the loop over requests in
-`system/supervisor.sqlite`, or hands its request to the one already
-running — and the rest is not.** This is the alternative to
+**Status: chosen over the join (2026-09-23); slices 0–4c are built —
+`datalib-dag` and the server run one loop over requests in
+`system/supervisor.sqlite`, and a Manage row reads the loop's record —
+and 5–7 are not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -492,13 +492,15 @@ running the loop writes facts.
 | `request_steps` | request → step, for every step in the request's scope, with the step's state as of the request's close |
 | `log`, `metrics`, `metric_samples` | as today, in the run store |
 
-*As built (4a):* `steps` holds the facts — fingerprint, what the step read
-at its last success, its last run and last success — and not yet the
-tick's `state`, which 4c adds for rows to read; `sinks` (path and
+*As built (4c):* `steps` holds the facts — fingerprint, what the step read
+at its last success, its last run and last success — and the tick's
+`state` (`StateKind`), a `state_detail`, `paused_by` and the open
+`request` it serves, written only when they change; `sinks` (path and
 version only) and `invocations` (no `pid` or `consumed` yet); and `runs`
-and `run_steps`, the
-busy period in flight and each step's state in it, which is what
-`GET /api/dag` and the Manage rows read until 4c. `request_steps` is 4c's.
+and `run_steps`, the busy period in flight and each step's `RunState` in
+it, which `GET /api/dag` still reads. There is no `request_steps`: a
+step names the one request it serves, which is all a row's Stop needs;
+the wave is slice 5's.
 
 A request *is* the wave — "your Sync of Gmail: ingest done, render
 running, index waiting on its sink" is `request_steps` joined to
@@ -923,7 +925,30 @@ last.
      //...` or `bazelisk test //datalib/ui:e2e_test`; the hermetic line's
      `-external` filter drops it. Run it before pushing.
 
-   **4c. Rows read the supervisor.** `steps.state` is what a Manage row
+   **4c. Rows read the supervisor.** *Built.* What the build did beyond,
+   or instead of, the brief below:
+   - A row at rest (`idle`, `stale`, `failed`) shows its last outcome
+     and when, which says more than the state's word. `waiting` reads
+     Queued with what it waits on, and so does `fresh` until the step has
+     run in this busy period: up to date so far, but a streaming
+     producer's next seal can run it again before the sync ends. A step running for no open request reads Stopping.
+   - The loop writes the states at every tick, and once more at the end
+     of a busy period with nothing open. A pause or resume made while it
+     is idle, and what a dead loop left running, reach the record through
+     `Runner::settle`, one tick with nothing open, which the server runs
+     when the pauses move and once at boot.
+   - `POST /api/requests` answers once the loop has taken the request on
+     (`Store::taken_on`), so the rows read after it already show its
+     steps as wanted.
+   - A reset is `POST /api/reset`, run by the server's host between busy
+     periods and refused while one runs: no row, no queue.
+   - A paused step that a sync skipped records no run, rather than
+     "Up to date" and a false last success.
+   - The `/sources` page (and its `/setup` and `/sync` aliases), the
+     config-editor agent hand-off and the quick-add snippets it alone
+     used are gone.
+
+   The brief: `steps.state` is what a Manage row
    says; `status.rs`'s inference (`reached_since`, `spoken_for`,
    `StatusFloor`) is deleted. `POST /api/requests`,
    `/api/requests/<id>/stop`, `/api/steps/<id>/{pause,resume}`, the

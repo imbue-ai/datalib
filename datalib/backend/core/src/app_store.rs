@@ -1,10 +1,8 @@
-//! `AppStore` — the four stores this server owns: filed feedback, the
-//! sync job queue, the bytes-on-disk timeseries, and remote media (the
-//! allow-list and the download CAS's index), one doltlite file each.
+//! `AppStore` — the three stores this server owns: filed feedback, the
+//! bytes-on-disk timeseries, and remote media (the allow-list and the
+//! download CAS's index), one doltlite file each.
 
-use crate::app_store_migrate::{
-    DISK_USAGE_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER, SYNC_JOBS_LADDER,
-};
+use crate::app_store_migrate::{DISK_USAGE_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::open_pool;
 use app_schema::disk_usage::{DiskUsageRow, DDL as DISK_USAGE_DDL};
@@ -12,20 +10,17 @@ use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
-use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow, DDL as SYNC_JOBS_DDL};
 use async_trait::async_trait;
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-/// The four application stores: filed feedback, the sync job queue,
-/// the bytes-on-disk timeseries, and remote media.
+/// The three application stores: filed feedback, the bytes-on-disk
+/// timeseries, and remote media.
 pub struct AppStore {
     /// Filed feedback. Outside the cache-tagged index tree, because
     /// nothing regenerates it.
     feedback_pool: SqlitePool,
-    /// The sync job queue and its history.
-    jobs_pool: SqlitePool,
     /// The disk-usage timeseries. Written every few seconds while the
     /// server is up, and never committed — so it must not share a file
     /// with anything that is.
@@ -50,7 +45,6 @@ impl AppStore {
     /// (`app_store_migrate`).
     pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
         let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
-        let jobs_pool = open_pool(&crate::layout::jobs_db(root)).await?;
         let usage_pool = open_pool(&crate::layout::usage_db(root)).await?;
         let remote_media_pool = open_pool(&crate::layout::remote_media_db(root)).await?;
         let has_dolt = probe_dolt_extensions(&feedback_pool).await;
@@ -58,20 +52,14 @@ impl AppStore {
         // Before the ladder and the DDL: a store a newer line of datalib
         // wrote is refused whole (`datalib_store_meta::guard`). Then the
         // rungs above the store's version. Feedback is committed per row
-        // with `-Am`, so each rung is sealed as its own commit; jobs and
-        // usage are never committed, by design.
+        // with `-Am`, so each rung is sealed as its own commit; usage is
+        // never committed, by design.
         for (pool, path, ladder, commits) in [
             (
                 &feedback_pool,
                 crate::layout::feedback_db(root),
                 FEEDBACK_LADDER,
                 has_dolt,
-            ),
-            (
-                &jobs_pool,
-                crate::layout::jobs_db(root),
-                SYNC_JOBS_LADDER,
-                false,
             ),
             (
                 &usage_pool,
@@ -88,7 +76,7 @@ impl AppStore {
         ] {
             let written_by = datalib_store_meta::read(pool).await.map_err(internal)?;
             if let Err(newer) = datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
-                for p in [&feedback_pool, &jobs_pool, &usage_pool, &remote_media_pool] {
+                for p in [&feedback_pool, &usage_pool, &remote_media_pool] {
                     p.close().await;
                 }
                 return Err(sqlx::Error::Configuration(Box::new(newer)));
@@ -96,7 +84,7 @@ impl AppStore {
             let stored = written_by.map_or(0, |m| m.schema_version);
             let top = datalib_store_meta::ladder::top(ladder);
             if stored > top {
-                for p in [&feedback_pool, &jobs_pool, &usage_pool, &remote_media_pool] {
+                for p in [&feedback_pool, &usage_pool, &remote_media_pool] {
                     p.close().await;
                 }
                 return Err(sqlx::Error::Configuration(Box::new(
@@ -118,32 +106,23 @@ impl AppStore {
         }
         let store = Self {
             feedback_pool,
-            jobs_pool,
             usage_pool,
             remote_media_pool,
             has_dolt,
         };
         store.init_feedback_table().await?;
-        store.init_sync_jobs_table().await?;
         store.init_disk_usage_table().await?;
         store.init_remote_media_tables().await?;
         // Which build wrote each store, beside its tables. Feedback and
         // remote media are committed per row with `-Am`, so a changed
         // meta row is sealed here rather than left to ride into the next
-        // commit; jobs and usage are never committed and their rows just
-        // land.
+        // commit; usage is never committed and its rows just land.
         for (pool, kind, ddl, ladder) in [
             (
                 &store.feedback_pool,
                 StoreKind::Feedback,
                 FEEDBACK_DDL,
                 FEEDBACK_LADDER,
-            ),
-            (
-                &store.jobs_pool,
-                StoreKind::Jobs,
-                SYNC_JOBS_DDL,
-                SYNC_JOBS_LADDER,
             ),
             (
                 &store.usage_pool,
@@ -202,12 +181,6 @@ impl AppStore {
         }
         Ok(())
     }
-    async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
-        for (_table, ddl) in SYNC_JOBS_DDL {
-            sqlx::query(*ddl).execute(&self.jobs_pool).await?;
-        }
-        Ok(())
-    }
     async fn init_disk_usage_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in DISK_USAGE_DDL {
             sqlx::query(*ddl).execute(&self.usage_pool).await?;
@@ -258,244 +231,6 @@ impl AppRepo for AppStore {
         .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
         let msg = format!("feedback: {}", row.feedback_uuid);
         self.commit_version(&mut conn, &msg).await?;
-        Ok(())
-    }
-    async fn list_jobs(
-        &self,
-        only_active: bool,
-        limit: usize,
-    ) -> Result<Vec<SyncJobRow>, RepoError> {
-        let base = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
-                           started_at_utc, finished_at_utc, tz_offset, error, pid, \
-                           progress_pct, progress_msg \
-                    FROM sync_jobs";
-        // The SQL form of `SyncJobRow::is_active`: a job told to stop is
-        // active until it is stamped finished.
-        let sql = if only_active {
-            format!(
-                "{base} WHERE state IN (?, ?) \
-                 OR (state = ? AND started_at_utc IS NOT NULL AND finished_at_utc IS NULL) \
-                 ORDER BY created_at_utc DESC, id DESC LIMIT ?"
-            )
-        } else {
-            format!("{base} ORDER BY created_at_utc DESC, id DESC LIMIT ?")
-        };
-        // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is
-        // `format!` over two `&'static str` templates selected by a bool, and
-        // every runtime value (the three states, `limit`) is a bound `?`
-        // parameter. Nothing caller-supplied reaches the string.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-        if only_active {
-            q = q
-                .bind(JobState::Pending.as_str())
-                .bind(JobState::Running.as_str())
-                .bind(JobState::Canceled.as_str());
-        }
-        let rows = q
-            .bind(limit as i64)
-            .fetch_all(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
-        let mut out: Vec<SyncJobRow> = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(row_to_sync_job(&r));
-        }
-        Ok(out)
-    }
-    async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
-        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
-                          started_at_utc, finished_at_utc, tz_offset, error, pid, \
-                          progress_pct, progress_msg \
-                   FROM sync_jobs WHERE id = ? LIMIT 1";
-        let row = sqlx::query(sql)
-            .bind(job_id)
-            .fetch_optional(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
-        Ok(row.as_ref().map(row_to_sync_job))
-    }
-    async fn enqueue_job(
-        &self,
-        kind: JobKind,
-        source_ids: Option<&str>,
-    ) -> Result<SyncJobRow, RepoError> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let (created_at_utc, tz_offset) =
-            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let row = SyncJobRow {
-            id: id.clone(),
-            source_ids: source_ids.map(|s| s.to_string()),
-            kind: kind.as_str().to_string(),
-            parent_job_id: None,
-            state: JobState::Pending.as_str().to_string(),
-            created_at_utc,
-            started_at_utc: None,
-            finished_at_utc: None,
-            tz_offset: Some(tz_offset),
-            error: None,
-            pid: None,
-            progress_pct: None,
-            progress_msg: None,
-        };
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "INSERT INTO sync_jobs \
-             (id, source_ids, kind, parent_job_id, state, created_at_utc, \
-              started_at_utc, finished_at_utc, tz_offset, error, pid, progress_pct, \
-              progress_msg) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&row.id)
-        .bind(&row.source_ids)
-        .bind(&row.kind)
-        .bind(&row.parent_job_id)
-        .bind(&row.state)
-        .bind(&row.created_at_utc)
-        .bind(&row.started_at_utc)
-        .bind(&row.finished_at_utc)
-        .bind(&row.tz_offset)
-        .bind(&row.error)
-        .bind(row.pid)
-        .bind(row.progress_pct)
-        .bind(&row.progress_msg)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
-        // NB: no DOLT_COMMIT here, and the reason has changed. It used
-        // to be forced: `sync_jobs` shared a file with the grid index,
-        // so a pipeline child committing mid-run would collide with a
-        // commit from here. `system/jobs.doltlite_db` has one writer,
-        // so that hazard is gone — what remains is that the queue is
-        // transient and a per-update dolt history would buy nothing.
-        // Queue writes persist as plain SQL in the working set.
-        Ok(row)
-    }
-    async fn request_cancel_job(&self, job_id: &str) -> Result<(), RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query("UPDATE sync_jobs SET state = ? WHERE id = ? AND state IN (?, ?)")
-            .bind(JobState::Canceled.as_str())
-            .bind(job_id)
-            .bind(JobState::Pending.as_str())
-            .bind(JobState::Running.as_str())
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        Ok(())
-    }
-    async fn start_job(
-        &self,
-        job_id: &str,
-        run_id: &str,
-        msg: Option<&str>,
-    ) -> Result<Option<SyncJobRow>, RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let (started_at_utc, tz_offset) =
-            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let started = sqlx::query(
-            "UPDATE sync_jobs SET state = CASE WHEN state = ? THEN ? ELSE state END, \
-             started_at_utc = ?, tz_offset = ?, parent_job_id = ?, progress_msg = ? \
-             WHERE id = ? AND started_at_utc IS NULL AND state IN (?, ?)",
-        )
-        .bind(JobState::Pending.as_str())
-        .bind(JobState::Running.as_str())
-        .bind(&started_at_utc)
-        .bind(&tz_offset)
-        .bind(run_id)
-        .bind(msg)
-        .bind(job_id)
-        .bind(JobState::Pending.as_str())
-        .bind(JobState::Canceled.as_str())
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("start job: {e}")))?
-        .rows_affected();
-        // No DOLT_COMMIT — see the note in `enqueue_job`.
-        if started == 0 {
-            return Ok(None);
-        }
-        let sql = "SELECT id, source_ids, kind, parent_job_id, state, created_at_utc, \
-                          started_at_utc, finished_at_utc, tz_offset, error, pid, \
-                          progress_pct, progress_msg \
-                   FROM sync_jobs WHERE id = ? LIMIT 1";
-        let row = sqlx::query(sql)
-            .bind(job_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("start job refetch: {e}")))?;
-        Ok(row.as_ref().map(row_to_sync_job))
-    }
-    async fn requeue_job(&self, job_id: &str) -> Result<(), RepoError> {
-        sqlx::query(
-            "UPDATE sync_jobs SET state = ?, started_at_utc = NULL, parent_job_id = NULL, \
-             progress_pct = NULL, progress_msg = NULL WHERE id = ? AND state = ?",
-        )
-        .bind(JobState::Pending.as_str())
-        .bind(job_id)
-        .bind(JobState::Running.as_str())
-        .execute(&self.jobs_pool)
-        .await
-        .map_err(|e| RepoError::Internal(format!("requeue job: {e}")))?;
-        Ok(())
-    }
-    async fn update_job_progress(
-        &self,
-        job_id: &str,
-        pct: Option<f64>,
-        msg: Option<&str>,
-    ) -> Result<(), RepoError> {
-        // No DOLT_COMMIT here on purpose: progress ticks are high-frequency
-        // and would flood `dolt log`. Only the lifecycle transitions
-        // (start / finish) are versioned.
-        sqlx::query("UPDATE sync_jobs SET progress_pct = ?, progress_msg = ? WHERE id = ?")
-            .bind(pct)
-            .bind(msg)
-            .bind(job_id)
-            .execute(&self.jobs_pool)
-            .await
-            .map_err(|e| RepoError::Internal(format!("update progress: {e}")))?;
-        Ok(())
-    }
-    async fn finish_job(
-        &self,
-        job_id: &str,
-        state: JobState,
-        error: Option<&str>,
-    ) -> Result<(), RepoError> {
-        let mut conn = self
-            .jobs_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let (finished_at_utc, tz_offset) =
-            datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        sqlx::query(
-            "UPDATE sync_jobs SET state = ?, finished_at_utc = ?, tz_offset = ?, error = ?, \
-             pid = NULL WHERE id = ?",
-        )
-        .bind(state.as_str())
-        .bind(&finished_at_utc)
-        .bind(&tz_offset)
-        .bind(error)
-        .bind(job_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("finish job: {e}")))?;
-        // No DOLT_COMMIT — see the note in `enqueue_job`. (This is the
-        // transition that actually raced the sync child's commit in
-        // testing and produced "commit conflict".)
         Ok(())
     }
     async fn record_disk_usage(&self, rows: &[DiskUsageRow]) -> Result<(), RepoError> {
@@ -712,33 +447,6 @@ async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
     matches!(res, Ok(n) if n > 0)
 }
 
-fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
-    // Decoded through `Option`, which is what checks for NULL: a bare
-    // `String` decode reads a NULL VARCHAR as `""`, and a job that had
-    // not finished then carried `finished_at_utc: ""` to every reader.
-    fn nullable<'r, T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>>(
-        r: &'r sqlx::sqlite::SqliteRow,
-        col: &str,
-    ) -> Option<T> {
-        r.try_get::<Option<T>, _>(col).ok().flatten()
-    }
-    SyncJobRow {
-        id: r.try_get("id").unwrap_or_default(),
-        source_ids: nullable(r, "source_ids"),
-        kind: r.try_get("kind").unwrap_or_default(),
-        parent_job_id: nullable(r, "parent_job_id"),
-        state: r.try_get("state").unwrap_or_default(),
-        created_at_utc: r.try_get("created_at_utc").unwrap_or_default(),
-        started_at_utc: nullable(r, "started_at_utc"),
-        finished_at_utc: nullable(r, "finished_at_utc"),
-        tz_offset: nullable(r, "tz_offset"),
-        error: nullable(r, "error"),
-        pid: nullable::<i64>(r, "pid"),
-        progress_pct: nullable(r, "progress_pct"),
-        progress_msg: nullable(r, "progress_msg"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,36 +547,14 @@ mod tests {
     /// `tz_offset` (#427) still has the old column names, and
     /// `CREATE TABLE IF NOT EXISTS` leaves them. Opening such a root
     /// has to rename the columns and rewrite the stamps — every read of
-    /// the queue returned 500 on a real root before it did — and must
+    /// a store returned 500 on a real root before it did — and must
     /// keep the rows: feedback is filed by a person and nothing
     /// regenerates it.
     #[tokio::test]
     async fn a_store_from_before_the_utc_columns_is_migrated_on_open() {
         let td = tempfile::tempdir().unwrap();
-        // The old shape, by hand, in all three stores.
+        // The old shape, by hand, in both stores.
         {
-            let jobs = open_pool(&crate::layout::jobs_db(td.path())).await.unwrap();
-            sqlx::query(
-                "CREATE TABLE sync_jobs (id VARCHAR(36) NOT NULL, source_ids VARCHAR(64), \
-                 kind VARCHAR(16) NOT NULL, parent_job_id VARCHAR(36), state VARCHAR(16) NOT NULL, \
-                 created_at VARCHAR(40) NOT NULL, started_at VARCHAR(40), finished_at VARCHAR(40), \
-                 error TEXT, pid INT, progress_pct DOUBLE, progress_msg VARCHAR(512), \
-                 PRIMARY KEY (id))",
-            )
-            .execute(&jobs)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO sync_jobs (id, kind, state, created_at, started_at, finished_at) \
-                 VALUES ('job-1', 'all', 'done', '2026-09-10T10:00:00+02:00', \
-                         '2026-09-10T10:00:05+02:00', '2026-09-10T10:01:00+02:00'), \
-                        ('job-2', 'all', 'pending', '2026-09-11T09:00:00+02:00', NULL, NULL)",
-            )
-            .execute(&jobs)
-            .await
-            .unwrap();
-            jobs.close().await;
-
             let feedback = open_pool(&crate::layout::feedback_db(td.path()))
                 .await
                 .unwrap();
@@ -915,26 +601,6 @@ mod tests {
 
         let store = AppStore::open(td.path()).await.expect("open migrates");
 
-        let jobs = store.list_jobs(false, 10).await.unwrap();
-        assert_eq!(jobs.len(), 2, "{jobs:?}");
-        let done = jobs.iter().find(|j| j.id == "job-1").unwrap();
-        assert_eq!(done.created_at_utc, "2026-09-10T08:00:00.000000+00:00");
-        assert_eq!(
-            done.finished_at_utc.as_deref(),
-            Some("2026-09-10T08:01:00.000000+00:00")
-        );
-        assert_eq!(done.tz_offset.as_deref(), Some("+02:00"));
-        let pending = jobs.iter().find(|j| j.id == "job-2").unwrap();
-        assert_eq!(pending.tz_offset.as_deref(), Some("+02:00"));
-        // Asked in SQL rather than through the mapper, which reads a
-        // NULL text column as `Some("")` on doltlite.
-        let null_start: i64 =
-            sqlx::query_scalar("SELECT started_at_utc IS NULL FROM sync_jobs WHERE id = 'job-2'")
-                .fetch_one(&store.jobs_pool)
-                .await
-                .unwrap();
-        assert_eq!(null_start, 1, "a stamp that was NULL stays NULL");
-
         // The feedback row is still there, and still readable by the
         // current queries.
         let n: i64 = sqlx::query_scalar(
@@ -952,7 +618,7 @@ mod tests {
 
         // The rung is recorded: every store is at the ladder's top, and
         // feedback's rung is its own commit.
-        for pool in [&store.feedback_pool, &store.jobs_pool, &store.usage_pool] {
+        for pool in [&store.feedback_pool, &store.usage_pool] {
             let meta = datalib_store_meta::read(pool).await.unwrap().unwrap();
             assert_eq!(meta.schema_version, 1);
         }
@@ -972,7 +638,7 @@ mod tests {
         // Opening again is a no-op: nothing to rename, nothing rewritten.
         drop(store);
         let again = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(again.list_jobs(false, 10).await.unwrap().len(), 2);
+        assert_eq!(again.recent_disk_usage(10).await.unwrap().len(), 1);
     }
 
     /// Each of the stores says which build wrote it, with its own
@@ -985,7 +651,6 @@ mod tests {
         let store = AppStore::open(td.path()).await.unwrap();
         for (pool, kind) in [
             (&store.feedback_pool, StoreKind::Feedback),
-            (&store.jobs_pool, StoreKind::Jobs),
             (&store.usage_pool, StoreKind::Usage),
             (&store.remote_media_pool, StoreKind::RemoteMedia),
         ] {
@@ -1037,12 +702,14 @@ mod tests {
     async fn app_stores_a_newer_build_wrote_are_refused() {
         let td = tempfile::tempdir().unwrap();
         drop(AppStore::open(td.path()).await.unwrap());
-        let jobs = open_pool(&crate::layout::jobs_db(td.path())).await.unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
-            .execute(&jobs)
+        let usage = open_pool(&crate::layout::usage_db(td.path()))
             .await
             .unwrap();
-        jobs.close().await;
+        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            .execute(&usage)
+            .await
+            .unwrap();
+        usage.close().await;
         let err = match AppStore::open(td.path()).await {
             Ok(_) => panic!("an older build opened a newer root"),
             Err(e) => e.to_string(),

@@ -28,7 +28,6 @@ async fn app() -> (axum::Router, ApiToken) {
         root: root.clone(),
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
-        progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,
         // No sampler running here, so the monitor is empty and every
         // tree reports as absent — the state a root nobody has walked
@@ -92,10 +91,10 @@ async fn unauthenticated_requests_are_refused() {
         .unwrap();
     assert_eq!(status(&app, put_config).await, StatusCode::UNAUTHORIZED);
 
-    let enqueue = Request::post("/api/sync/jobs")
+    let enqueue = Request::post("/api/requests")
         .header("content-type", "application/json")
         .body(Body::from(
-            serde_json::to_vec(&serde_json::json!({"kind": "all"})).unwrap(),
+            serde_json::to_vec(&serde_json::json!({"roots": []})).unwrap(),
         ))
         .unwrap();
     assert_eq!(status(&app, enqueue).await, StatusCode::UNAUTHORIZED);

@@ -2,7 +2,7 @@
 //! facts come from the record in `system/supervisor.sqlite` and go back to
 //! it, and the events are the ones the run store and the server read.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result};
 use tokio::sync::watch;
@@ -12,9 +12,8 @@ use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
     tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
-    StepFacts, StepShape, StepState as Row,
+    StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
-use super::RequestEvent;
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, StepProgress};
 use crate::graph::Graph;
@@ -87,38 +86,17 @@ struct Mailbox<'a> {
     store: &'a Store,
     seen: Option<i64>,
     /// Requests naming a step this loop's graph lacks, left for the next
-    /// loop: it loads the config again, and may know them.
-    deferred: BTreeSet<String>,
+    /// loop: it loads the config again, and may know them. Each with the
+    /// roots this graph lacks.
+    deferred: BTreeMap<String, Vec<String>>,
 }
 
-/// An open request as the loop holds it: its row's id and the tick's view
-/// of it.
+/// An open request as the loop holds it: its row's id, the tick's view
+/// of it, and the steps it wants.
 struct Open {
     id: String,
     request: Request,
-    /// Whether the host has been told the loop took it on. Only once the
-    /// record has been saved with its steps in it: told sooner, a job
-    /// reads as running while the record still says its steps were not
-    /// selected.
-    told: bool,
-}
-
-/// A stopped request whose steps are still winding down.
-struct Winding {
-    id: String,
-    by: String,
     scope: Vec<bool>,
-}
-
-impl Winding {
-    fn over(&self) -> RequestEvent {
-        RequestEvent::Closed {
-            id: self.id.clone(),
-            outcome: RequestOutcome::Stopped,
-            failed_step: None,
-            stopped_by: Some(self.by.clone()),
-        }
-    }
 }
 
 /// How often a loop with steps running looks for new rows. A loop with
@@ -152,7 +130,7 @@ impl Runner {
         let mut mailbox = Mailbox {
             store,
             seen: None,
-            deferred: BTreeSet::new(),
+            deferred: BTreeMap::new(),
         };
         let plan: Vec<String> = graph
             .topo
@@ -187,7 +165,7 @@ impl Runner {
         let shape = shape_of(graph);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
-        let mut paused: BTreeSet<usize> = BTreeSet::new();
+        let mut paused: BTreeMap<usize, String> = BTreeMap::new();
         let mut ever_in_scope = vec![false; n];
         let mut seq = 0u64;
 
@@ -203,7 +181,6 @@ impl Runner {
         // Each step's state the last time a request wanted it, which is
         // what its row settles on once none does.
         let mut last_states: Vec<Row> = vec![Row::Idle; n];
-        let mut winding: Vec<Winding> = Vec::new();
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
@@ -214,7 +191,6 @@ impl Runner {
             &mut paused,
             &mut seq,
             &mut ever_in_scope,
-            &mut winding,
         )
         .await?;
 
@@ -231,13 +207,12 @@ impl Runner {
                     &mut paused,
                     &mut seq,
                     &mut ever_in_scope,
-                    &mut winding,
                 )
                 .await?;
             }
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
-                paused: paused.clone(),
+                paused: paused.keys().copied().collect(),
             };
             let t = tick(&shape, &intent, &facts, &self.budgets);
             for (i, st) in t.states.iter().enumerate() {
@@ -293,7 +268,9 @@ impl Runner {
             for i in 0..n {
                 let unwanted = matches!(t.states[i], Row::Idle | Row::Stale);
                 if ever_in_scope[i] && status[i].is_none() && ended[i].is_none() && unwanted {
-                    let st = settled(graph, &last_states, i, cancelled);
+                    let Some(st) = settled(graph, &last_states, i, cancelled) else {
+                        continue;
+                    };
                     if st == StepStatus::SkippedUpToDate {
                         queue.cleared(graph, i, &*self.sink);
                     }
@@ -301,13 +278,18 @@ impl Runner {
                 }
             }
 
-            winding.retain(|w| {
-                let still_stopping = t.stops.iter().any(|&i| w.scope[i]);
-                if !still_stopping {
-                    self.tell(w.over());
-                }
-                still_stopping
+            // A request closing now is closed after the save below, and a
+            // reader that sees it closed must find no step still serving it.
+            let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
+            let held: Vec<bool> = ended.iter().map(Option::is_some).collect();
+            record_states(graph, &mut state, &t, &held, &paused, |i| {
+                let mut serving = open
+                    .iter()
+                    .enumerate()
+                    .filter(|(r, _)| !closing.contains(r));
+                serving.find(|(_, o)| o.scope[i]).map(|(_, o)| o.id.clone())
             });
+            record_deferred(graph, &mut state, &mailbox.deferred);
 
             for start in t.starts {
                 let i = start.step;
@@ -341,16 +323,12 @@ impl Runner {
                     (i, attempts, res, consumed)
                 });
             }
-            for i in t.stops {
+            for &i in &t.stops {
                 if let Some(tx) = stops[i].take() {
                     let _ = tx.send(true);
                 }
             }
             record.save(&state).await?;
-            for o in open.iter_mut().filter(|o| !o.told) {
-                o.told = true;
-                self.tell(RequestEvent::Admitted { id: o.id.clone() });
-            }
 
             for &(r, outcome) in t.closed.iter().rev() {
                 let closed = open.remove(r);
@@ -361,12 +339,6 @@ impl Runner {
                     }
                 };
                 store.close_request(&closed.id, outcome, step).await?;
-                self.tell(RequestEvent::Closed {
-                    id: closed.id,
-                    outcome,
-                    failed_step: step.map(str::to_string),
-                    stopped_by: None,
-                });
             }
             if open.is_empty() && set.is_empty() {
                 break;
@@ -436,16 +408,21 @@ impl Runner {
             if status[i].is_some() || !ever_in_scope[i] {
                 continue;
             }
-            let st = settled(graph, &last_states, i, cancelled);
+            let Some(st) = settled(graph, &last_states, i, cancelled) else {
+                continue;
+            };
             if st == StepStatus::SkippedUpToDate {
                 queue.cleared(graph, i, &*self.sink);
             }
             self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
         }
-        for w in winding {
-            self.tell(w.over());
-        }
-
+        let at_rest = Intent {
+            requests: Vec::new(),
+            paused: paused.keys().copied().collect(),
+        };
+        let t = tick(&shape, &at_rest, &facts, &self.budgets);
+        record_states(graph, &mut state, &t, &vec![false; n], &paused, |_| None);
+        record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
         }
@@ -486,23 +463,23 @@ impl Runner {
         graph: &Graph,
         mailbox: &mut Mailbox<'_>,
         open: &mut Vec<Open>,
-        paused: &mut BTreeSet<usize>,
+        paused: &mut BTreeMap<usize, String>,
         seq: &mut u64,
         ever_in_scope: &mut [bool],
-        winding: &mut Vec<Winding>,
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
-            for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
+            let scope = downstream_of(graph, &roots);
+            for (i, &reached) in scope.iter().enumerate() {
                 ever_in_scope[i] |= reached;
             }
             *seq += 1;
             open.push(Open {
-                told: false,
                 id,
                 request: Request {
                     roots,
                     opened: Seq(*seq),
                 },
+                scope,
             });
         };
         let Mailbox {
@@ -522,23 +499,21 @@ impl Runner {
                 let first = seen.is_none();
                 *seen = Some(version);
                 let rows = store.open_requests().await?;
+                deferred.retain(|id, _| {
+                    rows.iter()
+                        .any(|r| &r.id == id && r.stop_requested_by.is_none())
+                });
                 let still_open: BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
                 open.retain(|o| still_open.contains(o.id.as_str()));
                 for row in rows {
                     let known = open.iter().position(|o| o.id == row.id);
-                    if let Some(by) = row.stop_requested_by {
+                    if row.stop_requested_by.is_some() {
                         store
                             .close_request(&row.id, RequestOutcome::Stopped, None)
                             .await?;
-                        let stopped = Winding {
-                            id: row.id,
-                            by,
-                            scope: match known {
-                                Some(k) => downstream_of(graph, &open.remove(k).request.roots),
-                                None => vec![false; graph.steps.len()],
-                            },
-                        };
-                        winding.push(stopped);
+                        if let Some(k) = known {
+                            open.remove(k);
+                        }
                         continue;
                     }
                     if known.is_some() {
@@ -547,7 +522,13 @@ impl Runner {
                     let unknown = row.roots.iter().find(|r| !graph.by_id.contains_key(*r));
                     if let Some(unknown) = unknown {
                         if !first {
-                            if deferred.insert(row.id.clone()) {
+                            let lacked = row
+                                .roots
+                                .iter()
+                                .filter(|r| !graph.by_id.contains_key(*r))
+                                .cloned()
+                                .collect();
+                            if deferred.insert(row.id.clone(), lacked).is_none() {
                                 self.sink.emit(&Event::Log {
                                     step: unknown.clone(),
                                     level: crate::events::LogLevel::Info,
@@ -581,32 +562,37 @@ impl Runner {
                         store
                             .close_request(&row.id, RequestOutcome::Failed, Some(unknown))
                             .await?;
-                        self.tell(RequestEvent::Closed {
-                            id: row.id,
-                            outcome: RequestOutcome::Failed,
-                            failed_step: Some(unknown.clone()),
-                            stopped_by: None,
-                        });
                         continue;
                     }
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
-                *paused = store
-                    .paused()
-                    .await?
-                    .into_keys()
-                    .filter_map(|id| graph.by_id.get(&id).copied())
-                    .collect();
+                *paused = paused_in(graph, store).await?;
             }
         }
         Ok(())
     }
 
-    fn tell(&self, event: RequestEvent) {
-        if let Some(tx) = &self.requests {
-            let _ = tx.send(event);
-        }
+    /// One tick with no request open, its states saved: for a host whose
+    /// loop is idle when a pause or a resume lands, or that has just taken
+    /// the lock from a loop that died with steps running.
+    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<()> {
+        let mut record = Recorded::load(store).await?;
+        let mut state = record.saved.clone();
+        let paused = paused_in(graph, store).await?;
+        let intent = Intent {
+            requests: Vec::new(),
+            paused: paused.keys().copied().collect(),
+        };
+        let t = tick(
+            &shape_of(graph),
+            &intent,
+            &facts_of(graph, &state),
+            &self.budgets,
+        );
+        let held = vec![false; graph.steps.len()];
+        record_states(graph, &mut state, &t, &held, &paused, |_| None);
+        record.save(&state).await
     }
 
     fn ctx_for(
@@ -877,10 +863,91 @@ fn check_reported(
     Ok(())
 }
 
+/// Step index → who paused it, for the steps this graph has.
+async fn paused_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
+    Ok(store
+        .paused()
+        .await?
+        .into_iter()
+        .filter_map(|(id, by)| Some((*graph.by_id.get(&id)?, by)))
+        .collect())
+}
+
+/// Write what the tick made of each step into its record. A step between
+/// passes (`held`: its invocation ended, and what it reads has not
+/// settled) is still running. `serving` names the open request a step is
+/// run for.
+fn record_states(
+    graph: &Graph,
+    state: &mut Record,
+    t: &Tick,
+    held: &[bool],
+    paused: &BTreeMap<usize, String>,
+    serving: impl Fn(usize) -> Option<String>,
+) {
+    let id = |j: usize| graph.steps[j].id.as_str();
+    for (i, &st) in t.states.iter().enumerate() {
+        let st = if held[i] { Row::Running } else { st };
+        let paused_by = paused.get(&i).cloned();
+        let detail = match st {
+            Row::Running if t.stops.contains(&i) => Some(match &paused_by {
+                Some(by) => format!("stopping: paused by {by}"),
+                None => "stopping: no open request wants it".to_string(),
+            }),
+            Row::Paused => paused_by.as_ref().map(|by| format!("paused by {by}")),
+            Row::Blocked(p) => Some(format!(
+                "{} has published nothing and is not going to run",
+                id(p)
+            )),
+            Row::Waiting(Wait::Upstream(p)) => Some(format!("waiting for {}", id(p))),
+            // Today each step writes the sink its own index names.
+            Row::Waiting(Wait::Sink(s)) => Some(format!("waiting for another writer of {}", id(s))),
+            Row::Waiting(Wait::Reader(r)) => Some(format!(
+                "waiting for {}, which reads what this writes",
+                id(r)
+            )),
+            Row::Waiting(Wait::Budget(class)) => {
+                Some(format!("waiting for a free {} slot", class.as_str()))
+            }
+            _ => None,
+        };
+        let entry = state.steps.entry(id(i).to_string()).or_default();
+        entry.state = Some(st.into());
+        entry.state_detail = detail;
+        entry.paused_by = paused_by;
+        entry.request = serving(i);
+    }
+}
+
+/// A step this loop's graph lacks reads as waiting while a request left
+/// for the next loop names it, and as nothing once none does.
+fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String, Vec<String>>) {
+    for root in deferred.values().flatten() {
+        state.steps.entry(root.clone()).or_default();
+    }
+    for (id, st) in state.steps.iter_mut() {
+        if graph.by_id.contains_key(id) {
+            continue;
+        }
+        let request = deferred
+            .iter()
+            .find(|(_, roots)| roots.contains(id))
+            .map(|(r, _)| r.clone());
+        st.state = request.as_ref().map(|_| super::tick::StateKind::Waiting);
+        st.state_detail = request.as_ref().map(|_| {
+            "waiting for the sync in progress to end: it loaded the config before this \
+             step was in it"
+                .to_string()
+        });
+        st.request = request;
+    }
+}
+
 /// What a step's row settles on once no open request wants it and it has
-/// nothing of its own left to finish.
-fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> StepStatus {
-    match last_states[i] {
+/// nothing of its own left to finish. A paused step took no part: none.
+fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> Option<StepStatus> {
+    Some(match last_states[i] {
+        Row::Paused => return None,
         Row::Waiting(_) if cancelled => StepStatus::Failed {
             kind: FailureKind::Cancelled,
         },
@@ -888,7 +955,7 @@ fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> Ste
             on: graph.steps[on].id.clone(),
         },
         _ => StepStatus::SkippedUpToDate,
-    }
+    })
 }
 
 /// Resolves when a stop has been asked for; never, with no stop wired.
@@ -1003,6 +1070,8 @@ mod tests {
 
     use super::*;
     use crate::step::{StepRun, StepSpec};
+    use crate::supervisor::record::StepRecord;
+    use crate::supervisor::tick::StateKind;
 
     /// Wait for what the next assertion is about, with a deadline that
     /// names what never came.
@@ -1174,6 +1243,14 @@ mod tests {
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
         assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
+        let a = crate::supervisor::record::recorded(f.root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
+        assert_eq!(a.state, Some(StateKind::Paused));
+        assert_eq!(a.paused_by.as_deref(), Some("claude"));
+        assert_eq!(a.last_run, None, "a step it skipped took no part");
+        assert_eq!(a.last_success_at, None);
     }
 
     #[tokio::test]
@@ -1190,90 +1267,63 @@ mod tests {
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
     }
 
-    fn serve_telling(
-        f: &Fixture,
-    ) -> (
-        tokio::task::JoinHandle<Result<RunReport>>,
-        tokio::sync::mpsc::UnboundedReceiver<RequestEvent>,
-    ) {
-        let (root, graph) = (f.root.path().to_path_buf(), f.graph.clone());
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let running = tokio::spawn(async move {
-            let store = Store::open(&root).await?;
-            let mut runner = Runner::new(&root);
-            runner.requests = Some(tx);
-            let report = runner.serve(&graph, &store).await;
-            store.close().await;
-            report
-        });
-        (running, rx)
+    /// A step's record as the loop last saved it, once `ready` holds.
+    async fn until_recorded(
+        root: &std::path::Path,
+        step: &str,
+        what: &str,
+        ready: impl Fn(&StepRecord) -> bool,
+    ) -> StepRecord {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let record = crate::supervisor::record::recorded(root).await;
+            if let Some(st) = record.steps.get(step).filter(|st| ready(st)) {
+                return st.clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {step} to be {what}: {:?}",
+                record.steps.get(step)
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 
-    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<RequestEvent>) -> Vec<RequestEvent> {
-        std::iter::from_fn(|| rx.try_recv().ok()).collect()
-    }
-
-    /// The server keeps a job row per request; these two events are all
-    /// it has to keep it in step with.
+    /// A Manage row is the record's `state`, with no inference behind it:
+    /// the step a request wants reads running and names that request, and
+    /// one no request wants names none.
     #[tokio::test]
-    async fn the_host_is_told_when_a_request_is_taken_on_and_when_it_is_over() {
+    async fn each_step_reads_as_the_tick_left_it_and_names_the_request_it_serves() {
         let f = fixture();
-        f.go.store(true, Ordering::SeqCst);
         let other = Store::open(f.root.path()).await.unwrap();
         let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
-        running.await.unwrap().unwrap();
-        assert_eq!(
-            drain(&mut rx),
-            [
-                RequestEvent::Admitted { id: id.clone() },
-                RequestEvent::Closed {
-                    id,
-                    outcome: RequestOutcome::Done,
-                    failed_step: None,
-                    stopped_by: None
-                }
-            ]
-        );
-    }
-
-    /// The host flips its job to running when it hears a request was taken
-    /// on, and the Manage row then reads the record. Told before the
-    /// record was saved, the row read the step as not selected by its own
-    /// job's run, and painted last week's status instead of Running.
-    #[tokio::test]
-    async fn the_host_hears_of_a_request_only_once_the_record_names_its_steps() {
-        let f = fixture();
-        let other = Store::open(f.root.path()).await.unwrap();
-        other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
-        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
-
-        let b = other.open_request(&["b/raw".into()], "ui").await.unwrap();
-        loop {
-            let event = tokio::time::timeout(Duration::from_secs(10), rx.recv())
-                .await
-                .expect("b to be taken on")
-                .unwrap();
-            if event == (RequestEvent::Admitted { id: b.clone() }) {
-                break;
-            }
-        }
-        let recorded = crate::supervisor::record::recorded(f.root.path())
+        let running = serve(&f);
+        let a = until_recorded(f.root.path(), "a/raw", "running", |st| {
+            st.state == Some(StateKind::Running)
+        })
+        .await;
+        assert_eq!(a.request.as_deref(), Some(id.as_str()));
+        let b = crate::supervisor::record::recorded(f.root.path())
             .await
-            .current_run
-            .and_then(|r| r.states.get("b/raw").cloned());
-        assert_eq!(recorded.as_deref(), Some("running"));
+            .steps["b/raw"]
+            .clone();
+        assert_eq!(b.state, Some(StateKind::Stale), "never succeeded");
+        assert_eq!(b.request, None);
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
+        let a = crate::supervisor::record::recorded(f.root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
+        assert_eq!((a.state, a.request), (Some(StateKind::Idle), None));
     }
 
-    /// A stop closes the request's row at once, but its host hears it is
-    /// over only when the step it stopped has exited: until then the Stop
-    /// button says Stopping, and a second one would be a lie.
+    /// A stop closes the request at once, but the step it stopped is still
+    /// checkpointing: until it exits its row reads running, serving no
+    /// request, and says it is stopping — what the Stopping button is.
     #[tokio::test]
-    async fn a_stopped_request_is_over_for_its_host_once_its_step_has_exited() {
+    async fn a_stopped_step_reads_stopping_until_it_has_exited() {
         let root = tempfile::tempdir().unwrap();
         let heard_stop = Arc::new(AtomicBool::new(false));
         let let_go = Arc::new(AtomicBool::new(false));
@@ -1299,45 +1349,72 @@ mod tests {
         let graph = Arc::new(Graph::build(vec![lingering]).unwrap());
         let other = Store::open(root.path()).await.unwrap();
         let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let running = {
             let (root, graph) = (root.path().to_path_buf(), graph.clone());
             tokio::spawn(async move {
                 let store = Store::open(&root).await?;
-                let mut runner = Runner::new(&root);
-                runner.requests = Some(tx);
-                let report = runner.serve(&graph, &store).await;
+                let report = Runner::new(&root).serve(&graph, &store).await;
                 store.close().await;
                 report
             })
         };
 
-        until("the loop to take the request on", || !rx.is_empty()).await;
+        until_recorded(root.path(), "a/raw", "running", |st| {
+            st.state == Some(StateKind::Running)
+        })
+        .await;
         other.request_stop(&id, "ui").await.unwrap();
         until("the stop to reach the step", || {
             heard_stop.load(Ordering::SeqCst)
         })
         .await;
+        let a = until_recorded(root.path(), "a/raw", "serving no request", |st| {
+            st.request.is_none()
+        })
+        .await;
+        assert_eq!(a.state, Some(StateKind::Running), "still running");
+        assert_eq!(
+            a.state_detail.as_deref(),
+            Some("stopping: no open request wants it")
+        );
         assert_eq!(
             outcome(&other, &id).await,
             Some(Some(RequestOutcome::Stopped))
         );
-        assert_eq!(
-            drain(&mut rx),
-            [RequestEvent::Admitted { id: id.clone() }],
-            "over while its step still runs"
-        );
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
+        let a = crate::supervisor::record::recorded(root.path()).await.steps["a/raw"].clone();
+        assert_ne!(a.state, Some(StateKind::Running));
+        assert_eq!(a.last_run.unwrap().status, "stopped");
+    }
+
+    /// A pause landing while no loop runs reaches the rows only through a
+    /// tick; `settle` is that tick, with no request open.
+    #[tokio::test]
+    async fn a_pause_while_the_loop_is_idle_reads_once_settled() {
+        let f = fixture();
+        let store = Store::open(f.root.path()).await.unwrap();
+        let runner = Runner::new(f.root.path());
+        store.pause("a/raw", "claude").await.unwrap();
+        runner.settle(&f.graph, &store).await.unwrap();
+        let a = crate::supervisor::record::recorded(f.root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
+        assert_eq!(a.state, Some(StateKind::Paused));
+        assert_eq!(a.paused_by.as_deref(), Some("claude"));
+        assert_eq!(a.state_detail.as_deref(), Some("paused by claude"));
+
+        store.resume("a/raw").await.unwrap();
+        runner.settle(&f.graph, &store).await.unwrap();
+        let a = crate::supervisor::record::recorded(f.root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
         assert_eq!(
-            drain(&mut rx),
-            [RequestEvent::Closed {
-                id,
-                outcome: RequestOutcome::Stopped,
-                failed_step: None,
-                stopped_by: Some("ui".into())
-            }]
+            (a.state, a.paused_by, a.state_detail),
+            (Some(StateKind::Stale), None, None)
         );
     }
 
@@ -1349,7 +1426,7 @@ mod tests {
         let f = fixture();
         let other = Store::open(f.root.path()).await.unwrap();
         let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
-        let (running, mut rx) = serve_telling(&f);
+        let running = serve(&f);
         until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
 
         let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
@@ -1360,18 +1437,19 @@ mod tests {
             f.runs[1].load(Ordering::SeqCst) == 1
         })
         .await;
+        // Its row says it waits, and for whom, rather than nothing.
+        let c = until_recorded(f.root.path(), "c/raw", "waiting", |st| {
+            st.state == Some(StateKind::Waiting)
+        })
+        .await;
+        assert_eq!(c.request.as_deref(), Some(later.as_str()));
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
 
         assert_eq!(outcome(&other, &later).await, None, "still open");
-        let told: Vec<String> = drain(&mut rx)
-            .into_iter()
-            .map(|e| match e {
-                RequestEvent::Admitted { id } | RequestEvent::Closed { id, .. } => id,
-            })
-            .collect();
-        assert!(!told.contains(&later), "{told:?}");
-        assert!(told.contains(&first) && told.contains(&marker), "{told:?}");
+        for id in [&first, &marker] {
+            assert_eq!(outcome(&other, id).await, Some(Some(RequestOutcome::Done)));
+        }
     }
 
     /// A step a stopped request wanted, and nothing else does, reads as

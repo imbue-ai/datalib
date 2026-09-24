@@ -1,26 +1,19 @@
 <!--
   AgentHandoffModal — the step-by-step instructions shown when existing
-  work is handed to a coding agent (handoff.ts): "modify" (the 🤖
-  button on a component-backed card) and "config" (the 🤖 button on the
-  config editor). The create flow has no dialog — a
+  work is handed to a coding agent (handoff.ts): the 🤖 button on a
+  component-backed card. The create flow has no dialog — a
   freshly minted component renders its instructions in the card body
   (cards/libs/agentSeedView.ts). Driven entirely by the module-level
   `pendingHandoff` store; mounted once in App.
 
   The copy button IS step 1 — the wayfinder is deliberately not copied
-  on open, so the clipboard only changes when the user asks. Both kinds
-  carry the "skip these steps next time" checkbox; once checked, that
-  surface's 🤖 button copies the wayfinder directly (see handoff.ts).
+  on open, so the clipboard only changes when the user asks. The
+  "skip these steps next time" checkbox, once checked, makes the 🤖
+  button copy the wayfinder directly (see handoff.ts).
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, type Ref } from "vue";
-import {
-  copyWayfinder,
-  dismissHandoff,
-  pendingHandoff,
-  skipConfigInstructions,
-  skipModifyInstructions,
-} from "@/handoff";
+import { copyWayfinder, dismissHandoff, pendingHandoff, skipModifyInstructions } from "@/handoff";
 
 const copied = ref(false);
 const copyBtn = ref<HTMLButtonElement | null>(null);
@@ -37,12 +30,6 @@ const KIND_TEXT: Record<
     ask: "what you want changed",
     watch: "Keep the card open — it re-renders every time the agent saves the component.",
     skipFlag: skipModifyInstructions,
-  },
-  config: {
-    title: "Edit the config with a coding agent",
-    ask: "what you want changed",
-    watch: "Keep the editor open — it reloads every time the agent saves the config.",
-    skipFlag: skipConfigInstructions,
   },
 };
 
@@ -86,7 +73,7 @@ function onKeydown(ev: KeyboardEvent) {
         <header class="ah-header">
           <div class="ah-title">{{ text.title }}</div>
           <div class="ah-component">
-            {{ pendingHandoff.kind === "config" ? "config file" : "component" }}
+            component
             <code>{{ pendingHandoff.subject }}</code>
           </div>
         </header>

@@ -2,9 +2,9 @@
 //! per entry in the config *file* — a group with its steps and applets
 //! under it — plus one for `system/`, which no config names but which
 //! is on disk like the rest; with the status, timestamps, sizes and
-//! actions the screen draws, joined here from the config, the runner's
-//! record, the run store, the job queue, the usage sampler and the
-//! applet supervisor, and typed by the columns the response declares.
+//! actions the screen draws, joined here from the config, the loop's
+//! record and requests, the run store, the usage sampler and the applet
+//! supervisor, and typed by the columns the response declares.
 //! What stays in the browser is what needs the wizard's descriptors:
 //! whether the form can edit a row, what Browse opens, and an ingest
 //! step's Download/Import label.
@@ -16,13 +16,15 @@ mod problems;
 mod status;
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
 
 use axum::extract::{Query, State};
 use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Sample, Segment, Timeseries,
 };
+use datalib_dag::supervisor::record::StepRecord;
+use datalib_dag::supervisor::store::RequestRow;
+use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
 use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
@@ -30,16 +32,11 @@ use serde::{Deserialize, Serialize};
 use crate::usage::OutputStorage;
 use crate::{usage, AppState, DagRecord, DagRunInfo};
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
-use status::{EffectiveRun, StatusArgs, StatusFloor, StatusView, StepEdges, StepRecord};
+use status::{StatusView, StepEdges};
 
 pub use documents::by_step as documents_by_step;
 pub use problems::{counts_by_step, ProblemCounts};
 pub use status::dropped_detail;
-
-/// The floor that keeps a row's status from going backwards within one
-/// run (`StatusFloor`). One per process, which is one per data root:
-/// the lock in `crate::lock` sees to that.
-static FLOOR: LazyLock<Mutex<StatusFloor>> = LazyLock::new(Default::default);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,17 +175,19 @@ pub struct ManageRow {
     pub last_success: Option<String>,
     /// Bytes on disk, with the recent measurements behind the number.
     pub disk: Timeseries,
-    /// The Sync column: a Sync button, or a Stop button while a job has
-    /// this row claimed.
+    /// The Sync column: a Sync button, or a Stop button while an open
+    /// request wants this row.
     pub actions: Vec<Action>,
     /// What a sync of this row starts at: the step itself, or for a
     /// group its steps with no inputs. Empty exactly when the sync
     /// action says why.
     pub seeds: Vec<String>,
     pub reveal_blocked: Option<String>,
-    /// The active job that has claimed this step, when one has: what
-    /// the Stop action cancels.
-    pub stop_job_id: Option<String>,
+    /// The open request this row is being run for, when there is one:
+    /// what the Stop action stops.
+    pub stop_request_id: Option<String>,
+    /// Who paused this step, while it is paused.
+    pub paused_by: Option<String>,
     /// The run the step's `last_run` happened in — where its log is.
     /// Empty when it has never run, or ran before runs had ids.
     pub last_run_id: String,
@@ -239,15 +238,10 @@ pub async fn get_manage_rows(
     }
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    // The queue before the record: the loop saves its record before it
-    // marks a job running, so a job read as running here has its record
-    // already on disk. Read the other way round, a request landing
-    // between the two reads pairs a running job with the record from
-    // before its steps were taken on, and the row paints their history.
-    // The grid is still useful without the queue; the columns it feeds
-    // just read as idle.
-    let jobs = s.app.list_jobs(false, 200).await.unwrap_or_default();
     let record = crate::dag_record(&s.root, &s.sync).await;
+    // After the record: a request it names was opened before the record
+    // was saved, so it is there to read, open or not.
+    let requests = requests_named(&s, &record).await;
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))
@@ -274,18 +268,15 @@ pub async fn get_manage_rows(
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
     let applet_errors = s.applets.frontend_view().applet_errors;
 
-    let rows = {
-        let mut floor = FLOOR.lock().unwrap_or_else(|e| e.into_inner());
-        Snapshot {
-            written: &written,
-            diagnostics: &diagnostics,
-            record: &record,
-            jobs: &jobs,
-            outputs: &storage.outputs,
-            applet_errors: &applet_errors,
-        }
-        .rows(&mut floor)
-    };
+    let rows = Snapshot {
+        written: &written,
+        diagnostics: &diagnostics,
+        record: &record,
+        requests: &requests,
+        outputs: &storage.outputs,
+        applet_errors: &applet_errors,
+    }
+    .rows();
     Json(ManageResponse {
         ok: true,
         error: None,
@@ -297,12 +288,29 @@ pub async fn get_manage_rows(
     })
 }
 
+/// The requests the record's steps are being run for, by id.
+async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, RequestRow> {
+    let Ok(store) = s.sync.mailbox().await else {
+        return HashMap::new();
+    };
+    let mut out = HashMap::new();
+    for id in record.steps.values().filter_map(|st| st.request.as_deref()) {
+        if out.contains_key(id) {
+            continue;
+        }
+        if let Ok(Some(row)) = store.request(id).await {
+            out.insert(id.to_string(), row);
+        }
+    }
+    out
+}
+
 /// Everything one answer is assembled from, read once.
 struct Snapshot<'a> {
     written: &'a WrittenEntries,
     diagnostics: &'a [Diagnostic],
     record: &'a DagRecord,
-    jobs: &'a [app_schema::sync_jobs::SyncJobRow],
+    requests: &'a HashMap<String, RequestRow>,
     outputs: &'a [OutputStorage],
     applet_errors: &'a std::collections::BTreeMap<String, String>,
 }
@@ -406,7 +414,7 @@ fn not_in_pipeline(d: &Diagnostic) -> String {
 }
 
 impl Snapshot<'_> {
-    fn rows(&self, floor: &mut StatusFloor) -> Vec<ManageRow> {
+    fn rows(&self) -> Vec<ManageRow> {
         let edges: Vec<StepEdges> = self
             .written
             .steps
@@ -416,16 +424,9 @@ impl Snapshot<'_> {
                 inputs: s.inputs.clone(),
             })
             .collect();
-        let claims = status::claimed_by(&edges, self.jobs);
-        let live_job = self.jobs.iter().find(|j| j.state == "running");
-        let run = status::effective_run(self.record.run.as_ref(), live_job);
-        let stale = run.as_ref().is_some_and(|r| r.synthesized);
         let ctx = RowCtx {
             snap: self,
             edges: &edges,
-            claims: &claims,
-            run: run.as_ref(),
-            stale,
         };
 
         let entries: Vec<Entry<'_>> = self
@@ -437,7 +438,7 @@ impl Snapshot<'_> {
             .collect();
         let mut entry_rows: Vec<(Entry<'_>, ManageRow)> = entries
             .iter()
-            .map(|e| (e.clone(), ctx.entry_row(e, floor)))
+            .map(|e| (e.clone(), ctx.entry_row(e)))
             .collect();
 
         let groups: Vec<ManageRow> = self
@@ -516,7 +517,8 @@ impl Snapshot<'_> {
             reveal_blocked: on_disk
                 .is_none()
                 .then(|| "Nothing on disk yet.".to_string()),
-            stop_job_id: None,
+            stop_request_id: None,
+            paused_by: None,
             last_run_id: String::new(),
             live_run_id: None,
             reveal_path: on_disk.map(|t| t.abs.clone()),
@@ -537,7 +539,7 @@ impl Snapshot<'_> {
                 detail: Some(match dir_disk {
                     None => "Nothing on disk yet.".to_string(),
                     Some(t) => format!(
-                        "{} in {dir}/ \u{2014} the run log {}, and the job queue, the usage \
+                        "{} in {dir}/ \u{2014} the run log {}, and the loop's record, the usage \
                          samples and the feedback filed here.",
                         human_bytes(t.bytes),
                         human_bytes(log_disk.map_or(0, |l| l.bytes)),
@@ -581,9 +583,6 @@ impl Snapshot<'_> {
 struct RowCtx<'a> {
     snap: &'a Snapshot<'a>,
     edges: &'a [StepEdges],
-    claims: &'a HashMap<String, &'a app_schema::sync_jobs::SyncJobRow>,
-    run: Option<&'a EffectiveRun>,
-    stale: bool,
 }
 
 /// Base-10 units, matching what a file manager shows — the question
@@ -663,97 +662,57 @@ impl RowCtx<'_> {
             .then(|| g.to_string())
     }
 
-    /// The runner's record for one step, as it applies to the run in
-    /// flight: `current_state` dropped when the record still describes
-    /// a previous run.
-    fn step_now(&self, id: &str) -> Option<StepRecord> {
-        let record = self.snap.record;
-        let last_run = record.last_runs.get(id).cloned();
-        let current_state = record.states.get(id).cloned();
-        let last_success_at = record.last_successes.get(id).cloned();
-        let rec = (last_run.is_some() || current_state.is_some()).then_some(StepRecord {
-            last_run,
-            current_state,
-            last_success_at,
-        });
-        status::step_for_run(rec.as_ref(), self.stale)
+    fn step(&self, id: &str) -> Option<&StepRecord> {
+        self.snap.record.steps.get(id)
     }
 
-    fn finished_this_run(&self, id: &str) -> bool {
-        self.step_now(id)
-            .and_then(|s| s.current_state)
-            .is_some_and(|st| st != "running")
-    }
-
-    fn progress(&self, id: &str) -> Option<&crate::DagStepProgress> {
-        self.snap.record.progress.get(id).filter(|_| !self.stale)
-    }
-
-    fn step_status(
-        &self,
-        id: &str,
-        dropped: Option<&Diagnostic>,
-        floor: &mut StatusFloor,
-    ) -> StatusView {
-        let claim = self.claims.get(id).copied();
-        let step = self.step_now(id);
-        let waiting = status::waiting_on(self.edges, id, |i| self.finished_this_run(i));
-        let view = status::step_status(StatusArgs {
-            id,
-            step: step.as_ref(),
-            run: self.run,
-            claim,
-            waiting_on: &waiting,
-            dropped,
-        });
-        let key = claim
-            .map(|j| j.id.as_str())
-            .or(self.run.map(|r| r.run_id.as_str()))
-            .unwrap_or("");
-        // The floor may hand back an earlier frame's view; the last
-        // success is history, not a point in this run, so it is always
-        // the current one.
-        let last_success_at = view.last_success_at.clone();
-        let mut held = floor.hold(id, key, view);
-        held.last_success_at = last_success_at;
+    fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
+        let run = self.snap.record.run.as_ref().map(|r| r.run_id.as_str());
+        let mut view = status::step_status(self.step(id), run, dropped);
         // The step's own words and how far along it is, while it runs.
-        if let Some(p) = self.progress(id) {
+        if let Some(p) = self.snap.record.progress.get(id) {
             if let Some(msg) = &p.msg {
-                held.detail = Some(msg.clone());
+                view.detail = Some(msg.clone());
             }
-            if held.key == "running" {
-                held.fraction = activity::fraction(p);
+            if view.key == "running" {
+                view.fraction = activity::fraction(p);
             }
         }
-        held
+        view
     }
 
-    /// Sync, or Stop while a job has the row claimed: the one button
+    /// Sync, or Stop while an open request wants the row: the one button
     /// beside Browse.
     fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Action, Option<String>) {
-        if let Some(job) = self.claims.get(id) {
-            let of = match job.source_ids.as_deref().filter(|s| !s.is_empty()) {
-                Some(ids) => format!("the {} of {ids}", status::job_verb(job)),
-                None => "the sync in progress".to_string(),
+        let step = self.step(id);
+        let request = step
+            .and_then(|s| s.request.as_deref())
+            .and_then(|r| self.snap.requests.get(r));
+        let stop = |label: String, stopping: bool| Action {
+            id: "stop".into(),
+            enabled: !stopping,
+            disabled_reason: stopping
+                .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
+            label,
+            danger: true,
+        };
+        if let Some(r) = request {
+            let whose = match r.opened_by.as_str() {
+                "ui" => String::new(),
+                by => format!(" by {by}"),
             };
-            // Once asked to stop there is nothing more to ask: the steps
-            // in flight are checkpointing, and the face says so until
-            // they exit.
-            let stopping = job.is_stopping();
-            let label = if stopping {
-                format!("Stopping {of}")
-            } else {
-                format!("Stop {of}")
-            };
-            let stop = Action {
-                id: "stop".into(),
-                enabled: !stopping,
-                disabled_reason: stopping
-                    .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
-                label,
-                danger: true,
-            };
-            return (stop, Some(job.id.clone()));
+            // Once asked to stop there is nothing more to ask.
+            let stopping = r.stop_requested_by.is_some();
+            let verb = if stopping { "Stopping" } else { "Stop" };
+            return (
+                stop(format!("{verb} the sync{whose}"), stopping),
+                Some(r.id.clone()),
+            );
+        }
+        // Running for no open request: its request was stopped, or it was
+        // paused, and it is checkpointing on its way out.
+        if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
+            return (stop("Stopping the sync".into(), true), None);
         }
         let sync = Action {
             id: "sync".into(),
@@ -765,7 +724,7 @@ impl RowCtx<'_> {
         (sync, None)
     }
 
-    fn entry_row(&self, e: &Entry<'_>, floor: &mut StatusFloor) -> ManageRow {
+    fn entry_row(&self, e: &Entry<'_>) -> ManageRow {
         let id = e.id().to_string();
         let dropped = self.dropped(&id, e.entry_kind());
         let dropped_why = dropped.map(not_in_pipeline);
@@ -779,7 +738,7 @@ impl RowCtx<'_> {
 
         let (status, run_blocked, seeds, last_run_id, live_run_id) = match e {
             Entry::Step(s) => {
-                let status = self.step_status(&id, dropped, floor);
+                let status = self.step_status(&id, dropped);
                 // A sync starts at a *source* step — one with no declared
                 // inputs — and everything downstream follows.
                 // `datalib-dag` rejects a `--sync` naming anything else.
@@ -809,18 +768,17 @@ impl RowCtx<'_> {
                 } else {
                     vec![]
                 };
-                let now = self.step_now(&id);
                 let last_run_id = self
-                    .snap
-                    .record
-                    .last_runs
-                    .get(&id)
+                    .step(&id)
+                    .and_then(|st| st.last_run.as_ref())
                     .map(|r| r.run_id.clone())
                     .unwrap_or_default();
                 let live_run_id = self
+                    .snap
+                    .record
                     .run
-                    .filter(|r| r.in_flight())
-                    .filter(|_| now.as_ref().is_some_and(|n| n.current_state.is_some()))
+                    .as_ref()
+                    .filter(|r| r.finished_at.is_none() && r.run_id == last_run_id)
                     .map(|r| r.run_id.clone());
                 (status, run_blocked, seeds, last_run_id, live_run_id)
             }
@@ -932,7 +890,13 @@ impl RowCtx<'_> {
         };
 
         let activity = match e {
-            Entry::Step(_) => self.progress(&id).map(activity::chips).unwrap_or_default(),
+            Entry::Step(_) => self
+                .snap
+                .record
+                .progress
+                .get(&id)
+                .map(activity::chips)
+                .unwrap_or_default(),
             Entry::Applet(_) => vec![],
         };
         let problems = match e {
@@ -955,7 +919,8 @@ impl RowCtx<'_> {
                 }
             }),
         );
-        let (sync, stop_job_id) = self.sync_action(&id, run_blocked);
+        let (sync, stop_request_id) = self.sync_action(&id, run_blocked);
+        let paused_by = self.step(&id).and_then(|st| st.paused_by.clone());
         ManageRow {
             key: id.clone(),
             path: match &group {
@@ -986,7 +951,8 @@ impl RowCtx<'_> {
             actions: vec![browse, sync],
             seeds,
             reveal_blocked,
-            stop_job_id,
+            stop_request_id,
+            paused_by,
             last_run_id,
             live_run_id,
             reveal_path: on_disk.map(|o| o.abs.clone()),
@@ -1023,17 +989,7 @@ impl RowCtx<'_> {
                 .collect::<Vec<_>>(),
         );
         let (mut status, status_from) = if let Some(d) = dropped {
-            (
-                status::step_status(StatusArgs {
-                    id: &g.id,
-                    step: None,
-                    run: None,
-                    claim: None,
-                    waiting_on: &[],
-                    dropped: Some(d),
-                }),
-                None,
-            )
+            (status::step_status(None, None, Some(d)), None)
         } else if let Some((status, from)) = agg {
             (status, Some(from))
         } else {
@@ -1139,13 +1095,15 @@ impl RowCtx<'_> {
                 }),
             )
         };
-        // While a job has a child claimed, the group's button is that
-        // child's Stop.
-        let claimed = ordered
+        // While a child reads Stop, the group's button is that child's.
+        let (sync, stop_request_id) = ordered
             .iter()
-            .map(|c| c.id())
-            .find(|id| row_of(id).stop_job_id.is_some());
-        let (sync, stop_job_id) = self.sync_action(claimed.unwrap_or(&g.id), run_blocked);
+            .map(|c| row_of(c.id()))
+            .find_map(|r| {
+                let stop = r.actions.iter().find(|a| a.id == "stop")?;
+                Some((stop.clone(), r.stop_request_id.clone()))
+            })
+            .unwrap_or_else(|| self.sync_action(&g.id, run_blocked));
         let activity = ordered
             .iter()
             .map(|c| row_of(c.id()))
@@ -1231,7 +1189,8 @@ impl RowCtx<'_> {
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
             }),
-            stop_job_id,
+            stop_request_id,
+            paused_by: None,
             // A group's log is a child's; `status_from` names which.
             last_run_id: String::new(),
             live_run_id: None,

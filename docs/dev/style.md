@@ -62,7 +62,7 @@ shape.
 
 | core | shell that feeds it | what it decides |
 |---|---|---|
-| `manage/status::step_status(StatusArgs) -> StatusView` | the handler in `manage/mod.rs` | what a Manage row's Status column says |
+| `supervisor::tick::tick(shape, intent, facts, budgets) -> Tick` in `dag/src/supervisor/tick.rs` | the loop in `supervisor/round.rs` | what each step is doing, and what to start, stop and close |
 | `RenderPlan::decide(stored, params, version_changed)` in `datalib_step/src/render.rs` | `render_source` | diff from the cursor, or render everything |
 | `Adjustments::plan(prev, inputs)` and `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | what a config change means for the walk; which conversations to walk |
 | `Scan::changes_since(prev) -> Changes` in `etl/src/fsscan.rs` | `scan` | which files were added, modified, moved, removed |
@@ -70,10 +70,9 @@ shape.
 | `scope_config::{turned_on, limit_relaxed, filter_widened}` | the provider's `plan` | whether a knob widened |
 | `ui/src/config/{rowMenu,sourceSteps,activity,browsePresets}.ts` | the Vue components | which menu entries, which steps, what the activity column shows |
 
-Every one of these has synchronous tests, and in `status.rs` a replayed
-timeline (`the_sequence_a_sync_actually_produces`,
-`never_goes_backwards_across_the_live_sequence`) that is only
-writable because the function is pure.
+Every one of these has synchronous tests, and the tick's walk a sync
+through its states event by event, which is only writable because the
+function is pure.
 
 ### Where to split
 

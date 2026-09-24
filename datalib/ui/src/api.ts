@@ -686,41 +686,17 @@ export async function saveConfig(text: string, signal?: AbortSignal): Promise<Sa
 
 // --- Sync API --------------------------------------------------------------
 
-// A source is any config step with no declared inputs (a fringe
-// step — what a sync can target), identified by its step id.
-export type SyncSource = {
+/// A request as `GET /api/requests` serves it: a sync of `roots` and
+/// everything downstream of them. Mirrors `datalib_http::RequestView`.
+export type SyncRequest = {
   id: string;
-};
-
-export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
-// The only kind enqueued today: one DAG run over the whole config
-// (`source_ids` optionally narrows it to selected sources).
-export type SyncJobKind = "all" | "reset";
-
-export type SyncJob = {
-  id: string;
-  // Free-form, not SyncJobKind: historical rows may carry retired
-  // kinds ("download" / "ingest" / "render").
-  kind: string;
-  // Comma-separated source-step ids, or null for the whole config.
-  source_ids: string | null;
-  state: SyncJobState;
-  progress_pct: number | null;
-  progress_msg: string | null;
-  error: string | null;
-  // UTC, with the server's offset beside them in `tz_offset`.
-  created_at_utc: string;
-  started_at_utc: string | null;
-  finished_at_utc: string | null;
-  tz_offset?: string | null;
-  parent_job_id?: string | null;
-  // Whether the job still holds the runner — queued, running, or told
-  // to stop and not yet stopped. The server's answer
-  // (`SyncJobRow::is_active`); nothing here derives it from `state`.
-  active: boolean;
-  // Told to stop, and still winding down.
-  stopping: boolean;
-  pid?: number | null;
+  roots: string[];
+  /// Who opened it: `ui`, `cli`, or the name an agent passed.
+  by: string;
+  /// `open`, or how it ended.
+  state: "open" | "done" | "failed" | "stopped" | "closed";
+  stop_requested_by: string | null;
+  failed_step: string | null;
 };
 
 export type StoragePart = { label: string; bytes: number };
@@ -909,7 +885,10 @@ export type ManageRow = {
   actions: Action[];
   seeds: string[];
   reveal_blocked: string | null;
-  stop_job_id: string | null;
+  /// The open request this row is being run for: what Stop stops.
+  stop_request_id: string | null;
+  /// Who paused this step, while it is paused.
+  paused_by: string | null;
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
@@ -1005,71 +984,48 @@ export function fetchTreeHistory(tree: string, signal?: AbortSignal): Promise<Tr
   return getJson<TreeHistory>(`/api/pipeline/history?tree=${encodeURIComponent(tree)}`, signal);
 }
 
-export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
-  return getJson<SyncSource[]>("/api/sync/sources", signal);
+/// A refused call's reason, as the server gave it.
+async function refusal(url: string, r: Response): Promise<Error> {
+  const detail = (await r.text().catch(() => "")).trim();
+  return new Error(detail || `POST ${url} → ${r.status}`);
 }
 
-// One push update for a job: an *unnamed* frame on
-// `GET /api/sync/stream`. The worker + enqueue/cancel handlers emit
-// these the instant they write a job's state, so the UI updates without
-// polling. What a running job's steps are doing is not here: the runner
-// writes that to the run store, and its writes arrive as `table_changed`
-// root frames naming the datasets they feed (`manage.rows`, `log`, …),
-// on which a page refetches what it reads.
-export type JobProgressEvent = {
-  id: string;
-  kind: string;
-  source_ids: string | null;
-  state: SyncJobState;
-  // As on `SyncJob`: whether the job still holds the runner after this
-  // event.
-  active: boolean;
-  progress_msg: string | null;
-};
-
-// The stream itself is opened by `@/live`, not here: it multiplexes one
-// connection across every subscriber, and owns the reconnect and
-// stall-detection policy. This module keeps only the wire types.
-
-export function fetchActiveJobs(signal?: AbortSignal): Promise<SyncJob[]> {
-  return getJson<SyncJob[]>("/api/sync/jobs", signal);
-}
-
-export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  return getJson<SyncJob[]>(`/api/sync/jobs/all?${params.toString()}`, signal);
-}
-
-export async function enqueueJob(
-  req: { kind: SyncJobKind; source_ids?: string | null },
-  signal?: AbortSignal,
-): Promise<SyncJob> {
-  const r = await fetch("/api/sync/jobs", {
+async function post(url: string, body?: unknown): Promise<Response> {
+  const r = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-    signal,
+    headers: body === undefined ? {} : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!r.ok) {
-    let detail = "";
-    try {
-      detail = await r.text();
-    } catch {
-      // ignore
-    }
-    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/sync/jobs → ${r.status}`);
-  }
-  return (await r.json()) as SyncJob;
+  if (!r.ok) throw await refusal(url, r);
+  return r;
 }
 
-export async function cancelJob(id: string, signal?: AbortSignal): Promise<void> {
-  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/cancel`, {
-    method: "POST",
-    signal,
-  });
-  if (!r.ok) {
-    throw new Error(`POST /api/sync/jobs/${id}/cancel → ${r.status}`);
-  }
+/// The open requests, then the newest closed ones.
+export function fetchRequests(signal?: AbortSignal): Promise<SyncRequest[]> {
+  return getJson<SyncRequest[]>("/api/requests", signal);
+}
+
+/// Sync `roots` and everything downstream of them; none syncs every source.
+export async function openRequest(roots: string[]): Promise<SyncRequest> {
+  return (await (await post("/api/requests", { roots })).json()) as SyncRequest;
+}
+
+export async function stopRequest(id: string): Promise<void> {
+  await post(`/api/requests/${encodeURIComponent(id)}/stop`);
+}
+
+export async function pauseStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/pause`);
+}
+
+export async function resumeStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/resume`);
+}
+
+/// Drop what the targets wrote; answers once it is done. Refused while a
+/// sync runs.
+export async function resetSteps(targets: string[]): Promise<void> {
+  await post("/api/reset", { targets });
 }
 
 // --- The run store -----------------------------------------------------------
@@ -1176,29 +1132,12 @@ export function fetchRuns(
   return getJson<RunInfo[]>(`/api/runs${q ? `?${q}` : ""}`, signal);
 }
 
-// A run's log lines, oldest first. Tail by remembering the last `seq`
-// seen and passing it as `afterSeq` on the next `log` frame.
-export function fetchRunLog(
-  run: string,
-  opts: { step?: string; afterSeq?: number; limit?: number } = {},
-  signal?: AbortSignal,
-): Promise<RunLogLine[]> {
-  const params = new URLSearchParams();
-  if (opts.step) params.set("step", opts.step);
-  if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
-  if (opts.limit != null) params.set("limit", String(opts.limit));
-  const q = params.toString();
-  return getJson<RunLogLine[]>(
-    `/api/runs/${encodeURIComponent(run)}/log${q ? `?${q}` : ""}`,
-    signal,
-  );
-}
-
 // Log lines across every run the store holds, or one run's with `run`;
 // `step` narrows to a step. `q` is the search bar, in the grammar every
 // grid shares (`level:warn -target:sqlx "history"`); a key a log line
-// does not have is a 400 whose text says so. Tails with `afterSeq` the
-// way `fetchRunLog` does: `seq` is monotone across runs too.
+// does not have is a 400 whose text says so. Tail by remembering the
+// last `seq` seen and passing it as `afterSeq` on the next `log` frame:
+// `seq` is monotone across runs.
 export function fetchLog(
   opts: {
     run?: string;
@@ -1240,17 +1179,6 @@ async function fetchLogLines(url: string, signal?: AbortSignal): Promise<RunLogL
   if (r.status === 400) throw new Error((await r.text()).trim());
   if (!r.ok) throw new Error(`${url} → ${r.status}`);
   return (await r.json()) as RunLogLine[];
-}
-
-/// One job by id — a run the commit history names, which may be older
-/// than the list the Manage screen holds. Null when the app never ran
-/// it, without the toast `getJson` would raise: a run started from a
-/// terminal is an ordinary answer here, not a failure.
-export async function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob | null> {
-  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}`, { signal });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`GET /api/sync/jobs/${id} → ${r.status}`);
-  return (await r.json()) as SyncJob;
 }
 
 // --- Authoring the `user` namespace ----------------------------------------

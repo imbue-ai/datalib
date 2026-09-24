@@ -7,7 +7,6 @@
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
 <data_root>/unified_index/qmd_index/              the qmd index (plain SQLite inside)
 <data_root>/system/feedback.doltlite_db           filed feedback
-<data_root>/system/jobs.doltlite_db               the UI's record of each sync it asked for
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
                                                   load, and the URLs fetched for it
@@ -23,8 +22,9 @@
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and pauses: the
                                                   mailbox the loop reads; and the loop's
-                                                  record — each step's last run and
-                                                  last success, each sink's version,
+                                                  record — each step's state now, its
+                                                  last run and last success, each
+                                                  sink's version,
                                                   the run in flight, every process it
                                                   started (plain SQLite; anyone writes
                                                   intent, only the loop's holder writes
@@ -47,7 +47,7 @@ One writer per file, and it is load-bearing: doltlite's working set is
 per *file and branch* and shared across processes, so two writers that
 land on one branch commit each other's in-flight rows. The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
-the index; `datalib-http` owns feedback, jobs, usage and remote media;
+the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
@@ -78,17 +78,6 @@ whatever else is dirty in the same file, which is why feedback has a
 file of its own with one writer. Bazel stamps the binary with the git
 hash via `tools/workspace_status.sh`; cargo builds get it from
 `datalib/backend/core/build.rs`.
-
-**Jobs.** The UI's record of each sync it asked for, never committed.
-A sync job and its request in `supervisor.sqlite` share an id:
-`POST /api/sync/jobs` writes both, and the loop the server runs keeps the
-job in step with the request — `running` when the loop takes it on, with
-`parent_job_id` naming that busy period's run, then `done`, `failed` or
-`canceled` as the request ends (a stopped one once its steps have
-exited). A reset job has no request: it needs the root to itself, and
-the server runs it between busy periods. On boot, a job the last server
-left active is set to match its request, which is still open for the
-loop to run (`http/src/supervisor.rs`).
 
 **Usage** is the one store nothing ever commits. It is a timeseries —
 `datalib-http` walks the root every five seconds *while a run holds it*

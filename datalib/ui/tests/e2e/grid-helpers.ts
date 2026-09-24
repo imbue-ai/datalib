@@ -432,45 +432,6 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
   }, id);
 }
 
-/// Has the runner closed its record for the run in flight?
-///
-/// `finished_at` is written by the runner when the run ends, so it is a
-/// fact rather than an inference — unlike `run.live`, which the endpoint
-/// derives by probing the lock. A root that has never run reports no run
-/// at all, which counts as closed: there is nothing in flight to be
-/// wrong about.
-/// What the backend says about the run right now, for a failure that
-/// would otherwise report only a status word.
-///
-/// The three fields that decide `Interrupted` are `run.live` (the
-/// backend's lock probe), `run.finished_at`, and the step's
-/// `current_state`; printing all three separates "a run really died"
-/// from "the lock probe lost its race" without opening a trace.
-async function dumpRunnerState(page: Page, id: string, why: string): Promise<void> {
-  try {
-    const dag = await (await page.request.get("/api/dag")).json();
-    const step = (dag.steps ?? []).find((s: { id: string }) => s.id === id);
-    console.warn(
-      `[e2e] ${why} for ${id}: run=${JSON.stringify(dag.run ?? null)} ` +
-        `current_state=${JSON.stringify(step?.current_state ?? null)} ` +
-        `last_run=${JSON.stringify(step?.last_run ?? null)}`,
-    );
-  } catch (e) {
-    console.warn(`[e2e] ${why} for ${id}: could not read /api/dag: ${e}`);
-  }
-}
-
-async function runIsClosed(page: Page): Promise<boolean> {
-  const dag = await (await page.request.get("/api/dag")).json();
-  // `ok: false` is the endpoint failing to read the root at that
-  // instant — its record mid-write, say — and it then carries no run
-  // at all. That is not a closed run; it is no answer. Reading it as
-  // closed is how a healthy `Sync everything` once settled as
-  // "Interrupted" on CI, with the dump showing every field null.
-  if (dag.ok === false) return false;
-  return !dag.run || dag.run.finished_at != null;
-}
-
 /// A row's status and Last-synced stamp, read from one paint of it. Read
 /// one after the other, the two can come from different paints: a sync
 /// the loop takes on at once can finish between the reads, and "Stopped"
@@ -498,48 +459,23 @@ async function settleRowOnly(
   timeout: number,
 ): Promise<string> {
   let last = "(no status)";
-  try {
-    await expect
-      .poll(
-        async () => {
-          const reading = await statusAndStampOf(page, id);
-          last = reading.status ?? "(no status)";
-          const stamp = reading.stamp;
-          const done = TERMINAL.test(last) && stamp !== before;
-          // "Interrupted" is the one terminal status the UI INFERS rather
-          // than reads: `stepStatus` reports it when a step says
-          // `running` on a run with no `finished_at` while `GET /api/dag`
-          // says no runner holds the lock — and that endpoint answers by
-          // taking the lock itself, which its own comment calls "racy by
-          // nature". So the instant a runner is taking or dropping the
-          // root looks like a run that died, and a settle that believes it
-          // returns "Interrupted" for a healthy `Sync everything`.
-          if (done && last === "Interrupted") {
-            if (!(await runIsClosed(page))) return `${last} @ ${stamp} (run record still open)`;
-            // The run has closed, so the next repaint says what really
-            // happened; a verdict inferred before the close is not it.
-            return `${last} @ ${stamp} (waiting for the grid to catch up with the closed run)`;
-          }
-          return done ? "finished" : `${last} @ ${stamp}`;
-        },
-        {
-          timeout,
-          intervals: [200],
-          message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
-        },
-      )
-      .toBe("finished");
-  } finally {
-    // The poll never returns on "Interrupted", so ending on it means
-    // the poll timed out on a row that stayed that way: leave behind
-    // the evidence that says whether a run really died — Playwright
-    // puts test stdout in the report and in bazel's test log.
-    if (last === "Interrupted") {
-      await dumpRunnerState(page, id, "settle timed out on Interrupted");
-    }
-  }
+  await expect
+    .poll(
+      async () => {
+        const reading = await statusAndStampOf(page, id);
+        last = reading.status ?? "(no status)";
+        const stamp = reading.stamp;
+        return TERMINAL.test(last) && stamp !== before ? "finished" : `${last} @ ${stamp}`;
+      },
+      {
+        timeout,
+        intervals: [200],
+        message: `${id} never finished a run newer than ${before ?? "(never run)"}`,
+      },
+    )
+    .toBe("finished");
   // The value the poll matched, never a fresh read: the row can be
-  // claimed by the next job between the two, and the function would
+  // wanted by the next request between the two, and the function would
   // then return "Queued" from a call whose contract is a terminal
   // status.
   return last;

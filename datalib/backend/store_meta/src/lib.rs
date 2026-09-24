@@ -46,7 +46,6 @@ pub enum StoreKind {
     /// The grid index (`unified_index/grid_index`).
     GridIndex,
     Feedback,
-    Jobs,
     Usage,
     /// `system/remote_media.doltlite_db`: what remote media a person
     /// let a document load, and the URLs fetched into the download CAS.
@@ -349,7 +348,7 @@ mod tests {
     async fn a_newer_builds_spelling_is_none_not_a_guess() {
         let td = tempfile::tempdir().unwrap();
         let p = pool(&td.path().join("s.db")).await;
-        write(&p, StoreKind::Jobs, "h", 0).await.unwrap();
+        write(&p, StoreKind::Usage, "h", 0).await.unwrap();
         sqlx::query("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")
             .execute(&p)
             .await

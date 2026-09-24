@@ -43,7 +43,6 @@ index). A step's function is the directory it writes:
     ├── supervisor.sqlite           # sync requests, pauses, and the loop's record (plain SQLite)
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
-    ├── jobs.doltlite_db            # sync job queue + history
     └── usage.doltlite_db           # bytes-on-disk timeseries
 ```
 
@@ -141,58 +140,74 @@ steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
 
 **You can sync while the app, or another `datalib-dag`, is syncing the
-same root.** A sync is a request in `<data_root>/system/supervisor.sqlite`.
-While the app is open it runs every sync, yours included; otherwise, if
-nothing else is running the root, your `datalib-dag` runs it. Either way,
-if something else is running it, yours hands it the request, says
-`following request <id>`, and waits for it — your source runs beside
-theirs, not after. Either way
-it exits with *your* request's outcome: 0 done, 2 failed, 130 stopped,
-and Ctrl-C stops your request only. Pass `--by <name>` so the request
-says who asked (`sqlite3 system/supervisor.sqlite 'select * from
-requests'`). `--reset` is the exception: it empties stores, so it
-refuses while anything else runs the loop — always, while the app is
-open; reset from the app then (below).
+same root.** A sync is a *request*: a row in
+`<data_root>/system/supervisor.sqlite` naming the steps to sync (its
+*roots*; everything downstream of them comes too) and who asked. One
+process runs the loop that serves requests — the app while it is open,
+otherwise the first `datalib-dag` to need one — and every other
+`datalib-dag` hands its request to that loop, says `following request
+<id>`, and waits for it. Your source runs beside theirs, not after. It
+exits with *your* request's outcome: 0 done, 2 failed, 130 stopped, and
+Ctrl-C stops your request only. Pass `--by <name>` so the request says
+who asked.
 
-To steer what is running — yours, the app's, anyone's — without SQL:
+There are four verbs, and each is the same row written two ways: from
+a shell with no server needed, or over HTTP while the app is up.
+
+| verb | CLI | HTTP |
+|---|---|---|
+| sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source) |
+| stop a sync | `datalib-dag stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
+| pause a step | `datalib-dag pause <config> <step> --by claude` | `POST /api/steps/<step>/pause {"by": "claude"}` (`/` in the id as `%2F`) |
+| resume it | `datalib-dag resume <config> <step>` | `POST /api/steps/<step>/resume` |
+
+`<config>` is `<data_root>/config.toml`. A stop, a pause and a resume
+take effect within a second. A pause stops a step that is running,
+keeps it from starting until it is resumed, and makes whatever reads it
+wait. It does not hold a sync open: a sync whose only work is a paused
+step closes without running it. `POST /api/requests` answers once the
+loop has taken the request on, with the request's `id`.
+
+**Watching.** `GET /api/requests` lists the open requests, then the
+newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
+how it ended: `done`, `failed`, `stopped`). `datalib-dag status
+<config>` prints the same from the shell, with the pauses and the steps
+running now. What each step is doing is in the loop's record, which the
+Manage screen's Status column reads directly:
 
 ```sh
-datalib-dag status <data_root>/config.toml                    # open requests, pauses, running steps
-datalib-dag stop   <data_root>/config.toml <request-id> --by claude
-datalib-dag pause  <data_root>/config.toml slack/ingest --by claude
-datalib-dag resume <data_root>/config.toml slack/ingest
+sqlite3 <data_root>/system/supervisor.sqlite \
+  'select step, state, state_detail, paused_by, request from steps'
 ```
 
-Each writes a row and returns at once; whatever is running the loop acts
-on it within a second (a pause stops a running step and keeps it from
-starting until resumed; it does not hold a sync open). `status` prints a
-line per open request (`request <id>  by <who>  roots <ids>`), per
-pause (`paused <step>  by <who>`) and per step running now (`running
-<step>  since <utc>  in run <id>`). **Don't resume what a person paused
-without saying so** — `status` says who did.
+`state` is `running`, `waiting` (on what: `state_detail`), `paused`,
+`blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
+the open request it is being run for. Each request and pause records
+who made it, so the screen shows "paused by claude" or "Stop the sync by
+claude". **Don't resume or stop what a person started without saying
+so.**
 
-Via the server instead: `POST /api/sync/jobs` enqueues —
-`{"kind":"all"}` with an optional comma-separated `source_ids`, or
-`{"kind":"reset","source_ids":"slack/ingest,slack/render_markdown"}`
-for `datalib-dag --reset` of those steps (`+blobs` on an ingest step
-takes its attachments with it), which the Manage screen offers as "Reset (preserve attachments)…" and
-"Reset (drop attachments)…"
-on a row's right-click menu — and `/api/sync/jobs/{id}/cancel`
-cancels; `GET /api/sync/stream` pushes a
-frame when a job starts or ends and whenever the run store moves. A
-job's id is its request's id, so `datalib-dag status` and `stop` work on
-it too. The
-run store is what to read for what happened: `GET /api/runs` lists
-runs (a job's `parent_job_id` is its run: the app runs every sync that
-arrives while one is going in the same run), `/api/runs/{run}/steps` gives every
-step's state and metrics, and `/api/runs/{run}/log?step=&after_seq=`
-is the log, tailable by `seq`. `GET /api/log?q=` is the same log
-across every run, in the search bar's grammar — `level:warn
--target:sqlx "history"` — and `process:http` narrows it to what the
-server itself said (its sync loop, the applets, requests that failed),
-which the app's **Logs** shows when you pick this server's launch. All of it is
+**Resetting** drops what a step wrote (its store; with `+blobs`, an
+ingest step's attachments too), keeping the doltlite history, so the
+next sync does its work from the start. It needs the root to itself, so
+it runs only when nothing is syncing. With the app up, use `POST
+/api/reset {"targets": ["slack/ingest", "slack/render_markdown+blobs"]}`:
+it answers once the reset is done, and refuses while a sync runs. The
+Manage screen offers the same on a row's right-click menu. With no app
+up, use `datalib-dag --reset`.
+
+**Logs.** The run store is where to read what happened.
+`GET /api/runs` lists runs: a run is one stretch of the loop being busy,
+and every request served in that stretch is in it.
+`/api/runs/{run}/steps` gives every step's state and metrics, and
+`/api/runs/{run}/log?step=&after_seq=` is the log, which you can tail
+by `seq`. `GET /api/log?q=` is the same log across every run, in the
+search bar's grammar (`level:warn -target:sqlx "history"`), and
+`process:http` narrows it to what the server itself said (its sync
+loop, the applets, requests that failed). All of it is
 `system/runs/runs.sqlite`, plain SQLite, so `sqlite3` reads it directly
-too.
+too. `GET /api/sync/stream` is a server-sent-event stream that pushes a
+`root` frame whenever any of this moves.
 
 ## Reading the mirrored data
 
@@ -325,9 +340,10 @@ document.
   403s despite a fresh cookie usually mean a flagged IP/UA; wait or
   change networks.
 - **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
-  plain SQLite. `select step, reads, last_status, last_error from steps`
-  gives each step's input versions at its last success and how it last
-  ended; `select * from sinks` the version each tree was published at.
+  plain SQLite. `select step, state, state_detail from steps` says what
+  each step is doing and what it waits on; `select step, reads,
+  last_status, last_error from steps` gives each step's input versions
+  at its last success and how it last ended; `select * from sinks` the version each tree was published at.
   A step re-runs when an input version moved (download steps always run
   — their input is a remote service). `select step, started_at_utc from
   invocations where outcome is null` is what is running now.

@@ -7,13 +7,12 @@ export const CONFIG_MUTATING = [
   "data-sources-streaming",
   "data-sources-control",
   "data-sources-name",
-  // Syncs, which write the root's stores and job queue.
+  // Syncs, which write the root's stores.
   "data-sources-layout",
   "data-sources-menu",
   "grid-source-id",
   // Writes the remote-media allow-list, not the config.
   "remote-images-load",
-  "sources-view",
   "wizard-select",
   "wizard-email",
   "wizard-slack",

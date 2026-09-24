@@ -10,7 +10,6 @@
 //! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
 use app_schema::feedback::FeedbackRow;
-use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -21,6 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -53,21 +53,16 @@ pub struct AppState {
     /// Data root on disk — the `accounts.json` lookup and the config
     /// path. The SQL store is reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// The two stores this process owns and writes: filed feedback and
-    /// the sync job queue, one doltlite file each.
+    /// The stores this process owns and writes: filed feedback, disk
+    /// usage and remote media.
     pub app: DynAppRepo,
-    /// Fan-out channel for live sync-job progress. The loop's host (and
-    /// the enqueue/cancel handlers) publish [`supervisor::ProgressEvent`]s
-    /// here; `GET /api/sync/stream` subscribes and pushes them to the UI
-    /// over SSE, so progress is realtime push, not poll.
-    pub progress_tx: supervisor::ProgressTx,
     /// The supervisor loop this server runs: whether a sync is running,
-    /// and the store requests are written to.
+    /// and the store intent is written to.
     pub sync: supervisor::SyncControl,
-    /// Fan-out channel for everything that changes in the data root *without*
-    /// a job behind it — the config, the runner's record, the component store
-    /// — plus a heartbeat, so a client can tell an idle stream from a dead
-    /// one. Merged into the same SSE response as `progress_tx`.
+    /// Fan-out channel for everything that changes in the data root — the
+    /// config, the loop's record, the component store — plus a heartbeat,
+    /// so a client can tell an idle stream from a dead one.
+    /// `GET /api/sync/stream` pushes it over SSE.
     pub root_tx: watch::RootTx,
     /// The configured applets: their components, their gallery
     /// entries, the module store behind `/modules/`, and the
@@ -186,10 +181,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
         .route("/api/pipeline/history", get(history::tree_history))
-        .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
-        .route("/api/sync/jobs/all", get(sync_jobs_all))
-        .route("/api/sync/jobs/{id}", get(sync_job_get))
-        .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
+        .route("/api/requests", get(requests_list).post(request_open))
+        .route("/api/requests/{id}/stop", post(request_stop))
+        .route("/api/steps/{id}/pause", post(step_pause))
+        .route("/api/steps/{id}/resume", post(step_resume))
+        .route("/api/reset", post(reset_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -702,21 +698,6 @@ pub struct SourceInfo {
     pub id: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct EnqueueJobRequest {
-    pub kind: String,
-    /// Comma-separated source-step ids to narrow the run to. Empty or
-    /// absent syncs the whole config.
-    #[serde(default, alias = "source_name")]
-    pub source_ids: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct JobsAllParams {
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
 // --- Config / setup --------------------------------------------------------
 
 fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config::ConfigCheck> {
@@ -1222,6 +1203,19 @@ pub struct DagStepRun {
     pub error: Option<String>,
 }
 
+impl From<&datalib_dag::supervisor::record::LastRun> for DagStepRun {
+    fn from(r: &datalib_dag::supervisor::record::LastRun) -> Self {
+        DagStepRun {
+            run_id: r.run_id.clone(),
+            started_at: r.started_at.clone(),
+            finished_at: r.finished_at.clone(),
+            status: r.status.clone(),
+            attempts: r.attempts,
+            error: r.error.clone(),
+        }
+    }
+}
+
 /// The run in flight, or the one that finished last.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagRunInfo {
@@ -1251,11 +1245,9 @@ pub struct DagRecord {
     pub run: Option<DagRunInfo>,
     /// step id → its state in the run `run` describes.
     pub states: std::collections::BTreeMap<String, String>,
-    /// step id → what it did the last time a run reached it.
-    pub last_runs: std::collections::HashMap<String, DagStepRun>,
-    /// step id → when a run last left it current. Absent for a step
-    /// that has never succeeded.
-    pub last_successes: std::collections::HashMap<String, String>,
+    /// step id → the loop's record of it: its state now, what it did the
+    /// last time a run reached it, when it last succeeded.
+    pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → the errors and warnings its store held the last time
@@ -1303,31 +1295,6 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         _ => Default::default(),
     };
 
-    let last_runs = state
-        .steps
-        .iter()
-        .filter_map(|(id, st)| st.last_run.as_ref().map(|r| (id.clone(), r)))
-        .map(|(id, r)| {
-            (
-                id,
-                DagStepRun {
-                    run_id: r.run_id.clone(),
-                    started_at: r.started_at.clone(),
-                    finished_at: r.finished_at.clone(),
-                    status: r.status.clone(),
-                    attempts: r.attempts,
-                    error: r.error.clone(),
-                },
-            )
-        })
-        .collect();
-
-    let last_successes = state
-        .steps
-        .iter()
-        .filter_map(|(id, st)| Some((id.clone(), st.last_success_at.clone()?)))
-        .collect();
-
     let problems =
         manage::counts_by_step(&datalib_runs::latest_metric(root, datalib_problems::METRIC).await);
     let documents = manage::documents_by_step(
@@ -1337,8 +1304,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     DagRecord {
         run,
         states,
-        last_runs,
-        last_successes,
+        steps: state.steps,
         progress,
         problems,
         documents,
@@ -1355,8 +1321,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
     let DagRecord {
         run,
         states,
-        last_runs,
-        last_successes: _,
+        steps: records,
         progress,
         problems: _,
         documents: _,
@@ -1391,7 +1356,10 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
                         .iter()
                         .map(|&d| graph.steps[d].id.clone())
                         .collect(),
-                    last_run: last_runs.get(&sp.id).cloned(),
+                    last_run: records
+                        .get(&sp.id)
+                        .and_then(|r| r.last_run.as_ref())
+                        .map(DagStepRun::from),
                     current_state: states.get(&sp.id).cloned(),
                     progress: progress.get(&sp.id).cloned(),
                 }
@@ -1511,120 +1479,190 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-/// A job as the API serves it: the row, plus two verdicts on its
-/// `state` that every reader needs and none should compute for itself.
-/// `active` is [`SyncJobRow::is_active`] (a job told to stop is active
-/// until its steps have exited and it is stamped finished); `stopping`
-/// is that wind-down.
+// --- Intent: requests, pauses, resets (`docs/dev/plans/supervisor.md` §2.9) --
+
+/// A request as the API serves it.
 #[derive(Debug, Serialize)]
-pub struct SyncJobView {
-    #[serde(flatten)]
-    pub row: SyncJobRow,
-    pub active: bool,
-    pub stopping: bool,
+pub struct RequestView {
+    pub id: String,
+    /// The steps it syncs, with everything downstream of them.
+    pub roots: Vec<String>,
+    /// Who opened it: `ui`, `cli`, or the name an agent passed.
+    pub by: String,
+    /// `open`, or how it ended: `done`, `failed` or `stopped` (`closed` for
+    /// an outcome a newer build wrote).
+    pub state: &'static str,
+    pub stop_requested_by: Option<String>,
+    pub failed_step: Option<String>,
 }
 
-impl From<SyncJobRow> for SyncJobView {
-    fn from(row: SyncJobRow) -> Self {
-        SyncJobView {
-            active: row.is_active(),
-            stopping: row.is_stopping(),
-            row,
+impl From<RequestRow> for RequestView {
+    fn from(r: RequestRow) -> Self {
+        RequestView {
+            state: match r.closed {
+                None => "open",
+                Some(Some(outcome)) => outcome.as_str(),
+                Some(None) => "closed",
+            },
+            id: r.id,
+            roots: r.roots,
+            by: r.opened_by,
+            stop_requested_by: r.stop_requested_by,
+            failed_step: r.failed_step,
         }
     }
 }
 
-async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobView>>, StatusCode> {
-    s.app
-        .list_jobs(true, 200)
-        .await
-        .map(|rows| Json(rows.into_iter().map(SyncJobView::from).collect()))
-        .map_err(repo_err_to_status)
+/// Who is asking: `{"by": "claude"}`, or no body at all for the UI.
+fn by_of(body: &[u8]) -> Result<String, Refusal> {
+    #[derive(Deserialize)]
+    struct By {
+        by: Option<String>,
+    }
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok("ui".to_string());
+    }
+    let by: By = serde_json::from_slice(body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("not a JSON body: {e}")))?;
+    Ok(by.by.unwrap_or_else(|| "ui".to_string()))
 }
 
-async fn sync_jobs_all(
+#[derive(Debug, Deserialize)]
+struct OpenRequest {
+    /// Step ids; empty syncs every source.
+    #[serde(default)]
+    roots: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetRequest {
+    /// Step ids, each optionally `+blobs`.
+    targets: Vec<String>,
+}
+
+type Refusal = (StatusCode, String);
+
+fn internal(e: anyhow::Error) -> Refusal {
+    tracing::error!("intent: {e:#}");
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+}
+
+async fn mailbox(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
+    s.sync.mailbox().await.map_err(internal)
+}
+
+/// `GET /api/requests` — the open requests, then the newest closed ones.
+async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView>>, Refusal> {
+    let rows = mailbox(&s)
+        .await?
+        .recent_requests(100)
+        .await
+        .map_err(internal)?;
+    Ok(Json(rows.into_iter().map(RequestView::from).collect()))
+}
+
+/// `POST /api/requests` — sync `roots` and everything downstream of them.
+/// Refused, with the reason, when the config cannot run or lacks a root.
+async fn request_open(
     State(s): State<AppState>,
-    Query(p): Query<JobsAllParams>,
-) -> Result<Json<Vec<SyncJobView>>, StatusCode> {
-    let limit = p.limit.unwrap_or(200).min(10_000);
-    s.app
-        .list_jobs(false, limit)
-        .await
-        .map(|rows| Json(rows.into_iter().map(SyncJobView::from).collect()))
-        .map_err(repo_err_to_status)
+    Json(req): Json<OpenRequest>,
+) -> Result<Json<RequestView>, Refusal> {
+    let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
+    let roots = if req.roots.is_empty() {
+        source_ids(&checked)
+    } else {
+        req.roots
+    };
+    if let Some(unknown) = roots.iter().find(|r| !checked.graph.by_id.contains_key(*r)) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("the config has no step {unknown:?}"),
+        ));
+    }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    let store = mailbox(&s).await?;
+    let id = store.open_request(&roots, &by).await.map_err(internal)?;
+    s.sync.wake();
+    // Answered once the loop has taken it on, so rows read after this
+    // show its steps as wanted. A loop mid-sync looks every quarter
+    // second; one whose config lacks a root leaves it for the next sync.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !store.taken_on(&id).await.map_err(internal)? && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Ok(Json(RequestView {
+        id,
+        roots,
+        by,
+        state: "open",
+        stop_requested_by: None,
+        failed_step: None,
+    }))
 }
 
-async fn sync_job_get(
+/// `POST /api/requests/{id}/stop` — asking, not doing: the loop stops the
+/// steps only this request wants, and closes it.
+async fn request_stop(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<SyncJobView>, StatusCode> {
-    match s.app.get_job(&id).await {
-        Ok(Some(row)) => Ok(Json(SyncJobView::from(row))),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => Err(repo_err_to_status(e)),
+    body: axum::body::Bytes,
+) -> Result<StatusCode, Refusal> {
+    let store = mailbox(&s).await?;
+    if store.request(&id).await.map_err(internal)?.is_none() {
+        return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     }
+    let by = by_of(&body)?;
+    store.request_stop(&id, &by).await.map_err(internal)?;
+    s.sync.wake();
+    Ok(StatusCode::NO_CONTENT)
 }
 
-async fn sync_enqueue(
+/// `POST /api/steps/{id}/pause` — the step is not started until resumed,
+/// and one running is stopped; what reads it waits.
+async fn step_pause(
     State(s): State<AppState>,
-    Json(req): Json<EnqueueJobRequest>,
-) -> Result<Json<SyncJobView>, StatusCode> {
-    // Validate the discriminator server-side; the DB column is a
-    // VARCHAR with no enum constraint so we'd otherwise accept
-    // anything. `All` (one DAG run, `source_ids` optionally selecting
-    // a subset) and `Reset` (which needs its targets) are the live
-    // kinds — the legacy fixed-phase kinds died with the fixed-phase
-    // orchestrator and are rejected, though historical rows keep
-    // whatever kind they were written with.
-    let kind = JobKind::parse(&req.kind).ok_or(StatusCode::BAD_REQUEST)?;
-    let targets = req
-        .source_ids
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty());
-    match kind {
-        JobKind::All => {}
-        JobKind::Reset if targets => {}
-        _ => return Err(StatusCode::BAD_REQUEST),
-    }
-    let row = s
-        .app
-        .enqueue_job(kind, req.source_ids.as_deref())
-        .await
-        .map_err(repo_err_to_status)?;
-    // Push the new (pending) job so SSE clients show it immediately:
-    // before its request is written, so the loop's "running" cannot
-    // arrive ahead of it.
-    let _ = s.progress_tx.send(supervisor::ProgressEvent::new(
-        &row,
-        row.job_state().unwrap_or(JobState::Pending),
-        row.progress_msg.clone(),
-    ));
-    // A reset has no request: it needs the root to itself, and the host
-    // runs it between syncs.
-    if kind == JobKind::Reset {
-        s.sync.wake();
-        return Ok(Json(SyncJobView::from(row)));
-    }
-    if let Err(why) = supervisor::open_request_for(&s.sync, &row).await {
-        tracing::warn!(job = %row.id, "sync: could not start it: {why}");
-        s.app
-            .finish_job(&row.id, JobState::Failed, Some(&why))
-            .await
-            .map_err(repo_err_to_status)?;
-        let failed = s
-            .app
-            .get_job(&row.id)
-            .await
-            .map_err(repo_err_to_status)?
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        let _ = s.progress_tx.send(supervisor::ProgressEvent::new(
-            &failed,
-            JobState::Failed,
-            Some(why),
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, Refusal> {
+    let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
+    if !checked.graph.by_id.contains_key(&id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("the config has no step {id:?}"),
         ));
-        return Ok(Json(SyncJobView::from(failed)));
     }
-    Ok(Json(SyncJobView::from(row)))
+    let by = by_of(&body)?;
+    mailbox(&s).await?.pause(&id, &by).await.map_err(internal)?;
+    s.sync.wake();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/steps/{id}/resume`.
+async fn step_resume(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, Refusal> {
+    mailbox(&s).await?.resume(&id).await.map_err(internal)?;
+    s.sync.wake();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/reset` — drop what the targets wrote, keeping the history.
+/// Answers once it is done; refused while a sync runs.
+async fn reset_steps(
+    State(s): State<AppState>,
+    Json(req): Json<ResetRequest>,
+) -> Result<StatusCode, Refusal> {
+    if req.targets.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "nothing to reset".into()));
+    }
+    s.sync
+        .reset(&req.targets)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn sync_stream(
@@ -1632,78 +1670,20 @@ async fn sync_stream(
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     use tokio::sync::broadcast::error::RecvError;
 
-    /// One broadcast receiver as a stream of SSE frames, dropping the
-    /// gap when a slow client lags rather than disconnecting it.
-    fn frames<T: Clone + Send + serde::Serialize + 'static>(
-        rx: tokio::sync::broadcast::Receiver<T>,
-        name: Option<&'static str>,
-    ) -> impl futures::Stream<Item = Result<Event, std::convert::Infallible>> {
-        futures::stream::unfold(rx, move |mut rx| async move {
-            loop {
-                match rx.recv().await {
-                    Ok(ev) => {
-                        let data = serde_json::to_string(&ev).unwrap_or_default();
-                        let event = match name {
-                            Some(n) => Event::default().event(n).data(data),
-                            None => Event::default().data(data),
-                        };
-                        return Some((Ok(event), rx));
-                    }
-                    // Slow consumer dropped some events; keep going
-                    // with the next.
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => return None,
+    // A slow client that lags drops the gap rather than the connection.
+    let stream = futures::stream::unfold(s.root_tx.subscribe(), |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    let data = serde_json::to_string(&frame).unwrap_or_default();
+                    return Some((Ok(Event::default().event("root").data(data)), rx));
                 }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
             }
-        })
-    }
-
-    let stream = futures::stream::select(
-        frames(s.progress_tx.subscribe(), None),
-        frames(s.root_tx.subscribe(), Some("root")),
-    );
+        }
+    });
     Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-async fn sync_job_cancel(
-    State(s): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let job = s.app.get_job(&id).await.map_err(repo_err_to_status)?;
-    let was_running = job
-        .as_ref()
-        .is_some_and(|row| row.job_state() == Some(JobState::Running));
-    s.app
-        .request_cancel_job(&id)
-        .await
-        .map_err(repo_err_to_status)?;
-    // The job row says "stopping"; the request is what the loop acts on.
-    if job.is_some_and(|row| row.kind != JobKind::Reset.as_str()) {
-        let mailbox = s.sync.mailbox().await.map_err(|e| {
-            tracing::error!(job = %id, "sync: cannot reach the request store to stop it: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        mailbox.request_stop(&id, "ui").await.map_err(|e| {
-            tracing::error!(job = %id, "sync: could not ask its request to stop: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        s.sync.wake();
-    }
-    // A job not yet taken on is over as of now, so say so. A running
-    // job's event is the host's to send, once its steps have exited:
-    // pushing one here would tell the UI the sync was over while they
-    // were still checkpointing.
-    if !was_running {
-        let _ = s.progress_tx.send(supervisor::ProgressEvent {
-            id,
-            kind: String::new(),
-            source_ids: None,
-            state: JobState::Canceled,
-            active: false,
-            progress_msg: None,
-        });
-    }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1901,16 +1881,6 @@ async fn log_lines(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
-fn repo_err_to_status(e: RepoError) -> StatusCode {
-    match e {
-        RepoError::ReadOnly => StatusCode::SERVICE_UNAVAILABLE,
-        _ => {
-            tracing::error!("repo error: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2046,21 +2016,6 @@ mod tests {
             checked.diagnostics
         );
         source_ids(&checked)
-    }
-
-    /// The field was called `source_name` for as long as a source had
-    /// nothing but an id, and a script or agent driving the HTTP API
-    /// may still post that spelling.
-    #[test]
-    fn enqueue_accepts_the_old_source_name_key() {
-        let old: EnqueueJobRequest =
-            serde_json::from_str(r#"{"kind":"all","source_name":"slack/ingest"}"#).unwrap();
-        assert_eq!(old.source_ids.as_deref(), Some("slack/ingest"));
-        let new: EnqueueJobRequest =
-            serde_json::from_str(r#"{"kind":"all","source_ids":"slack/ingest"}"#).unwrap();
-        assert_eq!(new.source_ids, old.source_ids);
-        let neither: EnqueueJobRequest = serde_json::from_str(r#"{"kind":"all"}"#).unwrap();
-        assert_eq!(neither.source_ids, None);
     }
 
     /// Whatever the scaffold emits has to survive the round trip the

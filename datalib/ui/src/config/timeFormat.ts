@@ -27,19 +27,10 @@ export function formatStamp(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : STAMP_FMT.format(d);
 }
 
-/// The time of day to the millisecond, in the viewer's own zone. For a
-/// column where every row is the same day and the offsets differ — a
-/// step's own tracing lines are stamped in UTC, the runner's in local
-/// time — showing the digits as written would interleave two clocks.
-export function formatTimeOfDay(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return timeOfDay(d);
-}
-
 /// The whole stamp to the millisecond, `2026-09-22 14:07:47.190`, in the
-/// viewer's own zone for the reason above. Digits and separators only,
+/// viewer's own zone: a step's own tracing lines are stamped in UTC and
+/// the runner's in local time, and showing the digits as written would
+/// interleave two clocks. Digits and separators only,
 /// so it sorts as text and a column can clip it from the left down to
 /// the time of day.
 export function formatDateTime(iso: string | null): string {
