@@ -52,7 +52,7 @@ pub struct CarddavSync {
     /// `current-user-principal` → `addressbook-home-set` from here.
     /// Examples:
     ///   - `https://contacts.icloud.com/`
-    ///   - `https://carddav.fastmail.com/`
+    ///   - `https://carddav.fastmail.com/dav/` (the bare host is a 404)
     ///   - `https://www.googleapis.com/carddav/v1/principals/`
     pub server_url: String,
     /// Restrict the run to the named addressbooks (matched against
