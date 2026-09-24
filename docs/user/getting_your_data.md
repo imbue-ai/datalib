@@ -104,44 +104,33 @@ no credentials. Lightly used — expect rough edges. It never notices a
 deletion, and `always_clear_before_ingest` is the wrong fix here (the
 provider's `INGEST.md` says why).
 
-## Calendar
+## CalDAV
 
-`type = "calendar"` — Google Calendar through Google's API (`google`),
-Fastmail over CalDAV (`fastmail`), any other CalDAV server such as
-iCloud or Nextcloud (`caldav`), **or** a folder of `.ics` files
-(`ics`). Mirrors your events.
+`type = "calendar"` — any CalDAV server, such as iCloud or Nextcloud
+(`caldav`), **or** a folder of `.ics` files (`ics`). Mirrors your
+events. Fastmail and Google have sections of their own:
+[Fastmail Calendar](#fastmail-calendar), [Google Calendar](#google-calendar).
 
 Every event becomes a page and a row in the grid, dated by when it
-happens. A recurring event is one page that says how it repeats, which
-dates were cancelled, and which were moved or edited; each moved or
-edited date gets a page of its own, linked both ways with the series.
-The dates a series simply repeats on are not written out: there can be
-infinitely many of them, and the rule on the series page is what they
-are.
+happens, whichever way the calendar was reached. A recurring event is
+one page that says how it repeats, which dates were cancelled, and
+which were moved or edited; each moved or edited date gets a page of
+its own, linked both ways with the series. The dates a series simply
+repeats on are not written out: there can be infinitely many of them,
+and the rule on the series page is what they are.
 
-- **Google.** Built into latchkey; one command opens a browser, you
-  sign in and approve every scope it asks for:
-
-  ```sh
-  latchkey auth browser google-calendar
-  ```
-
-- **Fastmail.** Built into latchkey as `fastmail-dav`, which takes an
-  app password (Settings → Privacy & Security → Integrations → App
-  passwords, with calendar access):
-
-  ```sh
-  latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
-  ```
-
-- **Another CalDAV server.** Put the server in `caldav.server_url`, and
-  register a latchkey service for its host that holds the login.
+- **A CalDAV server.** Put it in `caldav.server_url` — the host alone
+  is usually enough, since discovery tries `/.well-known/caldav`. The
+  login is latchkey's: register a service for the server's host
+  (`latchkey services register`), then give it an app password with
+  `latchkey auth set`.
 - **`.ics` files.** Point `ics.path` at a folder of them — Google
-  Takeout's `Calendar/` is one. No credentials.
+  Takeout's `Calendar/` is one. Each file is one calendar. No
+  credentials.
 
-Each of the first three takes a `calendars` list of names to mirror;
-leave it out for all of them. Adding a calendar to the list later
-downloads it whole.
+A `calendars` list of names narrows a server to those calendars; leave
+it out for all of them. Adding a calendar to the list later downloads
+it whole.
 
 ## ChatGPT
 
@@ -353,6 +342,23 @@ latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 Use a `jmap` table with `hostname = "api.fastmail.com"`. Fastmail's
 contacts are a separate route — see [Contacts](#contacts).
 
+## Fastmail Calendar
+
+`type = "calendar"` — Fastmail's calendars over CalDAV, through latchkey
+(`fastmail`). Rendered the way [CalDAV](#caldav) says.
+
+Fastmail's CalDAV login is built into latchkey as `fastmail-dav`, and
+takes an app password (Settings → Privacy & Security → Integrations →
+App passwords, with calendar access) — not the OAuth login the mail
+source uses:
+
+```sh
+latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+```
+
+The `fastmail` table needs nothing else; `calendars` narrows it to the
+calendars you name.
+
 ## Garmin
 
 `type = "garmin"` — Garmin Connect's API, with its own login rather
@@ -416,6 +422,22 @@ events. Throughput is capped by Google's quota at roughly 300 messages
 a minute, so a large mailbox backfills over several runs. A Takeout
 `.mbox` of the same mailbox is the no-credentials route — see
 [Email](#email).
+
+## Google Calendar
+
+`type = "calendar"` — the Google Calendar API through latchkey
+(`google`). Mirrors every calendar on the account's list, subscribed
+ones included. Rendered the way [CalDAV](#caldav) says.
+
+Built into latchkey; one command opens a browser, you sign in and
+approve every scope it asks for:
+
+```sh
+latchkey auth browser google-calendar
+```
+
+The `google` table needs nothing else; `calendars` narrows it to the
+calendars you name.
 
 ## Google Chat
 

@@ -34,7 +34,7 @@ const CATALOG: &[Entry] = &[
         "calendar",
         Some("google"),
         "Google Calendar",
-        Some("calendar"),
+        Some("google_calendar"),
     ),
     e(
         "calendar",
@@ -42,6 +42,8 @@ const CATALOG: &[Entry] = &[
         "Fastmail Calendar",
         Some("fastmail"),
     ),
+    e("calendar", Some("caldav"), "CalDAV", Some("calendar")),
+    e("calendar", Some("ics"), "Calendar files", Some("calendar")),
     e("calendar", None, "Calendar", Some("calendar")),
     e("contacts", None, "Contacts", None),
     e("garmin", None, "Garmin", Some("garmin")),

@@ -589,9 +589,8 @@ export const CATALOG: CatalogEntry[] = [
   },
   // ── the `calendar` variants ───────────────────────────────────────
   //
-  // Like `email`: one type, and an entry per way in. Each is keyed on
-  // its own method table, so the catch-all below matches only a
-  // `caldav` or `ics` step.
+  // Like `email`: one type, and an entry per way in, each keyed on its
+  // own method table. Every method has a form, so there is no catch-all.
   {
     type: "calendar",
     variantKey: "google",
@@ -600,7 +599,7 @@ export const CATALOG: CatalogEntry[] = [
     blurb: "Mirror the calendars on a Google account through Google's API.",
     keywords: ["google", "calendar", "gcal", "events", "meetings", "schedule"],
     kind: "api",
-    icon: "calendar",
+    icon: "google_calendar",
     defaultName: "google_calendar",
     nameHint: "Work calendar",
     wizard: true,
@@ -658,19 +657,74 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
-  // The catch-all, and last of the three: another CalDAV server (iCloud,
-  // Nextcloud) or a folder of `.ics` exports. No form, for the reason
-  // the email catch-all has none.
   {
     type: "calendar",
-    label: "Calendar (CalDAV or .ics files)",
-    blurb: "Any CalDAV server, or a folder of .ics exports such as Google Takeout's.",
-    keywords: ["calendar", "caldav", "ics", "icloud", "nextcloud", "takeout", "events"],
+    variantKey: "caldav",
+    label: "CalDAV",
+    blurb: "Mirror the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"],
     kind: "api",
     icon: "calendar",
-    defaultName: "calendar",
+    defaultName: "caldav_calendar",
+    nameHint: "iCloud calendar",
+    wizard: true,
+    // No `credentialService`: latchkey keys a CalDAV login by the
+    // server's host, and a host it does not ship needs registering
+    // first, with an app password rather than a browser login — which
+    // the Connect flow cannot do. The help text says how.
+    fields: [
+      {
+        kind: "text",
+        required: true,
+        target: "caldav.server_url",
+        label: "Server URL",
+        help:
+          "Where the server's CalDAV starts, e.g. https://caldav.icloud.com/. The host alone is " +
+          "usually enough: discovery tries /.well-known/caldav when it does not answer. The login " +
+          "is latchkey's: `latchkey services register` a service for this host, then " +
+          '`latchkey auth set <service> -u "you@example.com:<app password>"`.',
+      },
+      {
+        kind: "text",
+        target: "latchkey_settings.account",
+        label: "Latchkey account",
+        help: "Which stored login to use, when latchkey holds more than one for this host.",
+      },
+      {
+        kind: "string_list",
+        target: "caldav.calendars",
+        label: "Only these calendars",
+        help:
+          "Calendar names as the server shows them, comma-separated. Empty mirrors every calendar. " +
+          "Adding one later downloads it whole.",
+      },
+    ],
+  },
+  {
+    type: "calendar",
+    variantKey: "ics",
+    label: "Calendar files (.ics)",
+    blurb: "A folder of .ics exports, such as Google Takeout's Calendar folder.",
+    keywords: ["calendar", "ics", "ical", "icalendar", "takeout", "export", "events"],
+    kind: "export",
+    icon: "calendar",
+    defaultName: "ics_calendar",
     nameHint: "Old calendar export",
-    wizard: false,
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of .ics files",
+        required: true,
+        target: "ics.path",
+        label: "Folder",
+        help:
+          "A folder of .ics files, each one calendar — Takeout/Calendar from a Google export, " +
+          "say. A file's events are the whole of that calendar: an event a re-read file no " +
+          "longer holds is dropped from the mirror.",
+      },
+    ],
   },
   {
     type: "contacts",

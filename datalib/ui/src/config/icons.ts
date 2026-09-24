@@ -37,6 +37,7 @@ import garminIconUrl from "@/assets/garmin.svg";
 import githubIconUrl from "@/assets/github.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
 import gmailIconUrl from "@/assets/gmail.svg";
+import googleCalendarIconUrl from "@/assets/google_calendar.svg";
 import googleTakeoutIconUrl from "@/assets/google_takeout.svg";
 import lightroomIconUrl from "@/assets/lightroom.svg";
 import linkedinIconUrl from "@/assets/linkedin.svg";
@@ -72,6 +73,7 @@ const ICONS: Record<string, string> = {
   github: githubIconUrl,
   gitlab: gitlabIconUrl,
   gmail: gmailIconUrl,
+  google_calendar: googleCalendarIconUrl,
   google_takeout: googleTakeoutIconUrl,
   lightroom: lightroomIconUrl,
   linkedin: linkedinIconUrl,
