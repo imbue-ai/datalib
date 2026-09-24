@@ -108,44 +108,19 @@ struct Discovered {
     login: Option<String>,
 }
 
-/// `current-user-principal` from the configured URL, falling back to the
-/// host's `/.well-known/caldav` (RFC 6764) when that URL does not answer
-/// with one — Fastmail's bare host is a 404.
 async fn discover(
     server_url: &str,
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<Discovered> {
-    let mut tried: Vec<String> = Vec::new();
-    let mut candidates = vec![server_url.to_string()];
-    if let Some(o) = dav::origin(server_url) {
-        candidates.push(format!("{o}/.well-known/caldav"));
-    }
-    let mut principal = None;
-    for url in candidates {
-        summary.requests += 1;
-        match dav::propfind(&url, "0", dav::BODY_CURRENT_USER_PRINCIPAL, lk).await {
-            Ok(ms) => {
-                if let Some(href) = ms
-                    .responses
-                    .iter()
-                    .find_map(|r| r.current_user_principal.clone())
-                {
-                    principal = dav::absolutize(&url, &href);
-                    break;
-                }
-                tried.push(format!("{url}: no current-user-principal"));
-            }
-            Err(e) => tried.push(format!("{url}: {e}")),
-        }
-    }
-    let principal_url = principal.with_context(|| {
-        format!(
-            "no CalDAV principal found — tried {}. Check the server URL and that latchkey \
-             holds a login for this host.",
-            tried.join("; ")
-        )
-    })?;
+    let principal_url = datalib_etl::dav::find_principal(
+        dav::HTTP_SERVICE,
+        server_url,
+        "caldav",
+        lk,
+        &mut summary.requests,
+    )
+    .await?;
 
     summary.requests += 1;
     let ms = dav::propfind(&principal_url, "0", dav::BODY_PRINCIPAL, lk)
@@ -154,13 +129,13 @@ async fn discover(
     let home = ms
         .responses
         .iter()
-        .find_map(|r| r.calendar_home_set.clone())
+        .find_map(|r| r.props.calendar_home_set.clone())
         .context("the principal has no calendar-home-set")?;
     let home_url = dav::absolutize(&principal_url, &home).context("calendar home URL")?;
     let login = ms
         .responses
         .iter()
-        .flat_map(|r| r.user_addresses.iter())
+        .flat_map(|r| r.props.user_addresses.iter())
         .find_map(|a| {
             a.strip_prefix("mailto:")
                 .or_else(|| a.strip_prefix("MAILTO:"))
@@ -184,8 +159,10 @@ fn calendars_in(account_id: &str, home_url: &str, listing: &Multistatus) -> Vec<
     listing
         .responses
         .iter()
-        .filter(|r| r.is_calendar)
-        .filter(|r| r.components.is_empty() || r.components.iter().any(|c| c == "VEVENT"))
+        .filter(|r| r.props.is_calendar)
+        .filter(|r| {
+            r.props.components.is_empty() || r.props.components.iter().any(|c| c == "VEVENT")
+        })
         .filter_map(|r| {
             let id = last_segment(&r.href)?;
             Some(Calendar {
@@ -194,10 +171,10 @@ fn calendars_in(account_id: &str, home_url: &str, listing: &Multistatus) -> Vec<
                     id,
                     account_id: account_id.to_string(),
                     href: Some(r.href.clone()),
-                    display_name: r.display_name.clone(),
-                    description: r.description.clone(),
-                    color: r.color.clone(),
-                    time_zone: r.calendar_timezone.as_deref().and_then(timezone_id),
+                    display_name: r.props.display_name.clone(),
+                    description: r.props.description.clone(),
+                    color: r.props.color.clone(),
+                    time_zone: r.props.calendar_timezone.as_deref().and_then(timezone_id),
                 },
             })
         })
@@ -344,7 +321,7 @@ async fn apply(
             == cal.row.href.as_deref().unwrap_or("").trim_end_matches('/')
         {
             // The collection itself, which some servers list first.
-        } else if r.calendar_data.is_some() {
+        } else if r.props.calendar_data.is_some() {
             with_data.push(r);
         } else {
             without_data.push(r.href);
@@ -358,13 +335,13 @@ async fn apply(
         with_data.extend(
             ms.responses
                 .into_iter()
-                .filter(|r| r.calendar_data.is_some()),
+                .filter(|r| r.props.calendar_data.is_some()),
         );
     }
 
     let mut rows: Vec<IcsObjectRow> = Vec::with_capacity(with_data.len());
     for r in &with_data {
-        let data = r.calendar_data.as_deref().unwrap_or_default();
+        let data = r.props.calendar_data.as_deref().unwrap_or_default();
         let Some(uid) = ical::first_event_uid(data) else {
             summary.errors += 1;
             problems.push(RecordProblem::new(
@@ -382,7 +359,7 @@ async fn apply(
             id,
             &uid,
             Some(r.href.clone()),
-            r.etag.clone(),
+            r.props.etag.clone(),
             data,
         ));
     }
@@ -394,6 +371,7 @@ async fn apply(
 
 #[cfg(test)]
 mod tests {
+    use super::dav::CalendarProps;
     use super::*;
 
     #[test]
@@ -406,15 +384,21 @@ mod tests {
                 },
                 DavResponse {
                     href: "/dav/calendars/user/p/bridge-uuid/".into(),
-                    is_calendar: true,
-                    display_name: Some("Bridge".into()),
-                    components: vec!["VEVENT".into()],
+                    props: CalendarProps {
+                        is_calendar: true,
+                        display_name: Some("Bridge".into()),
+                        components: vec!["VEVENT".into()],
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 DavResponse {
                     href: "/dav/calendars/user/p/tasks/".into(),
-                    is_calendar: true,
-                    components: vec!["VTODO".into()],
+                    props: CalendarProps {
+                        is_calendar: true,
+                        components: vec!["VTODO".into()],
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 DavResponse {

@@ -11,6 +11,7 @@ pub mod blob_cas;
 pub mod bulk;
 pub mod checkpointer;
 pub mod control;
+pub mod dav;
 pub mod doltlite_raw;
 pub mod download_metrics;
 pub mod download_params;

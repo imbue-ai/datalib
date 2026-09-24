@@ -14,7 +14,8 @@ use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::Progress;
 use tracing::{info, warn};
 
-use api::{CarddavError, Multistatus};
+use api::{DavError, Multistatus};
+use datalib_etl::dav::absolutize;
 use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
@@ -29,9 +30,10 @@ pub struct FetchOptions {
     /// `datalib/backend/etl/README.md`.
     pub db: RawDb,
     /// Root URL of the user's CardDAV server. We start discovery
-    /// here (PROPFIND for `current-user-principal`). Examples:
+    /// here (PROPFIND for `current-user-principal`), then at the host's
+    /// `/.well-known/carddav`. Examples:
     /// `https://contacts.icloud.com/`,
-    /// `https://carddav.fastmail.com/dav/` (the bare host is a 404),
+    /// `https://carddav.fastmail.com/`,
     /// `https://www.googleapis.com/carddav/v1/principals/`.
     pub server_url: String,
     /// Restrict the run to the named addressbooks (matched against
@@ -61,8 +63,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let account_id = host_for_account(&opts.server_url)?;
 
     // ── Discovery ──────────────────────────────────────────────────
+    let (principal_url, home_set_url) =
+        discover(&opts.server_url, &mut summary, &opts.latchkey).await?;
     let server_url = opts.server_url.trim_end_matches('/').to_string();
-    let (principal_url, home_set_url) = discover(&server_url, &mut summary, &opts.latchkey).await?;
     db.upsert_account(
         &account_id,
         &server_url,
@@ -167,19 +170,15 @@ async fn discover(
     summary: &mut FetchSummary,
     latchkey: &LatchkeySettings,
 ) -> Result<(String, String)> {
-    // Step 1: current-user-principal.
-    summary.requests += 1;
-    let ms = api::propfind(server_url, "0", api::BODY_CURRENT_USER_PRINCIPAL, latchkey)
-        .await
-        .map_err(|e| anyhow::anyhow!("propfind current-user-principal: {e}"))?;
-    let principal_href = ms
-        .responses
-        .iter()
-        .find_map(|r| r.current_user_principal.clone())
-        .with_context(|| "server did not return current-user-principal")?;
-    let principal_url = absolutize(server_url, &principal_href)?;
+    let principal_url = datalib_etl::dav::find_principal(
+        api::HTTP_SERVICE,
+        server_url,
+        "carddav",
+        latchkey,
+        &mut summary.requests,
+    )
+    .await?;
 
-    // Step 2: addressbook-home-set.
     summary.requests += 1;
     let ms = api::propfind(
         &principal_url,
@@ -192,9 +191,10 @@ async fn discover(
     let home_set_href = ms
         .responses
         .iter()
-        .find_map(|r| r.addressbook_home_set.clone())
+        .find_map(|r| r.props.addressbook_home_set.clone())
         .with_context(|| "server did not return addressbook-home-set")?;
-    let home_set_url = absolutize(server_url, &home_set_href)?;
+    let home_set_url =
+        absolutize(&principal_url, &home_set_href).context("addressbook home URL")?;
 
     Ok((principal_url, home_set_url))
 }
@@ -210,16 +210,16 @@ async fn list_addressbooks(
         .map_err(|e| anyhow::anyhow!("propfind list-addressbooks: {e}"))?;
     let mut out = Vec::new();
     for r in ms.responses {
-        if !r.is_addressbook {
+        if !r.props.is_addressbook {
             continue;
         }
-        let url = absolutize(home_set_url, &r.href)?;
+        let url = absolutize(home_set_url, &r.href).context("addressbook URL")?;
         out.push(Book {
             href: r.href,
             url,
-            display_name: r.display_name,
-            description: r.description,
-            ctag: r.ctag,
+            display_name: r.props.display_name,
+            description: r.props.description,
+            ctag: r.props.ctag,
         });
     }
     Ok(out)
@@ -237,7 +237,7 @@ async fn sync_addressbook(
     let body = api::body_sync_collection(prev_token);
     let ms = match api::report(book_url, &body, latchkey).await {
         Ok(ms) => ms,
-        Err(CarddavError::Http {
+        Err(DavError::Http {
             status: 403 | 405 | 501,
             ..
         }) => {
@@ -309,30 +309,6 @@ async fn apply_multistatus(
     Ok(())
 }
 
-fn absolutize(base: &str, href: &str) -> Result<String> {
-    if href.starts_with("http://") || href.starts_with("https://") {
-        return Ok(href.to_string());
-    }
-    let scheme_end = base.find("://").context("malformed base URL: no ://")?;
-    let after_scheme = &base[scheme_end + 3..];
-    let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
-    let host = &after_scheme[..host_end];
-    let scheme = &base[..scheme_end];
-    if href.starts_with('/') {
-        Ok(format!("{scheme}://{host}{href}"))
-    } else {
-        // Relative-to-base — strip any trailing filename component
-        // off the base path.
-        let mut prefix = base.to_string();
-        if !prefix.ends_with('/') {
-            if let Some(slash) = prefix.rfind('/') {
-                prefix.truncate(slash + 1);
-            }
-        }
-        Ok(format!("{prefix}{href}"))
-    }
-}
-
 /// Account identifier: the URL host. One latchkey credential entry
 /// keys per host, so this is the natural account key. If you ever
 /// need to coexist two accounts on the same host (two Fastmail
@@ -353,26 +329,6 @@ fn host_for_account(server_url: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn absolutize_handles_root_relative() {
-        assert_eq!(
-            absolutize("https://carddav.fastmail.com/", "/dav/principals/u/").unwrap(),
-            "https://carddav.fastmail.com/dav/principals/u/"
-        );
-    }
-
-    #[test]
-    fn absolutize_keeps_absolute_urls() {
-        assert_eq!(
-            absolutize(
-                "https://contacts.icloud.com/",
-                "https://p123-contacts.icloud.com/123/principal/"
-            )
-            .unwrap(),
-            "https://p123-contacts.icloud.com/123/principal/"
-        );
-    }
 
     #[test]
     fn host_for_account_strips_path() {
