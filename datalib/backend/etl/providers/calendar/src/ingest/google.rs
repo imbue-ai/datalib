@@ -137,7 +137,7 @@ async fn sync_calendar(
     let token = db.sync_token(calendar_id).await?;
     let full = token.is_none();
     let known = db.google_event_ids(calendar_id).await?;
-    let mut listed: HashSet<String> = HashSet::new();
+    let mut seen = Seen::default();
     let mut page: Option<String> = None;
     let next_sync = loop {
         let url = events_url(calendar_id, token.as_deref(), page.as_deref());
@@ -161,14 +161,14 @@ async fn sync_calendar(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        apply(db, calendar_id, &items, &known, &mut listed, summary).await?;
+        apply(db, calendar_id, &items, &known, &mut seen, summary).await?;
         page = str_of(&v, "nextPageToken");
         if page.is_none() {
             break str_of(&v, "nextSyncToken");
         }
     };
     if full {
-        let gone: Vec<String> = known.difference(&listed).cloned().collect();
+        let gone: Vec<String> = known.difference(&seen.listed).cloned().collect();
         summary.events_deleted += gone.len();
         db.delete_google_events(calendar_id, &gone).await?;
     }
@@ -191,43 +191,70 @@ pub fn events_url(calendar_id: &str, sync_token: Option<&str>, page: Option<&str
 
 /// Store a page of events. A cancelled occurrence is kept — it is how a
 /// series says one of its dates is off — but a cancelled event or
-/// series is a deletion, and takes its occurrences with it.
+/// series is a deletion, and takes its occurrences with it. Pages come
+/// in no particular order, so `cancelled` carries the deleted series
+/// across them: an occurrence listed after its series' deletion is not
+/// stored, and one stored before it is removed with it.
 async fn apply(
     db: &RawDb,
     calendar_id: &str,
     items: &[Value],
     known: &HashSet<String>,
-    listed: &mut HashSet<String>,
+    seen: &mut Seen,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let mut rows = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
+    let mut kept = Vec::new();
     for item in items {
         let Some(row) = GoogleEventRow::new(calendar_id, item) else {
             summary.errors += 1;
             continue;
         };
-        let cancelled = row.status.as_deref() == Some("cancelled");
-        if cancelled && row.recurring_event_id.is_none() {
+        if row.status.as_deref() == Some("cancelled") && row.recurring_event_id.is_none() {
+            seen.cancelled.insert(row.event_id.clone());
             deleted.push(row.event_id.clone());
-            continue;
+        } else {
+            kept.push(row);
         }
-        listed.insert(row.event_id.clone());
+    }
+    let rows: Vec<GoogleEventRow> = kept
+        .into_iter()
+        .filter(|r| {
+            !r.recurring_event_id
+                .as_ref()
+                .is_some_and(|series| seen.cancelled.contains(series))
+        })
+        .collect();
+    for row in &rows {
+        seen.listed.insert(row.event_id.clone());
         if known.contains(&row.event_id) {
             summary.events_updated += 1;
         } else {
             summary.events_new += 1;
         }
-        rows.push(row);
     }
     db.upsert_google_events(&rows).await?;
     if !deleted.is_empty() {
         let mut gone = db.google_occurrences_of(calendar_id, &deleted).await?;
-        gone.extend(deleted.into_iter().filter(|id| known.contains(id)));
-        summary.events_deleted += gone.len();
+        gone.extend(deleted);
+        for id in &gone {
+            seen.listed.remove(id);
+        }
+        // Only what an earlier run stored is a deletion; the rest were
+        // stored and removed within this one.
+        summary.events_deleted += gone.iter().filter(|id| known.contains(*id)).count();
         db.delete_google_events(calendar_id, &gone).await?;
     }
     Ok(())
+}
+
+/// What one calendar's listing has shown so far, across its pages.
+#[derive(Default)]
+struct Seen {
+    /// Every event stored by this listing.
+    listed: HashSet<String>,
+    /// Series the listing deleted.
+    cancelled: HashSet<String>,
 }
 
 async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {

@@ -124,7 +124,15 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
                  "originalStartTime": {"dateTime": "2026-04-02T09:00:00-07:00", "timeZone": "America/Los_Angeles"}},
                 {"id": "reception01", "status": "confirmed", "summary": "Reception for the Klingon delegation",
                  "start": {"dateTime": "2026-09-18T19:00:00-07:00"}, "end": {"dateTime": "2026-09-18T22:00:00-07:00"}},
-                {"id": "gone01", "status": "cancelled"}
+                {"id": "gone01", "status": "cancelled"},
+                // A deleted series lists as cancelled, and its occurrences
+                // may come on either side of it; neither side is stored.
+                {"id": "old01_20260105T170000Z", "status": "cancelled", "recurringEventId": "old01",
+                 "originalStartTime": {"dateTime": "2026-01-05T09:00:00-08:00"}},
+                {"id": "old01", "status": "cancelled", "recurrence": ["RRULE:FREQ=DAILY"]},
+                {"id": "old01_20260106T170000Z", "status": "confirmed", "recurringEventId": "old01",
+                 "originalStartTime": {"dateTime": "2026-01-06T09:00:00-08:00"},
+                 "start": {"dateTime": "2026-01-06T10:00:00-08:00"}}
             ]),
             None,
             Some("s1"),
@@ -163,7 +171,8 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
             format!("{PRIMARY}#staff01_20260312T170000Z"),
             format!("{PRIMARY}#staff01_20260402T160000Z"),
         ],
-        "a cancelled one-off is not stored; a cancelled occurrence is"
+        "a cancelled one-off is not stored, nor a deleted series' occurrences; \
+         a cancelled occurrence of a live series is"
     );
 
     let second = run(&two, &store).await;
