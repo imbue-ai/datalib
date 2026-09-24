@@ -239,3 +239,35 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+# One process's share of the load in supervisor_writers_test.
+rust_binary(
+    name = "supervisor_writer",
+    testonly = True,
+    srcs = ["tests/supervisor_writer/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Seven processes on one supervisor.sqlite in rollback-journal mode: every
+# write lands, no process gives up on a lock.
+rust_test(
+    name = "supervisor_writers_test",
+    size = "medium",
+    srcs = ["tests/supervisor_writers.rs"],
+    data = [":supervisor_writer"],
+    edition = "2021",
+    env = {
+        "WRITER_BIN": "$(rootpath :supervisor_writer)",
+    },
+    tags = ["cpu:4"],
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

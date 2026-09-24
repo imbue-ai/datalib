@@ -343,7 +343,11 @@ fn options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(format!("file:{escaped}?doltlite_engine=sqlite"))
         .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        // Doltlite's plain-SQLite engine answers `wal` to a request for
+        // WAL and stays in rollback-journal mode, so the mode is said as
+        // it is: a commit takes the file, a reader waits it out.
+        // `supervisor_writers_test` is the measurement.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .busy_timeout(BUSY_TIMEOUT)
 }
 

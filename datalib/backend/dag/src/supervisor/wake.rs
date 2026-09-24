@@ -1,7 +1,8 @@
 //! What wakes a process waiting on the loop's store: a commit to
 //! `supervisor.sqlite`, from any process, seen as the write to the file
 //! that a commit is — to the database itself in the rollback-journal mode
-//! the store is in today, to its `-wal` in WAL mode; both are watched.
+//! the store is in, or to its `-wal` were it ever in WAL mode; both are
+//! watched.
 //! Nobody has to announce anything, so a write from a `sqlite3` shell or
 //! an older build wakes the loop too.
 //!

@@ -17,8 +17,9 @@
                                                   server launch, page of the app — a
                                                   row in `processes`
                                                   (plain SQLite; any sqlite3 opens it).
-                                                  Its own directory, so the WAL beside
-                                                  it counts with it on the Manage screen
+                                                  Its own directory, so the journal
+                                                  beside it counts with it on the Manage
+                                                  screen
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and pauses: the
                                                   mailbox the loop reads; and the loop's
@@ -51,7 +52,7 @@ the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
-SQLite in WAL mode, written by whoever runs the loop (its runs) and the
+SQLite in rollback-journal mode, written by whoever runs the loop (its runs) and the
 server (its own log) — one process while the server is up, two while a
 `datalib-dag` runs the loop — which SQLite's own locking makes ordinary —
 `runs_two_process_test` is the measurement, not the argument.
