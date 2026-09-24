@@ -34,10 +34,22 @@ async fn state(root: &Path) -> AppState {
 }
 
 async fn send(root: &Path, uri: &str, with_token: bool) -> (StatusCode, Vec<u8>) {
+    send_with(root, uri, with_token, None).await
+}
+
+async fn send_with(
+    root: &Path,
+    uri: &str,
+    with_token: bool,
+    cause: Option<&str>,
+) -> (StatusCode, Vec<u8>) {
     let app = router(state(root).await);
     let mut req = Request::builder().uri(uri);
     if with_token {
         req = req.header("x-datalib-token", TEST_TOKEN);
+    }
+    if let Some(cause) = cause {
+        req = req.header(datalib_http::loop_guard::CAUSE_HEADER, cause);
     }
     let resp = app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
     let status = resp.status();
@@ -82,6 +94,12 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = send(root, "/dactal/index.html", false).await;
     assert_eq!(status, StatusCode::OK);
+    // A live refetch: what a page fetches on a frame, several a second
+    // during a sync. Kept, but under `info`; one that failed is not.
+    let (status, _) = send_with(root, "/api/health", true, Some("0")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send_with(root, "/api/config", false, Some("0")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     // The read the log panel makes on every `log` frame. Made while the
     // writer is still up, so a line for it would be flushed with the rest.
     let (status, _) = send(root, "/api/log", true).await;
@@ -105,7 +123,9 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
             "/api/health",
             "/api/health",
             "/api/config",
-            "/modules/not-a-hash"
+            "/modules/not-a-hash",
+            "/api/health",
+            "/api/config"
         ],
         "{lines:#?}"
     );
@@ -130,4 +150,7 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
 
     let missing = fields(&lines[3]);
     assert_eq!(missing["status"], 404);
+
+    assert_eq!(lines[4]["level"], "debug", "{:#?}", lines[4]);
+    assert_eq!(lines[5]["level"], "info", "{:#?}", lines[5]);
 }

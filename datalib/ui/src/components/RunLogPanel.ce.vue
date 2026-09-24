@@ -157,6 +157,7 @@ let queryTimer: ReturnType<typeof setTimeout> | null = null;
 const lineCount = ref(0);
 const busy = ref(false);
 const error = ref<string | null>(null);
+const panelEl = ref<HTMLElement | null>(null);
 /// The newest `seq` in the grid, which the next fetch resumes after.
 let lastSeq = 0;
 const boxEl = ref<HTMLDivElement | null>(null);
@@ -846,18 +847,21 @@ onMounted(async () => {
   await Promise.all([loadProcesses(props.step), loadRuns()]);
   announce();
   void load(true);
-  unsubscribe = subscribeLive({
-    root: (e) => {
-      if (changed(e, "log") && live.value) void load(false);
-      // A step's new attempt is a new process for the picker to offer.
-      if (changed(e, "runs")) void loadProcesses(null);
+  unsubscribe = subscribeLive(
+    {
+      root: (e) => {
+        if (changed(e, "log") && live.value) void load(false);
+        // A step's new attempt is a new process for the picker to offer.
+        if (changed(e, "runs")) void loadProcesses(null);
+      },
+      resync: () => {
+        void loadRuns();
+        void loadProcesses(null);
+        if (live.value) void load(false);
+      },
     },
-    resync: () => {
-      void loadRuns();
-      void loadProcesses(null);
-      if (live.value) void load(false);
-    },
-  });
+    { onScreen: panelEl.value ?? undefined },
+  );
   themeWatch = new MutationObserver(() => bundle?.setDarkMode(isDark()));
   themeWatch.observe(document.documentElement, {
     attributes: true,
@@ -881,7 +885,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="rl-panel" :aria-busy="busy">
+  <div ref="panelEl" class="rl-panel" :aria-busy="busy">
     <div class="rl-bar">
       <input
         class="rl-search"

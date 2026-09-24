@@ -18,6 +18,7 @@ const text = ref("");
 const path = ref("");
 const dirty = ref(false);
 const busy = ref(false);
+const cardEl = ref<HTMLElement | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
 const canReveal = isDesktopApp();
 const revealLabel = revealActionLabel();
@@ -90,12 +91,15 @@ let unsubscribe: (() => void) | null = null;
 let unsubscribeBus: (() => void) | null = null;
 onMounted(() => {
   void load();
-  unsubscribe = subscribeLive({
-    root: (e) => {
-      if (e.kind === "config_changed") void load();
+  unsubscribe = subscribeLive(
+    {
+      root: (e) => {
+        if (e.kind === "config_changed") void load();
+      },
+      resync: () => void load(),
     },
-    resync: () => void load(),
-  });
+    { onScreen: cardEl.value ?? undefined },
+  );
   unsubscribeBus = props.ctx.bus.subscribe(TOPIC_CONFIG_WRITTEN, () => void load());
 });
 onBeforeUnmount(() => {
@@ -105,7 +109,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="cfg">
+  <div ref="cardEl" class="cfg">
     <p class="cfg-file">
       <code>{{ path }}</code>
       <button
