@@ -62,12 +62,27 @@ pub struct SlackThreadBucket {
     pub inputs: Inputs,
 }
 
+/// How far the account has read, as the last download saw it: per
+/// conversation for its top-level messages, from `channel_read_states`,
+/// and per followed thread for its replies, from the root message's
+/// `last_read`. Both live in volatile sidecars (the ingest's
+/// `READ_STATE_VOLATILE_PATHS` and `MESSAGE_VOLATILE_PATHS`), so a moved
+/// mark reaches the render through [`scan_diff`], not the content diff.
+#[derive(Debug, Clone, Default)]
+pub struct ReadMarks {
+    /// Conversation id → its `last_read` `ts`.
+    pub channels: BTreeMap<String, String>,
+    /// Thread key → the thread's `last_read` `ts`.
+    pub threads: BTreeMap<String, String>,
+}
+
 #[derive(Default)]
 pub struct ParsedSlack {
     pub workspace: Option<Workspace>,
     pub users: BTreeMap<String, User>,
     pub channels: BTreeMap<String, Channel>,
     pub threads: Vec<SlackThreadBucket>,
+    pub read_marks: ReadMarks,
     /// Count of threads `dolt_diff` reported as unchanged. Reported
     /// into the render summary so the orchestrator's progress
     /// accounting stays accurate.
@@ -156,7 +171,12 @@ async fn parse_doltlite_async(
     // No commit at all means nothing has been committed here to render, which
     // is emptiness, not a reason to read the working set.
 
-    let scan = scan_diff(&pool, source_id, range, &pin).await?;
+    // A store no download has opened since read states arrived lacks
+    // the table, and this read-only pool never adds it.
+    let has_read_states =
+        datalib_etl::doltlite_raw::column_exists(&pool, "channel_read_states", "id").await?;
+    let scan = scan_diff(&pool, source_id, range, &pin, has_read_states).await?;
+    let read_marks = load_read_marks(&pool, has_read_states).await?;
 
     // Workspace + users + channels are cheap and shared across threads.
     let mut unparsed: Vec<Unparsed> = Vec::new();
@@ -201,6 +221,11 @@ async fn parse_doltlite_async(
         msgs.sort_by(|a, b| {
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
+        if has_read_states {
+            if let Some((_, channel, _)) = split_thread_key(&thread_key) {
+                inputs.read("channel_read_states", channel);
+            }
+        }
         // The login and its workspace name every document's header.
         if let Some(ws) = &workspace {
             inputs.read("workspaces", &ws.row_id);
@@ -235,41 +260,78 @@ async fn parse_doltlite_async(
         users,
         channels,
         threads,
+        read_marks,
         docs_skipped,
         scan,
         unparsed,
     })
 }
 
+/// Threads with a message or an attachment edge that changed.
+const CHANGED_MESSAGES_SQL: &str = "
+    SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
+      FROM dolt_diff_messages
+     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+    UNION
+    SELECT m.thread_root_uuid
+      FROM dolt_diff_slack_attachments d
+      JOIN pinned_messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
+     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'";
+
+/// Followed threads whose own `last_read` moved. The bookkeeping row
+/// changes on every upsert, so only a moved mark counts.
+const MOVED_THREAD_MARKS_SQL: &str = "
+    SELECT m.thread_root_uuid
+      FROM dolt_diff_messages_bookkeeping d
+      JOIN pinned_messages m ON m.id = coalesce(d.to_id, d.from_id)
+     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
+       AND json_extract(d.from_volatile_payload, '$.last_read')
+           IS NOT json_extract(d.to_volatile_payload, '$.last_read')";
+
+/// Threads whose root sits between a conversation's old and new
+/// `last_read` — the ones that turned read (or unread). Compared as
+/// REAL and inclusive at both ends, so rounding can only add a thread,
+/// never lose one; a thread rendered for nothing writes the same rows.
+/// A mark that appeared or went covers everything after the one there is.
+const MOVED_CHANNEL_MARKS_SQL: &str = "
+    SELECT m.thread_root_uuid
+      FROM (SELECT coalesce(to_id, from_id) AS channel_id,
+                   CAST(json_extract(from_volatile_payload, '$.last_read') AS REAL) AS was,
+                   CAST(json_extract(to_volatile_payload, '$.last_read') AS REAL) AS now
+              FROM dolt_diff_channel_read_states_bookkeeping
+             WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged') d
+      JOIN pinned_messages m ON m.channel_id = d.channel_id AND m.is_thread_root = 1
+     WHERE d.was IS NOT d.now
+       AND CAST(m.ts AS REAL) >= min(coalesce(d.was, d.now), coalesce(d.now, d.was))
+       AND (d.was IS NULL OR d.now IS NULL OR CAST(m.ts AS REAL) <= max(d.was, d.now))";
+
 /// Phase 1: union over the per-table dolt_diff vtabs to project
 /// touched `thread_root_uuid`s — what a new or changed message or
-/// attachment row maps to. A workspace, user or channel change reaches
-/// a thread through the inputs it declared, so none of them fans out.
+/// attachment row maps to, and the threads a moved read mark crosses.
+/// A workspace, user or channel change reaches a thread through the
+/// inputs it declared, so none of them fans out.
 async fn scan_diff(
     pool: &SqlitePool,
     source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
+    has_read_states: bool,
 ) -> Result<ScanResult> {
+    let mut union = format!("{CHANGED_MESSAGES_SQL} UNION {MOVED_THREAD_MARKS_SQL}");
+    if has_read_states {
+        union.push_str(" UNION ");
+        union.push_str(MOVED_CHANNEL_MARKS_SQL);
+    }
+    let bucket_query = format!(
+        "SELECT DISTINCT thread_root_uuid FROM ({union}) WHERE thread_root_uuid IS NOT NULL"
+    );
     let scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             global_fanout_tables: &[],
-            bucket_query: "
-                SELECT DISTINCT thread_root_uuid FROM (
-                    SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
-                      FROM dolt_diff_messages
-                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
-                    UNION
-                    SELECT m.thread_root_uuid
-                      FROM dolt_diff_slack_attachments d
-                      JOIN pinned_messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
-                     WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged'
-                )
-                WHERE thread_root_uuid IS NOT NULL
-            ",
+            bucket_query: &bucket_query,
         },
     )
     .await?;
@@ -290,6 +352,42 @@ async fn scan_diff(
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
+}
+
+async fn load_read_marks(pool: &SqlitePool, has_read_states: bool) -> Result<ReadMarks> {
+    let pairs = |rows: Vec<(String, Option<String>)>| -> BTreeMap<String, String> {
+        rows.into_iter()
+            .filter_map(|(k, v)| Some((k, v?)))
+            .collect()
+    };
+    let channels = if has_read_states {
+        pairs(
+            sqlx::query_as(
+                "SELECT r.id, json_extract(b.volatile_payload, '$.last_read')
+                   FROM pinned_channel_read_states r
+                   JOIN pinned_channel_read_states_bookkeeping b ON b.id = r.id",
+            )
+            .fetch_all(pool)
+            .await
+            .context("select channel read marks")?,
+        )
+    } else {
+        BTreeMap::new()
+    };
+    // A root's id is its thread's key, so the mark is keyed by thread.
+    let threads = pairs(
+        sqlx::query_as(
+            "SELECT m.thread_root_uuid, json_extract(b.volatile_payload, '$.last_read')
+               FROM pinned_messages m
+               JOIN pinned_messages_bookkeeping b ON b.id = m.id
+              WHERE m.is_thread_root = 1
+                AND json_extract(b.volatile_payload, '$.last_read') IS NOT NULL",
+        )
+        .fetch_all(pool)
+        .await
+        .context("select thread read marks")?,
+    );
+    Ok(ReadMarks { channels, threads })
 }
 
 async fn load_thread_keys(pool: &SqlitePool) -> Result<Vec<String>> {
@@ -709,6 +807,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         users,
         channels,
         threads,
+        read_marks: ReadMarks::default(),
         docs_skipped: 0,
         scan: ScanResult::default(),
         unparsed: Vec::new(),

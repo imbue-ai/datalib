@@ -10,6 +10,20 @@ pub const KIND_THREAD: &str = "thread";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_REACTION: &str = "reaction";
 
+/// A `ts` as microseconds since the epoch, so two of them order exactly.
+pub fn ts_micros(ts: &str) -> Option<i64> {
+    let (secs, frac) = ts.split_once('.').unwrap_or((ts, ""));
+    let secs: i64 = secs.parse().ok()?;
+    let micros: i64 = format!("{frac:0<6}").get(..6)?.parse().ok()?;
+    secs.checked_mul(1_000_000)?.checked_add(micros)
+}
+
+/// Whether the message at `ts` came after a `last_read` mark, i.e. is
+/// unread. `false` when either will not parse: an unknown is not unread.
+pub fn after_mark(ts: &str, last_read: &str) -> bool {
+    matches!((ts_micros(ts), ts_micros(last_read)), (Some(t), Some(r)) if t > r)
+}
+
 /// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
 /// (`"1728499573.123456"`) — into an offsetted instant. `None` on a
 /// shape we do not recognize; the message's caller records that.

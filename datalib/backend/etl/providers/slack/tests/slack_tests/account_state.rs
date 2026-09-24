@@ -1,7 +1,7 @@
 //! Whole-download tests for what the account itself holds: read states,
 //! saved-for-later items and channel bookmarks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -251,4 +251,165 @@ async fn read_states_saved_items_and_bookmarks_are_stored() {
         BTreeSet::from(["1735689600.000001".into(), "1735689600.000002".into()]),
         "an unsaved message should leave the saved items",
     );
+}
+
+const A: &str = "1735689600.000100";
+const REPLY: &str = "1735689600.000150";
+const B: &str = "1735689600.000200";
+const C: &str = "1735689600.000300";
+
+/// `C1` with three top-level messages from Riker, the first of them a
+/// thread the account follows (Slack's `replies` copy of its root carries
+/// `last_read`), read up to `channel_mark`.
+fn write_channel_with_marks(api: &Path, channel_mark: &str) {
+    append_envelope(
+        api,
+        "auth.test",
+        json!({}),
+        json!({"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"}),
+    );
+    append_envelope(
+        api,
+        "users.list",
+        json!({"limit": "200"}),
+        json!({"ok": true, "members": [{"id": "U1", "name": "picard"}, {"id": "U2", "name": "riker"}]}),
+    );
+    append_envelope(
+        api,
+        "conversations.list",
+        json!({"exclude_archived": "true", "limit": "200", "types": "public_channel,private_channel"}),
+        json!({"ok": true, "has_more": false, "channels": [
+            {"id": "C1", "name": "bridge", "is_member": true, "is_archived": false},
+        ]}),
+    );
+    let root = json!({"ts": A, "user": "U2", "text": "status report", "thread_ts": A,
+                      "reply_count": 1, "latest_reply": REPLY});
+    append_envelope(
+        api,
+        "conversations.history",
+        json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
+               "limit": "200", "oldest": TS_SINCE}),
+        json!({"ok": true, "has_more": false, "messages": [
+            {"ts": C, "user": "U2", "text": "third"},
+            {"ts": B, "user": "U2", "text": "second"},
+            root,
+        ]}),
+    );
+    append_envelope(
+        api,
+        "conversations.history",
+        json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "false",
+               "limit": "200", "oldest": C}),
+        json!({"ok": true, "has_more": false, "messages": []}),
+    );
+    let mut followed_root = root.clone();
+    followed_root["subscribed"] = json!(true);
+    followed_root["last_read"] = json!(A);
+    append_envelope(
+        api,
+        "conversations.replies",
+        json!({"channel": "C1", "ts": A, "limit": "200"}),
+        json!({"ok": true, "has_more": false, "messages": [
+            followed_root,
+            {"ts": REPLY, "user": "U2", "text": "all nominal", "thread_ts": A},
+        ]}),
+    );
+    append_envelope(
+        api,
+        "client.counts",
+        json!({}),
+        json!({"ok": true, "channels": [read_state("C1", channel_mark)], "mpims": [], "ims": []}),
+    );
+    write_saved(api, vec![]);
+}
+
+async fn sync_to_commit(out: &Path, api: &Path, playback: &Path) -> String {
+    SlackSynth::new(api).synthesize(playback).unwrap();
+    run_fetch(out, playback).await;
+    let db = RawDb::open(&db_path_for(out)).await.unwrap();
+    let head = dr::head_commit(db.pool()).await.unwrap().expect("a commit");
+    db.close().await;
+    head
+}
+
+/// The markdown of each rendered thread, keyed by its root's text.
+fn render_threads(
+    raw: &Path,
+    range: datalib_etl_render::inputs::RawRange<'_>,
+) -> (
+    datalib_etl_slack_render::render::ParsedSlack,
+    BTreeMap<String, String>,
+) {
+    let parsed = datalib_etl_slack_render::render::parse(raw, "src", range).unwrap();
+    let out = tempdir().unwrap();
+    let mut docs = BTreeMap::new();
+    datalib_etl_slack_render::render::render::render_all(
+        &parsed,
+        out.path(),
+        "src",
+        &datalib_etl::progress::Progress::noop(),
+        &mut |doc| {
+            let md: String = doc.sections.iter().map(|s| s.md.as_str()).collect();
+            let root = ["status report", "second", "third"]
+                .into_iter()
+                .find(|t| md.contains(&format!("title: \"#bridge: {t}")))
+                .unwrap_or("?");
+            docs.insert(root.to_string(), md);
+            Ok(())
+        },
+    )
+    .unwrap();
+    (parsed, docs)
+}
+
+fn unread_count(md: &str) -> usize {
+    md.matches("msg--slack unread").count()
+}
+
+/// A top-level message past its conversation's mark, and a reply past
+/// its followed thread's, render unread. When a later sync moves the
+/// conversation's mark, the incremental render names the threads the
+/// mark crossed — and not one that is unread on both sides of it, which
+/// is the whole point of keeping the mark out of the content diff.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_marks_render_and_a_moved_mark_rerenders_only_what_it_crossed() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out_raw");
+
+    let api1 = d.path().join("api1");
+    write_channel_with_marks(&api1, A);
+    let first = sync_to_commit(&out, &api1, &d.path().join("playback1")).await;
+
+    let (_, cold) = render_threads(&out, datalib_etl_render::inputs::RawRange::cold());
+    assert_eq!(
+        unread_count(&cold["status report"]),
+        1,
+        "the root is read, its reply past the thread's mark is not: {}",
+        cold["status report"]
+    );
+    assert!(cold["status report"].contains("first-unread"));
+    assert_eq!(unread_count(&cold["second"]), 1);
+    assert_eq!(unread_count(&cold["third"]), 1);
+
+    let api2 = d.path().join("api2");
+    write_channel_with_marks(&api2, B);
+    let second = sync_to_commit(&out, &api2, &d.path().join("playback2")).await;
+    assert_ne!(first, second, "the moved mark is a commit of its own");
+
+    let nothing_stale = std::collections::HashSet::new();
+    let (parsed, incremental) = render_threads(
+        &out,
+        datalib_etl_render::inputs::RawRange {
+            cursor: Some(&first),
+            pin: Some(&second),
+            stale: Some(&nothing_stale),
+        },
+    );
+    let named = parsed.scan.render.expect("a narrowed render");
+    assert!(named.contains(&format!("T1#C1#{B}")), "{named:?}");
+    assert!(
+        !named.contains(&format!("T1#C1#{C}")),
+        "`third` is unread before and after; nothing about it moved: {named:?}"
+    );
+    assert_eq!(unread_count(&incremental["second"]), 0, "read now");
 }

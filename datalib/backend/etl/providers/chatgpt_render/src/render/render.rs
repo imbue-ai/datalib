@@ -183,6 +183,7 @@ fn build_chat(
                 msg_id.natural_key.clone(),
             )),
             is_aside: is_tool_role(m.role.as_deref()),
+            unread: false,
             problems,
         });
     }

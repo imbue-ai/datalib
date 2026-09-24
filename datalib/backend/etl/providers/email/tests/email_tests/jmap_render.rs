@@ -475,3 +475,36 @@ fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
         "and it is still listed as an attachment: {md}"
     );
 }
+
+/// An email without `$seen` renders unread and opens the "New" line;
+/// one with it does not.
+#[test]
+fn an_email_without_seen_renders_unread() {
+    let mut parsed = make_loaded();
+    parsed.docs[0]
+        .joins
+        .keywords
+        .insert("E2".into(), vec!["$flagged".into()]);
+    let tmp = tempfile::tempdir().unwrap();
+    render_all(
+        &parsed,
+        tmp.path(),
+        "fastmail",
+        Some(OutlinkFormat::Fastmail),
+        &[],
+        &Progress::noop(),
+        &mut |_| Ok(()),
+    )
+    .expect("render_all");
+    let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
+    let wrappers: Vec<&str> = md
+        .lines()
+        .filter(|l| l.starts_with("<div id=\"m-"))
+        .collect();
+    assert_eq!(wrappers.len(), 2, "{md}");
+    assert!(wrappers[0].ends_with("class=\"msg msg--email\">"), "{md}");
+    assert!(
+        wrappers[1].ends_with("class=\"msg msg--email unread first-unread\">"),
+        "{md}"
+    );
+}

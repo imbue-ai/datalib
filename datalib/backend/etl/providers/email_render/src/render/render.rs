@@ -427,6 +427,14 @@ fn build_chat(
             &mut problems,
         );
         let email_id = ids::email(source_id, &em.account_id, &em.id, date_ms);
+        // Every download path stores read-ness as JMAP does, the presence
+        // of `$seen` (Gmail's `UNREAD` label and an mbox's `Unread` are
+        // turned into its absence), so no `$seen` is unread.
+        let unread = !bucket
+            .joins
+            .keywords
+            .get(&em.id)
+            .is_some_and(|kws| kws.iter().any(|k| k == "$seen"));
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
             author_id: em.account_id.clone(),
@@ -446,6 +454,7 @@ fn build_chat(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(email_id.entity_kind, email_id.natural_key)),
             is_aside: false,
+            unread,
             problems,
         });
     }

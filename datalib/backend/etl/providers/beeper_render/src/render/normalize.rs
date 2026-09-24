@@ -205,6 +205,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             kind_label: Some(kind_for_message(&room.network, &m.event_type)),
             source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
             is_aside: false,
+            unread: false,
             problems: Vec::new(),
         };
     }
@@ -227,6 +228,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         kind_label: Some(kind_for_message(&room.network, &m.event_type)),
         source_ref: Some(UpstreamRef::new(ids::KIND_EVENT, m.native_event_id.clone())),
         is_aside: false,
+        unread: false,
         problems: Vec::new(),
     }
 }

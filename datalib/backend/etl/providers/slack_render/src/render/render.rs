@@ -170,10 +170,25 @@ fn build_chats(
         let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
         let thread_uuid = thread.uuid.clone();
 
+        // A top-level message is read up to its conversation's mark, a
+        // reply up to its thread's, which Slack keeps only for a thread
+        // the account follows. The account's own messages are never
+        // unread, whatever the mark says.
+        let channel_mark = parsed.read_marks.channels.get(&root.channel_id);
+        let thread_mark = parsed.read_marks.threads.get(&bucket.thread_key);
+        let unread = |m: &Message| {
+            let mark = if m.is_thread_root {
+                channel_mark
+            } else {
+                thread_mark
+            };
+            m.user_id.as_deref() != self_user_id
+                && mark.is_some_and(|last_read| ids::after_mark(&m.ts, last_read))
+        };
         let items: Vec<NormalizedChatItem> = bucket
             .messages
             .iter()
-            .map(|m| build_item(source_id, m, root, labels))
+            .map(|m| build_item(source_id, m, root, labels, unread(m)))
             .collect();
 
         // "#channel: <root snippet>" preserves the old scannable H1; the
@@ -222,6 +237,7 @@ fn build_item(
     m: &Message,
     root: &Message,
     labels: Labels<'_>,
+    unread: bool,
 ) -> NormalizedChatItem {
     let author_display = m
         .user_id
@@ -259,6 +275,7 @@ fn build_item(
             msg_id.natural_key.clone(),
         )),
         is_aside: false,
+        unread,
         problems,
     }
 }

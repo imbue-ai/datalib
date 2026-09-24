@@ -22,6 +22,9 @@ pub struct SmsRecord {
     /// 1 = received (inbox), 2 = sent. Other values pass through.
     pub type_: i64,
     pub body: String,
+    /// Android's `read` column: whether the phone's owner has opened
+    /// it. `None` when the backup does not say.
+    pub read: Option<bool>,
     pub date_sent_ms: Option<i64>,
     pub readable_date: Option<String>,
     pub contact_name: Option<String>,
@@ -46,6 +49,8 @@ pub struct MmsRecord {
     pub msg_box: i64,
     pub m_id: Option<String>,
     pub tr_id: Option<String>,
+    /// As [`SmsRecord::read`].
+    pub read: Option<bool>,
     pub date_sent_ms: Option<i64>,
     pub readable_date: Option<String>,
     pub contact_name: Option<String>,
@@ -208,6 +213,7 @@ fn sms_from_attrs(a: &Attrs) -> SmsRecord {
         date_ms: int(a, "date").unwrap_or(0),
         type_: int(a, "type").unwrap_or(0),
         body: a.get("body").cloned().unwrap_or_default(),
+        read: int(a, "read").map(|r| r != 0),
         date_sent_ms: int(a, "date_sent"),
         readable_date: opt(a, "readable_date"),
         contact_name: opt(a, "contact_name"),
@@ -221,6 +227,7 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
         msg_box: int(a, "msg_box").unwrap_or(0),
         m_id: opt(a, "m_id"),
         tr_id: opt(a, "tr_id"),
+        read: int(a, "read").map(|r| r != 0),
         date_sent_ms: int(a, "date_sent"),
         readable_date: opt(a, "readable_date"),
         contact_name: opt(a, "contact_name"),
@@ -268,7 +275,7 @@ mod tests {
 
     const SMSES: &str = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <smses count="2">
-  <sms protocol="0" address="+17783176760" date="1778277198761" type="1" body="Hello, right back at you!" date_sent="1778277198000" readable_date="May 8, 2026 2:53:18 p.m." contact_name="(Unknown)" />
+  <sms protocol="0" address="+17783176760" date="1778277198761" type="1" body="Hello, right back at you!" read="0" date_sent="1778277198000" readable_date="May 8, 2026 2:53:18 p.m." contact_name="(Unknown)" />
   <sms protocol="0" address="+12262121542" date="1778277388135" type="1" body="&lt;#&gt; code 763&#10;line two" date_sent="0" readable_date="x" contact_name="null" />
 </smses>"#;
 
@@ -295,6 +302,9 @@ mod tests {
         // "null" contact_name collapses to None.
         assert_eq!(sms[1].contact_name, None);
         assert_eq!(sms[0].contact_name.as_deref(), Some("(Unknown)"));
+        // `read="0"` is kept; a backup that says nothing stays unknown.
+        assert_eq!(sms[0].read, Some(false));
+        assert_eq!(sms[1].read, None);
     }
 
     #[test]

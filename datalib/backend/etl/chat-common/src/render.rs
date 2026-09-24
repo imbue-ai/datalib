@@ -22,7 +22,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// `datalib_step`'s render step checks that every version stored on
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
-pub const LAYOUT_VERSION: u32 = 4;
+pub const LAYOUT_VERSION: u32 = 5;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -48,7 +48,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{timestamp_html, MessageHeader};
-use datalib_etl_render::section::{join, msg_div_open, Section};
+use datalib_etl_render::section::{join, msg_div_open_with, Section};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -342,6 +342,7 @@ fn render_markdown(
         return vec![Section::unkeyed(s)];
     }
 
+    let first_unread = doc.items.iter().position(|it| it.unread);
     let mut sections = vec![Section::unkeyed(s)];
     let mut i = 0;
     while i < doc.items.len() {
@@ -350,10 +351,15 @@ fn render_markdown(
             .position(|it| !it.is_aside)
             .map_or(doc.items.len(), |n| i + n);
         if run_end > i {
-            render_aside_run(&mut sections, profile, &doc.items[i..run_end]);
+            render_aside_run(
+                &mut sections,
+                profile,
+                &doc.items[i..run_end],
+                first_unread.and_then(|f| f.checked_sub(i)),
+            );
             i = run_end;
         } else {
-            sections.push(render_item(profile, &doc.items[i]));
+            sections.push(render_item(profile, &doc.items[i], first_unread == Some(i)));
             i += 1;
         }
     }
@@ -401,21 +407,31 @@ fn render_aside_run(
     sections: &mut Vec<Section>,
     profile: &RenderProfile,
     items: &[NormalizedChatItem],
+    first_unread: Option<usize>,
 ) {
     let plural = if items.len() == 1 { "" } else { "s" };
     sections.push(Section::unkeyed(format!(
         "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
         n = items.len(),
     )));
-    for item in items {
-        sections.push(render_item(profile, item));
+    for (i, item) in items.iter().enumerate() {
+        sections.push(render_item(profile, item, first_unread == Some(i)));
     }
     sections.push(Section::unkeyed("</details>\n\n".to_string()));
 }
 
-fn render_item(profile: &RenderProfile, item: &NormalizedChatItem) -> Section {
+fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {
     let mut s = String::with_capacity(512);
-    s.push_str(&msg_div_open(&item.message_uuid, profile.provider));
+    let classes: &[&str] = match (item.unread, first_unread) {
+        (true, true) => &["unread", "first-unread"],
+        (true, false) => &["unread"],
+        (false, _) => &[],
+    };
+    s.push_str(&msg_div_open_with(
+        &item.message_uuid,
+        profile.provider,
+        classes,
+    ));
     s.push_str("\n\n");
 
     match item.kind {
@@ -867,6 +883,7 @@ mod tests {
         rows
     }
     use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
+    use datalib_etl_render::section::msg_div_open;
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -909,6 +926,7 @@ mod tests {
                     kind_label: None,
                     source_ref: None,
                     is_aside: false,
+                    unread: false,
                     problems: Vec::new(),
                 }],
             }],
@@ -1077,6 +1095,7 @@ mod tests {
             kind_label: None,
             source_ref: None,
             is_aside: false,
+            unread: false,
             problems: Vec::new(),
         });
         let rows = rows_of(&profile, &chat);
@@ -1230,6 +1249,7 @@ mod tests {
             kind_label: Some("Tool Call".to_string()),
             source_ref: None,
             is_aside: true,
+            unread: false,
             problems: Vec::new(),
         }
     }
@@ -1267,6 +1287,53 @@ mod tests {
         for uuid in ["aside-1", "aside-2", "aside-3"] {
             assert!(md.contains(&format!("id=\"m-{uuid}\"")), "{md}");
         }
+    }
+
+    /// Every unread item is marked, and only the first of them — here
+    /// inside a run of asides — carries the "New" line's class.
+    #[test]
+    fn unread_items_are_marked_and_the_first_one_starts_the_new_line() {
+        let mut chat = mk_chat();
+        let spoken = chat.buckets[0].items[0].clone();
+        let unread = |mut item: NormalizedChatItem, uuid: &str| {
+            item.message_uuid = uuid.to_string();
+            item.unread = true;
+            item
+        };
+        chat.buckets[0].items = vec![
+            spoken.clone(),
+            aside_item("aside-read", "read tool"),
+            unread(aside_item("x", "unread tool"), "aside-unread"),
+            unread(spoken, "spoken-unread"),
+        ];
+        let md = join(&render_markdown(
+            &test_profile(),
+            &chat,
+            &chat.buckets[0],
+            "Test · Bridge Crew",
+            "Test · Bridge Crew (2364-04)",
+        ));
+
+        let class_of = |uuid: &str| {
+            let open = md
+                .split('\n')
+                .find(|l| l.contains(&format!("id=\"m-{uuid}\"")))
+                .unwrap_or_else(|| panic!("no wrapper for {uuid}: {md}"));
+            open.split("class=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(class_of("aside-read"), "msg msg--test");
+        assert_eq!(
+            class_of("aside-unread"),
+            "msg msg--test unread first-unread"
+        );
+        assert_eq!(class_of("spoken-unread"), "msg msg--test unread");
+        assert_eq!(md.matches("first-unread").count(), 1, "{md}");
     }
 
     /// A document's sections are one per item, each keyed by the item
