@@ -166,6 +166,15 @@ metrics for it:
 {"event":"progress_inc","step":"me","delta":1}
 ```
 
+A step whose consumers may read its output before it finishes says so
+once, as it starts:
+
+```json
+{"event":"capabilities","step":"me","streams_output":true}
+```
+
+Without it, a consumer waits for the step to end whatever it seals.
+
 `progress_message` is the step's own words — a phase, not a number.
 `log`'s `target` and `fields` are optional; a plain `msg` is fine.
 

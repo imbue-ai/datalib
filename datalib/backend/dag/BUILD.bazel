@@ -199,3 +199,43 @@ build_test(
         ":manual_e2e_live_sync_golden",
     ],
 )
+
+# A step that does only what it is told, for the supervisor's scenario
+# tests. `testonly`: nothing shipped may link `etl` through it.
+rust_binary(
+    name = "test_driver",
+    testonly = True,
+    srcs = ["tests/driver/main.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The supervisor's scenario tests: real driver steps, the loop in-process,
+# and a person at the controls through the store. No sleeps: every wait
+# is for an ack, an event or a commit, under a deadline.
+rust_test(
+    name = "supervisor_harness_test",
+    size = "medium",
+    srcs = glob(["tests/harness/*.rs"]),
+    crate_root = "tests/harness/main.rs",
+    data = [":test_driver"],
+    edition = "2021",
+    env = {
+        "DRIVER_BIN": "$(rootpath :test_driver)",
+    },
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
