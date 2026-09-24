@@ -30,6 +30,18 @@ struct Args {
     /// log output or pre-allocating a port.
     #[arg(long)]
     url_file: Option<PathBuf>,
+
+    /// Run every sync as if it were this instant (RFC 3339, with an
+    /// offset) rather than the clock's, as `datalib-dag --now` does for
+    /// one run: for building fixtures, never for a person's root.
+    #[arg(long, value_parser = rfc3339)]
+    now: Option<String>,
+}
+
+fn rfc3339(s: &str) -> Result<String, String> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|_| s.to_string())
+        .map_err(|e| format!("not RFC 3339 with an offset: {e}"))
 }
 
 #[tokio::main]
@@ -130,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
     let state = datalib_http::build_state(
         root,
         datalib_http::binaries::resolve_binary_dir(),
+        args.now.clone(),
         api_token,
     )
     .await?;

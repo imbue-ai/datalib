@@ -117,6 +117,10 @@ pub struct HostConfig {
     pub control: SyncControl,
     /// The step binaries' directory, ahead of the config's `binary_dir`.
     pub binary_dir: Option<PathBuf>,
+    /// Every busy period's "now", in place of the clock: what
+    /// `datalib-dag --now` is to one run. For fixtures, whose output must
+    /// not depend on the day they were built.
+    pub now: Option<String>,
 }
 
 /// How often an idle host looks for intent nobody woke it for: a request
@@ -281,6 +285,12 @@ async fn settle(root: &Path, store: &Store) {
     }
 }
 
+fn now(cfg: &HostConfig) -> String {
+    cfg.now
+        .clone()
+        .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
+}
+
 /// One busy period: the config loaded once, a run opened, and the loop
 /// served until no request it can place is open.
 async fn serve_period(cfg: &HostConfig, store: &Store) {
@@ -290,7 +300,7 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
         Err(why) => return fail_open_requests(store, &why).await,
     };
     let run_id = datalib_dag::scheduler::new_run_id();
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
+    let now = now(cfg);
     let env = match host::step_env(
         &checked.cfg,
         cfg.binary_dir.as_deref(),
@@ -350,7 +360,7 @@ async fn run_reset(cfg: &HostConfig, targets: &[ResetTarget]) -> Result<(), Stri
     let root = cfg.control.root.clone();
     let checked = load_config(&root)?;
     let run_id = datalib_dag::scheduler::new_run_id();
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
+    let now = now(cfg);
     let env = host::step_env(
         &checked.cfg,
         cfg.binary_dir.as_deref(),

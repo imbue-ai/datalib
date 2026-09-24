@@ -131,9 +131,12 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Cacheable, deterministic ingest of the TNG fixtures via the DAG
-# runner (//datalib/backend/dag:datalib_dag_bin driving
-# //datalib/backend/datalib_step:datalib_step). The pipeline runs
+# Cacheable, deterministic ingest of the TNG fixtures, driven through
+# the server the way the web client drives it: `datalib-http` on the
+# workspace, the config built with the Setup tab's endpoints and every
+# sync a `POST /api/requests` (sync_drivers.py). `:ingested_tng_test`
+# runs the same script through `datalib-dag`, so both doors are covered
+# over the same fixture. The pipeline runs
 # every source's download+render step pair over the checked-in
 # fixtures and the index fan-in stacks the resulting render stores into
 # `backend_index.doltlite_db` (the doltlite chunk store is linked
@@ -155,6 +158,7 @@ genrule(
         ":source_json",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/http:datalib_http_bin",
         # CLI that converts the signal TNG JSON spec into an encrypted
         # snapshot dir on the fly. Lives in the signal-backup library
         # crate; see that crate's BUILD.bazel.
@@ -178,6 +182,7 @@ genrule(
     tools = [
         "quiet.sh",
         "run_sync_pipeline.py",
+        "sync_drivers.py",
         "tar_qmd.py",
     ],
     cmd = " && ".join([
@@ -248,6 +253,8 @@ genrule(
             "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
             # Calendar: two `.ics` calendars (arg 29, appended likewise).
             "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
+            # The server every sync goes through (arg 30).
+            "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
@@ -332,6 +339,7 @@ py_test(
     ],
     data = [
         "run_sync_pipeline.py",
+        "sync_drivers.py",
         ":source_json",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
@@ -399,6 +407,7 @@ py_test(
     ],
     data = [
         "run_sync_pipeline.py",
+        "sync_drivers.py",
         ":source_json",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
