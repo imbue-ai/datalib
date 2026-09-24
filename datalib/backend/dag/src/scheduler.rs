@@ -72,6 +72,9 @@ pub struct Runner {
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
     /// How long a stopped subprocess step has before it is killed.
     pub stop_grace: std::time::Duration,
+    /// Where the loop re-reads its graph while it runs. `None` keeps the
+    /// graph it was started with for the whole busy period.
+    pub reload: Option<Arc<dyn crate::supervisor::reload::GraphSource>>,
 }
 
 impl Runner {
@@ -84,6 +87,7 @@ impl Runner {
             child_env: Arc::new(BTreeMap::new()),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
+            reload: None,
         }
     }
 
@@ -104,6 +108,11 @@ impl Runner {
 
     pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
         self.child_env = Arc::new(env);
+        self
+    }
+
+    pub fn reload_from(mut self, source: Arc<dyn crate::supervisor::reload::GraphSource>) -> Self {
+        self.reload = Some(source);
         self
     }
 }
@@ -537,6 +546,19 @@ impl QueueLedger {
         }
     }
 
+    /// The same ledger over a new graph: `from_old[i]` is the index step
+    /// `i` of the new graph had in the old one. What a step the new graph
+    /// lacks had queued, or had queued for it, goes with it.
+    pub(crate) fn remap(&mut self, from_old: &[Option<usize>]) {
+        let to_new: HashMap<usize, usize> = from_old
+            .iter()
+            .enumerate()
+            .filter_map(|(new, old)| Some(((*old)?, new)))
+            .collect();
+        self.pending = remap_by_step(&mut self.pending, from_old, &to_new);
+        self.last_seen = remap_by_step(&mut self.last_seen, from_old, &to_new);
+    }
+
     fn publish(&self, graph: &Graph, consumer: usize, producer: usize, sink: &dyn EventSink) {
         let value: u64 = self.pending[consumer]
             .get(&producer)
@@ -549,6 +571,25 @@ impl QueueLedger {
             value: value as i64,
         });
     }
+}
+
+fn remap_by_step<T>(
+    v: &mut [BTreeMap<usize, T>],
+    from_old: &[Option<usize>],
+    to_new: &HashMap<usize, usize>,
+) -> Vec<BTreeMap<usize, T>> {
+    from_old
+        .iter()
+        .map(|old| {
+            let Some(o) = *old else {
+                return BTreeMap::new();
+            };
+            std::mem::take(&mut v[o])
+                .into_iter()
+                .filter_map(|(p, x)| Some((*to_new.get(&p)?, x)))
+                .collect()
+        })
+        .collect()
 }
 
 /// A fresh run id. UUID v7, so ids sort in the order the runs started

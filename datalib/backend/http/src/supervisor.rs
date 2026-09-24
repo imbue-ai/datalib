@@ -12,6 +12,7 @@ use std::time::Duration;
 use datalib_dag::config::ConfigCheck;
 use datalib_dag::scheduler::ResetTarget;
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{EventSink, Runner};
 use tokio::sync::{oneshot, watch, Notify, OnceCell};
@@ -298,8 +299,9 @@ fn now(cfg: &HostConfig) -> String {
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
 }
 
-/// One busy period: the config loaded once, a run opened, and the loop
-/// served until no request it can place is open.
+/// One busy period: a run opened, and the loop served until no request
+/// it can place is open. The loop re-reads the config as it goes; the
+/// step environment is the one built here.
 async fn serve_period(cfg: &HostConfig, store: &Store) {
     let root = cfg.control.root.clone();
     let checked = match load_config(&root) {
@@ -328,7 +330,10 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
     let runner = Runner::new(root.as_path())
         .sink(sink)
         .child_env(env.vars)
-        .stop_on(cfg.control.stop.subscribe());
+        .stop_on(cfg.control.stop.subscribe())
+        .reload_from(Arc::new(ConfigFile::new(
+            datalib_dag::config::root_config_path(&root),
+        )));
 
     cfg.control.busy.store(true, Ordering::SeqCst);
     tracing::info!(run = %run_id, "supervisor: a sync started");

@@ -174,9 +174,18 @@ pause** keeps a step from starting and stops it if it is running; a
 paused step a request skipped takes no part and records no run. A pause
 made while the loop is idle reaches the record through
 `Runner::settle`, one tick with nothing open. A request naming a step
-the loaded config lacks — a source added mid-run — waits, with its roots
-recorded as waiting on it, for the next run, which loads the config
-again.
+no config the loop has taken on has waits, with its roots recorded as
+waiting on it, for one that has it.
+
+**The loop re-reads the config while it runs.** A source added mid-sync
+starts beside the sync already going, and a step edited mid-sync runs
+under its new definition from its next start. A running step keeps the
+definition it started with and records that one, so the edit leaves it
+stale and it runs again if a request still wants it. A config that drops
+a step still running, or still named by an open request, is taken on once
+the loop is done with that step: a config saved mid-edit must not cost a
+long download. The step environment (`PATH`, log level, checkpoint
+cadence) stays the one the busy period started with.
 
 **A reset** (`datalib-dag --reset`, the app's Reset, `POST /api/reset`)
 empties what a step wrote and records the tree's new version, forgetting
