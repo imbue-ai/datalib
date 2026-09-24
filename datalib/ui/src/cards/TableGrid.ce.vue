@@ -321,7 +321,7 @@ function options(): GridOption {
       hideMenuOnScroll: false,
       hideCopyCellValueCommand: true,
       hideCommands: ["copy", "clear-grouping", "collapse-all-groups", "expand-all-groups"],
-      commandItems: menuSlots(24, entriesFor),
+      ...menuSlots(24, entriesFor),
     },
   };
 }
@@ -339,6 +339,15 @@ function onCellChange(_e: SlickEventData, args: OnCellChangeEventArgs) {
   if (!bundle || !editing) return;
   const { item, field, before } = editing;
   editing = null;
+  // The grid commits onto whatever row now sits where the edit began.
+  // Every refresh closes the editor first, so a different row here is a
+  // path that does not, and the edit is dropped rather than misapplied.
+  if (args.item !== item) {
+    console.warn("TableGrid: an edit's row moved under it; the edit was dropped", { field });
+    bundle.slickGrid.invalidateRow(args.row);
+    bundle.slickGrid.render();
+    return;
+  }
   const next = String(readPath(item, field) ?? "").trim();
   writePath(item, field, before);
   bundle.slickGrid.updateRow(args.row);
