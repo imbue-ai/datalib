@@ -2,8 +2,8 @@
 
 `slack-ingest` mirrors a Slack workspace into a single doltlite db
 at `<out>/raw/<name>/entities.doltlite_db`. Per-entity tables (channels, users,
-messages, replies, files) are each keyed by their upstream Slack
-identifier; payloads are stored as JSONB blobs in a `payload` column
+messages, replies, files, and the account's read states, saved items and
+channel bookmarks) are each keyed by their upstream Slack identifier; payloads are stored as JSONB blobs in a `payload` column
 alongside per-run bookkeeping and file/blob bytes. The old
 `<out>/raw_api/<method>/events.jsonl` tree was retired with the
 doltlite port — see
@@ -21,6 +21,12 @@ Required Slack OAuth scopes (user token):
   * `channels:history`, `groups:history`, `im:history`, `mpim:history`
   * `channels:read`, `groups:read`, `im:read`, `mpim:read`
   * `users:read`, `auth:test`
+  * `bookmarks:read`
+
+`client.counts` and `saved.list` are not in Slack's published API; they
+are what Slack's own web client calls, and they answer the browser-session
+token `latchkey` holds. A token that cannot call them costs those two
+tables and nothing else (see "The account's own state" below).
 
 ### File downloads
 
@@ -38,6 +44,9 @@ registration is needed — the same `slack` credential signs both
 | `users.list`                | Enumerate workspace users                |
 | `conversations.history`     | Per-channel forward pass + refresh window |
 | `conversations.replies`     | Threaded replies for every parent message |
+| `client.counts`             | How far the account has read, per conversation |
+| `saved.list`                | The account's "Saved for later" items    |
+| `bookmarks.list`            | A conversation's header bookmarks        |
 
 `shapes.rs` is the shape-of-the-response catalog: which path holds the
 items, what counts as the cursor key, how to dedup.
@@ -240,6 +249,46 @@ Two rules worth knowing when reading the code:
     having covered everything; recording anyway would drop a scheduled
     backfill permanently, since — unlike the resume cursor — bookkeeping
     doesn't self-heal from stored rows.
+
+## The account's own state
+
+Three tables record where the account itself stands, rather than what
+was said. All three cover only the conversations this run mirrors, so
+`channels`, `dms` and `dm_conversations` narrow them the way they narrow
+messages. They are fetched after the conversation listing and before
+the message walk. A listing that fails becomes a `problems` row on the
+Manage screen (a warning when Slack refused the token, an error
+otherwise), leaves that table as it was, and does not stop the sync.
+
+- **`channel_read_states`**, from one `client.counts` call: each
+  conversation's `last_read`, `latest`, `has_unreads` and
+  `mention_count`. **All of it is volatile**: the content payload is just
+  `{"id": …}`, and the state lives in the `volatile_payload` column of
+  `channel_read_states_bookkeeping`. Reading a channel is not a change to
+  it, so it must not show in `dolt_diff_channel_read_states` or wake the
+  render. `RawDb::load_read_states` lays the two halves back together.
+  Upserted every run; never pruned.
+- **`saved_items`**, from `saved.list`: in progress, completed and
+  archived. With no `filter` Slack returns only the in-progress ones, so
+  the walk asks for each of `saved`, `completed` and `archived` (checked
+  live: the three add up to the response's `counts.total_count`). The key
+  is `{item_type}#{item_id}#{ts}`; a saved message is a pointer to the
+  message, not a copy of it. Every run lists the whole set, so an item
+  no longer listed is deleted — but only inside mirrored conversations.
+- **`bookmarks`**, from `bookmarks.list`, one call per conversation. The
+  folder a bookmark sits in is its `parent_id`; the folder itself is not
+  listed (its label is in the channel's `properties.tabs`). A
+  conversation is asked only when its `properties.tabs` shows a
+  `bookmarks` or `folder` tab, or when we already hold bookmarks for it.
+  On a real workspace (2026-09-24) 75 of 128 channels had no such tab, and
+  none of the 25 of those we asked held a bookmark. Listed at most once
+  per `MANIFEST_TTL`, like the channel list. The listing is not paged,
+  so it is the conversation's whole set, and a bookmark it no longer
+  names is deleted.
+
+**Slack Lists are not mirrored.** `slackLists.*` answers the session
+token with `not_allowed_token_type`, and no List turned up through
+`files.list` or search on the workspace we checked.
 
 ## Rate limits
 

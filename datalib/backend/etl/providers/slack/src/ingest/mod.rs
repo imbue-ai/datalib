@@ -5,7 +5,7 @@ pub mod db;
 pub mod schema_raw;
 pub mod shapes;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-use datalib_etl::download_problems::{self, DownloadProblem};
+use datalib_etl::download_problems::{self, DownloadProblem, RunProblem};
 use datalib_etl::events;
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::progress::RunBar;
@@ -23,7 +23,9 @@ pub use db::{
     block_on_load_all, db_path_for, FetchTarget, LoadedMessage, LoadedRaw, MessageInput, RawDb,
     TsBounds, UserDirectoryEntry,
 };
-use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
+use shapes::{
+    M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_USERS,
+};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
@@ -53,7 +55,7 @@ async fn call(
 ) -> Result<Value> {
     let SlackCall { response, .. } = call_slack(method, params, latchkey)
         .await
-        .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
+        .map_err(anyhow::Error::from)?;
     Ok(response)
 }
 
@@ -247,6 +249,237 @@ pub(crate) fn next_cursor(resp: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+// The account's own place in the workspace: how far it has read, what
+// each conversation has bookmarked, what it saved for later.
+
+/// Filters `saved.list` walks, one listing each. With no `filter` it
+/// answers only what `saved` does; the three together are every item
+/// (checked against the response's own `counts.total_count` on
+/// 2026-09-24).
+const SAVED_FILTERS: &[&str] = &["saved", "completed", "archived"];
+
+fn refused(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<SlackError>(),
+        Some(SlackError::Refused { .. })
+    )
+}
+
+fn listing_problem(name: &str, e: &anyhow::Error) -> RunProblem {
+    problem_for(name, format!("{e:#}"), refused(e))
+}
+
+fn problem_for(name: &str, detail: String, refused: bool) -> RunProblem {
+    if refused {
+        RunProblem::forbidden(name, detail)
+    } else {
+        RunProblem::listing(name, detail)
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+pub struct AccountTotals {
+    pub read_states: usize,
+    pub bookmarks: usize,
+    pub saved_items: usize,
+    /// Bookmarks and saved items upstream no longer lists.
+    pub pruned: usize,
+}
+
+/// `client.counts` has one entry per conversation the account is in,
+/// mirrored or not; only the mirrored ones are kept, so `dms = false`
+/// keeps DMs out of this table as it does out of `channels`.
+async fn fetch_read_states(
+    db: &RawDb,
+    in_scope: &HashSet<String>,
+    latchkey: &LatchkeySettings,
+) -> Result<usize> {
+    let resp = call(M_COUNTS, &empty_params(), latchkey).await?;
+    let mut entries: Vec<Value> = Vec::new();
+    for surface in ["channels", "mpims", "ims"] {
+        let listed = resp
+            .get(surface)
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("{M_COUNTS}: no `{surface}` array"))?;
+        entries.extend(
+            listed
+                .iter()
+                .filter(|e| {
+                    e.get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| in_scope.contains(id))
+                })
+                .cloned(),
+        );
+    }
+    db.upsert_read_states(&entries).await?;
+    Ok(entries.len())
+}
+
+/// Every page of every [`SAVED_FILTERS`] listing, or an error: a walk
+/// that stopped short is not an enumeration, and nothing may be pruned
+/// to it.
+async fn list_saved_items(latchkey: &LatchkeySettings) -> Result<Vec<Value>> {
+    let mut items = Vec::new();
+    for filter in SAVED_FILTERS {
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut p = BTreeMap::new();
+            p.insert("filter".to_string(), filter.to_string());
+            p.insert("limit".to_string(), "50".to_string());
+            if let Some(c) = &cursor {
+                p.insert("cursor".to_string(), c.clone());
+            }
+            let resp = call(M_SAVED, &p, latchkey).await?;
+            let page = resp
+                .get("saved_items")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("{M_SAVED} filter={filter}: no `saved_items`"))?;
+            items.extend(page.iter().cloned());
+            cursor = next_cursor(&resp);
+            if cursor.is_none() {
+                break;
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// Saved items in conversations this run mirrors. Everything else in
+/// the listing points at messages we do not hold.
+fn saved_items_in_scope(items: Vec<Value>, in_scope: &HashSet<String>) -> Vec<Value> {
+    items
+        .into_iter()
+        .filter(|i| {
+            i.get("item_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| in_scope.contains(id))
+        })
+        .collect()
+}
+
+/// `bookmarks.list` for each mirrored conversation whose header has a
+/// bookmarks bar (see [`RawDb::channels_to_list_bookmarks`]): on a real
+/// workspace 75 of 128 channels had none, and none of the 25 of those
+/// asked held a bookmark. At most once per [`MANIFEST_TTL`], like the
+/// channel listing. Returns `(stored, pruned)`; a conversation that
+/// could not be listed keeps what it had.
+async fn fetch_bookmarks(
+    db: &RawDb,
+    targets: &[(String, String)],
+    stop: &datalib_etl::stop::StopFlag,
+    progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
+    problems: &mut Vec<RunProblem>,
+) -> Result<(usize, usize)> {
+    let sweep_key = "bookmarks";
+    if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
+        if age < MANIFEST_TTL {
+            info!(
+                event = "slack_fetch_bookmarks_skipped",
+                reason = "ttl",
+                age_s = age.num_seconds().max(0),
+                "the bookmarks are fresh enough; not re-listing"
+            );
+            return Ok((0, 0));
+        }
+    }
+    let with_bar = db.channels_to_list_bookmarks().await?;
+    let mut stored = 0usize;
+    let mut pruned = 0usize;
+    let mut failed: Vec<(String, anyhow::Error)> = Vec::new();
+    let mut stopped = false;
+    for (cid, label) in targets.iter().filter(|(cid, _)| with_bar.contains(cid)) {
+        if stop.requested() {
+            stopped = true;
+            break;
+        }
+        progress.set_message(&format!("{M_BOOKMARKS} {label}"));
+        let mut p = BTreeMap::new();
+        p.insert("channel_id".to_string(), cid.clone());
+        let listed = call(M_BOOKMARKS, &p, latchkey).await.and_then(|resp| {
+            resp.get("bookmarks")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("{M_BOOKMARKS} {label}: no `bookmarks` array"))
+        });
+        match listed {
+            Ok(bookmarks) => {
+                stored += bookmarks.len();
+                pruned += db.replace_bookmarks(cid, &bookmarks).await?;
+            }
+            Err(e) => {
+                warn!(event = "slack_bookmarks_failed", channel = %label, error = %format!("{e:#}"), "could not list a conversation's bookmarks");
+                failed.push((label.clone(), e));
+            }
+        }
+    }
+    if let Some((label, first)) = failed.first() {
+        let detail = format!(
+            "{} of the conversations with bookmarks could not be listed; the first, {label}: {first:#}",
+            failed.len()
+        );
+        problems.push(problem_for(M_BOOKMARKS, detail, refused(first)));
+    } else if !stopped {
+        db.record_manifest_sweep(sweep_key).await?;
+    }
+    Ok((stored, pruned))
+}
+
+/// Read states, saved items and bookmarks for the conversations this run
+/// mirrors. Each listing that fails becomes a `problems` row and costs
+/// only its own table; none of them sinks the message walk.
+async fn fetch_account_state(
+    db: &RawDb,
+    targets: &[(String, String)],
+    stop: &datalib_etl::stop::StopFlag,
+    progress: &datalib_etl::progress::Progress,
+    latchkey: &LatchkeySettings,
+) -> Result<(AccountTotals, Vec<RunProblem>)> {
+    let in_scope: HashSet<String> = targets.iter().map(|(cid, _)| cid.clone()).collect();
+    let mut totals = AccountTotals::default();
+    let mut problems = Vec::new();
+
+    progress.set_message(M_COUNTS);
+    match fetch_read_states(db, &in_scope, latchkey).await {
+        Ok(n) => totals.read_states = n,
+        Err(e) => problems.push(listing_problem(M_COUNTS, &e)),
+    }
+
+    progress.set_message(M_SAVED);
+    match list_saved_items(latchkey).await {
+        Ok(items) => {
+            let listed = items.len();
+            let kept = saved_items_in_scope(items, &in_scope);
+            totals.saved_items = kept.len();
+            totals.pruned += db.replace_saved_items(&kept, &in_scope).await?;
+            info!(
+                event = "slack_saved_items_listed",
+                listed,
+                kept = kept.len(),
+                "listed the saved-for-later items; kept those in mirrored conversations"
+            );
+        }
+        Err(e) => problems.push(listing_problem(M_SAVED, &e)),
+    }
+
+    let (bookmarks, pruned) =
+        fetch_bookmarks(db, targets, stop, progress, latchkey, &mut problems).await?;
+    totals.bookmarks = bookmarks;
+    totals.pruned += pruned;
+
+    info!(
+        event = "slack_account_state_done",
+        read_states = totals.read_states,
+        saved_items = totals.saved_items,
+        bookmarks = totals.bookmarks,
+        pruned = totals.pruned,
+        problems = problems.len(),
+        "recorded read states, saved items and bookmarks"
+    );
+    Ok((totals, problems))
 }
 
 // Which conversations this run walks.
@@ -1100,6 +1333,7 @@ pub struct FetchSummary {
     /// Messages Slack no longer serves inside a range this run re-walked.
     pub pruned: usize,
     pub media: BTreeMap<String, usize>,
+    pub account: AccountTotals,
 }
 
 #[instrument(skip_all)]
@@ -1156,6 +1390,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         replies: 0,
         pruned: 0,
         media: BTreeMap::new(),
+        account: AccountTotals::default(),
     };
     // Channels whose export errored. A per-channel failure is warned and
     // stepped over so one bad channel can't sink the sync, which means
@@ -1182,11 +1417,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             &opts.latchkey,
         )
         .await?;
-        setup.finish(&format!(
-            "setup done in {}ms",
-            t_setup.elapsed().as_millis() as u64
-        ));
-
         // Only loaded when DMs are in play — it names them, and for a
         // channels-only run it is a whole table scan nothing would read.
         let user_labels: BTreeMap<String, String> = if opts.dms {
@@ -1241,6 +1471,32 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             "planned the export"
         );
         let targets = plan.targets;
+
+        if !opts.control.stop.requested() {
+            let (account, problems) =
+                fetch_account_state(&db, &targets, &opts.control.stop, &setup, &opts.latchkey)
+                    .await?;
+            // A stop may have cut the bookmarks short; the last run's
+            // rows stand until a run gets through them.
+            if !opts.control.stop.requested() {
+                download_problems::report_run(db.pool(), &problems).await;
+            }
+            if let Some(sealer) = opts.sealer.as_ref() {
+                sealer
+                    .wrote(
+                        (account.read_states
+                            + account.saved_items
+                            + account.bookmarks
+                            + account.pruned) as u64,
+                    )
+                    .await;
+            }
+            grand.account = account;
+        }
+        setup.finish(&format!(
+            "setup done in {}ms",
+            t_setup.elapsed().as_millis() as u64
+        ));
 
         // Seeded with one tick per channel, so the bar reads as
         // something before the first channel has listed anything.

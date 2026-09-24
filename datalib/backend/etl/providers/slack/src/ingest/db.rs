@@ -20,8 +20,9 @@ use datalib_etl::event_tape::EventTape;
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
-    full_ddl, join_dm_user_ids, parse_dm_user_ids, slack_message_key, slack_thread_key, ChannelRow,
-    MessageRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, USER_VOLATILE_PATHS,
+    full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
+    slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, MessageRow, SavedItemRow,
+    UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -610,6 +611,182 @@ impl RawDb {
         Ok(out)
     }
 
+    // ── read states, bookmarks, saved items ─────────────────────────
+
+    pub async fn upsert_read_states(&self, entries: &[Value]) -> Result<()> {
+        let mut rows: Vec<ChannelReadStateRow> = Vec::with_capacity(entries.len());
+        let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(entries.len());
+        let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let (base, volatile) = dr::split_volatile(entry, READ_STATE_VOLATILE_PATHS);
+            rows.push(ChannelReadStateRow {
+                id_and_payload: WirePayload {
+                    id: id.to_string(),
+                    payload: serde_json::to_string(&base).context("serialize read state")?,
+                },
+            });
+            tape_pairs.push((id, entry));
+            if let Some(v) = volatile {
+                volatile_store.push((id, v));
+            }
+        }
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let volatile_pairs: Vec<(&str, &Value)> =
+            volatile_store.iter().map(|(id, v)| (*id, v)).collect();
+        bulk_upsert_with_tape_split(
+            &self.pool,
+            self.tape_ref(),
+            &rows,
+            &tape_pairs,
+            &volatile_pairs,
+        )
+        .await
+    }
+
+    /// Each conversation's read state with its volatile half laid back
+    /// over it: the whole `client.counts` entry, keyed by conversation id.
+    pub async fn load_read_states(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            "SELECT json(r.payload) AS payload, json(b.volatile_payload) AS volatile \
+             FROM channel_read_states r \
+             LEFT JOIN channel_read_states_bookkeeping b ON b.id = r.id \
+             WHERE r.payload IS NOT NULL ORDER BY r.id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select channel_read_states")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let parse = |col: &str| {
+                r.try_get::<Option<String>, _>(col)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            };
+            let Some(base) = parse("payload") else {
+                continue;
+            };
+            out.push(match parse("volatile") {
+                Some(v) => dr::overlay(&base, &v),
+                None => base,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Store one conversation's `bookmarks.list` answer and drop the
+    /// bookmarks it no longer names: the listing is not paged, so it is
+    /// the conversation's whole set. Returns how many went.
+    pub async fn replace_bookmarks(&self, channel_id: &str, payloads: &[Value]) -> Result<usize> {
+        let mut rows: Vec<BookmarkRow> = Vec::with_capacity(payloads.len());
+        let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            rows.push(BookmarkRow {
+                id_and_payload: WirePayload {
+                    id: id.to_string(),
+                    payload: serde_json::to_string(payload).context("serialize bookmark")?,
+                },
+                channel_id: channel_id.to_string(),
+            });
+            tape_pairs.push((id, payload));
+        }
+        let keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
+        if !rows.is_empty() {
+            bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await?;
+        }
+        let gone = datalib_etl::prune::prune_scope(
+            &self.pool,
+            "bookmarks",
+            &[("channel_id", channel_id)],
+            &keep,
+        )
+        .await?;
+        Ok(gone.len())
+    }
+
+    /// Conversations whose header shows a bookmarks bar or a bookmark
+    /// folder (`properties.tabs` of type `bookmarks` / `folder`), plus
+    /// every one we already hold bookmarks for, so a bar emptied upstream
+    /// is still asked about once more.
+    pub async fn channels_to_list_bookmarks(&self) -> Result<HashSet<String>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT c.id FROM channels c, json_each(c.payload, '$.properties.tabs') t \
+             WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') \
+             UNION SELECT channel_id FROM bookmarks",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select channels with a bookmarks tab")?;
+        Ok(ids.into_iter().collect())
+    }
+
+    pub async fn load_bookmarks(&self) -> Result<Vec<Value>> {
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "bookmarks").await
+    }
+
+    /// Store a complete `saved.list` walk and drop the stored items it no
+    /// longer names — but only those in `in_scope` conversations. An item
+    /// in a conversation this run does not mirror was not asked about, so
+    /// it is left alone. Returns how many went.
+    pub async fn replace_saved_items(
+        &self,
+        items: &[Value],
+        in_scope: &HashSet<String>,
+    ) -> Result<usize> {
+        let mut rows: Vec<SavedItemRow> = Vec::with_capacity(items.len());
+        let mut tape_pairs: Vec<(String, &Value)> = Vec::with_capacity(items.len());
+        for item in items {
+            let text = |k: &str| item.get(k).and_then(|v| v.as_str());
+            let (Some(item_type), Some(item_id)) = (text("item_type"), text("item_id")) else {
+                continue;
+            };
+            let ts = text("ts");
+            let id = saved_item_key(item_type, item_id, ts);
+            rows.push(SavedItemRow {
+                id_and_payload: WirePayload {
+                    id: id.clone(),
+                    payload: serde_json::to_string(item).context("serialize saved item")?,
+                },
+                item_type: item_type.to_string(),
+                item_id: item_id.to_string(),
+                ts: ts.map(String::from),
+            });
+            tape_pairs.push((id, item));
+        }
+        if !rows.is_empty() {
+            let pairs: Vec<(&str, &Value)> =
+                tape_pairs.iter().map(|(id, v)| (id.as_str(), *v)).collect();
+            bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &pairs).await?;
+        }
+
+        let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, item_id FROM saved_items")
+            .fetch_all(&self.pool)
+            .await
+            .context("select saved_items")?;
+        let mut keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
+        keep.extend(
+            stored
+                .iter()
+                .filter(|(_, item_id)| !in_scope.contains(item_id))
+                .map(|(id, _)| id.clone()),
+        );
+        let gone = datalib_etl::prune::prune_scope(&self.pool, "saved_items", &[], &keep).await?;
+        datalib_etl::prune::record("slack saved items", stored.len(), gone.len());
+        Ok(gone.len())
+    }
+
+    pub async fn load_saved_items(&self) -> Result<Vec<Value>> {
+        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "saved_items").await
+    }
+
     // ── attachments (per-provider CAS edge) ─────────────────────────
 
     /// Snapshot `(file_id → blake3)` for every attachment whose bytes
@@ -959,6 +1136,59 @@ mod tests {
             m.get(&("C1".to_string(), "3.0".to_string()))
                 .map(String::as_str),
             Some("4.0")
+        );
+    }
+
+    fn id_set(values: &[Value], key: &str) -> Vec<String> {
+        let mut out: Vec<String> = values
+            .iter()
+            .map(|v| v[key].as_str().unwrap().to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// A conversation's bookmark listing is its whole set: one gone
+    /// upstream goes here, and another conversation's are untouched.
+    #[tokio::test]
+    async fn replace_bookmarks_prunes_within_its_conversation() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        let bm = |id: &str| json!({"id": id, "type": "link"});
+        db.replace_bookmarks("C1", &[bm("B1"), bm("B2")])
+            .await
+            .unwrap();
+        db.replace_bookmarks("C2", &[bm("B3")]).await.unwrap();
+
+        let gone = db.replace_bookmarks("C1", &[bm("B2")]).await.unwrap();
+
+        assert_eq!(gone, 1);
+        assert_eq!(
+            id_set(&db.load_bookmarks().await.unwrap(), "id"),
+            vec!["B2", "B3"]
+        );
+    }
+
+    /// A saved item in a conversation this run does not mirror was not
+    /// asked about, so its absence from the listing deletes nothing.
+    #[tokio::test]
+    async fn replace_saved_items_prunes_only_in_scope() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        let item = |cid: &str, ts: &str| json!({"item_type": "message", "item_id": cid, "ts": ts});
+        let both: HashSet<String> = ["C1", "C2"].map(String::from).into();
+        db.replace_saved_items(&[item("C1", "1.0"), item("C2", "2.0")], &both)
+            .await
+            .unwrap();
+
+        // `C2` has left the config; `C1`'s item was unsaved upstream.
+        let only_c1: HashSet<String> = ["C1".to_string()].into();
+        let gone = db.replace_saved_items(&[], &only_c1).await.unwrap();
+
+        assert_eq!(gone, 1);
+        assert_eq!(
+            id_set(&db.load_saved_items().await.unwrap(), "item_id"),
+            vec!["C2"]
         );
     }
 }

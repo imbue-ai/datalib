@@ -1140,6 +1140,29 @@ ingested_files
     tz_offset
 
 == slack/raw ==
+bookmarks
+    id
+    payload
+    channel_id
+bookmarks_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+channel_read_states
+    id
+    payload
+channel_read_states_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
 channels
     id
     payload
@@ -1180,6 +1203,20 @@ replies_pages
     thread_ts
     latest_reply
 replies_pages_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+saved_items
+    id
+    payload
+    item_type
+    item_id
+    ts
+saved_items_bookkeeping
     id
     fetched_at_utc
     attempt_count
