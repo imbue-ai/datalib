@@ -130,7 +130,9 @@ and the rule on the series page is what they are.
 
 A `calendars` list of names narrows a server to those calendars; leave
 it out for all of them. Adding a calendar to the list later downloads
-it whole.
+it whole. `since` and `until` (`YYYY-MM-DD`) narrow it to a stretch of
+days: only events with some part in it, and only the changed dates of a
+series that fall in it. A windowed calendar is listed whole every run.
 
 ## ChatGPT
 
