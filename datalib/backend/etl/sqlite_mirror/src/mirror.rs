@@ -176,6 +176,8 @@ pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
         .create_if_missing(create);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .acquire_timeout(Duration::from_secs(300))
         .connect_with(opts)
         .await

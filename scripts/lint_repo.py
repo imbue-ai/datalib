@@ -25,6 +25,10 @@ instead from `bazel run //:precommit` and as a plain step in
      `npx -y @tobilu/qmd` without a version: bare `npx -y` resolves
      `latest` at run time, and those two commands are the ones a
      person pastes a live session cookie into.
+ 12. Every sqlx SQLite pool turns off `idle_timeout` and `max_lifetime`,
+     and none is built by a shortcut that takes sqlx's defaults: either
+     setting gives the pool a maintenance task, and sqlx 0.9's can spin
+     forever and hang the process at exit.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -309,6 +313,7 @@ def main() -> int:
     rc |= _check_source_grid(root)
     rc |= _check_workflows_no_empty_arrays(root)
     rc |= _check_no_floating_npx(root)
+    rc |= _check_pools_never_recycle(root)
     return rc
 
 
@@ -793,6 +798,59 @@ def _check_no_floating_npx(root: Path) -> int:
         + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
         "  or pin it: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
         "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 12: every sqlx pool is built with recycling off ---------------
+#
+# A pool with `idle_timeout` or `max_lifetime` set — sqlx's defaults —
+# spawns a maintenance task that loops `for _ in 0..pool.num_idle()`.
+# In sqlx 0.9.0 that counter is an unsigned atomic that `release`
+# increments only after it has handed the permit back, so a concurrent
+# `acquire` can decrement it first and wrap it to `usize::MAX`. A
+# maintenance task that reads it then never leaves its poll, and the
+# runtime's drop waits on that worker forever: the `render_contract_test`
+# exit stall (Sep 2026, datalib/backend/etl/README.md "Connection
+# pools"). With both settings off, and no `min_connections`, sqlx spawns
+# no task at all. A doltlite pool needs them off for its own reason too.
+#
+# The builder is read from `SqlitePoolOptions::new()` to the statement's
+# `;`, which covers the one-chain form and the `let mut options = …;`
+# form alike.
+_POOL_BUILDER = re.compile(r"\b\w*PoolOptions(?:::<[^>]*>)?::new\(\)")
+_POOL_SHORTCUT = re.compile(
+    r"\b\w*Pool(?:::<[^>]*>)?::connect(?:_with|_lazy|_lazy_with)?\("
+)
+_RECYCLING_OFF = ("idle_timeout(None)", "max_lifetime(None)")
+
+
+def _check_pools_never_recycle(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        text = (root / rel).read_text(encoding="utf-8")
+        for m in _POOL_BUILDER.finditer(text):
+            end = text.find(";", m.end())
+            builder = text[m.start() : end if end != -1 else len(text)]
+            if not all(s in builder for s in _RECYCLING_OFF):
+                lineno = text.count("\n", 0, m.start()) + 1
+                hits.append(
+                    f"  {rel}:{lineno}: a pool without idle_timeout(None) and max_lifetime(None)"
+                )
+        for m in _POOL_SHORTCUT.finditer(text):
+            lineno = text.count("\n", 0, m.start()) + 1
+            hits.append(
+                f"  {rel}:{lineno}: {m.group(0)} builds a pool with sqlx's defaults"
+            )
+    if not hits:
+        print("OK: every sqlx pool is built with recycling off.")
+        return 0
+    print(
+        "ERROR: a sqlx pool with a maintenance task:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Build it with `SqlitePoolOptions::new()` and chain\n"
+        "  `.idle_timeout(None).max_lifetime(None)`. See lint_repo.py check 12.",
         file=sys.stderr,
     )
     return 1

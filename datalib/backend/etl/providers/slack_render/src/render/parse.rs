@@ -967,6 +967,8 @@ mod legacy_schema_tests {
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .unwrap();

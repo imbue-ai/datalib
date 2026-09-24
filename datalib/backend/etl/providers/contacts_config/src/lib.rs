@@ -49,10 +49,12 @@ impl ContactsConfig {
 #[serde(deny_unknown_fields)]
 pub struct CarddavSync {
     /// Server URL. Discovery walks
-    /// `current-user-principal` → `addressbook-home-set` from here.
+    /// `current-user-principal` → `addressbook-home-set` from here, or
+    /// from the host's `/.well-known/carddav` when this URL does not
+    /// answer.
     /// Examples:
     ///   - `https://contacts.icloud.com/`
-    ///   - `https://carddav.fastmail.com/dav/` (the bare host is a 404)
+    ///   - `https://carddav.fastmail.com/`
     ///   - `https://www.googleapis.com/carddav/v1/principals/`
     pub server_url: String,
     /// Restrict the run to the named addressbooks (matched against
