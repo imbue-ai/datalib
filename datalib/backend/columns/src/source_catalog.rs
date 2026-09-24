@@ -17,7 +17,8 @@ struct Entry {
     icon: Option<&'static str>,
 }
 
-// Every icon names an asset in `ui/src/config/icons.ts`.
+// Every icon is a file's name in `datalib/ui/src/assets/`, and matches
+// the browser's catalog for the same type (`scripts/lint_repo.py`, check 13).
 const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
     e("claude", Some("api"), "Claude", Some("claude")),
