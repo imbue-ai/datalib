@@ -113,6 +113,9 @@ struct ChatItemSpec {
     text: String,
     #[serde(default)]
     outgoing: bool,
+    /// An incoming message the account has not read; read otherwise.
+    #[serde(default)]
+    unread: bool,
 }
 
 fn recipient_frame(r: &RecipientSpec) -> backup::Frame {
@@ -171,7 +174,10 @@ fn chat_item_frame(ci: &ChatItemSpec) -> backup::Frame {
         ))
     } else {
         Some(chat_item::DirectionalDetails::Incoming(
-            backup::chat_item::IncomingMessageDetails::default(),
+            backup::chat_item::IncomingMessageDetails {
+                read: !ci.unread,
+                ..Default::default()
+            },
         ))
     };
     backup::Frame {

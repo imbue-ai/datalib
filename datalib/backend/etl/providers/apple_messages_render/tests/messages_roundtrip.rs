@@ -202,6 +202,39 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
     Ok(())
 }
 
+/// Marking a message unread in Messages re-renders its chat with the
+/// message marked, and reading it takes the mark away again. The
+/// fixture has every message read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn marking_a_message_unread_and_read_again_rerenders_its_chat() -> Result<()> {
+    let fx = Fixture::new();
+    let first = fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    assert!(!pages(&docs, BRIDGE).contains("unread"));
+
+    fx.edit(&["UPDATE message SET is_read = 0 WHERE ROWID = 5"])
+        .await?;
+    let second = fx.ingest().await?.expect("a read flag commits");
+    let (docs, _, _) = fx.render(Some(&first)).await;
+    assert_eq!(docs.len(), 1, "only the bridge crew's chat moved");
+    let bridge = pages(&docs, BRIDGE);
+    assert_eq!(
+        bridge.matches("msg--apple_messages unread").count(),
+        1,
+        "{bridge}"
+    );
+
+    // Picard's own messages never render unread, whatever the flag says.
+    fx.edit(&["UPDATE message SET is_read = 0 WHERE ROWID = 6"])
+        .await?;
+    fx.edit(&["UPDATE message SET is_read = 1 WHERE ROWID = 5"])
+        .await?;
+    fx.ingest().await?.expect("the flags commit");
+    let (docs, _, _) = fx.render(Some(&second)).await;
+    assert!(!pages(&docs, BRIDGE).contains("unread"));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_run_renders_only_what_moved() -> Result<()> {
     let fx = Fixture::new();

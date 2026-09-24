@@ -295,7 +295,7 @@ async fn load(
     }
 
     let messages = sqlx::query(
-        "SELECT ROWID, guid, text, attributedBody, date, is_from_me, handle_id, item_type, \
+        "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
                 associated_message_type, associated_message_emoji \
            FROM pinned_message ORDER BY date, ROWID",
@@ -350,6 +350,9 @@ async fn load(
         let item_type: i64 = r.get("item_type");
         let system_note = (item_type != 0)
             .then(|| group_event(item_type, r.get("group_action_type"), r.get("group_title")));
+        // `is_read` on an outgoing message is the recipient's receipt,
+        // not the account's reading, so only an incoming one can be unread.
+        let unread = from_me == 0 && r.get::<Option<i64>, _>("is_read") == Some(0);
         let kind = match (&system_note, attachments.is_empty()) {
             (Some(_), _) => ItemKind::System,
             (None, false) => ItemKind::Attachment,
@@ -369,7 +372,7 @@ async fn load(
             kind_label: None,
             source_ref: Some(UpstreamRef::new(KIND_MESSAGE, guid)),
             is_aside: false,
-            unread: false,
+            unread,
             problems: Vec::new(),
         });
     }

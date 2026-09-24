@@ -55,9 +55,20 @@ reaches the text: the rule is CSS, so qmd's chunks are the same either
 way. `false` means read *or* unknown; a provider that cannot tell leaves
 it there.
 
-Who sets it: Slack, from the conversation's `last_read` for top-level
-messages and a followed thread's own `last_read` for its replies; email,
-from the absence of `$seen`.
+Who sets it, always only on a message someone else sent:
+
+- Slack: past the conversation's `last_read` for a top-level message,
+  past a followed thread's own `last_read` for a reply.
+- Email: no `$seen`.
+- Apple Messages: `message.is_read = 0`.
+- Signal: `IncomingMessageDetails.read` false.
+- SMS Backup & Restore: `read="0"`, from the newest backup file that
+  has the message.
+
+WhatsApp keeps only per-chat counts (`unseen_message_count`), not a
+per-message flag, and has not been wired. LinkedIn, Facebook, Beeper
+and Google Takeout carry no read state we store; the assistant
+transcripts have none to carry.
 
 A read mark is state that moves while the message does not, so a
 provider that renders it must re-render when it moves, and only the

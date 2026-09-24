@@ -454,7 +454,9 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
-                unread: false,
+                // Only an explicit `read="0"` on a message someone else
+                // sent: an older store's rows carry no `read` at all.
+                unread: !is_me && v.get("read").and_then(Value::as_bool) == Some(false),
                 problems: Vec::new(),
             }
         }
@@ -561,6 +563,31 @@ mod tests {
         // Filed under the epoch bucket — a filing decision, not a claim
         // about when they happened.
         assert_eq!(chats[0].buckets[0].period_key, "1970-01");
+    }
+
+    /// Only a message someone else sent, and the backup says is
+    /// unread, renders unread; `read` absent (an older store) is unknown.
+    #[test]
+    fn only_an_incoming_message_marked_unread_is_unread() {
+        let row = |id: &str, is_me: bool, read: Value| {
+            json!({"id":id,"kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard",
+                   "date":1778277198761i64,"is_me":is_me,"body":id,"read":read,"attachments":[]})
+        };
+        let messages = vec![
+            row("unread", false, json!(false)),
+            row("read", false, json!(true)),
+            row("unknown", false, Value::Null),
+            row("mine", true, json!(false)),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[]);
+        let unread: Vec<&str> = chats[0]
+            .buckets
+            .iter()
+            .flat_map(|b| &b.items)
+            .filter(|i| i.unread)
+            .map(|i| i.text.as_deref().unwrap())
+            .collect();
+        assert_eq!(unread, vec!["unread"]);
     }
 
     #[test]
