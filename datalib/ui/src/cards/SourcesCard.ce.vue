@@ -66,12 +66,24 @@ props.ctx.setHelp(`
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
-<p>A group row reads off its steps: <b>Status</b> is running if any step is, failed if
-any failed, and otherwise the last step’s in pipeline order; while a sync is in
-flight it draws one segment per step. <b>Last synced</b> and <b>Last success</b>
-are the fetch step’s.
-<b>Sync</b> runs the group’s source steps and everything downstream;
-<b>Remove</b> takes the steps and applets with it.</p>
+<p>Each row says what its step is doing now. <b>Sync</b> on a row asks for that
+source and everything downstream of it: its own steps, and the index every source
+feeds. Each of those rows then shows the sync in its own <b>Status</b> — queued, and
+what it waits for; running; then how it ended — so pressing Sync on one row moves
+others too. Syncs run side by side: a source synced while another syncs starts at
+once.</p>
+<p>While a sync wants a row, its Sync button is a <b>Stop</b> that names the sync —
+“Stop the sync of Work Gmail” — and who started it, if not you: a row can be part of
+a sync started on another row, from a terminal or by an agent, and Stop stops all of
+it. The steps in flight checkpoint what they have and exit; until they do the button
+reads Stopping. <b>Pause</b> keeps a step from starting until you press
+<b>Resume</b>, and stops it if it is running; what reads it waits. On a group it
+pauses every step under it. A pause says who made it.</p>
+<p>A group row reads off its steps: <b>Status</b> is running if any step is, paused
+if any is, failed if any failed, and otherwise the last step’s in pipeline order;
+while a sync is in flight it draws one segment per step. <b>Last synced</b> and
+<b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
+with it.</p>
 <p><b>Type</b> and <b>Status</b> are icons, and the mark after a step’s name says what
 it does — hover any of them for the word. <b>Double-click a Status</b> to read that
 step's log — from the run in flight while it runs, else from the run it last took
@@ -79,15 +91,20 @@ part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
-<p><b>Browse</b> and <b>Sync</b> are buttons: they are the two things a row does often.
-<b>Right-click a row</b> for everything it can do — browse, edit, reveal, remove, the
-log, a rename (on the Name cell), and its <b>commit history</b>: every store under it
+<p><b>Browse</b>, <b>Sync</b> and <b>Pause</b> are buttons: they are what a row does
+often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
+remove, the log, a rename (on the Name cell), <b>Reset</b>, and its
+<b>commit history</b>: every store under it
 is versioned, and the panel lists each commit — when, what it said, what it did to
 each table, and the run that made it — newest first, updating while a sync runs.
 Right-click inside a selection and the menu acts on all of it; outside one, on that
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
-and says why on hover. <b>Sync</b> stays a button: it is the one thing a row does
-often.</p>
+and says why on hover.</p>
+<p><b>Reset</b> empties what a step holds: every row goes, and the history keeps
+them, so a wrong click is a revert. Reset a source, or its download, and what reads
+it catches up at once, so its documents leave the grid; the next Sync downloads it
+all again from nothing. Reset a render and it renders its documents again from what
+is downloaded, at once.</p>
 <p><b>Documents</b> is how many things this source holds — what <b>Browse</b> opens —
 counted over the whole store, not this run, by the render step: on its own row and on
 the group above it. It moves while a render runs, each time the step seals what it has
@@ -101,12 +118,8 @@ that size has been doing. Hover for the total and the breakdown.</p>
 record — so a sync you or an agent start from a terminal shows up here too.
 <b>Last success</b> is when the step last ran without failing: when it is older than
 Last synced, every run since has failed, and a source's mirror is only known to match
-upstream as of then. A step waiting on another reads as <b>queued</b> and says what it
-waits for; a step whose sync stopped before it finished reads as
-<b>interrupted</b>. While a sync wants a row its Sync button becomes a Stop, which
-stops that whole sync — and names who started it, if it was not you.
-<b>Pause</b>, in the right-click menu, keeps a step from starting until it is resumed,
-and stops it if it is running; what reads it waits.</p>
+upstream as of then. A step whose sync ended before it finished — the app was quit
+mid-run, say — reads as <b>interrupted</b>.</p>
 <p>The bar along the bottom of the app is the <b>whole data root</b>, not the sum of
 the rows: it includes <code>system/</code> — the stores, the run log, the served
 attachments — and anything a deleted step left behind. The config itself is the
@@ -367,6 +380,8 @@ const rowActions: Record<string, (row: Row) => void> = {
   stop: (row) => {
     if (row.stop_request_id) void stopSync(row.stop_request_id);
   },
+  pause: (row) => void pauseRows([row], true),
+  resume: (row) => void pauseRows([row], false),
 };
 
 let gridApi: TableGridApi<Row> | null = null;
@@ -570,10 +585,7 @@ function menuTarget(row: Row): MenuTarget {
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
     stopRequestId: row.stop_request_id,
-    pausedBy:
-      row.kind === "group"
-        ? (stepsUnder(row).find((s) => s.paused_by)?.paused_by ?? null)
-        : row.paused_by,
+    pausedBy: row.paused_by,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
   };
@@ -1229,45 +1241,54 @@ async function runRows(targets: Row[]) {
   }
 }
 
-/// The steps a reset of these rows drops: a step is itself, a group is
-/// every step under it that keeps a store; with `blobs`, a download
-/// step's blob store goes with it (`docs/dev/step_protocol.md` § Reset).
+/// The steps a reset of these rows empties: a step is itself; a group is
+/// its download, what it renders following — or, for a comparison, which
+/// downloads nothing, its render. With `blobs`, a download's blob store
+/// goes with it (`docs/dev/step_protocol.md` § Reset).
 function resetTargets(targets: Row[], blobs: boolean): string[] {
-  const keeps = (r: Row) =>
-    r.kind === "step" && r.function !== "grid_index" && r.function !== "qmd_index";
-  const steps = targets.flatMap((t) =>
-    t.kind === "step" ? [t] : rows.value.filter((r) => keeps(r) && r.id.startsWith(`${t.id}/`)),
-  );
+  const steps = targets.flatMap((t) => {
+    if (t.kind !== "group") return [t];
+    const under = stepsUnder(t);
+    const downloads = under.filter((r) => r.function === "ingest");
+    return downloads.length ? downloads : under.filter((r) => r.function === "render_markdown");
+  });
   const ids = steps
-    .filter(keeps)
+    .filter((r) => r.function === "ingest" || r.function === "render_markdown")
     .map((r) => (blobs && r.function === "ingest" ? `${r.id}+blobs` : r.id));
   return [...new Set(ids)];
 }
 
-/// Drop what these rows wrote, keeping the history. The server runs it
-/// once no sync is running, and refuses it while one is. Nothing syncs
-/// until someone asks.
+/// Empty what these rows wrote, keeping the history. A render is rebuilt
+/// from what it reads at once; a download is not refilled, but what reads
+/// it catches up, so its documents leave the grid
+/// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
+/// is running, and refuses it while one is.
 async function resetRows(targets: Row[], blobs: boolean) {
   const ids = resetTargets(targets, blobs);
   const shown = targets.map((t) => t.name.label).join(", ");
-  if (ids.length === 0 || (blobs && !ids.some((id) => id.endsWith("+blobs")))) {
-    say(false, `Nothing under ${shown} keeps ${blobs ? "attachments" : "a store"} to reset.`);
+  if (ids.length === 0) {
+    say(false, `Nothing under ${shown} keeps anything to reset.`);
     return;
   }
+  const download = ids.some(
+    (id) => rows.value.find((r) => r.id === id.split("+")[0])?.function === "ingest",
+  );
   const what =
     `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
-    `Its stores are dropped and the next sync starts from scratch. The rows stay ` +
-    `in the doltlite history` +
-    (blobs
-      ? `; attachments already downloaded are deleted and fetched again.`
-      : `, and attachments already downloaded are kept.`);
+    `Every row goes, and the history keeps them. ` +
+    (download
+      ? `Its documents leave the grid, and the next Sync downloads it all again from nothing. ` +
+        (blobs
+          ? `Attachments already downloaded are deleted and fetched again.`
+          : `Attachments already downloaded are kept.`)
+      : `Its documents are rendered again from what it has downloaded, now.`);
   if (!window.confirm(what)) return;
   busy.value = true;
   clearBanner();
   try {
     say(true, `Resetting ${shown}…`);
     await resetSteps(ids);
-    say(true, `Reset ${shown}. Sync it when you are ready.`);
+    say(true, `Reset ${shown}.`);
     await loadRows(true);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };

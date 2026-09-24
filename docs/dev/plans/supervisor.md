@@ -1,9 +1,9 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–4c are built —
+**Status: chosen over the join (2026-09-23); slices 0–5 are built —
 `datalib-dag` and the server run one loop over requests in
-`system/supervisor.sqlite`, and a Manage row reads the loop's record —
-and 5–7 are not.** This is the alternative to
+`system/supervisor.sqlite`, a Manage row reads the loop's record and
+carries Sync, Stop, Pause and Reset — and 6–7 are not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -630,6 +630,11 @@ applied to operators.
 
 ### 2.10 Clear is its own operation
 
+*As built (5): the operation below is built, and the verb stayed
+`reset` — `datalib-dag --reset`, `POST /api/reset`, the row menu's
+Reset — because the CLI, the step protocol and the code already said
+reset, and one name beats two.*
+
 Emptying a sink is something a person asks for, on purpose, and it
 deserves its own verb and its own button rather than a flag on a
 download. **`clear <sink>`** is a framework step, not a provider's: it
@@ -956,9 +961,27 @@ last.
    `sync_jobs` goes, and so does the `/sources` page, a second
    job-driven UI, unless it is ported. `agent_user.md` is rewritten
    around the verbs.
-5. **The UI**: per-row Sync and Pause, a requests panel with Stop per
-   request and the wave under each, and Clear on
-   a sink with the wording of §2.10. The help text is rewritten around rows, not runs.
+5. **The UI.** *Built*, without the requests panel: the rows are the
+   panel. A sync moves every row it reaches through Queued, Running and
+   its outcome, the Activity column shows the queues, and each of those
+   rows offers Stop, named for the sync it stops and who started it
+   ("Stop the sync of Work Gmail, started by claude"), since a row can be
+   part of a sync started on another row. There is no `request_steps`
+   table: a row names the one request it serves, which is all its Stop
+   needs. Pause and Resume are row buttons; on a group they act on every
+   step under it. **Reset** (the row menu, `POST /api/reset`) now empties a
+   source's download and then opens a request rooted at what reads it,
+   so its documents leave the grid; reset on a render opens a request
+   rooted at the render itself, which rebuilds it from what it reads. That needed two changes below the
+   UI, measured by a reset case added to `render_contract_test`: a reset
+   *empties* every table instead of dropping it — with the tables gone,
+   20 of 22 renders failed and the other two kept every document — and a
+   shape break in an empty table is rebuilt rather than refused, so a
+   reset is still the way past a store this build cannot reach. The one
+   render that then kept its documents (sms-backup-restore) returned
+   early on an empty store. A reset records the store's new version
+   rather than forgetting it, so its readers see it move. The help text
+   is rewritten around rows.
 6. **Shared sinks.** `writes`/`reads` in the config with the defaults
    of §2.1, the loader allowing two steps to name one sink, and the
    first provider that uses it: the email import beside the live pull.

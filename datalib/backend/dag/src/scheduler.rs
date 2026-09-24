@@ -135,14 +135,17 @@ impl Runner {
     /// makes emptying a store safe.
     pub async fn reset(&self, graph: &Graph, targets: &[ResetTarget]) -> Result<()> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let saved = store.load_record().await.context("load the record")?;
-        let mut state = saved.clone();
-        for target in targets {
-            state.steps.remove(&target.step);
-        }
-        let forgotten = store.save_record(&saved, &state).await;
+        let result = self.reset_each(graph, targets, &store).await;
         store.close().await;
-        forgotten.context("save the record")?;
+        result
+    }
+
+    async fn reset_each(
+        &self,
+        graph: &Graph,
+        targets: &[ResetTarget],
+        store: &crate::supervisor::store::Store,
+    ) -> Result<()> {
         for target in targets {
             let &i = graph
                 .by_id
@@ -194,6 +197,25 @@ impl Runner {
             if let Some(error) = error {
                 anyhow::bail!("reset {}:{}: {error}", target.step, target.part);
             }
+            // Emptied, not gone: what reads it sees a new version and runs,
+            // which is how the emptiness reaches the grid; and the step
+            // keeps no history, so its next run starts from nothing.
+            let version = crate::sink::read_version(&self.data_root.join(spec.output().as_str()))
+                .await
+                .with_context(|| format!("read {} after its reset", target.step))?;
+            let saved = store.load_record().await.context("load the record")?;
+            let mut state = saved.clone();
+            state.steps.insert(
+                target.step.clone(),
+                crate::supervisor::record::StepRecord {
+                    version,
+                    ..Default::default()
+                },
+            );
+            store
+                .save_record(&saved, &state)
+                .await
+                .context("save the record")?;
         }
         Ok(())
     }

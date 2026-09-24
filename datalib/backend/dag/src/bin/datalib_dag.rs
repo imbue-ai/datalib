@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
          [--sync STEP_ID[,STEP_ID…]]… [--reset STEP_ID[+blobs][,…]]… [--now RFC3339] \
          [--run-id ID] [--parallelism N] [--by WHO]\n       \
          datalib-dag --check <config.toml>\n\n\
-         --reset drops what a step wrote (its store; `+blobs` an ingest step's blob \
+         --reset empties what a step wrote (its store; `+blobs` an ingest step's blob \
          CAS with it), keeping its doltlite history, so the next run does its work \
          from the start. Alone, that is all the invocation does; with --sync it runs \
          first.\n\n\

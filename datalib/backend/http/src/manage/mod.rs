@@ -697,15 +697,18 @@ impl RowCtx<'_> {
             danger: true,
         };
         if let Some(r) = request {
+            // The sync a row is part of may be one started elsewhere — of
+            // another source, or by an agent — and Stop stops all of it.
+            let of = self.sources_named(&r.roots);
             let whose = match r.opened_by.as_str() {
                 "ui" => String::new(),
-                by => format!(" by {by}"),
+                by => format!(", started by {by}"),
             };
             // Once asked to stop there is nothing more to ask.
             let stopping = r.stop_requested_by.is_some();
             let verb = if stopping { "Stopping" } else { "Stop" };
             return (
-                stop(format!("{verb} the sync{whose}"), stopping),
+                stop(format!("{verb} the sync of {of}{whose}"), stopping),
                 Some(r.id.clone()),
             );
         }
@@ -722,6 +725,52 @@ impl RowCtx<'_> {
             danger: false,
         };
         (sync, None)
+    }
+
+    /// The sources a request's roots belong to, by the names the config
+    /// gives their groups: "Work Gmail", "Work Gmail and Notes", "5 sources".
+    fn sources_named(&self, roots: &[String]) -> String {
+        let written = self.snap.written;
+        let mut names: Vec<String> = Vec::new();
+        for root in roots {
+            let group = written
+                .steps
+                .iter()
+                .find(|s| &s.id == root)
+                .and_then(|s| s.group.as_deref());
+            let name = group
+                .and_then(|g| written.groups.iter().find(|x| x.id == g))
+                .map(|g| g.name.clone().unwrap_or_else(|| g.id.clone()))
+                .unwrap_or_else(|| root.clone());
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        match names.as_slice() {
+            [one] => one.clone(),
+            [a, b] => format!("{a} and {b}"),
+            _ => format!("{} sources", names.len()),
+        }
+    }
+
+    /// Pause, or Resume while it is paused: whether the loop may start it.
+    fn pause_action(paused_by: Option<&str>, blocked: Option<String>) -> Action {
+        match paused_by {
+            Some(by) => Action {
+                id: "resume".into(),
+                label: format!("Resume (paused by {by})"),
+                enabled: blocked.is_none(),
+                disabled_reason: blocked,
+                danger: false,
+            },
+            None => Action {
+                id: "pause".into(),
+                label: "Pause".into(),
+                enabled: blocked.is_none(),
+                disabled_reason: blocked,
+                danger: false,
+            },
+        }
     }
 
     fn entry_row(&self, e: &Entry<'_>) -> ManageRow {
@@ -921,6 +970,13 @@ impl RowCtx<'_> {
         );
         let (sync, stop_request_id) = self.sync_action(&id, run_blocked);
         let paused_by = self.step(&id).and_then(|st| st.paused_by.clone());
+        let pause = match e {
+            Entry::Step(_) => Some(Self::pause_action(
+                paused_by.as_deref(),
+                dropped_why.clone(),
+            )),
+            Entry::Applet(_) => None,
+        };
         ManageRow {
             key: id.clone(),
             path: match &group {
@@ -948,7 +1004,7 @@ impl RowCtx<'_> {
             problems,
             documents,
             disk,
-            actions: vec![browse, sync],
+            actions: [browse, sync].into_iter().chain(pause).collect(),
             seeds,
             reveal_blocked,
             stop_request_id,
@@ -1104,6 +1160,24 @@ impl RowCtx<'_> {
                 Some((stop.clone(), r.stop_request_id.clone()))
             })
             .unwrap_or_else(|| self.sync_action(&g.id, run_blocked));
+        // A group is paused when every step under it is: Pause pauses the
+        // rest, Resume lifts them all.
+        let paused: Vec<Option<String>> = steps
+            .iter()
+            .map(|c| row_of(c.id()).paused_by.clone())
+            .collect();
+        let paused_by = match paused.first() {
+            Some(first) if paused.iter().all(Option::is_some) => first.clone(),
+            _ => None,
+        };
+        let pause = Self::pause_action(
+            paused_by.as_deref(),
+            dropped_why.clone().or_else(|| {
+                steps
+                    .is_empty()
+                    .then(|| "Nothing under this group runs.".into())
+            }),
+        );
         let activity = ordered
             .iter()
             .map(|c| row_of(c.id()))
@@ -1184,13 +1258,13 @@ impl RowCtx<'_> {
             last_synced,
             last_success,
             disk,
-            actions: vec![browse, sync],
+            actions: vec![browse, sync, pause],
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
             }),
             stop_request_id,
-            paused_by: None,
+            paused_by,
             // A group's log is a child's; `status_from` names which.
             last_run_id: String::new(),
             live_run_id: None,

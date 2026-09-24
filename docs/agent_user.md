@@ -116,9 +116,9 @@ some entries were dropped.
 Useful flags: `--sync <step-id>` (repeatable; runs the named download
 steps and everything downstream of them, and nothing else — pending
 work in other sources waits for a full run), `--parallelism N`,
-`--reset <step-id>[+blobs]` (drops what that step wrote — its store,
-and with `+blobs` an ingest step's blob CAS too — keeping its doltlite
-history, so the
+`--reset <step-id>[+blobs]` (empties what that step wrote — every row
+of its store, and with `+blobs` an ingest step's blob CAS too — keeping
+its doltlite history, so the
 next run does its work from the start; alone it does nothing else, with
 `--sync` it runs first), `--binary-dir DIR` (where bare `command:` names
 like `datalib-step` resolve; defaults to the directory `datalib-dag`
@@ -183,18 +183,23 @@ sqlite3 <data_root>/system/supervisor.sqlite \
 `state` is `running`, `waiting` (on what: `state_detail`), `paused`,
 `blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
 the open request it is being run for. Each request and pause records
-who made it, so the screen shows "paused by claude" or "Stop the sync by
-claude". **Don't resume or stop what a person started without saying
-so.**
+who made it, so the screen shows "paused by claude" or "Stop the sync of
+Work Slack, started by claude". **Don't resume or stop what a person
+started without saying so.**
 
-**Resetting** drops what a step wrote (its store; with `+blobs`, an
-ingest step's attachments too), keeping the doltlite history, so the
-next sync does its work from the start. It needs the root to itself, so
-it runs only when nothing is syncing. With the app up, use `POST
-/api/reset {"targets": ["slack/ingest", "slack/render_markdown+blobs"]}`:
-it answers once the reset is done, and refuses while a sync runs. The
-Manage screen offers the same on a row's right-click menu. With no app
-up, use `datalib-dag --reset`.
+**Resetting** empties what a source downloaded: every row of its store
+goes (with `+blobs`, its attachments too), and the doltlite history
+keeps them. Then what reads it runs, so its documents leave the grid,
+and its next sync downloads everything again from nothing. Resetting a
+render step (`slack/render_markdown`) instead rebuilds its documents
+from what is downloaded, at once. It needs the
+root to itself, so it runs only when nothing is syncing. With the app
+up, use `POST /api/reset {"targets": ["slack/ingest+blobs"], "by":
+"claude"}`: it answers once the store is empty, opens the request that
+carries the emptiness downstream, and refuses while a sync runs. The
+Manage screen's row menu offers the same. With no app up,
+`datalib-dag --reset slack/ingest` empties the store alone; add
+`--sync slack/ingest` to download it again at once.
 
 **Logs.** The run store is where to read what happened.
 `GET /api/runs` lists runs: a run is one stretch of the loop being busy,

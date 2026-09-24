@@ -1022,8 +1022,8 @@ export async function resumeStep(id: string): Promise<void> {
   await post(`/api/steps/${encodeURIComponent(id)}/resume`);
 }
 
-/// Drop what the targets wrote; answers once it is done. Refused while a
-/// sync runs.
+/// Empty what the targets wrote, keeping the history, and sync what reads
+/// them; answers once they are empty. Refused while a sync runs.
 export async function resetSteps(targets: string[]): Promise<void> {
   await post("/api/reset", { targets });
 }
