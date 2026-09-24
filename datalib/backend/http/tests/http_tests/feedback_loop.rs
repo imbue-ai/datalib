@@ -29,7 +29,6 @@ async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
         root: root.clone(),
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
-        progress_tx: broadcast::channel(16).0,
         root_tx,
         usage: Default::default(),
         newer_root: Vec::new(),

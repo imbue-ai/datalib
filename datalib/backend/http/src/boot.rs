@@ -12,8 +12,8 @@ use datalib_core::repo::DynAppRepo;
 use crate::{auth::ApiToken, supervisor, usage, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
-/// [`AppState`]: the feedback and job stores, `<root>/config.toml`, the
-/// sync-progress channel, and the supervisor loop, spawned onto the
+/// [`AppState`]: the stores it owns, `<root>/config.toml`, and the
+/// supervisor loop, spawned onto the
 /// ambient tokio runtime — so this must be called from within one.
 /// `binary_dir` goes first on every step's `PATH`, ahead of the config's
 /// own `binary_dir`. Presentation concerns (browser opening, the
@@ -41,13 +41,11 @@ pub async fn build_state(
         for n in &newer_root {
             tracing::error!("{n}");
         }
-        let (progress_tx, _) = tokio::sync::broadcast::channel(512);
         let (root_tx, _) = tokio::sync::broadcast::channel(64);
         crate::watch::spawn((*root).clone(), root_tx.clone());
         return Ok(AppState {
             root: root.clone(),
             app: Arc::new(NewerRootRepo(newer_root.clone())),
-            progress_tx,
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
             // No entries: nothing starts, and the unified_index applet
@@ -64,9 +62,8 @@ pub async fn build_state(
     }
 
     tracing::info!(
-        "stores: {}, {}",
+        "stores: {}",
         datalib_core::layout::feedback_db(&root).display(),
-        datalib_core::layout::jobs_db(&root).display(),
     );
     let app: DynAppRepo = Arc::new(
         AppStore::open(&root)
@@ -74,13 +71,7 @@ pub async fn build_state(
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
 
-    // Live sync-job progress fan-out: the loop's host + enqueue/cancel
-    // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
-    // Buffer a few hundred events so a briefly-stalled client lags
-    // rather than blocks the host.
-    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
-
-    // Everything that changes without a job behind it. One watcher per
+    // Everything the UI shows that changes. One watcher per
     // process, replacing the timers every UI surface used to keep — see
     // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
@@ -90,9 +81,7 @@ pub async fn build_state(
     let sync = supervisor::SyncControl::new(root.clone());
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),
-        repo: app.clone(),
         binary_dir: binary_dir.clone(),
-        progress_tx: progress_tx.clone(),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a
@@ -131,7 +120,6 @@ pub async fn build_state(
     Ok(AppState {
         root,
         app,
-        progress_tx,
         sync,
         root_tx,
         applets,
@@ -166,26 +154,6 @@ impl datalib_core::repo::AppRepo for NewerRootRepo {
     ) -> Result<(), datalib_core::repo::RepoError> {
         self.refuse()
     }
-    async fn list_jobs(
-        &self,
-        _only_active: bool,
-        _limit: usize,
-    ) -> Result<Vec<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
-        self.refuse()
-    }
-    async fn get_job(
-        &self,
-        _job_id: &str,
-    ) -> Result<Option<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
-        self.refuse()
-    }
-    async fn enqueue_job(
-        &self,
-        _kind: app_schema::sync_jobs::JobKind,
-        _source_ids: Option<&str>,
-    ) -> Result<app_schema::sync_jobs::SyncJobRow, datalib_core::repo::RepoError> {
-        self.refuse()
-    }
     async fn recent_disk_usage(
         &self,
         _limit: usize,
@@ -209,12 +177,8 @@ mod tests {
         let state = build_state(root.path().to_path_buf(), None, token)
             .await
             .unwrap();
-        for p in [
-            layout::feedback_db(root.path()),
-            layout::jobs_db(root.path()),
-        ] {
-            assert!(p.is_file(), "expected {} to be created", p.display());
-        }
+        let p = layout::feedback_db(root.path());
+        assert!(p.is_file(), "expected {} to be created", p.display());
         assert_eq!(state.root.as_path(), root.path());
         assert!(state.newer_root.is_empty());
     }
@@ -252,7 +216,12 @@ mod tests {
             .expect("boots to show the gate");
         assert_eq!(state.newer_root.len(), 1);
         assert_eq!(state.newer_root[0].wrote, "99.0.0");
-        let err = state.app.list_jobs(false, 1).await.unwrap_err().to_string();
+        let err = state
+            .app
+            .recent_disk_usage(1)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("written by datalib 99.0.0"), "{err}");
         // Not opened: still says what the newer release wrote.
         let meta = datalib_store_meta::guard::read_at(&feedback)
@@ -304,12 +273,11 @@ mod tests {
         );
     }
 
-    /// The two stores this server does own are separate files, and
-    /// neither is inside the tree the pipeline tags as rebuildable
-    /// cache — feedback is not regenerable and must survive a
+    /// Feedback is not inside the tree the pipeline tags as rebuildable
+    /// cache: it is not regenerable and must survive a
     /// `--exclude-caches` backup.
     #[tokio::test]
-    async fn build_state_keeps_the_stores_apart() {
+    async fn build_state_keeps_feedback_out_of_the_cache() {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
@@ -318,11 +286,8 @@ mod tests {
             .unwrap();
 
         let feedback = layout::feedback_db(root.path());
-        let jobs = layout::jobs_db(root.path());
-        assert_ne!(feedback, jobs);
         let derived = layout::unified_index_dir(root.path());
         assert!(!feedback.starts_with(&derived), "{}", feedback.display());
-        assert!(!jobs.starts_with(&derived), "{}", jobs.display());
     }
 
     /// The token has to reach disk during boot — it is how an agent

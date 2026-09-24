@@ -82,6 +82,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         kind_label: None,
         source_ref: None,
         is_aside: false,
+        unread: false,
         problems: Vec::new(),
     }
 }
@@ -227,11 +228,14 @@ fn group_chat() -> NormalizedChat {
         ..text("s2-data", "Data", T0 + 3_600_000, "")
     };
     data.text = Some("The readout, as promised.".to_string());
+    // Read up to Riker; the rest arrived since.
+    data.unread = true;
 
     let mut joined = text("s2-system", "", T0 + 7_200_000, "");
     joined.kind = ItemKind::System;
     joined.text = None;
     joined.system_note = Some("Worf joined the channel".to_string());
+    joined.unread = true;
 
     chat(
         "sample-group",
@@ -363,6 +367,7 @@ mod tests {
             "an attachment",
         );
         assert!(items.iter().any(|i| !i.reactions.is_empty()), "a reaction");
+        assert!(items.iter().any(|i| i.unread), "an unread message");
         assert!(items.iter().any(|i| i.date_ms.is_none()), "an undated item");
         assert!(items.iter().any(|i| i.source_url.is_some()), "a linkout");
         assert!(

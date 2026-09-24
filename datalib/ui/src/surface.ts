@@ -1,8 +1,7 @@
 // What the chrome can ask of the card surface — reveal a card, start
 // a new one — without knowing which layout is showing. CardsView
-// registers the active layout here; off the card surface (the hidden
-// /sources screen, the gates) the toolbar navigates to a stack that
-// holds the card instead.
+// registers the active layout here; off the card surface (the gates)
+// the toolbar navigates to a stack that holds the card instead.
 import { ref } from "vue";
 import router, { MANAGE_STACK, NEW_CARD_STACK } from "@/router";
 

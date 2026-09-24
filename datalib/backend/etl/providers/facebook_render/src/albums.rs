@@ -56,6 +56,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: None,
             source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
             is_aside: false,
+            unread: false,
             problems: Vec::new(),
         });
     }
@@ -80,6 +81,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
             kind_label: Some("Facebook Photo".to_string()),
             source_ref: Some(UpstreamRef::new(item_id.entity_kind, item_id.natural_key)),
             is_aside: false,
+            unread: false,
             problems: Vec::new(),
         });
     }

@@ -268,6 +268,14 @@ otherwise), leaves that table as it was, and does not stop the sync.
   it, so it must not show in `dolt_diff_channel_read_states` or wake the
   render. `RawDb::load_read_states` lays the two halves back together.
   Upserted every run; never pruned.
+- **A followed thread's own mark.** `conversations.replies` puts
+  `last_read` and `subscribed` on its copy of the root of a thread the
+  account follows (the `conversations.history` copy has neither).
+  Those two are volatile on `messages` too
+  (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
+  root, and the history copy no longer overwrites the replies copy. A
+  thread is only re-fetched when it has a new reply, so its mark is as
+  fresh as its last reply, not as the last sync.
 - **`saved_items`**, from `saved.list`: in progress, completed and
   archived. With no `filter` Slack returns only the in-progress ones, so
   the walk asks for each of `saved`, `completed` and `archived` (checked
@@ -289,6 +297,10 @@ otherwise), leaves that table as it was, and does not stop the sync.
 **Slack Lists are not mirrored.** `slackLists.*` answers the session
 token with `not_allowed_token_type`, and no List turned up through
 `files.list` or search on the workspace we checked.
+
+Render reads both marks: a top-level message after its conversation's
+`last_read`, or a reply after its followed thread's, renders unread
+(`slack_render/TRANSLATE.md`).
 
 ## Rate limits
 

@@ -2,13 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import type { Column } from "@slickgrid-universal/common";
-import {
-  type ManageResponse,
-  type ManageRow,
-  type SyncJob,
-  type JobProgressEvent,
-  type ColumnSpec,
-} from "@/api";
+import { type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -54,12 +48,15 @@ const {
   fetchConfig,
   fetchConfigScaffold,
   saveConfig,
-  fetchAllJobs,
   fetchManageRows,
+  fetchRequests,
   fetchRuns,
   fetchTreeHistory,
-  enqueueJob,
-  cancelJob,
+  openRequest,
+  stopRequest,
+  pauseStep,
+  resumeStep,
+  resetSteps,
 } = useApi();
 
 props.ctx.setTitle("Sources");
@@ -101,16 +98,17 @@ whole folder, measured on the same walk — plotted over the last few minutes an
 against the largest row, so a row’s height means its size, and its shape means what
 that size has been doing. Hover for the total and the breakdown.</p>
 <p><b>Last synced</b> and <b>Status</b> are per step, read from the runner’s own
-record — so a sync you start from a terminal shows up here too. <b>Last success</b>
-is when the step last ran without failing: when it is older than Last synced, every
-run since has failed, and a source's mirror is only known to match upstream as of
-then. A run whose record
-never closed and whose lock nobody holds reads as <b>interrupted</b>: it was
-killed, not lost. A step a queued sync will reach reads as <b>queued</b>, and its
-Sync button becomes a Stop — one job is one runner process over a whole subgraph,
-so stopping is per sync, not per row.</p>
+record — so a sync you or an agent start from a terminal shows up here too.
+<b>Last success</b> is when the step last ran without failing: when it is older than
+Last synced, every run since has failed, and a source's mirror is only known to match
+upstream as of then. A step waiting on another reads as <b>queued</b> and says what it
+waits for; a step whose sync stopped before it finished reads as
+<b>interrupted</b>. While a sync wants a row its Sync button becomes a Stop, which
+stops that whole sync — and names who started it, if it was not you.
+<b>Pause</b>, in the right-click menu, keeps a step from starting until it is resumed,
+and stops it if it is running; what reads it waits.</p>
 <p>The bar along the bottom of the app is the <b>whole data root</b>, not the sum of
-the rows: it includes <code>system/</code> — the stores, the job logs, the served
+the rows: it includes <code>system/</code> — the stores, the run log, the served
 attachments — and anything a deleted step left behind. The config itself is the
 <b>config.toml</b> card; <b>Show the config</b> opens it beside this one.</p>
 `);
@@ -132,34 +130,35 @@ const serverSourceCount = ref(0);
 const configExists = ref(false);
 const loadError = ref<string | null>(null);
 const banner = ref<{ ok: boolean; text: string } | null>(null);
-// The job a banner is about, when it is about one. A job-scoped banner
-// retires the moment that job stops running, not on the next action.
-const bannerJob = ref<string | null>(null);
+// The request a banner is about, when it is about one. Such a banner
+// retires once that request has closed, not on the next action.
+const bannerRequest = ref<string | null>(null);
 
-/// Put up a banner, optionally tying it to a job's lifetime.
-function say(ok: boolean, text: string, jobId: string | null = null) {
+/// Put up a banner, optionally tying it to a request's lifetime.
+function say(ok: boolean, text: string, requestId: string | null = null) {
   banner.value = { ok, text };
-  bannerJob.value = jobId;
+  bannerRequest.value = requestId;
 }
 
-/// Take the banner down, and with it any job it was tied to.
 function clearBanner() {
   banner.value = null;
-  bannerJob.value = null;
+  bannerRequest.value = null;
 }
 
-/// Take down a job-scoped banner once its job has stopped running. A
-/// job told to stop is still running until the worker says otherwise —
-/// the "Stopping…" banner is *for* that window.
-function retireBanner(job: SyncJob) {
-  if (bannerJob.value !== job.id) return;
-  if (job.active) return;
-  clearBanner();
+/// Take down a request's banner once the request has closed.
+async function retireBanner() {
+  const id = bannerRequest.value;
+  if (!id) return;
+  try {
+    const open = (await fetchRequests()).some((r) => r.id === id && r.state === "open");
+    if (!open && bannerRequest.value === id) clearBanner();
+  } catch {
+    // The banner stays until the next action.
+  }
 }
 const busy = ref(false);
-const jobs = ref<SyncJob[]>([]);
-/// The rows, joined server-side from the config, the runner's record,
-/// the run store, the queue and the usage sampler — see
+/// The rows, joined server-side from the config, the loop's record and
+/// requests, the run store and the usage sampler — see
 /// `datalib/backend/http/src/manage/`. Bytes are measured by the backend
 /// on a tick *while a sync is running*, not walked per request; between
 /// runs nothing walks, which is why the two loads that matter ask for a
@@ -366,7 +365,7 @@ const rowActions: Record<string, (row: Row) => void> = {
   browse: (row) => openBrowse(row),
   sync: (row) => void runRow(row),
   stop: (row) => {
-    if (row.stop_job_id) void stopJob(row.stop_job_id);
+    if (row.stop_request_id) void stopSync(row.stop_request_id);
   },
 };
 
@@ -377,9 +376,9 @@ function onGridReady(api: TableGridApi<Row>) {
 
 /// Commit only the newest answer, whatever order the answers arrive in.
 ///
-/// Not theoretical: a job list fetched before a sync was enqueued but landing
-/// after it drops the new job, and the row reads as *never synced* one frame
-/// after being queued. `data-sources-sync`'s monotonicity test catches it.
+/// Not theoretical: rows fetched before a sync was asked for but landing after
+/// the ones fetched once it was paint the row backwards.
+/// `data-sources-sync`'s monotonicity test catches it.
 function freshest<T>(commit: (value: T) => void) {
   let issued = 0;
   let committed = 0;
@@ -570,7 +569,11 @@ function menuTarget(row: Row): MenuTarget {
     editBlocked: row.editBlocked,
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
-    stopJobId: row.stop_job_id,
+    stopRequestId: row.stop_request_id,
+    pausedBy:
+      row.kind === "group"
+        ? (stepsUnder(row).find((s) => s.paused_by)?.paused_by ?? null)
+        : row.paused_by,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
   };
@@ -600,18 +603,17 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       await runRows(targets);
       return;
     case "stop": {
-      // One stop per job: several rows can be claimed by the same one.
-      const jobs = new Set<string>();
-      for (const t of targets) {
-        if (t.stop_job_id && !jobs.has(t.stop_job_id)) {
-          jobs.add(t.stop_job_id);
-          await stopJob(t.stop_job_id);
-        }
-      }
+      // One stop per request: several rows can be wanted by the same one.
+      const ids = new Set(targets.flatMap((t) => (t.stop_request_id ? [t.stop_request_id] : [])));
+      for (const id of ids) await stopSync(id);
       return;
     }
+    case "pause":
+    case "resume":
+      await pauseRows(targets, action === "pause");
+      return;
     case "edit":
-      if (first.editGroup) openEdit(first.editGroup);
+      if (first.editGroup) await openEdit(first.editGroup);
       return;
     case "compare":
       compareFor.value = { id: first.id, name: first.name.label };
@@ -897,35 +899,6 @@ async function loadConfig() {
 /// The rows the loader dropped, for the banner above the table.
 const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
-const commitJobs = freshest<SyncJob[]>((list) => {
-  jobs.value = list;
-  // Both paths retire the banner, because either can be the one that
-  // learns the job stopped: the push covers a sync this server ran,
-  // the poll covers a dropped SSE connection and a run started from a
-  // terminal.
-  if (bannerJob.value) {
-    const j = list.find((x) => x.id === bannerJob.value);
-    // A job that has fallen off the end of the queue we hold is not
-    // running either, so the banner goes.
-    if (j) retireBanner(j);
-    else clearBanner();
-  }
-});
-
-async function loadJobs() {
-  try {
-    await commitJobs(() => fetchAllJobs(100));
-  } catch {
-    // The grid is still useful without status; leave the columns empty.
-  }
-}
-
-/// A job the worker is about to start, or has started. Gates the
-/// Sync-everything button, and marks the window in which the runner's
-/// record has nothing to say yet: between the click and its first
-/// written state there is nothing there to read.
-const anyJobActive = computed(() => jobs.value.some((j) => j.active));
-
 const commitRows = freshest<ManageResponse>((m) => {
   manage.value = m;
 });
@@ -982,7 +955,11 @@ function openAdd() {
 
 /// Open the wizard on a source: its group, with both its steps' values
 /// in one form.
-function openEdit(groupId: string) {
+/// The form reads the config as the server has it: a save from the
+/// editor reaches this card by a pushed frame, and an Edit clicked before
+/// that lands would open on the text from before it.
+async function openEdit(groupId: string) {
+  await loadConfig();
   const group = configGroups.value.find((g) => g.id === groupId);
   if (!group) return;
   const steps = sourceStepsOf(group.id, sources.value);
@@ -1222,13 +1199,12 @@ async function revealPath(path: string) {
 }
 
 /// Sync what a row stands for. A step is its own seed; a group's seeds
-/// are its source steps, and the worker takes them comma-joined, one
-/// `--sync` each, so the whole group runs as one job.
+/// are its source steps, all in one request.
 function runRow(row: Row) {
   return runRows([row]);
 }
 
-/// Several rows as one job, so their downstream steps run once.
+/// Several rows as one request, so their downstream steps run once.
 async function runRows(targets: Row[]) {
   const seeds = [...new Set(targets.flatMap((r) => r.seeds))];
   if (seeds.length === 0) return;
@@ -1241,15 +1217,11 @@ async function runRows(targets: Row[]) {
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "all", source_ids: seeds.join(",") });
-    adoptJob(job);
-    say(true, `Queued a sync for ${shown}.`, job.id);
-    // Before returning: the queue is what puts this row and everything
-    // downstream of it into "Queued" and flips the button to Stop, and
-    // the whole complaint this answers is that pressing play looked
-    // like nothing happened. The job frame will refetch too; this is
-    // for a page whose stream is down.
-    await Promise.all([loadJobs(), loadRows()]);
+    const request = await openRequest(seeds);
+    say(true, `Queued a sync for ${shown}.`, request.id);
+    // The loop's record moving refetches too; this is for a page whose
+    // stream is down.
+    await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -1272,8 +1244,9 @@ function resetTargets(targets: Row[], blobs: boolean): string[] {
   return [...new Set(ids)];
 }
 
-/// Drop what these rows wrote, keeping the history: a job the worker
-/// turns into `datalib-dag --reset`. Nothing syncs until someone asks.
+/// Drop what these rows wrote, keeping the history. The server runs it
+/// once no sync is running, and refuses it while one is. Nothing syncs
+/// until someone asks.
 async function resetRows(targets: Row[], blobs: boolean) {
   const ids = resetTargets(targets, blobs);
   const shown = targets.map((t) => t.name.label).join(", ");
@@ -1292,24 +1265,15 @@ async function resetRows(targets: Row[], blobs: boolean) {
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "reset", source_ids: ids.join(",") });
-    adoptJob(job);
-    say(true, `Queued a reset of ${shown}. Sync it when you are ready.`, job.id);
-    await Promise.all([loadJobs(), loadRows()]);
+    say(true, `Resetting ${shown}…`);
+    await resetSteps(ids);
+    say(true, `Reset ${shown}. Sync it when you are ready.`);
+    await loadRows(true);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
     busy.value = false;
   }
-}
-
-/// Fold a job we have in hand into the queue we hold.
-function adoptJob(job: SyncJob) {
-  // Newest truth wins: anything already in flight predates this job.
-  commitJobs.invalidate();
-  const at = jobs.value.findIndex((j) => j.id === job.id);
-  jobs.value =
-    at >= 0 ? [...jobs.value.slice(0, at), job, ...jobs.value.slice(at + 1)] : [job, ...jobs.value];
 }
 
 /// Sync everything the config declares, in one run.
@@ -1317,10 +1281,9 @@ async function runEverything() {
   busy.value = true;
   clearBanner();
   try {
-    const job = await enqueueJob({ kind: "all" });
-    adoptJob(job);
-    say(true, "Queued a sync of everything.", job.id);
-    await Promise.all([loadJobs(), loadRows()]);
+    const request = await openRequest([]);
+    say(true, "Queued a sync of everything.", request.id);
+    await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -1328,20 +1291,15 @@ async function runEverything() {
   }
 }
 
-/// Call off the job that has a row claimed.
-async function stopJob(jobId: string) {
-  const sourceIds = jobs.value.find((j) => j.id === jobId)?.source_ids;
+/// Stop a request. Its steps checkpoint and exit; the rows say Stopping
+/// until they have.
+async function stopSync(requestId: string) {
   busy.value = true;
   clearBanner();
   try {
-    await cancelJob(jobId);
-    say(
-      true,
-      `Stopping the sync of ${sourceIds || "everything"}. Steps in flight ` +
-        `checkpoint what they have and exit.`,
-      jobId,
-    );
-    await Promise.all([loadJobs(), loadRows()]);
+    await stopRequest(requestId);
+    say(true, "Stopping the sync. Steps in flight checkpoint what they have and exit.", requestId);
+    await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };
   } finally {
@@ -1349,72 +1307,34 @@ async function stopJob(jobId: string) {
   }
 }
 
-/// One pushed job update. The queue decides "Queued" and the Run/Stop
-/// face, and the row is written before the frame is published, so the
-/// refetch sees it.
-function onJobEvent(e: JobProgressEvent) {
-  mergeJob(e);
-  const job = jobs.value.find((j) => j.id === e.id);
-  if (job) retireBanner(job);
-  const active = e.active;
-  // A job ending is exactly when the size on screen is about to be
-  // read and is about to be wrong — so that one asks for a fresh walk.
-  // It is also the last chance for a while: the backend's own tick
-  // stops as soon as the run lets go of the root.
-  void loadRows(!active);
+/// The steps a group row stands for.
+function stepsUnder(group: ManageRow): ManageRow[] {
+  return rows.value.filter((r) => r.kind === "step" && r.group === group.id);
 }
 
-/// Fold a pushed job update into the queue we hold, so the Sync
-/// everything button and the banner move on the push rather than on the
-/// next `GET /api/sync/jobs/all`. The rows' Queued and Run/Stop come
-/// from the server with the rows.
-function mergeJob(e: JobProgressEvent) {
-  const now = new Date().toISOString();
-  const at = jobs.value.findIndex((j) => j.id === e.id);
-  if (at >= 0) {
-    const prev = jobs.value[at];
-    const next: SyncJob = {
-      ...prev,
-      state: e.state,
-      active: e.active,
-      stopping: prev.stopping && e.active,
-      progress_msg: e.progress_msg,
-      started_at_utc: prev.started_at_utc ?? (e.state === "running" ? now : null),
-      finished_at_utc:
-        prev.finished_at_utc ??
-        (e.state === "done" || e.state === "failed" || e.state === "canceled" ? now : null),
-    };
-    jobs.value = [...jobs.value.slice(0, at), next, ...jobs.value.slice(at + 1)];
-    return;
+/// Pause or resume what these rows stand for: a step itself, a group
+/// every step under it.
+async function pauseRows(targets: Row[], pause: boolean) {
+  const steps = targets.flatMap((t) => (t.kind === "group" ? stepsUnder(t) : [t]));
+  busy.value = true;
+  clearBanner();
+  try {
+    for (const s of steps) await (pause ? pauseStep(s.id) : resumeStep(s.id));
+    await loadRows();
+  } catch (e) {
+    banner.value = { ok: false, text: (e as Error).message };
+  } finally {
+    busy.value = false;
   }
-  jobs.value = [
-    {
-      id: e.id,
-      kind: e.kind,
-      source_ids: e.source_ids,
-      state: e.state,
-      active: e.active,
-      stopping: false,
-      progress_pct: null,
-      progress_msg: e.progress_msg,
-      error: null,
-      created_at_utc: now,
-      started_at_utc: e.state === "running" ? now : null,
-      finished_at_utc: null,
-    },
-    ...jobs.value,
-  ];
 }
 
 let unsubscribe: (() => void) | null = null;
 const cardEl = ref<HTMLElement | null>(null);
 
-/// Everything this table shows, refetched together — which is the point, and
-/// why this is one function rather than three calls at three cadences. Rows come
-/// from the config, Status and Last synced from the runner's record; fetch the
-/// first without the second and a row that has run paints as "Never run".
+/// Everything this table shows, refetched together. The rows come from
+/// the server with the config and the loop's record already joined.
 async function reloadAll(freshStorage = false) {
-  await Promise.all([loadConfig(), loadJobs(), loadRows(freshStorage)]);
+  await Promise.all([loadConfig(), loadRows(freshStorage)]);
 }
 
 onMounted(async () => {
@@ -1424,10 +1344,8 @@ onMounted(async () => {
   await reloadAll(true);
   window.addEventListener("keydown", onWindowKeydown);
 
-  // Two push channels, and the split matters.
   unsubscribe = subscribeLive(
     {
-      job: onJobEvent,
       root: (e) => {
         if (changed(e, "manage.rows")) {
           // Deliberately *not* a fresh walk: this fires once a second while
@@ -1435,9 +1353,13 @@ onMounted(async () => {
           // cadence; this just reads what it found.
           void loadRows();
         }
-        // The runner's record moving is the nearest thing to "a step
-        // committed" — nothing watches the stores themselves.
-        if (changed(e, "dag")) refreshHistory();
+        // The loop's record moving is the nearest thing to "a step
+        // committed" — nothing watches the stores themselves — and its
+        // requests live beside it.
+        if (changed(e, "dag")) {
+          refreshHistory();
+          void retireBanner();
+        }
         if (e.kind === "config_changed") {
           // Config and record together, for the "Never run" reason above.
           void reloadAll();
@@ -1467,7 +1389,7 @@ onUnmounted(() => {
   <section ref="cardEl" class="m2 m2-card">
     <header class="m2-head">
       <!-- Here rather than above the table: it comes and goes with each
-           job, and a line appearing above the table moves every row
+           sync, and a line appearing above the table moves every row
            under the pointer. -->
       <p
         v-if="banner"
@@ -1481,13 +1403,11 @@ onUnmounted(() => {
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
-          :disabled="busy || !!parseError || !!configError || anyJobActive || rows.length === 0"
+          :disabled="busy || !!parseError || !!configError || rows.length === 0"
           :title="
-            anyJobActive
-              ? 'A sync is already running.'
-              : rows.length === 0
-                ? 'Nothing configured yet.'
-                : 'Run every step the config declares, in one sync.'
+            rows.length === 0
+              ? 'Nothing configured yet.'
+              : 'Run every step the config declares, in one sync.'
           "
           @click="runEverything"
         >

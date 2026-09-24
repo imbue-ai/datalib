@@ -3,7 +3,7 @@
 // While a run goes, the card re-reads its rows several times a second
 // and every answer reaches the grid. That has to be an edit of the rows,
 // not a redraw of the grid: a dragged width, a header sort, stay put.
-// A sync writes the root's stores and job queue, so this spec has a root
+// A sync writes the root's stores, so this spec has a root
 // of its own (`CONFIG_MUTATING`).
 
 import { test, expect, type Page } from "@playwright/test";
@@ -20,15 +20,15 @@ async function openSources(page: Page) {
 
 /// Run a whole sync from the card and wait for it to end — without the
 /// reload `settleRunner` does, which would throw away the layout under
-/// test. Waits on the job itself (the banner goes when the job does,
+/// test. Waits on the request itself (the banner goes when it closes,
 /// which can be before anything looks for it) and on the card having
 /// read its rows at least twice meanwhile, so the grid really was handed
 /// new answers.
 async function syncEverything(page: Page) {
-  type Job = { id: string; active: boolean };
-  const jobs = async () =>
-    (await (await page.request.get("/api/sync/jobs/all?limit=100")).json()) as Job[];
-  const before = new Set((await jobs()).map((j) => j.id));
+  type Request = { id: string; state: string };
+  const requests = async () =>
+    (await (await page.request.get("/api/requests")).json()) as Request[];
+  const before = new Set((await requests()).map((r) => r.id));
   let reads = 0;
   page.on("response", (r) => {
     if (r.url().includes("/api/manage/rows") && r.ok()) reads++;
@@ -37,8 +37,8 @@ async function syncEverything(page: Page) {
   await expect
     .poll(
       async () => {
-        const mine = (await jobs()).filter((j) => !before.has(j.id));
-        return mine.length > 0 && mine.every((j) => !j.active) && reads >= 2;
+        const mine = (await requests()).filter((r) => !before.has(r.id));
+        return mine.length > 0 && mine.every((r) => r.state !== "open") && reads >= 2;
       },
       { timeout: 60_000, intervals: [200], message: "the sync never ended" },
     )

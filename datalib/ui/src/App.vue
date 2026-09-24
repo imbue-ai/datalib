@@ -85,9 +85,7 @@ onUnmounted(() => stop?.());
 
 <template>
   <main class="datalib-shell" data-feedback-root>
-    <!-- The toolbar: the two places a person starts from. The old
-         Manage screen is hidden, not gone — `/sources` still serves
-         SourcesView.vue; a link here brings it back. -->
+    <!-- The toolbar: the two places a person starts from. -->
     <nav v-if="!gate" class="datalib-toolbar" aria-label="Cards">
       <template v-if="desktop">
         <button class="datalib-tool" title="back (⌘[)" @click="goBack">←</button>

@@ -64,7 +64,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
 
   // …and it does not come back on reload now that the root is
   // initialized.
-  await page.goto(`${EMPTY_URL}/sources`);
-  await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
+  await page.goto(`${EMPTY_URL}/data_sources`);
+  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Set up a data library" })).toHaveCount(0);
 });

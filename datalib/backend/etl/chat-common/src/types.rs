@@ -131,6 +131,13 @@ pub struct NormalizedChatItem {
     /// it. Layout only: an aside still gets its own anchor and its own
     /// grid_row.
     pub is_aside: bool,
+    /// The account has not read this item upstream, by the provider's
+    /// own reckoning — past a conversation's read marker, a mail
+    /// without `$seen`. `false` covers both "read" and "the provider
+    /// cannot tell". Layout only: the item's wrapper gets an `unread`
+    /// class, and the first unread item of a document `first-unread`,
+    /// which the UI draws a "New" line above.
+    pub unread: bool,
     /// What the provider could not do with this item while normalizing
     /// it — a stamp upstream sent that would not parse, a field left
     /// empty for want of a shape. Each becomes a `problems` row on the

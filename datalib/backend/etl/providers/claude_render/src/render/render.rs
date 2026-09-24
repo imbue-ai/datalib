@@ -341,6 +341,7 @@ fn build_chat(
                     block_id.natural_key.clone(),
                 )),
                 is_aside: matches!(btype, "tool_use" | "tool_result"),
+                unread: false,
                 problems: block_problems,
             });
         }
@@ -372,6 +373,7 @@ fn build_chat(
                 msg_id.natural_key.clone(),
             )),
             is_aside: false,
+            unread: false,
             problems: msg_problems,
         });
     }
@@ -505,6 +507,7 @@ fn build_project_page(
                 doc_id.natural_key.clone(),
             )),
             is_aside: false,
+            unread: false,
             problems: Vec::new(),
         });
     }
@@ -593,6 +596,7 @@ fn project_item(
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
+        unread: false,
         problems: Vec::new(),
     }
 }

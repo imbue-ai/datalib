@@ -51,6 +51,13 @@ it renders is written; an unchanged one writes identical rows, which
 doltlite's content-addressed tables store as no change, so the index
 never sees it.
 
+The read marks are the one input the content diff cannot see: they are
+volatile, so a moved mark touches only a `_bookkeeping` table. The scan
+therefore also reads `dolt_diff_channel_read_states_bookkeeping` and
+`dolt_diff_messages_bookkeeping` and renders the threads whose root lies
+between a conversation's old and new `last_read`, or whose own thread
+mark moved. A thread unread on both sides of a move is left alone.
+
 Bump [`RENDER_VERSION`](src/render/render.rs) when the on-disk render
 layout changes: the driver then re-renders every document. The shared
 chat layout has its own number, `LAYOUT_VERSION` in chat-common, which

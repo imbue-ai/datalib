@@ -1722,17 +1722,3 @@ feedback
     context_json
     fixed_in_git_hash
     notes
-sync_jobs
-    id
-    source_ids
-    kind
-    parent_job_id
-    state
-    created_at_utc
-    started_at_utc
-    finished_at_utc
-    tz_offset
-    error
-    pid
-    progress_pct
-    progress_msg

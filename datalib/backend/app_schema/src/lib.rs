@@ -9,10 +9,6 @@ pub mod feedback {
     include!("feedback.rs");
 }
 
-pub mod sync_jobs {
-    include!("sync_jobs.rs");
-}
-
 pub mod disk_usage {
     include!("disk_usage.rs");
 }
@@ -30,15 +26,6 @@ mod tests {
         let (_, cols) = super::feedback::COLUMNS[0];
         assert!(cols.contains(&"feedback_uuid"));
         assert!(cols.contains(&"context_json"));
-    }
-
-    #[test]
-    fn sync_jobs_table_present() {
-        assert_eq!(super::sync_jobs::TABLES.len(), 1);
-        assert_eq!(super::sync_jobs::DDL.len(), 1);
-        let (_, cols) = super::sync_jobs::COLUMNS[0];
-        assert!(cols.contains(&"id"));
-        assert!(cols.contains(&"state"));
     }
 
     /// The disk-usage timeseries is keyed on (series, instant): one

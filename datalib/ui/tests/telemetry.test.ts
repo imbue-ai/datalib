@@ -59,7 +59,7 @@ describe("track", () => {
   it("batches: one event waits for company, then goes with the page on it", async () => {
     const { spy, bodies } = fakeFetch();
     track("navigate", { path: "/cards" }, { msg: "/cards" });
-    track("navigate", { path: "/sources" }, { msg: "/sources" });
+    track("navigate", { path: "/data_sources" }, { msg: "/data_sources" });
     expect(spy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(3_000);
     expect(spy).toHaveBeenCalledTimes(1);

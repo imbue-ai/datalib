@@ -119,6 +119,9 @@ pub struct ParsedChatItem {
     /// True when ChatItem.directionalDetails was `outgoing`. Drives
     /// "me" attribution in the rendered markdown.
     pub outgoing: bool,
+    /// An incoming message the account has not read
+    /// (`IncomingMessageDetails.read` false). Never set on an outgoing one.
+    pub unread: bool,
     /// Attachments on this item, ordered by their position in the
     /// `StandardMessage.attachments` repeated field (matches the
     /// `slot` we stored at download time).
@@ -445,32 +448,49 @@ async fn load_buckets(
             docs.len() - 1
         });
         let item_pk: String = r.try_get("id")?;
-        let (text, outgoing, attachments) = decode_chat_item(&payload);
+        let Decoded {
+            text,
+            outgoing,
+            unread,
+            attachments,
+        } = decode_chat_item(&payload);
         docs[idx].items.push(ParsedChatItem {
             item_pk,
             author_id,
             date_sent,
             text,
             outgoing,
+            unread,
             attachments,
         });
     }
     Ok(docs)
 }
 
+/// What render takes from one stored chat item.
+#[derive(Debug, Default)]
+struct Decoded {
+    text: Option<String>,
+    outgoing: bool,
+    unread: bool,
+    attachments: Vec<ParsedAttachment>,
+}
+
 /// Parse a `chat_items.payload` JSON string (a `Frame::ChatItem`
-/// serialized via serde) and pull out (text, outgoing, attachments).
-/// Returns empty defaults for non-StandardMessage chat items so the
-/// renderer can skip them cleanly without panicking.
-fn decode_chat_item(payload: &str) -> (Option<String>, bool, Vec<ParsedAttachment>) {
+/// serialized via serde). Returns empty defaults for non-StandardMessage
+/// chat items so the renderer can skip them cleanly without panicking.
+fn decode_chat_item(payload: &str) -> Decoded {
     let ci: backup::ChatItem = match serde_json::from_str(payload) {
         Ok(c) => c,
-        Err(_) => return (None, false, Vec::new()),
+        Err(_) => return Decoded::default(),
     };
+    use backup::chat_item::DirectionalDetails;
     let outgoing = matches!(
         ci.directional_details,
-        Some(backup::chat_item::DirectionalDetails::Outgoing(_))
+        Some(DirectionalDetails::Outgoing(_))
     );
+    let unread =
+        matches!(&ci.directional_details, Some(DirectionalDetails::Incoming(d)) if !d.read);
     match ci.item {
         Some(backup::chat_item::Item::StandardMessage(sm)) => {
             let text = sm.text.and_then(|t| {
@@ -485,9 +505,18 @@ fn decode_chat_item(payload: &str) -> (Option<String>, bool, Vec<ParsedAttachmen
                 .iter()
                 .filter_map(attachment_from_message)
                 .collect();
-            (text, outgoing, attachments)
+            Decoded {
+                text,
+                outgoing,
+                unread,
+                attachments,
+            }
         }
-        _ => (None, outgoing, Vec::new()),
+        _ => Decoded {
+            outgoing,
+            unread,
+            ..Decoded::default()
+        },
     }
 }
 
@@ -518,4 +547,45 @@ fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAtta
         file_name: ptr.file_name.clone(),
         is_image,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use backup::chat_item::{DirectionalDetails, IncomingMessageDetails, OutgoingMessageDetails};
+
+    fn stored(directional: DirectionalDetails) -> String {
+        serde_json::to_string(&backup::ChatItem {
+            directional_details: Some(directional),
+            item: Some(backup::chat_item::Item::StandardMessage(
+                backup::StandardMessage {
+                    text: Some(backup::Text {
+                        body: "Hailing frequencies open, sir.".into(),
+                        body_ranges: vec![],
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// Unread is an incoming message the account has not read, read off
+    /// the JSON the ingest stores; an outgoing one never is.
+    #[test]
+    fn only_an_unread_incoming_message_is_unread() {
+        let incoming = |read| {
+            DirectionalDetails::Incoming(IncomingMessageDetails {
+                read,
+                ..Default::default()
+            })
+        };
+        assert!(decode_chat_item(&stored(incoming(false))).unread);
+        assert!(!decode_chat_item(&stored(incoming(true))).unread);
+        let outgoing = decode_chat_item(&stored(DirectionalDetails::Outgoing(
+            OutgoingMessageDetails::default(),
+        )));
+        assert!(outgoing.outgoing && !outgoing.unread);
+    }
 }

@@ -819,7 +819,7 @@ fn is_option_string(ty: &Type) -> bool {
 /// Derive the portable `CREATE TABLE` surface (`DDL` + `TABLES` +
 /// `COLUMNS` module consts) for a hand-written *presentation* row
 /// struct — the denormalized tables that back the grid / UI
-/// (`grid_rows`, `edges`, `markdowns`, `feedback`, `sync_jobs`).
+/// (`grid_rows`, `edges`, `markdowns`, `feedback`).
 #[proc_macro_derive(PortableTable, attributes(portable_table, col, derived))]
 pub fn derive_portable_table(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

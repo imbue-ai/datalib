@@ -83,8 +83,8 @@ async function writeConfig(page: Page, text: string) {
   // is refetched separately. Between the two, a row that has run before
   // paints as "Never run": it exists because the config declares it,
   // and nothing has yet said what it did. Mounting the page afresh
-  // fetches config, jobs and the DAG record in one `Promise.all`, so
-  // that in-between state cannot be observed.
+  // fetches the config and the rows together, so that in-between state
+  // cannot be observed.
   await openManager(page);
 }
 
@@ -241,14 +241,15 @@ ${applets()}`;
     // starting it before the click.)
     await expect(page.getByText(/Queued a sync for/)).toBeVisible();
 
-    // Syncing a source claims everything downstream of it, so the
-    // render step is queued from the same first frame — before the
-    // runner exists, let alone reaches it. This is the assertion a
-    // download-only provider could not support, and the reason this
-    // spec is built on `pdf`. The rows are the server's, refetched
-    // after the banner goes up, so the first frame is waited for
-    // rather than read off the banner — what is asserted is what that
-    // frame says.
+    // Syncing a source takes on everything downstream of it, and the
+    // POST answers only once the loop has, so the render step is in
+    // flight from the first frame after it: Queued behind its download,
+    // or Running on what the download has already published, since
+    // the download streams. This is the assertion a download-only
+    // provider could not support, and the reason this spec is built on
+    // `pdf`. The rows are the server's, refetched after the banner goes
+    // up, so the first frame is waited for rather than read off the
+    // banner — what is asserted is what that frame says.
     await expect
       .poll(async () => (await statusLog(page, "pdfs/render_markdown")).length, {
         timeout: 10_000,
@@ -257,9 +258,10 @@ ${applets()}`;
       })
       .toBeGreaterThan(beforeDown);
     const downstream = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
-    expect(statusWord(downstream[0]), `downstream sequence was ${JSON.stringify(downstream)}`).toBe(
-      "Queued",
-    );
+    expect(
+      statusWord(downstream[0]),
+      `downstream sequence was ${JSON.stringify(downstream)}`,
+    ).toMatch(/^(Queued|Running)$/);
     // ...while the unrelated source is not claimed at all.
     expect(await statusOf(page, "docs/ingest")).not.toBe("Queued");
 
@@ -273,9 +275,9 @@ ${applets()}`;
     // What the sequence must contain: a frame from before the run was
     // over, which used to be missing entirely — the click produced no
     // visible change until the whole run was done. Which frame it is
-    // depends on how fast the loop takes the job on: Queued if the rows
-    // repaint first, Running if the loop does. The render row above is
-    // the one that is always Queued first, because it waits on this one.
+    // depends on how far the loop has got when the rows repaint: Queued
+    // if it has taken the request on and not yet started this step,
+    // Running if it has.
     expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
       /^(Queued|Running)$/,
     );
@@ -324,8 +326,8 @@ ${applets()}`;
     const downstreamFinal = (await statusLog(page, "pdfs/render_markdown")).slice(beforeDown);
     expect(
       statusWord(downstreamFinal[0]),
-      `downstream never started Queued: ${JSON.stringify(downstreamFinal)}`,
-    ).toBe("Queued");
+      `downstream did not start in flight: ${JSON.stringify(downstreamFinal)}`,
+    ).toMatch(/^(Queued|Running)$/);
     expect(
       statusWord(downstreamFinal[downstreamFinal.length - 1]),
       `downstream never finished: ${JSON.stringify(downstreamFinal)}`,
@@ -370,11 +372,11 @@ ${applets()}`;
     expect(stamp).toMatch(/\d{2}:\d{2}:\d{2}/);
 
     // Cut the API off before touching the clock. Advancing time fires
-    // every timer that comes due, including the jobs and rows pollers,
-    // and each of those calls `repaint()` on the way back — which
-    // refreshes this cell for reasons that have nothing to do with the
-    // column's own clock. With the fetches failing, `commitRows` and
-    // `commitJobs` never run, so `tickRelative` is the only thing left
+    // every timer that comes due, including the rows poller, and each
+    // of those calls `repaint()` on the way back — which refreshes this
+    // cell for reasons that have nothing to do with the column's own
+    // clock. With the fetches failing, `commitRows` never runs, so
+    // `tickRelative` is the only thing left
     // that can repaint. Verified: without this the test passes with
     // `setInterval(tickRelative, …)` deleted outright.
     await page.route("**/api/**", (route) => route.abort());
@@ -655,9 +657,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
   }) => {
     await writeConfigAndOpenGroups(page, config());
 
-    // `datalib-dag` rejects a `--sync` naming anything but a source
-    // step, so this button would only ever queue a job that fails on
-    // startup. It is disabled, and names the row that does carry it.
+    // A sync starts at a source step, so this button is disabled, and
+    // names the row that does carry it.
     const btn = syncBtn(page, "pdfs/render_markdown");
     await expect(btn).toBeDisabled();
     await expect(btn).toHaveAttribute("title", /Run pdfs\/ingest/);

@@ -34,7 +34,7 @@ pub async fn run(
         // trees, so cache-aware backups (`restic --exclude-caches` etc.)
         // may skip all of it. Tagging the parent also means the tag is
         // right before the qmd step has ever run. Nothing precious lives
-        // here — feedback and the job queue are under `system/`, which is
+        // here — feedback and the loop's record are under `system/`, which is
         // never tagged.
         datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_index_dir(
             data_root,
@@ -161,7 +161,7 @@ mod tests {
                 .exists(),
             "the per-index tag was replaced by the one on the parent"
         );
-        // `system/` is operational history — feedback, the job queue — and is
+        // `system/` is operational history — feedback, the loop's record — and is
         // not rebuildable from raw, so it must never be swept up by
         // `--exclude-caches`.
         assert!(

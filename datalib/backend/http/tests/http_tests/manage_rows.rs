@@ -1,6 +1,6 @@
 //! `GET /api/manage/rows` assembles the Manage screen's tree: one row
-//! per entry in the config file, with status read off the runner's
-//! record and the job queue.
+//! per entry in the config file, with status read off the loop's
+//! record.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -27,7 +27,6 @@ async fn state_of(root: &Path) -> AppState {
         root: root.clone(),
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
-        progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,
         usage: Default::default(),
         newer_root: Vec::new(),
@@ -550,84 +549,4 @@ async fn document_counts_reach_the_rows_from_the_run_store() {
             "{key}: never counted is blank, not zero"
         );
     }
-}
-
-/// A job queue that, the first time it is listed, does what the loop
-/// does when it takes a request on: saves the record with the step
-/// running, then marks the job running under that run.
-struct LoopActsWhileListed {
-    inner: datalib_core::repo::DynAppRepo,
-    root: std::path::PathBuf,
-    job: String,
-    acted: std::sync::atomic::AtomicBool,
-}
-
-#[async_trait::async_trait]
-impl datalib_core::repo::AppRepo for LoopActsWhileListed {
-    async fn list_jobs(
-        &self,
-        only_active: bool,
-        limit: usize,
-    ) -> Result<Vec<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
-        if !self.acted.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let store = datalib_dag::supervisor::store::Store::open(&self.root)
-                .await
-                .unwrap();
-            let saved = store.load_record().await.unwrap();
-            let mut state = saved.clone();
-            let run = state.current_run.as_mut().unwrap();
-            run.states.insert("slack/ingest".into(), "running".into());
-            store.save_record(&saved, &state).await.unwrap();
-            store.close().await;
-            self.inner.start_job(&self.job, "busy-period", None).await?;
-        }
-        self.inner.list_jobs(only_active, limit).await
-    }
-}
-
-/// The loop saves its record, then marks the job running. A rows
-/// request landing between the two must not pair the running job with
-/// the record from before: its step still reads `not_selected` there,
-/// which the job's own run seems to be saying, and the row painted last
-/// week's Succeeded — and held it, for the whole of the sync.
-#[tokio::test]
-async fn a_row_never_pairs_a_running_job_with_the_record_from_before_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let state = serde_json::json!({
-        "steps": {"slack/ingest": {"last_run": {
-            "run_id": "yesterday",
-            "started_at": "2026-09-22T10:00:00+00:00",
-            "finished_at": "2026-09-22T10:00:05+00:00",
-            "status": "succeeded",
-            "attempts": 1
-        }}},
-        "current_run": {
-            "run_id": "busy-period",
-            "started_at": "2026-09-23T10:00:00+00:00",
-            "states": {"slack/ingest": "not_selected"}
-        }
-    });
-    write_root(tmp.path(), CONFIG, Some(&state.to_string())).await;
-    // A sync is running: a process holds the root.
-    let _runner = datalib_dag::lock::acquire_runner(tmp.path()).unwrap();
-
-    let mut app_state = state_of(tmp.path()).await;
-    let job = app_state
-        .app
-        .enqueue_job(app_schema::sync_jobs::JobKind::All, Some("slack/ingest"))
-        .await
-        .unwrap();
-    app_state.app = Arc::new(LoopActsWhileListed {
-        inner: app_state.app.clone(),
-        root: tmp.path().to_path_buf(),
-        job: job.id,
-        acted: Default::default(),
-    });
-
-    let got = rows_of(app_state).await;
-    assert_eq!(
-        by_key(&got)["slack/ingest"]["status"]["key"],
-        "running",
-        "{got}"
-    );
 }

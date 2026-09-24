@@ -72,9 +72,6 @@ pub struct Runner {
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
     /// How long a stopped subprocess step has before it is killed.
     pub stop_grace: std::time::Duration,
-    /// Told when the loop takes on a request from the store and when it
-    /// is done with one, for a host that keeps a record of its own.
-    pub requests: Option<tokio::sync::mpsc::UnboundedSender<crate::supervisor::RequestEvent>>,
 }
 
 impl Runner {
@@ -87,7 +84,6 @@ impl Runner {
             child_env: Arc::new(BTreeMap::new()),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
-            requests: None,
         }
     }
 

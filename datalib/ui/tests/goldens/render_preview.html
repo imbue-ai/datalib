@@ -758,6 +758,26 @@ code.hljs {
   color: inherit;
   background: var(--datalib-hover, #f0f0f0);
 }
+/* A message the account had not read upstream when it was rendered
+   (chat-common's `unread`). The first one in a document opens with a
+   "New" rule, the way the upstream apps mark where you left off. The
+   rule is drawn inside the card, not above it: a clamped card is
+   `overflow: hidden` and would clip anything outside its box. Declared
+   before `.selected` so a selection still wins the border. */
+.chat-body .msg.unread {
+  border-left-color: #e01e5a;
+}
+.chat-body .msg.first-unread::before {
+  content: "New";
+  display: block;
+  margin: -0.5rem -0.75rem 0.4rem;
+  padding: 0.1rem 0.75rem;
+  border-bottom: 1px solid #e01e5a;
+  color: #e01e5a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: right;
+}
 .chat-body .msg.selected {
   background: var(--datalib-hover, #f0f0f0);
   border-color: var(--datalib-accent, #6366f1);
@@ -4367,7 +4387,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <h3 class="preview-name">slack-diff/render_markdown/00000000-0000-8c02-a5c8-c13c049e1e6d/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8c02-a5c8-c13c049e1e6d">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div class="diff-added">
-<div id="m-0b769903-a780-8ace-afc7-445f6377a51b" data-section-uuid="0b769903-a780-8ace-afc7-445f6377a51b" class="msg msg--slack">
+<div id="m-0b769903-a780-8ace-afc7-445f6377a51b" data-section-uuid="0b769903-a780-8ace-afc7-445f6377a51b" class="msg msg--slack unread first-unread">
 <h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Shields up. Red alert.</p>
 </div>
@@ -4380,7 +4400,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8087-98c3-35796eae6f68/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8087-98c3-35796eae6f68">#ten-forward: Anyone up for poker tonight? (all) <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-0b7698fa-7fc0-89d7-af94-d89a1724367f" data-section-uuid="0b7698fa-7fc0-89d7-af94-d89a1724367f" class="msg msg--slack">
+<div id="m-0b7698fa-7fc0-89d7-af94-d89a1724367f" data-section-uuid="0b7698fa-7fc0-89d7-af94-d89a1724367f" class="msg msg--slack unread first-unread">
 <h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Anyone up for poker tonight?</p>
 </div>
@@ -4405,7 +4425,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-8119-8c96-61dfdcca24d4/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8119-8c96-61dfdcca24d4">#bridge: Shields up. Red alert. (all) <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-0b769903-a780-8b46-b987-b030e43d4ae0" data-section-uuid="0b769903-a780-8b46-b987-b030e43d4ae0" class="msg msg--slack">
+<div id="m-0b769903-a780-8b46-b987-b030e43d4ae0" data-section-uuid="0b769903-a780-8b46-b987-b030e43d4ae0" class="msg msg--slack unread first-unread">
 <h2><span class="msg-author">William T. Riker</span> <time class="msg-ts" datetime="2369-05-28T15:26:40+00:00" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://slack.com/archives/C_BRIDGE/p12604001200001200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Shields up. Red alert.</p>
 </div>
@@ -4467,7 +4487,7 @@ Captain on the bridge: Jean-Luc Picard presides over all standing orders below.
 <div class="preview-doc">
 <h3 class="preview-name">slack/render_markdown/00000000-0000-89a0-9bd6-7e928c9b2396/all.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89a0-9bd6-7e928c9b2396">@Lt. Cmdr. Data: Sir, I have completed my analysis of the Romulan signature. (all) <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
-<div id="m-0b7698ff-1b70-8b07-b467-aa4ec3751924" data-section-uuid="0b7698ff-1b70-8b07-b467-aa4ec3751924" class="msg msg--slack">
+<div id="m-0b7698ff-1b70-8b07-b467-aa4ec3751924" data-section-uuid="0b7698ff-1b70-8b07-b467-aa4ec3751924" class="msg msg--slack unread first-unread">
 <h2><span class="msg-author">Lt. Cmdr. Data</span> <time class="msg-ts" datetime="2369-05-28T15:21:42+00:00" title="2369-05-28 15:21:42 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://slack.com/archives/D_DATA/p12604000902000902?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Sir, I have completed my analysis of the Romulan signature.</p>
 <ul>
@@ -5826,7 +5846,7 @@ Worf has asked that no one serve gagh.</p>
 <p>🏷 Inbox · Sent</p>
 <p>Number One, Set a course for the Neutral Zone, warp 9. Brief the senior staff at 1400 hours. I want Mr. Data running long-range scans the moment we cross into the buffer region. Engage. — Picard</p>
 </div>
-<div id="m-019b8dde-1320-8508-ba52-d6fafa558797" data-section-uuid="019b8dde-1320-8508-ba52-d6fafa558797" class="msg msg--email">
+<div id="m-019b8dde-1320-8508-ba52-d6fafa558797" data-section-uuid="019b8dde-1320-8508-ba52-d6fafa558797" class="msg msg--email unread first-unread">
 <h2><span class="msg-author">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</span> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>🏷 Inbox</p>
 <p>Captain, Warp core diagnostics attached. We can sustain warp 9 for approximately twelve hours before we need to drop out for a coolant cycle. I would recommend a brief stop at Starbase 173 if the mission allows. — Geordi</p>
@@ -6628,13 +6648,13 @@ Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Comma
 <li>Conn: unassigned</li>
 </ul>
 </div>
-<div id="m-s2-data" data-section-uuid="s2-data" class="msg msg--claude">
+<div id="m-s2-data" data-section-uuid="s2-data" class="msg msg--claude unread first-unread">
 <h2><span class="msg-author">Data</span> <time class="msg-ts" datetime="2369-05-14T17:10:00+00:00" title="2369-05-14 17:10:00 UTC">Wed May 14th, 2369 at 17:10</time></h2>
 <p>The readout, as promised.</p>
 <p>🖼 <em>[tricorder-readout.png (not yet fetched)]</em>
 <em>(source: <a href="https://example.invalid/blob/readout">https://example.invalid/blob/readout</a>)</em></p>
 </div>
-<div id="m-s2-system" data-section-uuid="s2-system" class="msg msg--claude">
+<div id="m-s2-system" data-section-uuid="s2-system" class="msg msg--claude unread">
 <p><em><small><time class="msg-ts" datetime="2369-05-14T18:10:00+00:00" title="2369-05-14 18:10:00 UTC">Wed May 14th, 2369 at 18:10</time> — system: Worf joined the channel</small></em></p>
 </div>
 </div>

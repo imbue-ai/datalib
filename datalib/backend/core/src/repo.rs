@@ -1,5 +1,5 @@
-//! [`AppRepo`] — the seam to the two stores this server owns: filed
-//! feedback and the sync job queue.
+//! [`AppRepo`] — the seam to the stores this server owns: filed
+//! feedback, disk usage and remote media.
 
 use std::sync::Arc;
 
@@ -10,7 +10,6 @@ use app_schema::feedback::FeedbackRow;
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::AllowScope;
-use app_schema::sync_jobs::{JobKind, JobState, SyncJobRow};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -22,90 +21,13 @@ pub enum RepoError {
     Internal(String),
 }
 
-/// Writes and reads of the two application stores: filed feedback and
-/// the sync job queue.
+/// Writes and reads of the application stores.
 #[async_trait]
 pub trait AppRepo: Send + Sync {
     /// Append a feedback row. The default impl returns
     /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::AppStore`]
     /// overrides it.
     async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// List `sync_jobs` rows. When `only_active` is true, returns only
-    /// the rows whose [`JobState`] is not terminal — used by the UI's
-    /// polling chrome. Otherwise returns the most recent `limit` rows newest-first.
-    /// Default impl returns [`RepoError::ReadOnly`].
-    async fn list_jobs(
-        &self,
-        _only_active: bool,
-        _limit: usize,
-    ) -> Result<Vec<SyncJobRow>, RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// Fetch a single sync job by id. Returns `Ok(None)` when not found.
-    async fn get_job(&self, _job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// Enqueue a new [`JobState::Pending`] sync job. Implementations
-    /// stamp the id (UUIDv4) and `created_at` themselves so callers
-    /// don't have to. The new row is returned as written.
-    async fn enqueue_job(
-        &self,
-        _kind: JobKind,
-        _source_ids: Option<&str>,
-    ) -> Result<SyncJobRow, RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    async fn request_cancel_job(&self, _job_id: &str) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    // --- The job lifecycle, as the server's loop sees it -------------
-
-    /// The loop has taken a job's request on in the run `run_id`: stamp
-    /// it started, name the run as its `parent_job_id`, and flip a
-    /// pending job to [`JobState::Running`] (a canceled one stays
-    /// canceled, and is now winding down). The row as written, or `None`
-    /// when there is no such job or it was already started.
-    async fn start_job(
-        &self,
-        _job_id: &str,
-        _run_id: &str,
-        _msg: Option<&str>,
-    ) -> Result<Option<SyncJobRow>, RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// Put a running job back in the queue, unstarted: the server that
-    /// ran it is gone, and its request is still open for the next loop.
-    async fn requeue_job(&self, _job_id: &str) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// Update the live progress fraction / message for a running job.
-    /// Cheap, high-frequency write — deliberately does *not* mint a Dolt
-    /// commit (only state transitions land in `dolt log`).
-    async fn update_job_progress(
-        &self,
-        _job_id: &str,
-        _pct: Option<f64>,
-        _msg: Option<&str>,
-    ) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
-    /// Record a terminal [`JobState`] for a job.
-    async fn finish_job(
-        &self,
-        _job_id: &str,
-        _state: JobState,
-        _error: Option<&str>,
-    ) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 

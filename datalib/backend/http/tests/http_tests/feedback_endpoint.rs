@@ -40,7 +40,6 @@ async fn post_feedback_inserts_row() {
         root: root.clone(),
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
-        progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,
         // No sampler running here, so the monitor is empty and every
         // tree reports as absent — the state a root nobody has walked
