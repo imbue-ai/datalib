@@ -226,7 +226,7 @@ mod tests {
         let root = td.path();
         let newer = root.join("a/ingest/entities.doltlite_db");
         let same = root.join("b/ingest/entities.doltlite_db");
-        let bare = root.join("system/jobs.doltlite_db");
+        let bare = root.join("system/usage.doltlite_db");
         for p in [&newer, &same, &bare] {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))

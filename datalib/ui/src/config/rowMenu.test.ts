@@ -11,7 +11,8 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   editBlocked: null,
   revealBlocked: null,
   browseBlocked: null,
-  stopJobId: null,
+  stopRequestId: null,
+  pausedBy: null,
   statusFrom: "slack/render_markdown",
   revealPath: "/data/slack",
   ...over,
@@ -32,6 +33,7 @@ describe("rowMenu", () => {
     expect(actions).toEqual([
       "browse",
       "sync",
+      "pause",
       "edit",
       "compare",
       "log",
@@ -61,7 +63,7 @@ describe("rowMenu", () => {
     expect(entry(rowMenu([index], opts), "reset").disabled).toBe(
       "Reset a source; the index follows it",
     );
-    const busy = target({ stopJobId: "job-1" });
+    const busy = target({ stopRequestId: "req-1" });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
     const render = target({ kind: "step", func: "render_markdown" });
     expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
@@ -125,12 +127,23 @@ describe("rowMenu", () => {
   });
 
   it("turns Sync into Stop only when every target is claimed", () => {
-    expect(entry(rowMenu([target({ stopJobId: "j1" })], opts), "stop").name).toBe("Stop the sync");
+    expect(entry(rowMenu([target({ stopRequestId: "r1" })], opts), "stop").name).toBe(
+      "Stop the sync",
+    );
     const mixed = rowMenu(
-      [target({ stopJobId: "j1" }), target({ id: "mail", name: "Mail" })],
+      [target({ stopRequestId: "r1" }), target({ id: "mail", name: "Mail" })],
       opts,
     );
     expect(entry(mixed, "sync").disabled).toMatch(/already syncing/);
+  });
+
+  it("offers Resume only when every target is paused, and Pause on nothing unscheduled", () => {
+    expect(entry(rowMenu([target({ pausedBy: "claude" })], opts), "resume").disabled).toBeNull();
+    const mixed = rowMenu([target({ pausedBy: "ui" }), target({ id: "mail" })], opts);
+    expect(entry(mixed, "pause").disabled).toBeNull();
+    expect(entry(rowMenu([target({ kind: "applet" })], opts), "pause").disabled).toBe(
+      "An applet is not scheduled",
+    );
   });
 
   it("adds the cell's own entries ahead of the row's", () => {

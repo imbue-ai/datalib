@@ -1,8 +1,7 @@
 //! What changed in the data root, pushed instead of polled.
 //!
-//! Rides the same SSE connection as job progress, as named `root` frames, so
-//! a client has one connection, one reconnect policy, and one heartbeat to
-//! judge liveness by. A frame names a *dataset* a reader fetches, not the
+//! Rides one SSE connection, as named `root` frames, so a client has one
+//! connection, one reconnect policy, and one heartbeat to judge liveness by. A frame names a *dataset* a reader fetches, not the
 //! file that moved: one file can feed several readers, and one file —
 //! the run store — is written by two processes for two audiences. The
 //! filesystem says a file moved; the store says which of its parts did
@@ -54,9 +53,7 @@ pub const HEARTBEAT: Duration = Duration::from_secs(10);
 )]
 pub enum Table {
     /// `GET /api/dag`: the loop's record, in `system/supervisor.sqlite`,
-    /// written on every step state change. Covers a `datalib-dag` run
-    /// started from a terminal, which the job stream never sees because
-    /// no job row exists for it.
+    /// written on every step state change, whoever runs the loop.
     #[serde(rename = "dag")]
     #[strum(serialize = "dag")]
     Dag,
@@ -133,7 +130,7 @@ impl From<RootEvent> for RootFrame {
 }
 
 /// Fan-out channel for [`RootFrame`]s. Subscribed by
-/// `GET /api/sync/stream` alongside the job channel.
+/// `GET /api/sync/stream`.
 pub type RootTx = broadcast::Sender<RootFrame>;
 
 /// A file the watcher reports on. What the filesystem can say; the
@@ -776,17 +773,16 @@ mod tests {
         assert_eq!(tables, HashSet::from([Table::Log, Table::ManageRows]));
     }
 
-    /// The reason the directory watch filters by name at all. `system/`
-    /// holds the job queue, which is written on every job state change
-    /// — traffic the *job* stream already carries. Reporting it as
-    /// `DagChanged` would make every sync refetch the runner's record
-    /// several times per job, which is the poll this is replacing.
+    /// The reason the directory watch filters by name at all: `system/`
+    /// holds stores no frame is about, and reporting their writes as
+    /// `DagChanged` would make every reader refetch the loop's record
+    /// for nothing.
     #[test]
     fn the_stores_beside_the_runner_record_are_not_the_runner_record() {
         let root = Path::new("/data");
         for quiet in [
-            "system/jobs.doltlite_db",
             "system/feedback.doltlite_db",
+            "system/usage.doltlite_db",
             "system/api-token",
             "system/supervisor.sqlite",
             "system/supervisor.sqlite-wal",
@@ -846,11 +842,10 @@ mod tests {
         .await;
     }
 
-    /// The same for the loop's record — the case the sync-job stream
-    /// structurally cannot cover, because a `datalib-dag` run started from
-    /// a terminal has no job row behind it. The store is opened before the
-    /// watch starts, as a running loop's is: its file appearing once is not
-    /// what a subscriber needs to hear, its every commit is.
+    /// The same for the loop's record, whoever runs the loop. The store is
+    /// opened before the watch starts, as a running loop's is: its file
+    /// appearing once is not what a subscriber needs to hear, its every
+    /// commit is.
     #[tokio::test]
     async fn a_terminal_loops_record_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
@@ -1073,14 +1068,14 @@ mod tests {
     /// The control for the filter, and the reason `classify` is not
     /// simply "anything under `system/`".
     #[tokio::test]
-    async fn writes_to_the_job_store_are_not_reported() {
+    async fn writes_to_the_usage_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();
         let (tx, mut rx) = broadcast::channel(64);
         spawn(td.path().to_path_buf(), tx);
 
-        let jobs = td.path().join("system/jobs.doltlite_db");
+        let usage = td.path().join("system/usage.doltlite_db");
         for n in 0..20 {
-            std::fs::write(&jobs, format!("row {n}")).unwrap();
+            std::fs::write(&usage, format!("row {n}")).unwrap();
         }
         // A real sleep, and the one place in this change that earns
         // one: proving a *negative* means waiting, because there is no
@@ -1090,7 +1085,7 @@ mod tests {
         let got = rx.try_recv();
         assert!(
             got.is_err(),
-            "a write to the job store was reported as a data-root change: {got:?}"
+            "a write to the usage store was reported as a data-root change: {got:?}"
         );
     }
 }

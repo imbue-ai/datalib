@@ -29,13 +29,9 @@ pub const MEDIA_DIR: &str = "media";
 /// different writer from every other store and, unlike the indexes, it
 /// cannot be regenerated.
 pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
-/// The sync job queue and its history, relative to `system/`. Separate
-/// from [`FEEDBACK_DB`] so a job update and a feedback commit cannot
-/// land in each other's dolt history.
-pub const JOBS_DB: &str = "jobs.doltlite_db";
 /// The bytes-on-disk timeseries, relative to `system/`. Its own file
 /// for the reason every store here has one: doltlite's working set is
-/// per file and branch, so a sample landing between two job transitions
+/// per file and branch, so a sample landing between two feedback rows
 /// would be swept into whichever commit came next. Nothing commits this one at
 /// all — the rows are the history.
 pub const USAGE_DB: &str = "usage.doltlite_db";
@@ -102,10 +98,6 @@ pub fn media_dir(data_root: &Path) -> PathBuf {
 
 pub fn feedback_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(FEEDBACK_DB)
-}
-
-pub fn jobs_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(JOBS_DB)
 }
 
 pub fn usage_db(data_root: &Path) -> PathBuf {

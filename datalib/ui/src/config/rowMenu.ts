@@ -24,9 +24,11 @@ export type MenuTarget = {
   editBlocked: string | null;
   revealBlocked: string | null;
   browseBlocked: string | null;
-  /// Non-null while a job has this row claimed — the state in which
+  /// Non-null while an open request wants this row — the state in which
   /// Sync reads as Stop.
-  stopJobId: string | null;
+  stopRequestId: string | null;
+  /// Who paused it; for a group, who paused a step under it.
+  pausedBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
   revealPath: string | null;
@@ -51,6 +53,8 @@ export type MenuAction =
   | "browse"
   | "sync"
   | "stop"
+  | "pause"
+  | "resume"
   | "edit"
   | "compare"
   | "rename"
@@ -110,10 +114,17 @@ export function noStoreReason(t: MenuTarget): string | null {
 export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
-  if (t.stopJobId) return "Busy — stop the sync first";
+  if (t.stopRequestId) return "Busy — stop the sync first";
   if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
     return "Reset a source; the index follows it";
   }
+  return null;
+}
+
+/// Why "Pause" does not apply: only the loop's steps are scheduled.
+export function notPausableReason(t: MenuTarget): string | null {
+  if (t.kind === "system") return NOT_IN_CONFIG;
+  if (t.kind === "applet") return "An applet is not scheduled";
   return null;
 }
 
@@ -177,7 +188,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     name: browseLabel(only),
     disabled: !one ? ONE_AT_A_TIME : only.browseBlocked,
   });
-  const claimed = targets.filter((t) => t.stopJobId).length;
+  const claimed = targets.filter((t) => t.stopRequestId).length;
   if (claimed === targets.length) {
     entries.push({
       action: "stop",
@@ -194,6 +205,12 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
           : firstBlocked(targets, (t) => t.runBlocked),
     });
   }
+  const paused = targets.filter((t) => t.pausedBy).length;
+  entries.push({
+    action: paused === targets.length ? "resume" : "pause",
+    name: paused === targets.length ? "Resume" : "Pause",
+    disabled: firstBlocked(targets, notPausableReason),
+  });
   entries.push({
     action: "edit",
     name: "Edit settings…",

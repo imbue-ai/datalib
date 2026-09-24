@@ -18,7 +18,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 const DDL: [&str; 2] = [
     "CREATE TABLE IF NOT EXISTS requests (
@@ -116,6 +116,7 @@ impl Store {
         for stmt in ddl() {
             sqlx::query(stmt).execute(&store.pool).await?;
         }
+        store.add_missing_columns().await?;
         datalib_store_meta::write(
             &store.pool,
             datalib_store_meta::StoreKind::Supervisor,
@@ -124,6 +125,28 @@ impl Store {
         )
         .await?;
         Ok(store)
+    }
+
+    /// `CREATE TABLE IF NOT EXISTS` leaves a table an older build made as
+    /// it was, so a column added since reaches it here.
+    async fn add_missing_columns(&self) -> Result<()> {
+        for (table, column, decl) in super::record::ADDED_COLUMNS {
+            // Safe: `table` is a literal from `ADDED_COLUMNS`.
+            let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+            let have: Vec<String> = sqlx::query(pragma)
+                .fetch_all(&self.pool)
+                .await?
+                .iter()
+                .map(|r| r.try_get("name"))
+                .collect::<Result<_, _>>()?;
+            if !have.iter().any(|c| c == column) {
+                // Safe: every name here is a literal from `ADDED_COLUMNS`.
+                let alter =
+                    sqlx::AssertSqlSafe(format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"));
+                sqlx::query(alter).execute(&self.pool).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn refuse_if_newer(&self, path: &Path) -> Result<()> {
@@ -159,26 +182,19 @@ impl Store {
 
     pub async fn open_request(&self, roots: &[String], by: &str) -> Result<String> {
         let id = uuid::Uuid::now_v7().to_string();
-        self.open_request_as(&id, roots, by).await?;
-        Ok(id)
-    }
-
-    /// Under an id the caller already has: the server's job id, so the
-    /// job row and the request are one thing seen twice.
-    pub async fn open_request_as(&self, id: &str, roots: &[String], by: &str) -> Result<()> {
         let (now, tz_offset) = now_split();
         sqlx::query(
             "INSERT INTO requests (id, roots, opened_by, opened_at_utc, tz_offset) \
              VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(id)
+        .bind(&id)
         .bind(serde_json::to_string(roots)?)
         .bind(by)
         .bind(now)
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(id)
     }
 
     /// Asking, not doing: the loop stops the request's steps and closes it.
@@ -223,6 +239,20 @@ impl Store {
             "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
              FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
         )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(request_of).collect()
+    }
+
+    /// The open requests and then the newest closed ones, up to `limit`
+    /// in all.
+    pub async fn recent_requests(&self, limit: u32) -> Result<Vec<RequestRow>> {
+        let rows = sqlx::query(
+            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+             FROM requests ORDER BY closed_at_utc IS NOT NULL, opened_at_utc DESC, id DESC \
+             LIMIT ?",
+        )
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(request_of).collect()

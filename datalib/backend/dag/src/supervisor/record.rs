@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 
 use super::store::Store;
+use super::tick::StateKind;
 use crate::step::StepId;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -74,6 +75,14 @@ pub struct StepRecord {
     /// ages runs out, and the source failing longest is the one whose last
     /// success matters most.
     pub last_success_at: Option<String>,
+    /// What the loop's last tick made of it; `None` for a step no loop
+    /// has ticked, or a word this build does not know.
+    pub state: Option<StateKind>,
+    /// What it waits on or is blocked by, or who paused it: a sentence.
+    pub state_detail: Option<String>,
+    pub paused_by: Option<String>,
+    /// The open request it is being run for, the oldest if several are.
+    pub request: Option<String>,
 }
 
 /// One thing the store must write to hold `next` where it held `prev`.
@@ -140,7 +149,11 @@ pub(super) const DDL: [&str; 5] = [
         last_attempts INTEGER,
         last_error TEXT,
         last_success_at_utc TEXT,
-        tz_offset TEXT
+        tz_offset TEXT,
+        state TEXT,
+        state_detail TEXT,
+        paused_by TEXT,
+        request TEXT
     )",
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
@@ -163,6 +176,15 @@ pub(super) const DDL: [&str; 5] = [
         exit_code INTEGER,
         signal INTEGER
     )",
+];
+
+/// Columns added to a table after it first shipped: (table, column,
+/// declaration).
+pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 4] = [
+    ("steps", "state", "TEXT"),
+    ("steps", "state_detail", "TEXT"),
+    ("steps", "paused_by", "TEXT"),
+    ("steps", "request", "TEXT"),
 ];
 
 /// A process the loop started, as its row names it.
@@ -262,6 +284,13 @@ impl Store {
                 fingerprint: r.try_get("fingerprint")?,
                 last_run,
                 last_success_at: joined("last_success_at_utc")?,
+                state: r
+                    .try_get::<Option<String>, _>("state")?
+                    .as_deref()
+                    .and_then(StateKind::parse),
+                state_detail: r.try_get("state_detail")?,
+                paused_by: r.try_get("paused_by")?,
+                request: r.try_get("request")?,
             };
             steps.insert(id, state);
         }
@@ -323,8 +352,9 @@ impl Store {
                     sqlx::query(
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
-                         last_attempts, last_error, last_success_at_utc, tz_offset) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         last_attempts, last_error, last_success_at_utc, tz_offset, state, \
+                         state_detail, paused_by, request) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
                     .bind(st.succeeded)
@@ -338,6 +368,10 @@ impl Store {
                     .bind(last.and_then(|l| l.error.as_ref()))
                     .bind(utc(&st.last_success_at))
                     .bind(offset)
+                    .bind(st.state.map(StateKind::as_str))
+                    .bind(&st.state_detail)
+                    .bind(&st.paused_by)
+                    .bind(&st.request)
                     .execute(&mut *tx)
                     .await?;
                     match &st.version {
@@ -370,6 +404,18 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Whether a loop has taken the request on: a step's record names
+    /// it, or it has already closed.
+    pub async fn taken_on(&self, request: &str) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM steps WHERE request = ?1) \
+             OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)",
+        )
+        .bind(request)
+        .fetch_one(self.pool())
+        .await?)
     }
 
     pub async fn open_invocation(&self, row: &InvocationRow) -> Result<()> {
@@ -495,6 +541,10 @@ mod tests {
                         error: None,
                     }),
                     last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
+                    state: Some(StateKind::Waiting),
+                    state_detail: Some("waiting for x/raw".into()),
+                    paused_by: Some("claude".into()),
+                    request: Some("req-1".into()),
                 },
             )]),
             current_run: Some(CurrentRun {

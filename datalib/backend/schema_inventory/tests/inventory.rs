@@ -199,11 +199,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "system",
-            portable(&[
-                app_schema::feedback::DDL,
-                app_schema::sync_jobs::DDL,
-                app_schema::disk_usage::DDL,
-            ]),
+            portable(&[app_schema::feedback::DDL, app_schema::disk_usage::DDL]),
         ),
     ]
 }

@@ -1,13 +1,7 @@
 // The relative-time formatter behind the "Last synced" column.
 
 import { describe, expect, it } from "vitest";
-import {
-  compareStamps,
-  formatDateTime,
-  formatRelative,
-  formatStamp,
-  formatTimeOfDay,
-} from "./timeFormat";
+import { compareStamps, formatDateTime, formatRelative, formatStamp } from "./timeFormat";
 
 /// A fixed "now" so the tests don't race the clock. Every case below
 /// is expressed as an offset from it.
@@ -160,28 +154,11 @@ describe("ordering by when, not by how it reads", () => {
   });
 });
 
-describe("the time of day", () => {
-  it("shows one clock for stamps written in different zones", () => {
-    // The same instant, as a step's tracing line (UTC) and the runner's
-    // arrival stamp (an offset) would write it: one string on screen.
-    const utc = formatTimeOfDay("2026-09-11T15:10:41.113Z");
-    const local = formatTimeOfDay("2026-09-11T17:10:41.113+02:00");
-    expect(utc).toBe(local);
-    expect(utc).toMatch(/^\d\d:\d\d:41\.113$/);
-  });
-
-  it("passes an unreadable stamp through, and says nothing for none", () => {
-    expect(formatTimeOfDay("not a date")).toBe("not a date");
-    expect(formatTimeOfDay(null)).toBe("");
-  });
-});
-
 describe("formatDateTime", () => {
   it("is the date and the time of day, one clock for every zone", () => {
     const utc = formatDateTime("2026-09-11T15:10:41.113Z");
     expect(utc).toBe(formatDateTime("2026-09-11T17:10:41.113+02:00"));
     expect(utc).toMatch(/^2026-09-1\d \d\d:\d\d:41\.113$/);
-    expect(utc.slice(11)).toBe(formatTimeOfDay("2026-09-11T15:10:41.113Z"));
   });
 
   it("passes an unreadable stamp through, and says nothing for none", () => {

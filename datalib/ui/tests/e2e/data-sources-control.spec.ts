@@ -9,17 +9,11 @@
 // finishes at once when the test lets go. No window to miss on a slow
 // runner, and no sleeping on a fast one.
 //
-// Two groups of tests. The first is the workflow as the tree supports it
-// — every sync is its own job, and the server's one loop takes each on
-// as it arrives, beside whatever is already running — and has to stay
-// green. The second is what the workflow needs and does not have yet,
-// marked `test.fail()` or `test.fixme()`: an expected failure passes
-// today, and the day the feature lands Playwright fails it as "expected
-// to fail, but passed", which is the reminder to turn it into a plain
-// test.
+// Every sync is its own request, and the server's one loop takes each on
+// as it arrives, beside whatever is already running.
 //
-// Every test leaves the queue empty and the root unlocked behind it: a
-// job left pending by one test would run against the config the next
+// Every test leaves no request open and the loop idle behind it: a
+// request left open by one test would run against the config the next
 // test writes.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
@@ -27,9 +21,12 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
+  pickRowMenu,
   pipelineRow as row,
+  rowMenuEntry,
   settleRow,
   settleRunner,
+  stampOf,
   stampsBefore,
   statusOf,
   MANAGE_WITH_CONFIG,
@@ -68,14 +65,10 @@ const INDEX = "unified_index/grid_index";
 const ingestOf = (s: Source) => `${s.id}/ingest`;
 const renderOf = (s: Source) => `${s.id}/render_markdown`;
 
-type SyncJob = {
+type SyncRequest = {
   id: string;
-  source_ids: string | null;
-  state: "pending" | "running" | "done" | "failed" | "canceled";
-  /// The server's word on whether the job still holds its sources: a
-  /// cancel flips `state` at once, and this only once its steps have
-  /// exited and the job is stamped finished.
-  active: boolean;
+  roots: string[];
+  state: "open" | "done" | "failed" | "stopped" | "closed";
 };
 type DagStep = { id: string; current_state: string | null };
 
@@ -103,14 +96,14 @@ async function writeConfig(page: Page, text: string) {
   await openManager(page);
 }
 
-/// Every job the queue holds, newest first.
-async function jobs(request: APIRequestContext): Promise<SyncJob[]> {
-  return (await (await request.get("/api/sync/jobs/all")).json()) as SyncJob[];
+/// The open requests, then the newest closed ones.
+async function requests(request: APIRequestContext): Promise<SyncRequest[]> {
+  return (await (await request.get("/api/requests")).json()) as SyncRequest[];
 }
 
-/// The newest job whose seeds are exactly this source's ingest step.
-async function jobFor(request: APIRequestContext, s: Source): Promise<SyncJob | undefined> {
-  return (await jobs(request)).find((j) => j.source_ids === ingestOf(s));
+/// The newest request rooted at exactly this source's ingest step.
+async function requestFor(request: APIRequestContext, s: Source): Promise<SyncRequest | undefined> {
+  return (await requests(request)).find((r) => r.roots.join() === ingestOf(s));
 }
 
 /// What the runner says each step is doing right now.
@@ -123,21 +116,25 @@ async function currentStates(request: APIRequestContext): Promise<Record<string,
 /// the row claimed…
 const syncBtn = (page: Page, rowId: string) =>
   row(page, rowId).getByRole("button", { name: "Sync now" });
-/// …and on the face it shows while a job does…
+/// …and on the face it shows while an open request wants it…
 const stopBtn = (page: Page, rowId: string) =>
   row(page, rowId).getByRole("button", { name: /^Stop the sync/ });
-/// …and on the one it shows once that job has been told to stop and is
-/// still winding down.
+/// …and on the one it shows once that request has been told to stop and
+/// its steps are still winding down.
 const stoppingBtn = (page: Page, rowId: string) =>
   row(page, rowId).getByRole("button", { name: /^Stopping the sync/ });
 
-/// Start a source from its group's row, and wait for the queue to have
-/// taken it: `click()` resolves when the event is dispatched, not when
-/// the enqueue behind it returns.
+/// Start a source from its group's row, and wait for its request to have
+/// been written: `click()` resolves when the event is dispatched, not
+/// when the POST behind it returns.
 async function start(page: Page, s: Source) {
   await syncBtn(page, `group:${s.id}`).click();
   await expect(page.getByText(/Queued a sync for/)).toBeVisible();
 }
+
+/// A row's status icon reading `word`, as a locator to wait on.
+const statusFace = (page: Page, rowId: string, word: string) =>
+  row(page, rowId).locator(`[col-id="status"] [role="img"][aria-label="${word}"]`);
 
 /// Wait until the runner has this source's download in flight, as the
 /// row paints it.
@@ -151,44 +148,40 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
     .toBe("Running");
 }
 
-/// Wait until a job has *finished* in one of the given states — it has
-/// been stamped, so nothing is still running on its behalf. A cancel
-/// flips the state the moment it is asked for; `active` is what says its
-/// steps have actually gone. `settleRunner` is not enough: the run a job
-/// belongs to may be serving other jobs long after this one is over.
-async function untilJobFinished(
+/// Wait until a request has closed in one of the given states.
+async function untilClosed(
   request: APIRequestContext,
   s: Source,
-  states: SyncJob["state"][],
+  states: SyncRequest["state"][],
   timeout = 45_000,
-): Promise<SyncJob> {
-  let seen: SyncJob | undefined;
+): Promise<SyncRequest> {
+  let seen: SyncRequest | undefined;
   await expect
     .poll(
       async () => {
-        seen = await jobFor(request, s);
-        return seen ? `${seen.state}${seen.active ? " (still active)" : ""}` : "(no job)";
+        seen = await requestFor(request, s);
+        return seen?.state ?? "(no request)";
       },
       {
         timeout,
         intervals: [200],
-        message: `the job for ${s.id} never finished as ${states.join("/")}`,
+        message: `the request for ${s.id} never closed as ${states.join("/")}`,
       },
     )
     .toMatch(new RegExp(`^(${states.join("|")})$`));
   return seen!;
 }
 
-/// What a failure about a stop would otherwise leave unsaid: the queue
-/// as the API serves it, the runner's record, and the last lines this
+/// What a failure about a stop would otherwise leave unsaid: the requests
+/// as the API serves them, the loop's record, and the last lines this
 /// spec's backend wrote — where the loop says what it sent and saw.
 /// Playwright puts test stdout in the report and in bazel's test log,
 /// which is the only place a CI run can be read from.
 async function dumpStopEvidence(request: APIRequestContext, why: string): Promise<void> {
   try {
-    const queue = await jobs(request);
+    const open = await requests(request);
     const dag = await (await request.get("/api/dag")).json();
-    console.warn(`[e2e] ${why}: jobs=${JSON.stringify(queue)}`);
+    console.warn(`[e2e] ${why}: requests=${JSON.stringify(open)}`);
     console.warn(`[e2e] ${why}: dag=${JSON.stringify(dag)}`);
   } catch (e) {
     console.warn(`[e2e] ${why}: could not read the API: ${e}`);
@@ -207,19 +200,19 @@ async function dumpStopEvidence(request: APIRequestContext, why: string): Promis
   }
 }
 
-/// Empty the queue and wait for the loop to go idle, so the next test
-/// starts from nothing in flight.
-async function drainQueue(page: Page) {
-  for (const j of await jobs(page.request)) {
-    if (j.active) {
-      await page.request.post(`/api/sync/jobs/${encodeURIComponent(j.id)}/cancel`);
+/// Stop every open request and wait for the loop to go idle, so the next
+/// test starts from nothing in flight.
+async function drainRequests(page: Page) {
+  for (const r of await requests(page.request)) {
+    if (r.state === "open") {
+      await page.request.post(`/api/requests/${encodeURIComponent(r.id)}/stop`);
     }
   }
   await expect
-    .poll(async () => (await jobs(page.request)).filter((j) => j.active).length, {
+    .poll(async () => (await requests(page.request)).filter((r) => r.state === "open").length, {
       timeout: 60_000,
       intervals: [250],
-      message: "the queue never emptied",
+      message: "a request never closed",
     })
     .toBe(0);
   await settleRunner(page, 60_000);
@@ -236,7 +229,7 @@ test.beforeEach(async ({ page, request }) => {
 
 test.afterEach(async ({ page }) => {
   release();
-  await drainQueue(page);
+  await drainRequests(page);
   if (original) await writeConfig(page, original);
 });
 
@@ -353,7 +346,7 @@ test.describe("sources run independently", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await settleRunner(page, 60_000);
-    for (const s of [CHATGPT, CLAUDE, PDFS]) await untilJobFinished(request, s, ["done"]);
+    for (const s of [CHATGPT, CLAUDE, PDFS]) await untilClosed(request, s, ["done"]);
   });
 
   test("stopping one source mid-sync leaves the others alone, and it restarts after an edit", async ({
@@ -361,9 +354,9 @@ test.describe("sources run independently", () => {
     request,
   }) => {
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
-    // The queue is shared by every test on this root; only what this
-    // one enqueues is its to count.
-    const earlier = new Set((await jobs(request)).map((j) => j.id));
+    // The requests are shared by every test on this root; only what
+    // this one opens is its to count.
+    const earlier = new Set((await requests(request)).map((r) => r.id));
     const was = await stampsBefore(page, [
       ingestOf(CHATGPT),
       renderOf(CHATGPT),
@@ -386,30 +379,31 @@ test.describe("sources run independently", () => {
     // a fraction of a second: a held request answers the stop at once,
     // like a backoff. The row says so for as
     // long as that lasts: the button reads Stopping and takes no second
-    // click. Sampled until the job is stamped, and asserted only if the
+    // click. Sampled until the step has exited, and asserted only if the
     // window was wide enough to be seen at all — on a fast host it can
     // close before the first sample. The "Stopping…" banner is the
     // click handler's, painted a beat after the rows refetch that flips
     // the face, so it is only logged.
-    const banner = page.getByText(`Stopping the sync of ${ingestOf(CHATGPT)}`);
+    const banner = page.getByText(/^Stopping the sync\. Steps in flight/);
     const stopping = stoppingBtn(page, `group:${CHATGPT.id}`);
     /// What the row and banner read while the wind-down was on, if a
     /// sample caught it.
     type Seen = { disabled: boolean; banner: boolean };
     let windingDown: Seen | null = null;
-    let stopped: SyncJob | undefined;
+    let stopped: SyncRequest | undefined;
     let finished = false;
     try {
       await expect
         .poll(
           async () => {
-            stopped = await jobFor(request, CHATGPT);
-            if (stopped && !stopped.active) return "finished";
+            stopped = await requestFor(request, CHATGPT);
+            const exited = (await statusOf(page, ingestOf(CHATGPT))) !== "Running";
+            if (stopped?.state !== "open" && exited) return "finished";
             // Read the face without waiting for it: `isDisabled()` waits
             // for the element to exist, and the Stopping button leaves
             // the DOM the moment the step is gone — a sample that lands
             // in that gap would hang the poll until its timeout, long
-            // after the job it is waiting on has finished.
+            // after the step it is waiting on has exited.
             const faces = await stopping.evaluateAll((els) =>
               els.map((el) => (el as HTMLButtonElement).disabled),
             );
@@ -419,12 +413,12 @@ test.describe("sources run independently", () => {
                 banner: (windingDown?.banner ?? false) || (await banner.isVisible()),
               };
             }
-            return `winding down (${stopped?.state ?? "no job"})`;
+            return `winding down (${stopped?.state ?? "no request"})`;
           },
           {
             timeout: 45_000,
             intervals: [100],
-            message: `the job for ${CHATGPT.id} never finished`,
+            message: `the stop of ${CHATGPT.id} never finished`,
           },
         )
         .toBe("finished");
@@ -432,7 +426,7 @@ test.describe("sources run independently", () => {
     } finally {
       if (!finished) await dumpStopEvidence(request, "the stop never finished");
     }
-    expect(stopped?.state, "a stop is a cancel, not a failure").toBe("canceled");
+    expect(stopped?.state, "a stop is a stop, not a failure").toBe("stopped");
     // Read through a closure: TypeScript narrows the `let` to `null`
     // here, not seeing the assignment inside the poll, and an assigned
     // local would inherit that narrowing.
@@ -471,19 +465,17 @@ test.describe("sources run independently", () => {
       .poll(() => statusOf(page, `group:${CHATGPT.id}`), { timeout: 10_000, intervals: [200] })
       .toBe("Stopped");
 
-    // The other source's job was never touched by the stop: it is still
-    // running, and — once let go — it goes on to finish.
-    const other = await jobFor(request, CLAUDE);
-    expect(other?.state, `${CLAUDE.id}'s job after stopping ${CHATGPT.id}`).toMatch(
-      /^(pending|running)$/,
-    );
+    // The other source's request was never touched by the stop: it is
+    // still open, and — once let go — it goes on to finish.
+    const other = await requestFor(request, CLAUDE);
+    expect(other?.state, `${CLAUDE.id}'s request after stopping ${CHATGPT.id}`).toBe("open");
     release();
     for (const id of [ingestOf(CLAUDE), renderOf(CLAUDE)]) {
       const st = await settleRow(page, id, was[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    // Its rows are done; the job still owns the index pass behind them.
-    await untilJobFinished(request, CLAUDE, ["done"], 120_000);
+    // Its rows are done; the request still owns the index pass behind them.
+    await untilClosed(request, CLAUDE, ["done"], 120_000);
     await settleRunner(page, 60_000);
 
     // ── edit the stopped source, then start it again ──────────────────
@@ -503,17 +495,17 @@ test.describe("sources run independently", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await settleRunner(page, 60_000);
-    await untilJobFinished(request, CHATGPT, ["done"]);
-    // Two jobs for this source now: the one that was stopped, and the
-    // one that finished. Neither is the other's.
-    const mine = (await jobs(request)).filter(
-      (j) => !earlier.has(j.id) && j.source_ids === ingestOf(CHATGPT),
+    await untilClosed(request, CHATGPT, ["done"]);
+    // Two requests for this source now: the one that was stopped, and
+    // the one that finished. Neither is the other's.
+    const mine = (await requests(request)).filter(
+      (r) => !earlier.has(r.id) && r.roots.join() === ingestOf(CHATGPT),
     );
-    expect(mine.map((j) => j.state).sort()).toEqual(["canceled", "done"]);
+    expect(mine.map((r) => r.state).sort()).toEqual(["done", "stopped"]);
   });
 });
 
-test.describe("what independent control still needs", () => {
+test.describe("steering one source among several", () => {
   test.setTimeout(300_000);
 
   test("a source started during another's sync runs beside it, not behind it", async ({
@@ -534,15 +526,31 @@ test.describe("what independent control still needs", () => {
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
   });
 
-  test.fixme("a backlogged step can be put on ice, and taken off it", async ({ page }) => {
-    // There is no way to say "keep this step, but don't run it" in the
-    // config: a step is either in the pipeline or deleted from it, and
-    // deleting the index step drops its rows from the grid. The shape
-    // this wants is a flag on the step — `paused = true`, say — that the
-    // loader keeps in the graph, the scheduler skips (its dependents
-    // wait, not fail), the Status column paints as "Paused", and the
-    // row's menu toggles.
-    await writeConfigAndOpen(page, [CHATGPT]);
-    await expect(row(page, INDEX)).toBeVisible();
+  test("a backlogged step can be put on ice, and taken off it", async ({ page }) => {
+    // A step paused from its row's menu is not started, and what reads
+    // it waits; the sync of its source runs everything else and closes.
+    // Resumed, the next sync takes it on.
+    await writeConfigAndOpen(page, [PDFS]);
+    await pickRowMenu(page, row(page, INDEX), "Pause", statusFace(page, INDEX, "Paused"));
+    expect(await statusOf(page, INDEX)).toBe("Paused");
+
+    const was = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS), INDEX]);
+    await start(page, PDFS);
+    for (const id of [ingestOf(PDFS), renderOf(PDFS)]) {
+      const st = await settleRow(page, id, was[id], 120_000);
+      expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
+    }
+    await untilClosed(page.request, PDFS, ["done"]);
+    expect(await statusOf(page, INDEX)).toBe("Paused");
+    expect(await stampOf(page, INDEX), "a paused step took no part").toBe(was[INDEX]);
+
+    await (await rowMenuEntry(page, row(page, INDEX), "Resume").open()).click();
+    await expect
+      .poll(() => statusOf(page, INDEX), { timeout: 10_000, intervals: [200] })
+      .not.toBe("Paused");
+    const again = await stampsBefore(page, [INDEX]);
+    await start(page, PDFS);
+    const st = await settleRow(page, INDEX, again[INDEX], 120_000);
+    expect(st, `${INDEX} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
   });
 });

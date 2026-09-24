@@ -44,11 +44,7 @@ test("no screen violates the page's CSP", async ({ page, context }) => {
   await expect(page.locator(".chat-preview")).toBeVisible();
   expect(await violations(page)).toEqual([]);
 
-  // The Sources screens: the config editor and the pipeline table.
-  await page.goto("/sources");
-  await expect(page.getByRole("heading", { name: "Configure data sources" })).toBeVisible();
-  expect(await violations(page)).toEqual([]);
-
+  // The Sources card: the pipeline table.
   await page.goto("/data_sources");
   await expect(page.locator(TABLE_ROWS).first()).toBeVisible({ timeout: 15_000 });
   expect(await violations(page)).toEqual([]);

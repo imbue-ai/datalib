@@ -20,16 +20,6 @@ pub(crate) struct StampColumns {
     pub renames: &'static [(&'static str, &'static str)],
 }
 
-pub(crate) const SYNC_JOBS: StampColumns = StampColumns {
-    table: "sync_jobs",
-    key: &["id"],
-    renames: &[
-        ("created_at", "created_at_utc"),
-        ("started_at", "started_at_utc"),
-        ("finished_at", "finished_at_utc"),
-    ],
-};
-
 pub(crate) const FEEDBACK: StampColumns = StampColumns {
     table: "feedback",
     key: &["feedback_uuid"],
@@ -46,7 +36,7 @@ async fn column_names(
     conn: &mut SqliteConnection,
     table: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
-    // Safe: `table` is one of the three literals above, never input.
+    // Safe: `table` is one of the literals above, never input.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
         .fetch_all(&mut *conn)
         .await?;
@@ -185,7 +175,6 @@ macro_rules! stamps_rung {
 }
 
 pub(crate) const FEEDBACK_LADDER: &[Migration] = &[stamps_rung!(FEEDBACK)];
-pub(crate) const SYNC_JOBS_LADDER: &[Migration] = &[stamps_rung!(SYNC_JOBS)];
 pub(crate) const DISK_USAGE_LADDER: &[Migration] = &[stamps_rung!(DISK_USAGE)];
 /// Born after the stamp rename; nothing to climb yet.
 pub(crate) const REMOTE_MEDIA_LADDER: &[Migration] = &[];

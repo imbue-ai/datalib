@@ -169,7 +169,14 @@ pub struct Start {
     pub consumed: Consumed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `StateKind` is the word the record stores for a state
+/// (`steps.state`), without what it waits on or is blocked by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumDiscriminants)]
+#[strum_discriminants(
+    name(StateKind),
+    derive(EnumString, IntoStaticStr, VariantArray),
+    strum(serialize_all = "snake_case")
+)]
 pub enum StepState {
     /// No open request wants it, and it is up to date.
     Idle,
@@ -185,6 +192,17 @@ pub enum StepState {
     /// anything and is not going to run, so there is nothing to read.
     Blocked(StepIx),
     Waiting(Wait),
+}
+
+impl StateKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

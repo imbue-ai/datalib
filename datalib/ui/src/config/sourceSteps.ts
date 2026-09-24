@@ -139,8 +139,7 @@ function parseConfig(text: string): ParsedConfig {
 
 /// Every entry's character range in one `[[…]]` array. `[steps.params]`
 /// is a sibling node in the AST rather than a child of the step's own
-/// table, so the span has to be widened to cover it — same derivation
-/// as configSources.ts.
+/// table, so the span has to be widened to cover it.
 function ranges(ast: ParsedConfig["ast"], key: string): Map<number, [number, number]> {
   const out = new Map<number, [number, number]>();
   for (const node of ast.body[0].body) {
@@ -697,9 +696,8 @@ export function buildStep(opts: {
 
 /// The `[[steps]]` block itself: group, function, inputs, then a
 /// params body already rendered as TOML. What `buildStep` writes once
-/// it has turned form values into that body, and what the Sources tab's
-/// quick-add snippets write with a hand-written body — the one place
-/// the shape of a step is spelled out.
+/// it has turned form values into that body — the one place the shape of
+/// a step is spelled out.
 export function stepToml(opts: {
   group: string;
   phase: FieldPhase;

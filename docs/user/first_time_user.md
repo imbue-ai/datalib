@@ -406,7 +406,6 @@ faster.
     ├── api-token                   # the running server's bearer token
     ├── lock                        # held by the running server
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
-    ├── jobs.doltlite_db            # sync job queue + history
     ├── runs/runs.sqlite            # every run's step states, logs and metrics
     ├── usage.doltlite_db           # bytes on disk over time
     └── frontend/                   # UI components the applets contribute

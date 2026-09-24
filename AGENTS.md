@@ -203,7 +203,7 @@ datalib/
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback/sync_jobs/runs; both derive DDL via
+    app_schema/    feedback/usage/runs; both derive DDL via
                    `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
@@ -237,14 +237,17 @@ fan-in steps under `unified_index` index every render tree their
 `qmd_index` (semantic search, one collection per group). Both are read
 by the `unified_index` applet; `datalib-http` never opens them. A render
 store is readable at every commit: the documents between two checkpoints
-share one transaction. The loop's record — each step's last run and
-success, each sink's version — is in `system/supervisor.sqlite`. A
+share one transaction. The loop's record — each step's state now, its
+last run and success, each sink's version — is in
+`system/supervisor.sqlite`, and a Manage row's Status is that state. A
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-dag --check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; the Manage tab edits the config; a
+`runner-lock` for its life; a sync, a stop, a pause is a row it writes
+there (`POST /api/requests`, `/api/steps/<id>/pause`); the Manage tab
+edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
 for applets.
@@ -509,9 +512,8 @@ survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
 | **name** | what a person typed in the wizard. Free text, mutable, may repeat. |
 
 Everything that identifies, filters or joins uses the id, and the field
-is `source_id` everywhere. `source_name` survives in two places because a
-**person** types them: the `source_name:` search filter and the
-`source_name` alias on `POST /api/sync/jobs`.
+is `source_id` everywhere. `source_name` survives in one place because a
+**person** types it: the `source_name:` search filter.
 
 ## A cursor is only valid under the config that set it
 
@@ -565,7 +567,8 @@ upstream (block types, MIME types), free-form display text
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
 | what the run store names | `LiveState` | `runs/src/lib.rs` |
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
-| a sync job's lifecycle | `JobState`, `JobKind` | `app_schema/src/sync_jobs.rs` |
+| what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
+| how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
 | a browser-login attempt | `ConnectState` | `http/src/connect.rs` |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
