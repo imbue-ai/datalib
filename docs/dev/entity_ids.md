@@ -285,6 +285,7 @@ back by render as the natural key.
 | airvisual | none — the page keyed on the source id, a device on its serial | none — a device's stamp is its latest reading |
 | apple_messages | none — `message.guid` is a UUID Messages mints | messages, tapbacks |
 | beeper | none — `rooms.account_id` is nullable; keys are Matrix ids | events, at millisecond precision |
+| calendar | none — keyed on `{calendar}#{UID}` (iCalendar) or `{calendar}#{event id}` (Google); a changed iCalendar occurrence adds its `RECURRENCE-ID` as a UTC instant | none — an event's start moves when it is rescheduled |
 | chatgpt | none — keys are OpenAI's conversation and message ids | messages |
 | claude | none — `org_uuid` is nullable (see above); keys are Anthropic's uuids | messages, blocks, project documents |
 | claude_code | none — session ids, record uuids and tool-use ids are all Claude Code's own | records, blocks |
