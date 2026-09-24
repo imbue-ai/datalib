@@ -16,11 +16,13 @@ use crate::{auth::ApiToken, supervisor, usage, AppState};
 /// supervisor loop, spawned onto the
 /// ambient tokio runtime — so this must be called from within one.
 /// `binary_dir` goes first on every step's `PATH`, ahead of the config's
-/// own `binary_dir`. Presentation concerns (browser opening, the
+/// own `binary_dir`; `now`, when given, stands in for the clock in every
+/// sync the loop runs (`--now`). Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
 pub async fn build_state(
     root: PathBuf,
     binary_dir: Option<PathBuf>,
+    now: Option<String>,
     api_token: ApiToken,
 ) -> anyhow::Result<AppState> {
     datalib_core::layout::create_data_root(&root)
@@ -82,6 +84,7 @@ pub async fn build_state(
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),
         binary_dir: binary_dir.clone(),
+        now,
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a
@@ -174,7 +177,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("boot-test-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, token)
+        let state = build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
         let p = layout::feedback_db(root.path());
@@ -197,7 +200,7 @@ mod tests {
         let token = ApiToken::from_value("boot-test-token", root.path());
         // A first boot writes the stores; a "newer release" then marks one.
         drop(
-            build_state(root.path().to_path_buf(), None, token.clone())
+            build_state(root.path().to_path_buf(), None, None, token.clone())
                 .await
                 .unwrap(),
         );
@@ -211,7 +214,7 @@ mod tests {
             pool.close().await;
         }
 
-        let state = build_state(root.path().to_path_buf(), None, token.clone())
+        let state = build_state(root.path().to_path_buf(), None, None, token.clone())
             .await
             .expect("boots to show the gate");
         assert_eq!(state.newer_root.len(), 1);
@@ -263,7 +266,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("no-index-token", root.path());
-        build_state(root.path().to_path_buf(), None, token)
+        build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
         assert!(
@@ -281,7 +284,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
-        build_state(root.path().to_path_buf(), None, token)
+        build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
 
@@ -298,7 +301,7 @@ mod tests {
     async fn build_state_publishes_the_api_token() {
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("published-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, token)
+        let state = build_state(root.path().to_path_buf(), None, None, token)
             .await
             .unwrap();
         let path = state.api_token.token_file();
