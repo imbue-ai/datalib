@@ -13,8 +13,8 @@ import { createRouter, createWebHistory } from "vue-router";
 // docs/dev/cards.md § "The miller layout and the browser" before adding
 // another.
 //
-// The catchall MUST come after the explicit routes (the legacy
-// redirects); Vue Router does prefer specific over param routes by
+// The catchall MUST come after the explicit routes (the
+// `/data_sources` redirect); Vue Router does prefer specific over param routes by
 // path-rank, but order is the simpler invariant.
 /// The card stack `/data_sources` opens, and where a just-initialized
 /// library lands: the sources tree alone, at 1.6× the default column
@@ -29,12 +29,8 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     // The sources card on the card surface. The path stays so links,
-    // muscle memory and the launch URL keep working, and so do the
-    // paths of the screens it replaced.
+    // muscle memory and the launch URL keep working.
     { path: "/data_sources", redirect: MANAGE_STACK },
-    { path: "/sources", redirect: MANAGE_STACK },
-    { path: "/setup", redirect: MANAGE_STACK },
-    { path: "/sync", redirect: MANAGE_STACK },
     {
       path: "/:stack(.*)*",
       name: "cards",

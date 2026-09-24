@@ -115,8 +115,12 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// What a step is doing now, or did last, and when it last succeeded.
 /// A step the loader dropped says so and nothing else: a row still
 /// reading "Up to date" from last week, for an entry no longer in the
-/// graph, is what #209 was about.
-pub fn step_status(step: Option<&StepRecord>, dropped: Option<&Diagnostic>) -> StatusView {
+/// graph, is what #209 was about. `run` is the busy period in flight.
+pub fn step_status(
+    step: Option<&StepRecord>,
+    run: Option<&str>,
+    dropped: Option<&Diagnostic>,
+) -> StatusView {
     if let Some(d) = dropped {
         let key = if d.severity == Severity::Blocked {
             "config_blocked"
@@ -132,12 +136,14 @@ pub fn step_status(step: Option<&StepRecord>, dropped: Option<&Diagnostic>) -> S
             .clone()
             .unwrap_or_else(|| l.started_at.clone())
     });
+    // Fresh is wanted and up to date: done for this sync if it has run in
+    // it, and otherwise waiting, since what it reads may still move.
+    let ran_this_run =
+        last.is_some_and(|l| l.finished_at.is_some() && Some(l.run_id.as_str()) == run);
     let now = match step.and_then(|s| s.state) {
         Some(StateKind::Running) => view("running", last.map(|l| l.started_at.clone()), detail),
         Some(StateKind::Waiting) => view("queued", ended, detail),
-        // Wanted by an open sync and up to date so far: until the sync
-        // ends, what it reads may still move and run it again.
-        Some(StateKind::Fresh) => view(
+        Some(StateKind::Fresh) if !ran_this_run => view(
             "queued",
             ended,
             Some(
@@ -219,6 +225,7 @@ mod tests {
         let waiting = step_status(
             Some(&at(StateKind::Waiting, Some("waiting for a/ingest"))),
             None,
+            None,
         );
         assert_eq!(waiting.key, "queued");
         assert_eq!(waiting.detail.as_deref(), Some("waiting for a/ingest"));
@@ -226,19 +233,28 @@ mod tests {
 
         let mut running = at(StateKind::Running, None);
         running.last_run.as_mut().unwrap().started_at = STARTED.into();
-        let running = step_status(Some(&running), None);
+        let running = step_status(Some(&running), None, None);
         assert_eq!(
             (running.key.as_str(), running.at.as_deref()),
             ("running", Some(STARTED))
         );
 
         // Up to date so far is not done: what it reads may still move.
+        // Having run in this sync, it is.
         assert_eq!(
-            step_status(Some(&at(StateKind::Fresh, None)), None).key,
+            step_status(Some(&at(StateKind::Fresh, None)), Some("r0"), None).key,
+            "succeeded"
+        );
+        assert_eq!(
+            step_status(Some(&at(StateKind::Fresh, None)), None, None).key,
             "queued"
         );
 
-        let paused = step_status(Some(&at(StateKind::Paused, Some("paused by claude"))), None);
+        let paused = step_status(
+            Some(&at(StateKind::Paused, Some("paused by claude"))),
+            None,
+            None,
+        );
         assert_eq!(paused.label, "Paused");
         assert_eq!(paused.detail.as_deref(), Some("paused by claude"));
     }
@@ -248,7 +264,7 @@ mod tests {
     #[test]
     fn a_step_at_rest_reads_as_its_last_outcome() {
         for state in [StateKind::Idle, StateKind::Stale] {
-            let v = step_status(Some(&at(state, None)), None);
+            let v = step_status(Some(&at(state, None)), None, None);
             assert_eq!(
                 (v.key.as_str(), v.at.as_deref()),
                 ("succeeded", Some(YESTERDAY))
@@ -258,11 +274,11 @@ mod tests {
         let last = failed.last_run.as_mut().unwrap();
         last.status = "failed".into();
         last.finished_at = Some(ENDED.into());
-        let v = step_status(Some(&failed), None);
+        let v = step_status(Some(&failed), None, None);
         assert_eq!((v.key.as_str(), v.at.as_deref()), ("failed", Some(ENDED)));
         assert_eq!(v.last_success_at.as_deref(), Some(YESTERDAY));
 
-        assert_eq!(step_status(None, None).key, "never_run");
+        assert_eq!(step_status(None, None, None).key, "never_run");
     }
 
     /// A step started by a loop that then died has an outcome nobody
@@ -274,7 +290,7 @@ mod tests {
         let last = rec.last_run.as_mut().unwrap();
         last.status = String::new();
         last.finished_at = None;
-        assert_eq!(step_status(Some(&rec), None).key, "interrupted");
+        assert_eq!(step_status(Some(&rec), None, None).key, "interrupted");
     }
 
     fn diag(severity: Severity) -> Diagnostic {
@@ -292,7 +308,7 @@ mod tests {
     #[test]
     fn a_dropped_entry_outranks_whatever_the_record_remembers() {
         let rec = at(StateKind::Running, None);
-        let v = step_status(Some(&rec), Some(&diag(Severity::Rejected)));
+        let v = step_status(Some(&rec), None, Some(&diag(Severity::Rejected)));
         assert_eq!(v.key, "config_rejected");
         assert_eq!(v.at, None);
         assert_eq!(v.last_success_at, None);
@@ -300,7 +316,7 @@ mod tests {
             v.detail.as_deref(),
             Some("unknown type \u{2014} fix the type")
         );
-        let blocked = step_status(Some(&rec), Some(&diag(Severity::Blocked)));
+        let blocked = step_status(Some(&rec), None, Some(&diag(Severity::Blocked)));
         assert_eq!(blocked.key, "config_blocked");
     }
 

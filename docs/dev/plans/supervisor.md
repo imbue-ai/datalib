@@ -929,9 +929,9 @@ last.
    or instead of, the brief below:
    - A row at rest (`idle`, `stale`, `failed`) shows its last outcome
      and when, which says more than the state's word. `waiting` reads
-     Queued with what it waits on, and so does `fresh`: up to date so far,
-     but a streaming producer's next seal can run it again before the
-     sync ends. A step running for no open request reads Stopping.
+     Queued with what it waits on, and so does `fresh` until the step has
+     run in this busy period: up to date so far, but a streaming
+     producer's next seal can run it again before the sync ends. A step running for no open request reads Stopping.
    - The loop writes the states at every tick, and once more at the end
      of a busy period with nothing open. A pause or resume made while it
      is idle, and what a dead loop left running, reach the record through
@@ -944,8 +944,9 @@ last.
      periods and refused while one runs: no row, no queue.
    - A paused step that a sync skipped records no run, rather than
      "Up to date" and a false last success.
-   - The `/sources` page, the config-editor agent hand-off and the
-     quick-add snippets it alone used are gone.
+   - The `/sources` page (and its `/setup` and `/sync` aliases), the
+     config-editor agent hand-off and the quick-add snippets it alone
+     used are gone.
 
    The brief: `steps.state` is what a Manage row
    says; `status.rs`'s inference (`reached_since`, `spoken_for`,

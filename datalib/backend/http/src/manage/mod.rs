@@ -667,7 +667,8 @@ impl RowCtx<'_> {
     }
 
     fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
-        let mut view = status::step_status(self.step(id), dropped);
+        let run = self.snap.record.run.as_ref().map(|r| r.run_id.as_str());
+        let mut view = status::step_status(self.step(id), run, dropped);
         // The step's own words and how far along it is, while it runs.
         if let Some(p) = self.snap.record.progress.get(id) {
             if let Some(msg) = &p.msg {
@@ -988,7 +989,7 @@ impl RowCtx<'_> {
                 .collect::<Vec<_>>(),
         );
         let (mut status, status_from) = if let Some(d) = dropped {
-            (status::step_status(None, Some(d)), None)
+            (status::step_status(None, None, Some(d)), None)
         } else if let Some((status, from)) = agg {
             (status, Some(from))
         } else {
