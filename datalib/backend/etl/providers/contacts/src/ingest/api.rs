@@ -1,14 +1,15 @@
-//! CardDAV client built on top of [`datalib_etl::http`].
+//! What CardDAV asks a WebDAV server and reads out of its replies (the
+//! requests and the `multistatus` walk are [`datalib_etl::dav`]'s), and
+//! the vCard helpers the ingest and render sides share.
 
 use std::collections::HashMap;
 
-use quick_xml::events::Event;
-use quick_xml::Reader;
-use thiserror::Error;
+use quick_xml::events::BytesStart;
 
-use datalib_etl::http::{
-    latchkey_curl, HttpError, HttpMethod, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
-};
+use datalib_etl::dav::{self as webdav, DavProps};
+use datalib_etl::http::{HttpService, LatchkeySettings};
+
+pub use datalib_etl::dav::DavError;
 
 /// The latchkey service every CardDAV request runs under. The trailing
 /// host-specific keying happens inside latchkey based on the URL
@@ -16,35 +17,14 @@ use datalib_etl::http::{
 /// telemetry events.
 pub const HTTP_SERVICE: HttpService = HttpService::Carddav;
 
-#[derive(Error, Debug)]
-pub enum CarddavError {
-    #[error("carddav transport: {0}")]
-    Transport(#[from] HttpError),
-    /// Server responded with a non-success HTTP status that we don't
-    /// know how to retry/recover.
-    #[error("carddav http {status} on {method:?} {url}")]
-    Http {
-        method: HttpMethod,
-        status: u16,
-        url: String,
-    },
-    /// Multistatus response we couldn't parse — usually a server
-    /// bug or unexpected namespace.
-    #[error("carddav malformed response from {url}: {message}")]
-    Malformed { url: String, message: String },
-}
+pub type DavResponse = webdav::DavResponse<ContactProps>;
+pub type Multistatus = webdav::Multistatus<ContactProps>;
 
-/// One `<response>` block out of a multistatus document. `href` is
-/// the per-resource URL the server keyed this response under; the
-/// other fields are filled in iff the corresponding sub-elements
-/// appeared (CardDAV servers vary widely in which properties they
-/// return, so every column is optional).
-#[derive(Debug, Clone, Default)]
-pub struct DavResponse {
-    pub href: String,
-    /// `<status>HTTP/1.1 <code> ...</status>` from the first
-    /// propstat block — defaults to 200 when absent.
-    pub status: u16,
+/// The CardDAV properties of one `<response>`. Servers vary widely in
+/// which they return, so each is `Some` only when it came back with a
+/// value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContactProps {
     pub etag: Option<String>,
     pub display_name: Option<String>,
     pub description: Option<String>,
@@ -52,37 +32,38 @@ pub struct DavResponse {
     /// extension, since standardized as `<sync-token>` but
     /// universally implemented under the older name too).
     pub ctag: Option<String>,
-    pub current_user_principal: Option<String>,
     pub addressbook_home_set: Option<String>,
-    /// Resource type hints — true when `<resourcetype>` contains
-    /// `<addressbook/>`. Used to filter the home-set listing down
-    /// to actual addressbooks (vs. proxies, calendars, etc).
+    /// `<resourcetype>` holds `<addressbook/>`: the home-set listing
+    /// also names the home itself, and some servers proxies and
+    /// calendars.
     pub is_addressbook: bool,
-    /// The raw vCard bytes from `<address-data>`. Only present on
+    /// The raw vCard from `<address-data>`. Only present on
     /// sync-collection / multiget responses, not on PROPFINDs.
     pub vcard: Option<String>,
 }
 
-/// Parsed multistatus document.
-#[derive(Debug, Clone, Default)]
-pub struct Multistatus {
-    pub responses: Vec<DavResponse>,
-    /// Root-level `<sync-token>` returned on a sync-collection
-    /// REPORT. The next REPORT carries this back to the server.
-    pub sync_token: Option<String>,
+impl DavProps for ContactProps {
+    fn leaf(&mut self, name: &str, parent: &str, text: String) {
+        let trimmed = text.trim();
+        let some = || (!trimmed.is_empty()).then(|| trimmed.to_string());
+        match (name, parent) {
+            ("href", "addressbook-home-set") => self.addressbook_home_set = some(),
+            ("getetag", _) => self.etag = some(),
+            ("displayname", _) => self.display_name = some(),
+            ("addressbook-description", _) => self.description = some(),
+            ("getctag", _) => self.ctag = some(),
+            // Not trimmed: the card is what the server stored.
+            ("address-data", _) if !trimmed.is_empty() => self.vcard = Some(text),
+            _ => {}
+        }
+    }
+
+    fn empty(&mut self, name: &str, parent: &str, _element: &BytesStart<'_>) {
+        if name == "addressbook" && parent == "resourcetype" {
+            self.is_addressbook = true;
+        }
+    }
 }
-
-// Request bodies
-
-/// PROPFIND body that asks for `current-user-principal` — the entry
-/// point of every discovery flow. Depth `0`.
-pub const BODY_CURRENT_USER_PRINCIPAL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<propfind xmlns="DAV:">
-  <prop>
-    <current-user-principal/>
-  </prop>
-</propfind>
-"#;
 
 /// PROPFIND body asking for `addressbook-home-set` on a principal
 /// URL. Depth `0`.
@@ -107,316 +88,30 @@ pub const BODY_LIST_ADDRESSBOOKS: &str = r#"<?xml version="1.0" encoding="utf-8"
 </propfind>
 "#;
 
-/// `sync-collection` REPORT body. The caller substitutes
-/// `{SYNC_TOKEN}` with either the previously-stored token (for an
-/// incremental sync) or an empty string (for a full enumeration).
 pub fn body_sync_collection(prev_token: &str) -> String {
-    // Some servers (notably Apple) interpret the empty-string token
-    // literally and return zero changes. The canonical way to say
-    // "give me everything" is an empty `<sync-token/>` element.
-    let token_xml = if prev_token.is_empty() {
-        "<sync-token/>".to_string()
-    } else {
-        format!("<sync-token>{}</sync-token>", escape_xml(prev_token))
-    };
-    format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<sync-collection xmlns="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
-  {token_xml}
-  <sync-level>1</sync-level>
-  <prop>
-    <getetag/>
-    <card:address-data/>
-  </prop>
-</sync-collection>
-"#
+    webdav::body_sync_collection(
+        prev_token,
+        r#"xmlns:card="urn:ietf:params:xml:ns:carddav""#,
+        "card:address-data",
     )
 }
 
-fn escape_xml(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-// Request helpers
-
-/// Issue a PROPFIND with the given XML body and depth header. Caller
-/// supplies the parsed multistatus.
 pub async fn propfind(
     url: &str,
     depth: &str,
     body: &str,
     latchkey: &LatchkeySettings,
-) -> Result<Multistatus, CarddavError> {
-    let req = HttpRequest {
-        service: HTTP_SERVICE,
-        method: HttpMethod::Propfind,
-        url: url.to_string(),
-        headers: {
-            let mut h = std::collections::BTreeMap::new();
-            h.insert("Depth".into(), depth.into());
-            h.insert(
-                "Content-Type".into(),
-                "application/xml; charset=utf-8".into(),
-            );
-            h
-        },
-        body: Some(body.as_bytes().to_vec()),
-        timeout: std::time::Duration::from_secs(60),
-        bypass_latchkey: false,
-        latchkey: latchkey.clone(),
-        bearer: None,
-    };
-    let resp = latchkey_curl(&req).await?;
-    expect_dav_status(&req.method, &req.url, &resp)?;
-    parse_multistatus(&req.url, &resp.body_str())
+) -> Result<Multistatus, DavError> {
+    webdav::propfind(HTTP_SERVICE, url, depth, body, latchkey).await
 }
 
+/// A REPORT at Depth `0`, as RFC 6578 has `sync-collection` sent.
 pub async fn report(
     url: &str,
     body: &str,
     latchkey: &LatchkeySettings,
-) -> Result<Multistatus, CarddavError> {
-    let req = HttpRequest {
-        service: HTTP_SERVICE,
-        method: HttpMethod::Report,
-        url: url.to_string(),
-        headers: {
-            let mut h = std::collections::BTreeMap::new();
-            h.insert("Depth".into(), "0".into());
-            h.insert(
-                "Content-Type".into(),
-                "application/xml; charset=utf-8".into(),
-            );
-            h
-        },
-        body: Some(body.as_bytes().to_vec()),
-        timeout: std::time::Duration::from_secs(120),
-        bypass_latchkey: false,
-        latchkey: latchkey.clone(),
-        bearer: None,
-    };
-    let resp = latchkey_curl(&req).await?;
-    expect_dav_status(&req.method, &req.url, &resp)?;
-    parse_multistatus(&req.url, &resp.body_str())
-}
-
-fn expect_dav_status(
-    method: &HttpMethod,
-    url: &str,
-    resp: &HttpResponse,
-) -> Result<(), CarddavError> {
-    if resp.status == 207 || resp.status == 200 {
-        return Ok(());
-    }
-    Err(CarddavError::Http {
-        method: *method,
-        status: resp.status,
-        url: url.to_string(),
-    })
-}
-
-// Multistatus parsing
-
-pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavError> {
-    let mut reader = Reader::from_str(body);
-    reader.config_mut().trim_text(true);
-
-    let mut out = Multistatus::default();
-    let mut stack: Vec<String> = Vec::with_capacity(16);
-    let mut current: Option<DavResponse> = None;
-    let mut status_buf = String::new();
-    let mut text_capture = TextCapture::default();
-
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let name = local_name(e.name().as_ref());
-                stack.push(name.clone());
-                if name == "response" {
-                    current = Some(DavResponse {
-                        // Default to 200 — many servers omit
-                        // `<status>` when everything's fine and the
-                        // resource itself doesn't carry a propstat
-                        // (sync-collection inline `<address-data>`
-                        // is one case).
-                        status: 200,
-                        ..Default::default()
-                    });
-                    status_buf.clear();
-                }
-                if name == "resourcetype" {
-                    if let Some(c) = current.as_mut() {
-                        c.is_addressbook = false;
-                    }
-                }
-                text_capture.start(&name, &stack);
-            }
-            Ok(Event::Empty(e)) => {
-                // Self-closing element. We care about `<addressbook/>`
-                // inside `<resourcetype>` as the marker that a
-                // collection is an addressbook.
-                let name = local_name(e.name().as_ref());
-                if name == "addressbook" {
-                    if let Some(c) = current.as_mut() {
-                        if stack.last().map(String::as_str) == Some("resourcetype") {
-                            c.is_addressbook = true;
-                        }
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                let name = local_name(e.name().as_ref());
-                if let Some(text) = text_capture.finish(&name) {
-                    apply_text(&mut current, &stack, &name, &text, &mut status_buf);
-                }
-                stack.pop();
-                if name == "response" {
-                    if let Some(mut r) = current.take() {
-                        if !status_buf.is_empty() {
-                            r.status = parse_status_code(&status_buf).unwrap_or(r.status);
-                        }
-                        out.responses.push(r);
-                    }
-                }
-                if name == "sync-token" && current.is_none() {
-                    // Root-level sync-token (not inside a response).
-                    if let Some(tok) = text_capture.last_finished() {
-                        if !tok.is_empty() {
-                            out.sync_token = Some(tok);
-                        }
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                return Err(CarddavError::Malformed {
-                    url: url.to_string(),
-                    message: format!("xml: {e}"),
-                });
-            }
-            Ok(event) => {
-                if let Some(text) = datalib_etl::xml::text_of(&event, false) {
-                    text_capture.append(&text);
-                }
-            }
-        }
-        buf.clear();
-    }
-    Ok(out)
-}
-
-fn local_name(name: &[u8]) -> String {
-    let s = std::str::from_utf8(name).unwrap_or("");
-    match s.rsplit_once(':') {
-        Some((_prefix, local)) => local.to_string(),
-        None => s.to_string(),
-    }
-}
-
-/// Parse the status code out of a line like
-/// `HTTP/1.1 404 Not Found`. Tolerates leading whitespace +
-/// missing status text.
-fn parse_status_code(s: &str) -> Option<u16> {
-    let trimmed = s.trim();
-    let mut parts = trimmed.split_whitespace();
-    let _proto = parts.next()?;
-    let code = parts.next()?;
-    code.parse().ok()
-}
-
-fn apply_text(
-    current: &mut Option<DavResponse>,
-    stack: &[String],
-    leaf: &str,
-    text: &str,
-    status_buf: &mut String,
-) {
-    // Root-level sync-token is handled at the End event in
-    // `parse_multistatus` because it's outside any `<response>`.
-    let Some(c) = current.as_mut() else { return };
-    match leaf {
-        "href" => {
-            // Only the direct `response/href` counts as the response
-            // URL — nested hrefs inside <current-user-principal> /
-            // <addressbook-home-set> are the property values.
-            if parent_is(stack, "response") {
-                if c.href.is_empty() {
-                    c.href = text.to_string();
-                }
-            } else if parent_is(stack, "current-user-principal") {
-                c.current_user_principal = Some(text.to_string());
-            } else if parent_is(stack, "addressbook-home-set") {
-                c.addressbook_home_set = Some(text.to_string());
-            }
-        }
-        "getetag" => c.etag = Some(text.to_string()),
-        "displayname" => c.display_name = Some(text.to_string()),
-        "addressbook-description" => c.description = Some(text.to_string()),
-        "getctag" => c.ctag = Some(text.to_string()),
-        "address-data" => c.vcard = Some(text.to_string()),
-        "status"
-            // The status applies to the propstat block we're inside;
-            // we only track one per response (first one wins).
-            if status_buf.is_empty() => {
-                *status_buf = text.to_string();
-            }
-        _ => {}
-    }
-}
-
-fn parent_is(stack: &[String], parent: &str) -> bool {
-    if stack.len() < 2 {
-        return false;
-    }
-    stack[stack.len() - 2] == parent
-}
-
-/// Tiny helper for accumulating text content per element. We need
-/// it because quick-xml emits text in chunks (text, CDATA, references)
-/// and the leaf element name is the same one we'll see on End.
-#[derive(Default)]
-struct TextCapture {
-    /// Stack of (element_name, captured_text) pairs, mirroring the
-    /// element stack so nested elements don't clobber each other.
-    pending: Vec<(String, String)>,
-    last: Option<String>,
-}
-
-impl TextCapture {
-    fn start(&mut self, name: &str, _stack: &[String]) {
-        self.pending.push((name.to_string(), String::new()));
-    }
-
-    fn append(&mut self, text: &str) {
-        if let Some((_, buf)) = self.pending.last_mut() {
-            buf.push_str(text);
-        }
-    }
-
-    fn finish(&mut self, name: &str) -> Option<String> {
-        if self.pending.last().map(|(n, _)| n.as_str()) == Some(name) {
-            let (_, text) = self.pending.pop().unwrap();
-            self.last = Some(text.clone());
-            return Some(text);
-        }
-        None
-    }
-
-    fn last_finished(&self) -> Option<String> {
-        self.last.clone()
-    }
+) -> Result<Multistatus, DavError> {
+    webdav::report(HTTP_SERVICE, url, "0", body, latchkey).await
 }
 
 // vCard utility helpers
@@ -548,16 +243,16 @@ fn unfold_vcard_lines(vcard: &str) -> String {
 
 /// (`href` → (etag, vcard)) extracted from a multistatus the way
 /// sync-collection / multiget returns it. Skips responses whose
-/// propstat status indicates a delete (404 / 410) — those land in
+/// own status says deleted (404 / 410) — those land in
 /// [`deleted_hrefs`] instead.
 pub fn changed_contacts(ms: &Multistatus) -> HashMap<String, (Option<String>, String)> {
     let mut out = HashMap::new();
     for r in &ms.responses {
-        if matches!(r.status, 404 | 410) {
+        if matches!(r.status, Some(404 | 410)) {
             continue;
         }
-        if let Some(v) = &r.vcard {
-            out.insert(r.href.clone(), (r.etag.clone(), v.clone()));
+        if let Some(v) = &r.props.vcard {
+            out.insert(r.href.clone(), (r.props.etag.clone(), v.clone()));
         }
     }
     out
@@ -569,7 +264,7 @@ pub fn changed_contacts(ms: &Multistatus) -> HashMap<String, (Option<String>, St
 pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
     ms.responses
         .iter()
-        .filter(|r| matches!(r.status, 404 | 410))
+        .filter(|r| matches!(r.status, Some(404 | 410)))
         .map(|r| r.href.clone())
         .collect()
 }
@@ -579,6 +274,10 @@ pub fn deleted_hrefs(ms: &Multistatus) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(body: &str) -> Multistatus {
+        webdav::parse_multistatus(body).unwrap()
+    }
 
     /// A grouped property (`item1.EMAIL`) is the same property. Every
     /// email-only card in a real Google export was rendering with no
@@ -602,24 +301,6 @@ mod tests {
             "blank value stays absent"
         );
     }
-
-    /// Fastmail-shaped current-user-principal response (lowercase
-    /// `d:` prefix). Verifies our parser is namespace-prefix
-    /// tolerant.
-    const PRINCIPAL_FASTMAIL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response>
-    <d:href>/</d:href>
-    <d:propstat>
-      <d:prop>
-        <d:current-user-principal>
-          <d:href>/dav/principals/user/u%40example.com/</d:href>
-        </d:current-user-principal>
-      </d:prop>
-      <d:status>HTTP/1.1 200 OK</d:status>
-    </d:propstat>
-  </d:response>
-</d:multistatus>"#;
 
     /// Apple-shaped principal response (uppercase `D:` prefix).
     const HOME_SET_APPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -687,47 +368,42 @@ END:VCARD&#13;
 </d:multistatus>"#;
 
     #[test]
-    fn parses_current_user_principal_lowercase_prefix() {
-        let ms = parse_multistatus("url", PRINCIPAL_FASTMAIL).unwrap();
-        assert_eq!(ms.responses.len(), 1);
-        let r = &ms.responses[0];
-        assert_eq!(r.href, "/");
-        assert_eq!(
-            r.current_user_principal.as_deref(),
-            Some("/dav/principals/user/u%40example.com/")
-        );
-    }
-
-    #[test]
     fn parses_addressbook_home_set_uppercase_prefix() {
-        let ms = parse_multistatus("url", HOME_SET_APPLE).unwrap();
+        let ms = parse(HOME_SET_APPLE);
         assert_eq!(ms.responses.len(), 1);
         assert_eq!(
-            ms.responses[0].addressbook_home_set.as_deref(),
+            ms.responses[0].props.addressbook_home_set.as_deref(),
             Some("/123/carddavhome/")
         );
     }
 
     #[test]
     fn marks_resourcetype_addressbook_only_on_addressbook_collections() {
-        let ms = parse_multistatus("url", ADDRESSBOOK_LIST).unwrap();
+        let ms = parse(ADDRESSBOOK_LIST);
         assert_eq!(ms.responses.len(), 2);
         let abs: Vec<_> = ms
             .responses
             .iter()
-            .filter(|r| r.is_addressbook)
+            .filter(|r| r.props.is_addressbook)
             .map(|r| r.href.as_str())
             .collect();
         assert_eq!(abs, vec!["/dav/addressbooks/user/u%40example.com/Default/"]);
         // ctag still captured for the addressbook.
-        let addr = ms.responses.iter().find(|r| r.is_addressbook).unwrap();
-        assert_eq!(addr.ctag.as_deref(), Some("abc-1"));
-        assert_eq!(addr.display_name.as_deref(), Some("Default"));
+        let addr = ms
+            .responses
+            .iter()
+            .find(|r| r.props.is_addressbook)
+            .unwrap();
+        assert_eq!(addr.props.ctag.as_deref(), Some("abc-1"));
+        assert_eq!(addr.props.display_name.as_deref(), Some("Default"));
     }
 
+    /// The card's CRs arrive as `&#13;` references between text runs.
+    /// When the reader trimmed each run, the card lost its line feeds,
+    /// so no UID was found and every contact was skipped.
     #[test]
     fn sync_collection_yields_changes_and_deletes_and_token() {
-        let ms = parse_multistatus("url", SYNC_COLLECTION).unwrap();
+        let ms = parse(SYNC_COLLECTION);
         assert_eq!(
             ms.sync_token.as_deref(),
             Some("http://example.com/sync/4242")
@@ -739,6 +415,7 @@ END:VCARD&#13;
             .unwrap();
         assert_eq!(etag.as_deref(), Some("\"v1\""));
         assert!(vcard.contains("UID:abc"));
+        assert_eq!(vcard_uid(vcard).as_deref(), Some("abc"), "{vcard:?}");
         let deleted = deleted_hrefs(&ms);
         assert_eq!(
             deleted,
@@ -794,13 +471,13 @@ END:VCARD&#13;
     /// matched nothing) and every vCard was dropped as having no data.
     #[test]
     fn reads_fastmail_cdata_values() {
-        let ms = parse_multistatus("url", ADDRESSBOOK_LIST_FASTMAIL).unwrap();
-        let book = &ms.responses[0];
+        let ms = parse(ADDRESSBOOK_LIST_FASTMAIL);
+        let book = &ms.responses[0].props;
         assert!(book.is_addressbook);
         assert_eq!(book.display_name.as_deref(), Some("Personal"));
         assert_eq!(book.ctag.as_deref(), Some("1780602923-240"));
 
-        let ms = parse_multistatus("url", SYNC_COLLECTION_FASTMAIL).unwrap();
+        let ms = parse(SYNC_COLLECTION_FASTMAIL);
         assert_eq!(ms.sync_token.as_deref(), Some("data:,1780602923-240"));
         let changed = changed_contacts(&ms);
         let (etag, vcard) = changed
@@ -837,10 +514,5 @@ END:VCARD&#13;
         assert!(body.contains("<sync-token/>"));
         let body = body_sync_collection("http://example.com/sync/42");
         assert!(body.contains("<sync-token>http://example.com/sync/42</sync-token>"));
-    }
-
-    #[test]
-    fn escape_xml_handles_special_chars() {
-        assert_eq!(escape_xml("Tom & <Jerry>"), "Tom &amp; &lt;Jerry&gt;");
     }
 }

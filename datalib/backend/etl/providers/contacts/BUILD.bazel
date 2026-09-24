@@ -32,7 +32,6 @@ rust_library(
         "@datalib_crates//:quick-xml",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:thiserror",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
