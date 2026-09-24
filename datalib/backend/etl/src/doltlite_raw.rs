@@ -1407,18 +1407,27 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
     Ok(())
 }
 
-/// Seal a crashed prior run's orphaned working-tree changes into their own
-/// commit, so the next successful commit doesn't fold two runs' work into one
-/// `dolt_log` entry — and so a dirty tree at open gets logged.
+/// Put the working set back at the last commit, dropping whatever a writer
+/// that died left there.
 ///
-/// Errors are swallowed: a stock-libsqlite3 build (CI, no doltlite
-/// extensions) has no `dolt_status` at all.
 /// `dolt_reset --hard`, plus the part it leaves behind: like `git reset
 /// --hard`, it restores tracked tables and ignores an untracked one, and a
 /// writer that died after `CREATE TABLE` and before its first commit leaves
 /// exactly that. `dolt_clean` takes those, the way `git clean` does. Every
 /// commit here is `-Am`, so anything still dirty after this rides into the
 /// schema commit a few lines later — which is why both halves run.
+///
+/// A writer killed during the store's first open leaves only the commit
+/// doltlite makes with the file, "Initialize data repository", and
+/// doltlite's `dolt_reset --hard` refuses that one ("no commit to reset
+/// to"). Every table is untracked there, so `dolt_clean` alone empties the
+/// store.
+///
+/// Except `sqlite_sequence`, SQLite's counter for `AUTOINCREMENT`, made
+/// with the first such table: `dolt_clean` takes the table and cannot take
+/// the counter, which SQLite refuses to drop. It is emptied instead, and
+/// rides into the schema commit as it does on any first open. (After a real
+/// seal, `dolt_reset --hard` restores it with everything else.)
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
     let dirty: std::result::Result<i64, sqlx::Error> =
@@ -1439,20 +1448,54 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
          starting from the last commit"
     );
-    sqlx::query("SELECT dolt_reset('--hard')")
-        .execute(pool)
+    let commits: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+        .fetch_one(pool)
         .await
-        .context("dolt_reset --hard")?;
+        .context("count the commits to go back to")?;
+    let sealed_before = commits > 1;
+    if sealed_before {
+        sqlx::query("SELECT dolt_reset('--hard')")
+            .execute(pool)
+            .await
+            .context("dolt_reset --hard")?;
+    }
     sqlx::query("SELECT dolt_clean()")
         .execute(pool)
         .await
         .context("dolt_clean")?;
-    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
-        .fetch_one(pool)
+    let status = || async {
+        sqlx::query_as::<_, (String, i64, String)>(
+            "SELECT table_name, staged, status FROM dolt_status",
+        )
+        .fetch_all(pool)
         .await
-        .context("re-probe dolt_status")?;
-    if left != 0 {
-        bail!("{left} entries still dirty after dolt_reset --hard and dolt_clean");
+        .context("re-probe dolt_status")
+    };
+    let mut left = status().await?;
+    let stray_counter = |(table, _, state): &(String, i64, String)| {
+        table == "sqlite_sequence" && state == "new table"
+    };
+    if left.iter().any(stray_counter) {
+        sqlx::query("DELETE FROM sqlite_sequence")
+            .execute(pool)
+            .await
+            .context("empty the sqlite_sequence dolt_clean cannot drop")?;
+        left = status().await?;
+        left.retain(|entry| !stray_counter(entry));
+    }
+    if !left.is_empty() {
+        let named: Vec<String> = left
+            .iter()
+            .map(|(table, staged, status)| {
+                let staged = if *staged != 0 { " (staged)" } else { "" };
+                format!("{table}: {status}{staged}")
+            })
+            .collect();
+        bail!(
+            "{} entries still dirty after dolt_reset --hard and dolt_clean: {}",
+            left.len(),
+            named.join(", ")
+        );
     }
     Ok(())
 }
@@ -4146,6 +4189,60 @@ mod tests {
             "and nothing is left for the schema commit to sweep"
         );
         b.close().await;
+    }
+
+    /// A writer killed before a store's first seal left a working set with
+    /// only doltlite's initialization commit under it, and
+    /// `dolt_reset --hard` refuses that one; an `AUTOINCREMENT` table also
+    /// leaves `sqlite_sequence`, which `dolt_clean` cannot drop. Either
+    /// failed every later open the same way, so the source could never
+    /// sync again (`tng_fuzz_test`, docs/dev/plans/http_driven_e2e.md).
+    #[tokio::test]
+    async fn a_store_killed_before_its_first_seal_opens_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("killed_early.doltlite_db");
+        let ddl = "CREATE TABLE IF NOT EXISTS runs \
+                   (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)";
+        // The first open, up to the moment of the kill: on the writer's
+        // branch, the table made, a row written, nothing committed.
+        let dead = connect_pool(&path, Access::ReadWrite, true).await.unwrap();
+        if !has_dolt_extensions(&dead).await {
+            return;
+        }
+        sqlx::query(ddl).execute(&dead).await.unwrap();
+        sqlx::query("INSERT INTO runs (v) VALUES ('never sealed')")
+            .execute(&dead)
+            .await
+            .unwrap();
+        dead.close().await;
+
+        let b = open(&path, &[ddl])
+            .await
+            .expect("a store that never sealed opens again");
+        assert_clean_and_empty(&b, "runs").await;
+        let next: i64 = sqlx::query_scalar("INSERT INTO runs (v) VALUES ('x') RETURNING id")
+            .fetch_one(&b)
+            .await
+            .unwrap();
+        assert_eq!(next, 1, "the counter starts over with the rows");
+        b.close().await;
+    }
+
+    async fn assert_clean_and_empty(pool: &SqlitePool, table: &str) {
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            // A literal table name from the test above.
+            "SELECT COUNT(*) FROM {table}"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "what was never sealed is gone");
+        let dirty: Vec<(String, String)> =
+            sqlx::query_as("SELECT table_name, status FROM dolt_status")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(dirty, vec![], "and the schema is committed, as on any open");
     }
 
     /// Every store an owner opens says which build wrote it, committed
