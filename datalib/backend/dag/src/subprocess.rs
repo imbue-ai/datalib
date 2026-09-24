@@ -269,16 +269,11 @@ pub(crate) async fn run_subprocess(
         .with_context(|| format!("spawn {prog:?}"))
         .map_err(internal)?;
     let _pid_guard = child.id().map(RegisteredChild::new);
-    // Aborted when the step exits, so a rung is only ever sent to a group
-    // whose leader is still there to be reaped.
     let stop_task = child.id().map(|pid| {
         let mut stop = ctx.stop.clone();
         tokio::spawn(async move {
             stop.requested().await;
-            for (after, signal) in stop_ladder(stop.grace) {
-                tokio::time::sleep(after).await;
-                signal_group(pid, signal);
-            }
+            signal_group(pid, libc::SIGINT);
         })
     });
 
@@ -376,14 +371,7 @@ pub(crate) async fn run_subprocess(
         })
     } else {
         let w = outcome.unwrap_or_default();
-        // One that ignored its SIGINT and was killed says nothing, but it
-        // still ended because it was asked to.
-        let asked = if ctx.stop.is_requested() {
-            FailureKind::Cancelled
-        } else {
-            FailureKind::Data
-        };
-        let failure = w.failure.unwrap_or(asked);
+        let failure = w.failure.unwrap_or(FailureKind::Data);
         let outputs = w.into_outputs(sink, &ctx.step_id);
         let what = if failure == FailureKind::Cancelled {
             format!("step {} stopped when asked to", ctx.step_id)
@@ -658,18 +646,6 @@ fn signal_children(signal: libc::c_int) {
     }
 }
 
-/// What a stopped step is sent, and how long after the previous rung:
-/// SIGINT at once, so it stops at its next consistent point
-/// (`step_protocol.md` § Signals), and SIGKILL once `grace` has passed,
-/// for one that ignored it. Both to the group, so what the step spawned
-/// goes too.
-fn stop_ladder(grace: std::time::Duration) -> [(std::time::Duration, libc::c_int); 2] {
-    [
-        (std::time::Duration::ZERO, libc::SIGINT),
-        (grace, libc::SIGKILL),
-    ]
-}
-
 /// The step's process *group*, not the step: `spawn` gives each one a
 /// group of its own, so its id is the step's pid and this reaches
 /// whatever the step spawned as well as the step.
@@ -870,60 +846,6 @@ mod tests {
         for id in ["a/raw", "b/raw", "a/rendered"] {
             assert_eq!(rep.step(id).status, cancelled, "{id}: {rep:#?}");
         }
-    }
-
-    /// A stopped step that ignores its SIGINT is killed once the grace is
-    /// up, with what it spawned, and recorded as stopped. Without the
-    /// second rung a step like this held its store, and the loop waited
-    /// on it, for as long as it cared to run.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_step_deaf_to_its_stop_is_killed_after_the_grace() {
-        let root = tempfile::tempdir().unwrap();
-        let out = root.path().join("g/deaf");
-        let spec = StepSpec::new(
-            "g/deaf",
-            sh(r#"
-                trap '' INT
-                out="$DATALIB_DAG_DATA_ROOT/g/deaf"
-                mkdir -p "$out"
-                sleep 120 &
-                echo $! > "$out/grandchild.pid"
-                while :; do sleep 0.1; done
-            "#),
-        );
-        let g = Graph::build(vec![spec]).unwrap();
-        let (stop, stop_rx) = tokio::sync::watch::channel(false);
-        let mut runner = Runner::new(root.path()).stop_on(stop_rx);
-        runner.stop_grace = std::time::Duration::from_millis(300);
-        let round = tokio::spawn(async move { runner.run(&g).await });
-
-        let grandchild = || -> Option<libc::pid_t> {
-            std::fs::read_to_string(out.join("grandchild.pid"))
-                .ok()?
-                .trim()
-                .parse()
-                .ok()
-        };
-        until("the step to spawn a child of its own", || {
-            grandchild().is_some()
-        })
-        .await;
-        let child = grandchild().unwrap();
-        stop.send(true).unwrap();
-        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
-            .await
-            .expect("the kill ended the round")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            rep.step("g/deaf").status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
-        );
-        until("the step's child to go with it", || !alive(child)).await;
     }
 
     /// A step is told the version of each input it was started against, as

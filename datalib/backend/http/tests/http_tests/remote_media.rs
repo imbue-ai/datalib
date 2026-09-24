@@ -378,7 +378,6 @@ async fn app() -> (PathBuf, axum::Router) {
         .expect("open app stores");
     let state = AppState {
         root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(store),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,

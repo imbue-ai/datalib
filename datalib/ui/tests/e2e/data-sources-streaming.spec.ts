@@ -29,7 +29,7 @@
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.
 
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
@@ -44,6 +44,7 @@ import {
   SEARCH_ROWS,
   type GridApi,
 } from "./grid-helpers";
+import { expectSanePaints, watchPaints } from "./paint-watch";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -126,6 +127,12 @@ async function rowsKeptAcross(page: Page, frames: number): Promise<string[]> {
 const hiddenColumns = (grid: Page) =>
   grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.hiddenColumns());
 
+/// How many lines a log panel says it holds.
+const logLineCount = (log: Locator) =>
+  log
+    .locator(".rl-count")
+    .evaluate((el) => Number(/(\d+) line/.exec(el.textContent ?? "")?.[1] ?? NaN));
+
 /// What the runner says each step is doing right now.
 async function currentStates(page: Page): Promise<Record<string, string | null>> {
   const dag = (await (await page.request.get("/api/dag")).json()) as { steps?: DagStep[] };
@@ -191,7 +198,12 @@ function = "render_markdown"
 command = "'${STEP_BIN}'"
 inputs = ["${id}/ingest"]
 `;
-  const config = () => `data_root = "${dataRoot}"
+  const config = (
+    sources: readonly (readonly [string, string])[] = [
+      [SOURCES[0], "chatgpt"],
+      [SOURCES[1], "claude"],
+    ],
+  ) => `data_root = "${dataRoot}"
 
 [checkpoint_cadence]
 at_most_every_secs = 0
@@ -204,8 +216,8 @@ name = "Unified Index"
 group = "unified_index"
 function = "grid_index"
 command = "'${STEP_BIN}'"
-inputs = [${RENDERS.map((r) => `"${r}"`).join(", ")}]
-${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${applets()}`;
+inputs = [${sources.map(([id]) => `"${id}/render_markdown"`).join(", ")}]
+${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
   test("every stage is in flight at once, and rows reach the grid mid-download", async ({
     page,
@@ -223,6 +235,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
     await expect(grid.getByText("no matches.")).toBeVisible();
 
     const was = await stampsBefore(page, STEPS);
+    const pipelinePaints = await watchPaints(page.locator(".tg-grid").first());
     hold();
     await page.getByRole("button", { name: "Sync everything" }).click();
     await expect(page.getByText("Queued a sync of everything.")).toBeVisible();
@@ -256,6 +269,7 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
       (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns(["account"]),
     );
     expect(await hiddenColumns(grid)).not.toContain("account");
+    const explorePaints = await watchPaints(grid.locator(".grid-box"));
     await grid
       .locator(SEARCH_ROWS)
       .evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
@@ -298,6 +312,8 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
       const st = await settleRow(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
+    // Before `settleRunner`, which reloads the page.
+    expectSanePaints(await pipelinePaints(), "the Pipeline table, through a streaming sync");
 
     // ── and the grid caught up with every pass, not just the first ──
     // Every conversation the tapes hold, once the run is over: the same
@@ -326,5 +342,57 @@ ${source("chatgpt-replay", "chatgpt")}${source("claude-replay", "claude")}${appl
       .evaluateAll((els) => els.map((el) => el.getAttribute("data-row")));
     console.log(`[e2e] search rows kept across the refreshes: ${JSON.stringify(keptSearch)}`);
     expect(keptSearch.length, "a refresh of the same query redrew every row").toBeGreaterThan(0);
+    expectSanePaints(await explorePaints(), "the Explore grid, through a streaming sync");
+  });
+
+  // The panel follows its tail as a running step writes. A person
+  // reading a line has a menu open on it, and the lines arriving below
+  // must neither close that menu nor redraw the line under it.
+  test("a running step's log holds still while a menu is open on it", async ({ page }) => {
+    // A source of its own: one the test above already fetched is up to
+    // date, and never runs.
+    const id = "chatgpt-log";
+    const ingest = `${id}/ingest`;
+    const steps = [ingest, `${id}/render_markdown`, INDEX];
+    await writeConfig(page, config([[id, "chatgpt"]]));
+    for (const group of [id, "unified_index"]) await expandGroup(page, group);
+    const was = await stampsBefore(page, steps);
+    hold();
+    await page.getByRole("button", { name: "Sync everything" }).click();
+    await expect
+      .poll(() => statusOf(page, ingest), { timeout: 60_000, intervals: [250] })
+      .toBe("Running");
+
+    await pipelineRow(page, ingest).locator('[col-id="status"] .tg-status').dblclick();
+    const log = page.locator(".miller-col").filter({ has: page.locator(".rl-panel") });
+    const lines = log.locator(".rl-grid .slick-row:not(.slick-group)");
+    await expect(lines.first()).toBeVisible({ timeout: 10_000 });
+    const before = await logLineCount(log);
+
+    const menu = page.locator(".slick-context-menu");
+    await expect(async () => {
+      await lines.first().locator(".slick-cell.l0").click({ button: "right", timeout: 1_000 });
+      await expect(menu).toBeVisible({ timeout: 1_000 });
+    }).toPass();
+    const paints = await watchPaints(log.locator(".rl-grid"));
+
+    // The download runs to its end, writing lines the whole way, while
+    // the menu stays open on the first one.
+    release();
+    await settleRow(page, ingest, was[ingest], 120_000);
+    await expect(menu, "a line arriving closed the menu").toBeVisible();
+    expectSanePaints(await paints(), "the log of a running step, under an open menu");
+
+    // Closed, the menu lets the lines it held back in.
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect
+      .poll(() => logLineCount(log), {
+        timeout: 30_000,
+        message: "the lines held back while the menu was open never arrived",
+      })
+      .toBeGreaterThan(before);
+    for (const step of steps) await settleRow(page, step, was[step], 120_000);
+    await settleRunner(page, 120_000);
   });
 });

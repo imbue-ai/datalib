@@ -246,35 +246,28 @@ naming no step) looks exactly like one it did.
   single JSON state file after every terminal step, and the steps it
   spawns write raw stores whose doltlite working set is shared across
   every connection on the branch, in any process; two loops on one root
-  would interleave both. While `datalib-http` is up it holds this lock
-  for its life and runs the loop in-process whenever a request is open
-  (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
-  it. A `datalib-dag` is never refused for the lock: a sync is a request
-  row in `system/supervisor.sqlite`, so it writes its row and follows it
-  while whoever holds the lock runs it, trying the lock again every half
-  second in case that loop ends first (`supervisor/store.rs`,
-  `docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
-  stores, needs the root to itself and is refused while a loop runs —
-  always, with the app up; the app runs its own resets between syncs.
+  would interleave both. A second `datalib-dag` is not refused for it: a
+  sync is a request row in `system/supervisor.sqlite`, so it writes its
+  row and follows it while whoever holds the lock runs it, trying the
+  lock again every half second in case that loop ends first
+  (`supervisor/store.rs`, `docs/dev/plans/supervisor.md` §2.8). Only
+  `--reset`, which empties stores, needs the root to itself and is
+  refused while a loop runs.
 - **One server per data root**, which `datalib-http` takes for its own
   reasons (the API token, the job and feedback stores).
 
-They must be *different* files: a server that starts while a
-`datalib-dag` runs the loop holds the root as a server and waits for
-`runner-lock`, finishing the jobs whose requests that loop closes, and
-takes the loop over when it ends.
+They must be *different* files: the server spawns the runner, so one shared
+lock would deadlock the server against its own child.
 
-Whoever runs the loop owns its steps' processes. Each step holds a pipe
-from that process (`DATALIB_PARENT_PIPE`) and stops itself when the pipe
-closes, however the process died. A step the loop stops gets SIGINT on
-its process group and SIGKILL on it fifteen seconds later if it is still
-there (`subprocess::stop_ladder`, `step::STOP_GRACE`), so one that
-ignores its SIGINT cannot hold its store for good. A loop that died
-holding the lock leaves its run open in `dag_state.json` and the run
-store; the next process to take the lock closes it
-(`supervisor::host::close_dead_loop`), and the server's boot sets each
-job it finds active to match its request, which is still open for the
-next loop to run.
+The runner also exits with the server: the worker spawns it on a parent
+pipe (`datalib_parent_watch`, `DATALIB_PARENT_PIPE`), and when the pipe
+closes — the server exited, or the desktop shell SIGKILLed it — the
+runner SIGINTs its steps so they stop at their next consistent point,
+gives them fifteen seconds,
+then kills what is left and exits. A run that outlived its server would
+have nobody to record how it ended: the job row stays `running` and the
+next boot cannot tell a run still going from one that died. That boot
+reads the run store to say what became of each job it finds active.
 
 `flock(2)` rather than a pid file, because the kernel releases it when the
 holder dies — a crashed process leaves no stale lock to reason about. The
@@ -290,9 +283,8 @@ racy by nature: the holder may let go a microsecond later. Don't build an
 invariant on it.
 
 Read-only does not mean invisible. `flock(2)` has no way to ask without
-taking, so the probe holds the lock for an instant, and a server that has
-not got the lock yet probes on every change under the root — most often
-just as a run starts. A
+taking, so the probe holds the lock for an instant, and the server probes on
+every change under the root — most often just as a run starts. A
 `--reset` that finds the lock held therefore keeps trying for two seconds
 before it refuses; a sync that meets a probe follows for half a second and
 takes the lock on its next try.
@@ -337,14 +329,12 @@ state for *every* step (including ones that were skipped or blocked and
 never "ran"), a `finished_at` that distinguishes a completed run from a
 crashed one, and per-step timings.
 
-The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
-for one busy period of the loop (`datalib-dag` takes `--run-id` instead
-when given one); the app server names it as the `parent_job_id` of every
-job that period serves. `supervisor::host::step_env` puts it in the
-child environment and `start_record` hands the same string to the run
-store (`system/runs/runs.sqlite`) *before* the loop starts, and `Runner`
-reads it back out of that environment, so the record, the store and
-every step name one run. If
+The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 `datalib-dag`
+mints (or takes from `--run-id`; the http worker passes its job id, so
+the job row *is* the run). The binary puts it in the child environment
+and hands the same string to the run store (`system/runs/runs.sqlite`)
+*before* calling `run`, and `Runner` reads it back out of that
+environment, so the record, the store and every step name one run. If
 they diverge nothing errors — the store describes a run nobody is
 displaying, `/api/dag` filters every row out on the id mismatch, and the
 UI silently shows no progress at all. `started_at` stays the pinned
