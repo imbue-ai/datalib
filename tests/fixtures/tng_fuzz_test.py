@@ -15,6 +15,9 @@ The seed is printed first. `TNG_FUZZ_SEED=<n>` replays one case;
 `TNG_FUZZ_EVENTS` sets how many events it plays. Plan:
 `docs/dev/plans/http_driven_e2e.md` § 2.
 
+A red case is a lead, not a test: build the state it names by hand in
+the owning crate's tests, fast and deterministic, before fixing it.
+
 Args: the doltlite shell, then `run_sync_pipeline.py`'s own arguments
 (its data root is replaced per case).
 """

@@ -132,16 +132,17 @@ the source first, or pick a stale one — is the next thing to fix.
 - Every `/api/…` path that named no endpoint answered 200 with the
   app's page — the SPA fallback — so a mistyped call, or a step id with
   its slash unencoded, read as success. Now a 404 (`embed.rs`).
-- **Open: a store killed before its first commit is wedged for good.**
-  An ingest SIGKILLed before it ever sealed leaves rows in the working
-  set and no commit. The next open's `discard_dirty_working_tree`
-  (`etl/src/doltlite_raw.rs`) runs `dolt_reset --hard`, which fails
-  with "no commit to reset to", and so does every run after. Seeds 2
-  and 3 hit it under `bazelisk test` (four shards at once slow each
-  ingest enough for the kill to land early), on `slack` and
-  `tng_calendar`; both seeds pass when run alone, where the first commit
-  comes sooner. This is §3's item 3 in a milder form: the store opens,
-  but nothing can write to it.
+- A store killed during its first open — tables made, schema not yet
+  committed — could never be written again: doltlite's `dolt_reset
+  --hard` refuses the initialization commit, and `dolt_clean` cannot
+  drop `sqlite_sequence`. Seeds 2 and 3 hit it under `bazelisk test`,
+  where four shards at once slow each ingest enough for a kill to land
+  that early. Fixed in #776, with a test that builds the state directly.
+
+A red storm becomes a fast, deterministic test first: read the state
+out of the error (which table, which status, how many commits), build
+it by hand in the owning crate's tests, watch it fail, then fix. The
+fuzzer confirms; it is not how a finding gets debugged.
 
 ## 3. What it is likely to find
 
