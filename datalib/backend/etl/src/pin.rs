@@ -523,6 +523,8 @@ mod view_tests {
         // connect and its first statement.
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::new()
                     .filename(&path)
@@ -564,6 +566,8 @@ mod view_tests {
         let path = dir.path().join("half.doltlite_db");
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::new()
                     .filename(&path)

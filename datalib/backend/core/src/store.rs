@@ -19,6 +19,8 @@ pub async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Er
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
 }

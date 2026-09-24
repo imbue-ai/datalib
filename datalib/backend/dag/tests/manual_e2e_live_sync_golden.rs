@@ -953,6 +953,8 @@ async fn open_readonly(path: &Path) -> sqlx::SqlitePool {
         .read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .unwrap_or_else(|e| panic!("open {}: {e}", path.display()))
@@ -1112,6 +1114,8 @@ async fn latest_sync_run(path: &Path) -> Value {
         .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .unwrap_or_else(|e| panic!("open {} for sync_runs: {e}", path.display()));
@@ -1466,6 +1470,8 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .expect("open doltlite db");

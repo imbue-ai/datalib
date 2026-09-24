@@ -83,6 +83,8 @@ async fn open(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new().filename(path).read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .with_context(|| format!("open {}", path.display()))

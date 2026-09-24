@@ -96,6 +96,8 @@ pub async fn open_or_create(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     }
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(options(path, true))
         .await
 }
@@ -105,6 +107,8 @@ pub async fn open_or_create(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(options(path, false))
         .await
 }

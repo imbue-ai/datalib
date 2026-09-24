@@ -202,6 +202,8 @@ impl FingerprintCache {
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .with_context(|| format!("open fingerprint cache {}", path.display()))?;
