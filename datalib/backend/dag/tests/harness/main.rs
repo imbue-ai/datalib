@@ -8,9 +8,12 @@
 mod harness;
 mod walk;
 
+use std::time::Duration;
+
 use datalib_dag::supervisor::store::RequestOutcome;
-use datalib_dag::Event;
-use harness::{reads, step, Harness};
+use datalib_dag::supervisor::tick::StateKind;
+use datalib_dag::{Event, RunState};
+use harness::{reads, step, Harness, Options};
 
 const A: &str = "a/ingest";
 const B: &str = "b/ingest";
@@ -312,4 +315,194 @@ async fn random_walks() {
         failed.len(),
         failed.join("\n")
     );
+}
+
+/// Twenty syncs pressed while a source runs start it once more after it
+/// ends, not twenty times, and never beside itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn rapid_syncs_while_a_source_runs_start_it_once_more() {
+    let mut h = Harness::new(&[step(A)]).await;
+    let first = h.sync(&[A]).await;
+    h.expect(A, "started").await;
+    let mut rest = Vec::new();
+    for _ in 0..20 {
+        rest.push(h.sync(&[A]).await);
+    }
+    h.done(A, "ok").await;
+    h.expect(A, "started").await;
+    h.done(A, "ok").await;
+    for r in std::iter::once(&first).chain(&rest) {
+        assert_eq!(h.closed(r).await, Some(RequestOutcome::Done));
+    }
+    assert_eq!(h.pending_acks(A), Vec::<String>::new(), "a third start");
+    h.finish().await;
+}
+
+/// Twenty syncs pressed in a burst on an idle source never run it two at
+/// a time, and never more often than they were pressed: each run serves
+/// every request open when it started. How many runs there are depends on
+/// how fast each one ends, so that is not what is asserted.
+#[tokio::test(flavor = "multi_thread")]
+async fn rapid_syncs_on_an_idle_source_never_run_it_twice_at_once() {
+    let mut h = Harness::new(&[step(A)]).await;
+    // One per sync, the most a correct loop can use; whatever runs takes
+    // the next.
+    for _ in 0..20 {
+        h.tell(A, "ok");
+    }
+    let mut all = Vec::new();
+    for _ in 0..20 {
+        all.push(h.sync(&[A]).await);
+    }
+    for r in &all {
+        assert_eq!(h.closed(r).await, Some(RequestOutcome::Done));
+    }
+    let acks = h.pending_acks(A);
+    let starts = acks.iter().filter(|a| a.starts_with("started")).count();
+    let ends = acks.iter().filter(|a| a.starts_with("exiting 0")).count();
+    assert!(
+        (1..=20).contains(&starts),
+        "{starts} runs for 20 syncs: {acks:?}"
+    );
+    assert_eq!(starts, ends, "{acks:?}");
+    h.finish().await;
+}
+
+/// A stop that arrives while a failed step waits out its backoff ends
+/// the wait, not the backoff: the step reads stopped at once and is not
+/// tried again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_during_a_retry_backoff_ends_it_at_once() {
+    let hour = Options {
+        backoff: Duration::from_secs(3600),
+    };
+    let mut h = Harness::with(&[step(A)], hour).await;
+    let r = h.sync(&[A]).await;
+    h.expect(A, "started 1").await;
+    h.done(A, "write before transient").await;
+    h.done(A, "fail transient").await;
+    // Between attempts: no process, and still running.
+    h.until("a to wait out its backoff as running", |rec, _| {
+        (rec.steps.get(A)?.state == Some(StateKind::Running)).then_some(())
+    })
+    .await;
+    h.stop(&r).await;
+    assert_eq!(h.closed(&r).await, Some(RequestOutcome::Stopped));
+    h.until("a's run to read stopped", |rec, _| {
+        rec.steps
+            .get(A)?
+            .last_run
+            .as_ref()
+            .filter(|l| l.status == "stopped")
+            .map(|_| ())
+    })
+    .await;
+    assert_eq!(
+        h.pending_acks(A),
+        Vec::<String>::new(),
+        "retried after the stop"
+    );
+    h.check_files(A);
+    h.finish().await;
+}
+
+/// A pause during a backoff ends the wait the same way, and a resume
+/// lets the next sync run the step afresh.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pause_during_a_retry_backoff_ends_it_and_a_resume_runs_it_again() {
+    let hour = Options {
+        backoff: Duration::from_secs(3600),
+    };
+    let mut h = Harness::with(&[step(A)], hour).await;
+    let r = h.sync(&[A]).await;
+    h.expect(A, "started 1").await;
+    h.done(A, "fail transient").await;
+    h.until("a to wait out its backoff as running", |rec, _| {
+        (rec.steps.get(A)?.state == Some(StateKind::Running)).then_some(())
+    })
+    .await;
+    h.pause(A).await;
+    h.closed(&r).await;
+    assert_eq!(
+        h.pending_acks(A),
+        Vec::<String>::new(),
+        "retried after the pause"
+    );
+
+    h.resume(A).await;
+    let again = h.sync(&[A]).await;
+    h.expect(A, "started").await;
+    h.done(A, "ok").await;
+    assert_eq!(h.closed(&again).await, Some(RequestOutcome::Done));
+    h.finish().await;
+}
+
+/// A step deaf to its stop reads Stopping — running, and saying so — for
+/// as long as it lives, and Stopped once the grace has killed it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_deaf_to_its_stop_reads_stopping_then_stopped() {
+    let mut h = Harness::new(&[step(A)]).await;
+    let r = h.sync(&[A]).await;
+    h.expect(A, "started").await;
+    h.done(A, "on_stop ignore").await;
+    h.done(A, "stall").await;
+    h.stop(&r).await;
+    h.expect(A, "ignoring a stop").await;
+    // The loop records Stopping before it sends the signal the ack answers.
+    let now = h.record(A).await;
+    assert_eq!(now.state, Some(StateKind::Running), "{now:?}");
+    assert!(
+        now.state_detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("stopping")),
+        "{now:?}"
+    );
+    h.until("a to be killed and read stopped", |rec, _| {
+        rec.steps
+            .get(A)?
+            .last_run
+            .as_ref()
+            .filter(|l| l.status == "stopped")
+            .map(|_| ())
+    })
+    .await;
+    h.finish().await;
+}
+
+/// The loop sees how every process ended: an exit code, an abort, a kill.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_loop_sees_how_each_process_ended() {
+    for (instruction, code, signal) in [
+        ("exit 3", Some(3), None),
+        ("crash", None, Some(libc::SIGABRT)),
+        ("kill", None, Some(libc::SIGKILL)),
+    ] {
+        let mut h = Harness::new(&[step(A)]).await;
+        let r = h.sync(&[A]).await;
+        h.expect(A, "started").await;
+        h.done(A, instruction).await;
+        let finish = h
+            .event(
+                "a's finish",
+                |e| matches!(e, Event::StepFinish { step, .. } if step == A),
+            )
+            .await;
+        let Event::StepFinish {
+            status,
+            exit_code,
+            signal: sig,
+            ..
+        } = finish
+        else {
+            unreachable!()
+        };
+        assert_eq!(status, RunState::Failed, "{instruction}");
+        assert_eq!((exit_code, sig), (code, signal), "{instruction}");
+        assert_eq!(
+            h.closed(&r).await,
+            Some(RequestOutcome::Failed),
+            "{instruction}"
+        );
+        h.finish().await;
+    }
 }

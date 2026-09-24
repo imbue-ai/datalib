@@ -32,6 +32,22 @@ pub const DEADLINE: Duration = Duration::from_secs(20);
 /// ignore its stop ever waits it out.
 const STOP_GRACE: Duration = Duration::from_millis(200);
 
+/// What a scenario may set about the loop it runs against.
+#[derive(Clone, Copy)]
+pub struct Options {
+    /// Before a failed attempt's retry. Zero unless a scenario is about
+    /// the wait itself.
+    pub backoff: Duration,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            backoff: Duration::ZERO,
+        }
+    }
+}
+
 /// One `[[steps]]` entry: a driver step, and what it reads.
 #[derive(Clone)]
 pub struct StepDef {
@@ -62,6 +78,8 @@ struct Ctl {
     _acks_writer: pipe::Sender,
     read: Vec<u8>,
     lines: VecDeque<String>,
+    /// The process that last said it started.
+    pid: Option<i32>,
 }
 
 /// Every event the loop emits, fanned out to whoever is waiting.
@@ -113,6 +131,10 @@ fn driver_bin() -> PathBuf {
 
 impl Harness {
     pub async fn new(steps: &[StepDef]) -> Harness {
+        Harness::with(steps, Options::default()).await
+    }
+
+    pub async fn with(steps: &[StepDef], options: Options) -> Harness {
         let root = tempfile::tempdir().unwrap();
         let control = root.path().join("control");
         std::fs::create_dir_all(&control).unwrap();
@@ -144,6 +166,7 @@ impl Harness {
             config,
             Arc::new(Tap(tx)),
             stop_rx,
+            options,
         ));
         h
     }
@@ -188,6 +211,7 @@ impl Harness {
             _acks_writer: writer,
             read: Vec::new(),
             lines: VecDeque::new(),
+            pid: None,
         }
     }
 
@@ -269,7 +293,61 @@ impl Harness {
             .await
             .unwrap_or_else(|_| panic!("{step} acknowledged nothing within {DEADLINE:?}"));
         self.log(format!("ack {step}: {got}"));
+        self.one_at_a_time(step, &got);
         got
+    }
+
+    /// One instance of a step at a time: the loop has reaped a step's last
+    /// process before it starts the next, so a start finds the last gone.
+    fn one_at_a_time(&mut self, step: &str, ack: &str) {
+        let Some(pid) = ack
+            .split_once("pid=")
+            .and_then(|(_, p)| p.parse::<i32>().ok())
+        else {
+            return;
+        };
+        let ctl = self.steps.get_mut(step).expect("a step we have");
+        if let Some(last) = ctl.pid.replace(pid) {
+            // SAFETY: signal 0 only asks whether the process exists.
+            let alive = unsafe { libc::kill(last, 0) } == 0;
+            assert!(
+                !alive,
+                "{step} started as {pid} while {last} was still running"
+            );
+        }
+    }
+
+    /// Every ack `step`'s driver has written and nobody has read, without
+    /// waiting for more.
+    pub fn pending_acks(&mut self, step: &str) -> Vec<String> {
+        let ctl = self
+            .steps
+            .get_mut(step)
+            .unwrap_or_else(|| panic!("no step {step}"));
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = ctl.acks.try_read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            ctl.read.extend_from_slice(&buf[..n]);
+        }
+        let prefix = format!("{step} ");
+        while let Some(at) = ctl.read.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = ctl.read.drain(..=at).collect();
+            let line = String::from_utf8(line).unwrap();
+            ctl.lines.push_back(
+                line.trim_end()
+                    .strip_prefix(&prefix)
+                    .unwrap_or_else(|| panic!("an ack not from {step}: {line}"))
+                    .to_string(),
+            );
+        }
+        let acks: Vec<String> = ctl.lines.drain(..).collect();
+        for ack in &acks {
+            self.log(format!("ack {step}: {ack}"));
+            self.one_at_a_time(step, ack);
+        }
+        acks
     }
 
     /// Wait for `step`'s next ack and require it to start with `want`.
@@ -507,6 +585,7 @@ async fn host(
     config: PathBuf,
     sink: Arc<dyn EventSink>,
     mut stop: watch::Receiver<bool>,
+    options: Options,
 ) {
     let store = Store::open(&root).await.unwrap();
     let mut listener = Listener::new(&store, "harness host", &[]).await;
@@ -517,7 +596,7 @@ async fn host(
             let mut runner = Runner::new(&root)
                 .sink(sink.clone())
                 .retry(RetryPolicy {
-                    backoff: Duration::ZERO,
+                    backoff: options.backoff,
                     ..RetryPolicy::default()
                 })
                 .stop_on(stop.clone())

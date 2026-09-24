@@ -86,7 +86,7 @@ fn main() -> Result<()> {
         on_stop: OnStop::Graceful,
     };
     let attempt = std::env::var("DATALIB_DAG_ATTEMPT").unwrap_or_default();
-    d.ack(&format!("started {attempt}"))?;
+    d.ack(&format!("started {attempt} pid={}", std::process::id()))?;
     loop {
         match read_line(&mut input)? {
             Some(line) => d.run(line.trim())?,
