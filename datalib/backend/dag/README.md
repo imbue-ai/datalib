@@ -78,12 +78,16 @@ sends them looking for an `inputs` entry that isn't there.
 
 ## What the loop runs, and what makes a step stale
 
-The loop runs what open **requests** want. A request names its roots —
-source steps, every one of them with no `--sync` — and its **scope** is
-those plus everything downstream. A step no open request wants is never
-started, whatever its state, and a run records nothing for it: no state in
-the run, no line in the report, and its `last_run` left as it was, so a
-`--sync slack` never moves email's "last synced".
+The loop runs what open **requests** want. A request is a row in
+`system/supervisor.sqlite` naming its **roots** — the steps a Sync was
+pressed on, or every source step for `datalib-dag` with no `--sync` —
+and who opened it (`by`). Its **scope** is the roots and everything
+downstream of them. Anyone may open one, or ask one to stop, or pause a
+step: that is a row too. Only the process holding `runner-lock` runs the
+loop, and it reads new rows by watching the store's `PRAGMA
+data_version`. A **run** is one busy period of the loop — from taking a
+request on while idle to having none left — and every request served in
+it shares that run's id.
 
 Scope is reachability in the graph, deliberately independent of run-time
 state. That is what makes "sync yolink" mean the same thing every time — the
@@ -91,26 +95,52 @@ set of steps that can move is a property of the config, readable off the
 DAG. The cost is that pending work elsewhere stays pending until a request
 reaches it, and in exchange a per-source sync never does surprising work on
 someone else's chain. A step in scope that reads one outside it reads that
-step's recorded version.
+step's recorded version. A step no open request wants is never started,
+and a run records nothing for it: its `last_run` stays as it was, so a
+`--sync slack` never moves email's "last synced".
 
-In scope, a step runs iff it is **stale**, which is one predicate
-with four clauses:
+**Which step does what is one pure function**, `supervisor/tick.rs`: from
+the graph, the open requests, the pauses and the facts (each sink's
+version, what each step last read, what is running), it gives every step
+a state, and the starts, stops and request closures to make.
+`supervisor/round.rs` is the loop that feeds it and acts on it. The
+states, as the record's `steps.state` stores them and a Manage row shows
+them:
 
-- it declares no inputs (its real input is outside the graph, so it always
-  runs), or
-- it has never succeeded, or
-- some input's version differs from the one it consumed at its last success,
-  or
-- its own fingerprint — argv, env, declared inputs — differs from the one
-  recorded then.
+| state | meaning |
+|---|---|
+| `running` | an invocation is live — or it ran a pass and what it reads has not settled (below) |
+| `waiting` | wanted and due, and held back; `state_detail` says by what |
+| `fresh` | wanted, and up to date |
+| `paused` | someone paused it; `paused_by` says who |
+| `blocked` | wanted, but a producer it reads has never published and is not going to run |
+| `failed` | its retries ran out and nothing it reads has moved since |
+| `idle`, `stale` | no open request wants it; up to date, or not |
 
-A stale step waits for a step it reads in two cases only: that producer
-is running and does not declare `streams_output`, so what it writes may
-be half-done; or it is about to run, held only by a budget or its sink.
-A running producer that streams lets its consumers start on each seal
-as it lands, and staleness keeps them from running when nothing new has.
-A producer waiting on its own upstream holds nobody back, so a fan-in
-never waits for its slowest source.
+**A wanted step is due** iff it is **stale** — it has never succeeded,
+some input's version differs from the one it consumed at its last
+success, or its own fingerprint (argv, env, declared inputs) differs
+from the one recorded then — or it declares no inputs and has not run
+since this request opened: a source's real input is outside the graph,
+so every request runs it once.
+
+A due step waits, and says why, for one of four things:
+
+- **its upstream**: a producer it reads is running and does not declare
+  `streams_output`, so what it writes may be half-done, or is about to
+  run, held only by a budget, its sink or a reader. A running producer
+  that streams lets its consumers start on each seal as it lands, and
+  staleness keeps them from running when nothing new has. A producer
+  waiting on its own upstream holds nobody back, so a fan-in never waits
+  for its slowest source.
+- **its sink**: another writer of the same tree is running.
+- **a reader**: a step that reads its tree off disk, not at a pinned
+  commit, is running.
+- **a budget**: each step counts against one of three — `network` for a
+  source, `cpu` for a grouped step with inputs, `index` for one with no
+  group type — so a download waiting out a rate limit never keeps a
+  render from starting. `--parallelism N` is N downloads and N renders;
+  the two index steps may always run beside each other.
 
 **A step that reads its inputs off disk never overlaps a writer of
 them.** The loader marks the built-in ones (`UNPINNED_BUILTINS` in
@@ -130,10 +160,22 @@ A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in
 reads every source that worked. A step whose inputs have *never* been
 published — a first download that failed — has nothing to read and is
-`Blocked`. Failure kinds map to a retry policy; the step only classifies.
+`blocked`. Failure kinds map to a retry policy; the step only classifies.
 Retries re-invoke the step inside one invocation, which is safe because
 steps promise idempotency, and once they run out the step is not started
-again this run unless something it reads moves.
+again for that request unless something it reads moves.
+
+**A request closes** when nothing in its scope is running or waiting:
+`failed`, naming the first step in topological order that failed for it
+or was blocked, or `done`. **A stop** closes it at once as `stopped`, and
+a running step no open request wants any more gets SIGINT; it
+checkpoints and exits, and until it has, its row reads Stopping. **A
+pause** keeps a step from starting and stops it if it is running; a
+paused step a request skipped takes no part and records no run. A pause
+made while the loop is idle reaches the record through
+`Runner::settle`, one tick with nothing open. A request naming a step
+no config the loop has taken on has waits, with its roots recorded as
+waiting on it, for one that has it.
 
 **The loop re-reads the config while it runs.** A source added mid-sync
 starts beside the sync already going, and a step edited mid-sync runs
@@ -145,9 +187,13 @@ the loop is done with that step: a config saved mid-edit must not cost a
 long download. The step environment (`PATH`, log level, checkpoint
 cadence) stays the one the busy period started with.
 
-Which step starts when is one pure function, `supervisor/tick.rs`; a run
-is `supervisor/round.rs` calling it until the run's request closes. The
-design, and what comes next, is
+**A reset** (`datalib-dag --reset`, the app's Reset, `POST /api/reset`)
+empties what a step wrote and records the tree's new version, forgetting
+that the step ever succeeded. The app then opens a request: a reset
+step that reads something is rebuilt at once, and a reset download is
+not refilled — what reads it runs instead, so its documents leave the
+grid, and its next Sync downloads everything again. The design, and what
+is still to come (two steps writing one tree), is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
 
 ## Versions: read from the store, or reported by the step
@@ -246,11 +292,10 @@ naming no step) looks exactly like one it did.
 
 ## Two locks, two files
 
-- **One loop per data root** (`system/runner-lock`). The loop rewrites a
-  single JSON state file after every terminal step, and the steps it
-  spawns write raw stores whose doltlite working set is shared across
-  every connection on the branch, in any process; two loops on one root
-  would interleave both. While `datalib-http` is up it holds this lock
+- **One loop per data root** (`system/runner-lock`). The loop is the
+  only writer of its record, and the steps it spawns write raw stores
+  whose doltlite working set is shared across every connection on the
+  branch, in any process; two loops on one root would interleave both. While `datalib-http` is up it holds this lock
   for its life and runs the loop in-process whenever a request is open
   (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
   it. A `datalib-dag` is never refused for the lock: a sync is a request
@@ -261,11 +306,11 @@ naming no step) looks exactly like one it did.
   stores, needs the root to itself and is refused while a loop runs —
   always, with the app up; the app runs its own resets between syncs.
 - **One server per data root**, which `datalib-http` takes for its own
-  reasons (the API token, the job and feedback stores).
+  reasons (the API token, the feedback, usage and remote-media stores).
 
 They must be *different* files: a server that starts while a
 `datalib-dag` runs the loop holds the root as a server and waits for
-`runner-lock`, finishing the jobs whose requests that loop closes, and
+`runner-lock` — the UI's syncs are rows that loop serves meanwhile — and
 takes the loop over when it ends.
 
 Whoever runs the loop owns its steps' processes. Each step holds a pipe
@@ -276,9 +321,8 @@ there (`subprocess::stop_ladder`, `step::STOP_GRACE`), so one that
 ignores its SIGINT cannot hold its store for good. A loop that died
 holding the lock leaves its run and its invocations open in the record
 and the run store; the next process to take the lock closes them
-(`supervisor::host::take_over`), and the server's boot sets each job it
-finds active to match its request, which is still open for the next
-loop to run.
+(`supervisor::host::take_over`). Its requests are still open rows, and
+the next loop runs them.
 
 `flock(2)` rather than a pid file, because the kernel releases it when the
 holder dies — a crashed process leaves no stale lock to reason about. The
@@ -342,7 +386,7 @@ any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `state_detail`, `paused_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |
@@ -351,14 +395,14 @@ any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
 A run must record a state for *every* step in scope (including ones that
 were skipped or blocked and never "ran"), a
 `finished_at` that tells a completed run from a crashed one, and per-step
-timings. The loop holds the record in memory (`state::DagState`) and
-saves only what changed since its last save (`state::changes`), after
-every event.
+timings. The loop holds the record in memory (`record::Record`) and
+saves only what changed since its last save (`record::changes`), after
+every tick and every event; a Manage row's Status is `steps.state`,
+read straight from it.
 
 The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
 for one busy period of the loop (`datalib-dag` takes `--run-id` instead
-when given one); the app server names it as the `parent_job_id` of every
-job that period serves. `supervisor::host::step_env` puts it in the
+when given one). `supervisor::host::step_env` puts it in the
 child environment and `start_record` hands the same string to the run
 store (`system/runs/runs.sqlite`) *before* the loop starts, and `Runner`
 reads it back out of that environment, so the record, the store and
@@ -368,8 +412,9 @@ displaying, `/api/dag` filters every row out on the id mismatch, and the
 UI silently shows no progress at all. `started_at` stays the pinned
 `DATALIB_DAG_NOW`.
 
-The record is saved on `running`, not only on terminal states. It is the
-only channel to a reader who did not spawn the run, so without the
-running-state save a step went straight from "not reached yet" to
-"succeeded" and pressing Sync looked like nothing had happened until the
-step finished.
+The record is saved on every tick, not only on terminal states. It is
+the only channel to a reader who did not spawn the run, and the loop
+saves it before it closes a request, so a reader that sees a request
+closed never finds a step still serving it. `POST /api/requests`
+answers only once a step names the new request (`Store::taken_on`), so
+the rows read after a Sync already show it.
