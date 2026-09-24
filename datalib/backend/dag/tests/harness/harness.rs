@@ -90,6 +90,9 @@ pub struct Harness {
     pub rows: BTreeMap<String, BTreeMap<String, i64>>,
     /// Batches applied but not yet committed, per step.
     held: BTreeMap<String, Vec<String>>,
+    /// Everything the harness did and heard, in order, for a failure or a
+    /// hang to print.
+    pub trail: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 fn mkfifo(path: &Path) {
@@ -131,6 +134,7 @@ impl Harness {
             files: BTreeMap::new(),
             rows: BTreeMap::new(),
             held: BTreeMap::new(),
+            trail: Arc::default(),
             root,
         };
         h.set_config(steps);
@@ -189,20 +193,29 @@ impl Harness {
 
     // ── the person at the controls ───────────────────────────────────
 
+    pub fn log(&self, line: String) {
+        self.trail.lock().unwrap().push(line);
+    }
+
     pub async fn sync(&self, roots: &[&str]) -> String {
         let roots: Vec<String> = roots.iter().map(|s| s.to_string()).collect();
-        self.store.open_request(&roots, "harness").await.unwrap()
+        let id = self.store.open_request(&roots, "harness").await.unwrap();
+        self.log(format!("sync {roots:?} -> {id}"));
+        id
     }
 
     pub async fn stop(&self, request: &str) {
+        self.log(format!("stop {request}"));
         self.store.request_stop(request, "harness").await.unwrap();
     }
 
     pub async fn pause(&self, step: &str) {
+        self.log(format!("pause {step}"));
         self.store.pause(step, "harness").await.unwrap();
     }
 
     pub async fn resume(&self, step: &str) {
+        self.log(format!("resume {step}"));
         self.store.resume(step).await.unwrap();
     }
 
@@ -211,6 +224,7 @@ impl Harness {
     /// Queue an instruction for `step`'s driver, this invocation or the
     /// next one to start.
     pub fn tell(&mut self, step: &str, instruction: &str) {
+        self.log(format!("tell {step}: {instruction}"));
         let ctl = self
             .steps
             .get_mut(step)
@@ -251,9 +265,11 @@ impl Harness {
                 }
             }
         };
-        tokio::time::timeout(DEADLINE, wait)
+        let got = tokio::time::timeout(DEADLINE, wait)
             .await
-            .unwrap_or_else(|_| panic!("{step} acknowledged nothing within {DEADLINE:?}"))
+            .unwrap_or_else(|_| panic!("{step} acknowledged nothing within {DEADLINE:?}"));
+        self.log(format!("ack {step}: {got}"));
+        got
     }
 
     /// Wait for `step`'s next ack and require it to start with `want`.
@@ -368,6 +384,13 @@ impl Harness {
             .unwrap_or_else(|_| panic!("{what}: not within {DEADLINE:?}"))
     }
 
+    /// The next commit to the store, from anyone.
+    pub async fn next_commit(&mut self, what: &str) {
+        tokio::time::timeout(DEADLINE, self.listener.next(&self.store))
+            .await
+            .unwrap_or_else(|_| panic!("{what}: no commit within {DEADLINE:?}"));
+    }
+
     pub async fn closed(&mut self, request: &str) -> Option<RequestOutcome> {
         let id = request.to_string();
         self.until(&format!("request {request} to close"), |_, reqs| {
@@ -426,10 +449,13 @@ impl Harness {
     pub async fn check_rows(&self, step: &str) {
         let db = self.root.path().join(step).join("store.doltlite_db");
         let want = self.rows.get(step).cloned().unwrap_or_default();
-        let got: BTreeMap<String, i64> = match datalib_etl::doltlite_raw::open_reader(&db, None)
-            .await
-            .unwrap()
-        {
+        let reader = match db.exists() {
+            true => datalib_etl::doltlite_raw::open_reader(&db, None)
+                .await
+                .unwrap(),
+            false => None,
+        };
+        let got: BTreeMap<String, i64> = match reader {
             Some(reader) => {
                 let rows: Vec<(String, i64)> =
                     sqlx::query_as("SELECT id, n FROM pinned_rows ORDER BY id")

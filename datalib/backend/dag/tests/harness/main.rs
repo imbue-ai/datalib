@@ -6,6 +6,7 @@
 //! trace, and what did not happen happens on the next sync.
 
 mod harness;
+mod walk;
 
 use datalib_dag::supervisor::store::RequestOutcome;
 use datalib_dag::Event;
@@ -254,4 +255,61 @@ async fn a_transient_failure_is_retried_by_a_new_process() {
     assert_eq!(h.closed(&r).await, Some(RequestOutcome::Done));
     h.check_files(A);
     h.finish().await;
+}
+
+/// Seeded random walks through every way a step can end, under syncs,
+/// stops, pauses and resumes, the invariant checked after each episode.
+/// `HARNESS_SEED=<n>` replays one seed; `HARNESS_SEEDS=<n>` runs that
+/// many.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn random_walks() {
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+    let seeds: Vec<u64> = match env("HARNESS_SEED") {
+        Some(one) => vec![one],
+        None => (0..env("HARNESS_SEEDS").unwrap_or(32)).collect(),
+    };
+    type Trail = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+    let walks: Vec<(u64, Trail, tokio::task::JoinHandle<()>)> = seeds
+        .into_iter()
+        .map(|seed| {
+            let trail = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let walk = walk::walk(seed, 6, trail.clone());
+            let walk = async move {
+                // Every wait inside has its own deadline; this one catches
+                // a hang that is not a wait.
+                if tokio::time::timeout(harness::DEADLINE * 3, walk)
+                    .await
+                    .is_err()
+                {
+                    panic!("hung past {:?}", harness::DEADLINE * 3);
+                }
+            };
+            (seed, trail, tokio::spawn(walk))
+        })
+        .collect();
+    let mut failed = Vec::new();
+    for (seed, trail, walk) in walks {
+        if let Err(e) = walk.await {
+            let why = match e.try_into_panic() {
+                Ok(p) => p
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default(),
+                Err(e) => e.to_string(),
+            };
+            let trail = trail.lock().unwrap();
+            let last = &trail[trail.len().saturating_sub(40)..];
+            failed.push(format!(
+                "seed {seed}: {why}\n  last of its trail:\n    {}",
+                last.join("\n    ")
+            ));
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "{} walks failed:\n{}",
+        failed.len(),
+        failed.join("\n")
+    );
 }

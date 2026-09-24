@@ -318,8 +318,12 @@ impl Driver {
         })
     }
 
+    /// `None` when nothing was committed, which includes this process
+    /// never having opened the store.
     fn commit(&mut self) -> Result<Option<String>> {
-        let pool = self.store.as_ref().context("commit with no store open")?;
+        let Some(pool) = self.store.as_ref() else {
+            return Ok(None);
+        };
         self.rt.block_on(doltlite_raw::commit_run(pool, "driver"))
     }
 
