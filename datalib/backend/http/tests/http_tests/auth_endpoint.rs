@@ -186,6 +186,38 @@ async fn the_dactal_page_is_public_and_sandboxed() {
     );
 }
 
+/// An `/api` path that names no endpoint is a 404. The app shell's
+/// fallback used to answer it with a 200 page, so a mistyped call — or
+/// a step id with its slash left unencoded — read as success.
+#[tokio::test]
+async fn an_unknown_api_path_is_not_found_rather_than_the_app_shell() {
+    let (app, _) = app().await;
+    let authed = |req: axum::http::request::Builder| {
+        req.header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    for req in [
+        Request::get("/api/no/such/thing"),
+        Request::post("/api/steps/slack/ingest/pause"),
+    ] {
+        let req = authed(req);
+        let what = format!("{} {}", req.method(), req.uri());
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{what}");
+    }
+    let page = app
+        .clone()
+        .oneshot(authed(Request::get("/data_sources")))
+        .await
+        .unwrap();
+    assert_eq!(
+        page.status(),
+        StatusCode::OK,
+        "a UI route still gets the app"
+    );
+}
+
 #[tokio::test]
 async fn a_wrong_token_is_just_as_refused() {
     let (app, _) = app().await;

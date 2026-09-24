@@ -99,6 +99,10 @@ pub async fn serve_ui(uri: Uri) -> Response {
         // A public path names a file or nothing: the SPA fallback would
         // hand the app shell to a caller with no session.
         None if path.starts_with(PUBLIC_PREFIX) => StatusCode::NOT_FOUND.into_response(),
+        // An API call that names no endpoint must not read as a success.
+        None if path.starts_with("api/") => {
+            (StatusCode::NOT_FOUND, format!("no endpoint /{path}")).into_response()
+        }
         // SPA fallback — let the client router handle unknown routes.
         None => serve_index(),
     }
