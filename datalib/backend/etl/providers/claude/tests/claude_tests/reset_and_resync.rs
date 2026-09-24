@@ -178,6 +178,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     // HEAD pointer; see `datalib_etl::doltlite_raw` module docs).
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&format!("sqlite://{}", db_path_for(&out_db).display()))
         .await
         .unwrap();
@@ -233,6 +235,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     // HEAD pointer; see `datalib_etl::doltlite_raw` module docs).
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&format!("sqlite://{}", db_path_for(&out_db).display()))
         .await
         .unwrap();

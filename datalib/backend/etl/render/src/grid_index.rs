@@ -1258,6 +1258,8 @@ mod insert_round_trip_tests {
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .expect("open pool");
@@ -1386,6 +1388,8 @@ mod write_lock_tests {
             .create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(max_conn)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .unwrap()
@@ -1668,6 +1672,8 @@ mod schema_reconcile_tests {
             .create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .unwrap()
@@ -1828,6 +1834,8 @@ mod source_cursor_tests {
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
                     .unwrap()

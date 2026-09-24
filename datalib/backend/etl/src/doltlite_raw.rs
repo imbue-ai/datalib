@@ -1071,12 +1071,13 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
 /// nobody collects, so it made every `open` cost bytes. See the README.
 async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInfo>> {
     const PROBE: &str = "__datalib_schema_probe__";
-    // A fresh database per call rather than one shared scratch pool:
     // A fresh in-memory database per call, not a shared scratch pool: the
     // probe table name is a constant, so concurrent reconciles would drop
     // each other's table.
     let probe = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(
             SqliteConnectOptions::from_str("sqlite::memory:")
                 .context("sqlite uri for the schema probe")?,
@@ -1630,6 +1631,8 @@ pub async fn head_commit_at_path(db_path: &Path) -> Result<Option<String>> {
     let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&url)
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
@@ -1650,6 +1653,8 @@ pub async fn problem_counts_at_path(
     let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&url)
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
@@ -2511,6 +2516,8 @@ mod tests {
     async fn plain_pool(p: &Path) -> SqlitePool {
         sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))
                     .unwrap()
@@ -3714,6 +3721,8 @@ mod tests {
                 .create_if_missing(true);
             let pool = SqlitePoolOptions::new()
                 .max_connections(max_conns)
+                .idle_timeout(None)
+                .max_lifetime(None)
                 .connect_with(opts)
                 .await
                 .unwrap();

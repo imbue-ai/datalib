@@ -2,8 +2,9 @@
 //!
 //! [`fetch`] decrypts `Databases/msgstore.db.crypt15` to a tempfile, hands
 //! that file to the shared SQLite mirror engine (every table, drop-and-
-//! refill, doltlite dedups), then walks `Media/` into the sidecar CAS and
-//! the `wa_media_files` registry. The caller commits.
+//! refill, doltlite dedups), copies `wa.db`'s contacts into
+//! `wa_db_contacts`, then walks `Media/` into the sidecar CAS and the
+//! `wa_media_files` registry. The caller commits.
 //!
 //! No plaintext ever reaches a user-visible path — the decrypted msgstore is a
 //! `NamedTempFile` dropped at the end, and media are read in place from
@@ -15,7 +16,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool};
+use sqlx::Connection;
+use std::str::FromStr;
 
 use datalib_etl::blob_cas::{self, BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
@@ -25,11 +28,14 @@ use datalib_etl::progress::Progress;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
-use crate::schema_raw::{ALL_DDL, WA_MEDIA_FILES};
+use crate::schema_raw::{ALL_DDL, WA_DB_CONTACTS, WA_MEDIA_FILES};
 
 /// The plaintext attachment tree inside a WhatsApp backup, and the prefix
 /// msgstore puts on every `message_media.file_path`.
 const MEDIA_DIR: &str = "Media";
+
+/// Where WhatsApp backs up `wa.db`, the database that holds the names.
+const WA_DB_BACKUP: &str = "Backups/wa.db.crypt15";
 
 /// How many bytes of media may sit in memory before a CAS flush.
 const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -38,11 +44,20 @@ const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 pub struct IngestSummary {
     pub mirror: MirrorStats,
     pub media_files: u64,
+    /// `wa.db` contact rows copied; `None` when the backup has no `wa.db`.
+    pub contacts: Option<u64>,
 }
 
 impl IngestSummary {
     pub fn summary(&self) -> String {
-        format!("{} media_files={}", self.mirror.summary(), self.media_files)
+        let contacts = self
+            .contacts
+            .map_or_else(|| "none (no wa.db)".to_string(), |n| n.to_string());
+        format!(
+            "{} media_files={} contacts={contacts}",
+            self.mirror.summary(),
+            self.media_files
+        )
     }
 }
 
@@ -161,13 +176,27 @@ pub async fn fetch(
         stable_key_columns: Vec::new(),
         primary_keys: Default::default(),
         gc: knobs.gc,
-        sidecar_tables: vec![WA_MEDIA_FILES.to_string()],
+        sidecar_tables: vec![WA_MEDIA_FILES.to_string(), WA_DB_CONTACTS.to_string()],
     };
     let mut summary = IngestSummary {
         mirror: mirror::run(db.pool(), &options, progress).await?,
         media_files: 0,
+        contacts: None,
     };
     drop(tmp);
+
+    let wa_db = backup_dir.join(WA_DB_BACKUP);
+    if wa_db.is_file() {
+        summary.contacts = Some(copy_contacts(db.pool(), &wa_db, root_key).await?);
+    } else {
+        // Like a missing `Media/`: a copy of the backup made without
+        // `Backups/` says nothing about the contacts, so the ones stored
+        // stay.
+        tracing::info!(
+            wa_db = %wa_db.display(),
+            "whatsapp::ingest: no wa.db backup; keeping the stored contacts"
+        );
+    }
 
     let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
@@ -181,6 +210,86 @@ pub async fn fetch(
 
     tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
     Ok(summary)
+}
+
+/// Decrypt `wa.db` to a tempfile and drop-and-refill `wa_db_contacts` from
+/// its `wa_contacts`, every column as JSON (see
+/// [`crate::schema_raw::WA_DB_CONTACTS_DDL`]). Read through one plain
+/// connection, closed before returning. Returns the rows copied.
+async fn copy_contacts(dst: &SqlitePool, crypt_path: &Path, root_key: &[u8; 32]) -> Result<u64> {
+    let plaintext = decrypt_file(crypt_path, root_key)
+        .with_context(|| format!("decrypt {}", crypt_path.display()))?;
+    let tmp = tempfile::Builder::new()
+        .prefix("wa-db-")
+        .suffix(".db")
+        .tempfile()
+        .context("create tempfile for decrypted wa.db")?;
+    std::fs::write(tmp.path(), &plaintext).context("write decrypted wa.db to tempfile")?;
+    drop(plaintext);
+
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", tmp.path().display()))
+        .context("sqlite uri for decrypted wa.db")?
+        .read_only(true)
+        .create_if_missing(false);
+    let mut src = SqliteConnection::connect_with(&opts)
+        .await
+        .context("open decrypted wa.db")?;
+    let rows = read_contacts(&mut src).await;
+    let _ = src.close().await;
+    let rows = rows?;
+
+    let mut tx = dst.begin().await.context("begin wa_db_contacts tx")?;
+    sqlx::query("DELETE FROM wa_db_contacts")
+        .execute(&mut *tx)
+        .await
+        .context("clear wa_db_contacts")?;
+    for (jid, contact_rows) in &rows {
+        sqlx::query("INSERT INTO wa_db_contacts (jid, rows) VALUES (?, ?)")
+            .bind(jid)
+            .bind(contact_rows)
+            .execute(&mut *tx)
+            .await
+            .context("insert wa_db_contacts")?;
+    }
+    tx.commit().await.context("commit wa_db_contacts tx")?;
+    Ok(rows.len() as u64)
+}
+
+/// `(jid, [every column of each of its rows as a JSON object])`, one per
+/// jid. A BLOB column goes in as hex: JSON cannot hold one.
+async fn read_contacts(src: &mut SqliteConnection) -> Result<Vec<(String, String)>> {
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('wa_contacts')")
+            .fetch_all(&mut *src)
+            .await
+            .context("wa_contacts columns")?;
+    if columns.is_empty() {
+        anyhow::bail!("wa.db has no wa_contacts table");
+    }
+    let pairs: Vec<String> = columns
+        .iter()
+        .map(|c| {
+            let lit = c.replace('\'', "''");
+            let ident = c.replace('"', "\"\"");
+            format!(
+                "'{lit}', CASE WHEN typeof(\"{ident}\") = 'blob' THEN hex(\"{ident}\") ELSE \"{ident}\" END"
+            )
+        })
+        .collect();
+    let sql = format!(
+        "SELECT jid, json_group_array(json(obj)) FROM \
+           (SELECT jid, json_object({}) AS obj FROM wa_contacts \
+             WHERE jid IS NOT NULL ORDER BY _id) \
+         GROUP BY jid ORDER BY jid",
+        pairs.join(", ")
+    );
+    // Audited: the column names come from the file's own
+    // `pragma_table_info`, quoted as identifiers and as string literals.
+    let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(&mut *src)
+        .await
+        .context("read wa_contacts")?;
+    Ok(rows)
 }
 
 /// Register every media file in `wa_media_files` and make sure its bytes are
@@ -398,5 +507,11 @@ mod tests {
             .expect("ingest ok");
         assert!(summary.mirror.tables > 0);
         assert!(summary.mirror.rows > 0);
+        assert_eq!(
+            summary.contacts.is_some(),
+            backup_dir.join(WA_DB_BACKUP).is_file(),
+            "a backup with a wa.db has its contacts copied: {}",
+            summary.summary()
+        );
     }
 }

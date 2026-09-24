@@ -22,7 +22,7 @@
     { "lid_row_id": 9, "display_name": "Worf, Son of Mogh" }
   ],
   "chats": [
-    { "id": 100, "jid_row_id": 6, "subject": "Bridge Crew", "group_type": 1 },
+    { "id": 100, "jid_row_id": 6, "subject": "Bridge Crew", "group_type": 1, "last_read_message_id": 12 },
     { "id": 101, "jid_row_id": 2, "subject": null,           "group_type": 0 },
     { "id": 102, "jid_row_id": 7, "subject": null,           "group_type": 0 },
     { "id": 103, "jid_row_id": 8, "subject": null,           "group_type": 0 },
@@ -57,5 +57,12 @@
     { "relative_path": "WhatsApp Images/bridge-viewscreen.jpg", "size_bytes": 384 },
     { "relative_path": "WhatsApp Video/Private/warp-core-diagnostic.mp4", "size_bytes": 512 },
     { "relative_path": "WhatsApp Voice Notes/2364/tactical-briefing.opus", "size_bytes": 640 }
+  ],
+  "wa_contacts": [
+    { "jid": "17015550102@s.whatsapp.net", "display_name": "William Riker", "given_name": "William", "family_name": "Riker", "wa_name": "Number One" },
+    { "jid": "17015550102@s.whatsapp.net", "display_name": "Will Riker (Starfleet)" },
+    { "jid": "17015550103@s.whatsapp.net", "display_name": "Data" },
+    { "jid": "17015550104@s.whatsapp.net", "wa_name": "Geordi La Forge" },
+    { "jid": "17015550105@s.whatsapp.net", "display_name": "Worf" }
   ]
 }

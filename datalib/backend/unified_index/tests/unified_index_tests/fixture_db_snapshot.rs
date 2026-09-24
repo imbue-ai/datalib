@@ -53,6 +53,8 @@ async fn open_readonly(path: &std::path::Path) -> SqlitePool {
         .read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .unwrap_or_else(|e| panic!("open {}: {e}", real.display()))
