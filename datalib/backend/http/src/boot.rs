@@ -1,6 +1,7 @@
 //! Backend assembly: everything derived from a data root — the stores
-//! this server owns, where the config lives, the sync worker, the disk
-//! usage sampler — in one place, so every packaging boots identically.
+//! this server owns, where the config lives, the supervisor loop, the
+//! disk usage sampler — in one place, so every packaging boots
+//! identically.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,20 +9,17 @@ use std::sync::Arc;
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
 
-use crate::{auth::ApiToken, usage, worker, AppState};
+use crate::{auth::ApiToken, supervisor, usage, AppState};
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the feedback and job stores, `<root>/config.toml`, the
-/// sync-progress channel, and the background sync worker. The worker is spawned onto the ambient tokio runtime,
-/// so this must be called from within one. `dag_bin` is the
-/// `datalib-dag` runner the worker shells out to (with `binary_dir`
-/// passed through as `--binary-dir` when resolved); `None` makes
-/// UI-triggered syncs fail fast with a clear message while reads and
-/// search still work. Presentation concerns (browser opening, the
+/// sync-progress channel, and the supervisor loop, spawned onto the
+/// ambient tokio runtime — so this must be called from within one.
+/// `binary_dir` goes first on every step's `PATH`, ahead of the config's
+/// own `binary_dir`. Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
 pub async fn build_state(
     root: PathBuf,
-    dag_bin: Option<PathBuf>,
     binary_dir: Option<PathBuf>,
     api_token: ApiToken,
 ) -> anyhow::Result<AppState> {
@@ -36,7 +34,7 @@ pub async fn build_state(
 
     // A root a newer line of datalib wrote is not opened at all: this
     // server then boots only to show the gate that says so, with a repo
-    // that refuses every call, no worker and no sampler. Checked before
+    // that refuses every call, no loop and no sampler. Checked before
     // the app stores because opening them is the first write.
     let newer_root = datalib_store_meta::inspect_root(&root).await;
     if !newer_root.is_empty() {
@@ -50,6 +48,7 @@ pub async fn build_state(
             root: root.clone(),
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             progress_tx,
+            sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
             // No entries: nothing starts, and the unified_index applet
             // never opens the index this build must not read as its own.
@@ -75,32 +74,26 @@ pub async fn build_state(
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
 
-    // Live sync-job progress fan-out: the worker + enqueue/cancel
+    // Live sync-job progress fan-out: the loop's host + enqueue/cancel
     // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
     // Buffer a few hundred events so a briefly-stalled client lags
-    // rather than blocks the worker.
+    // rather than blocks the host.
     let (progress_tx, _) = tokio::sync::broadcast::channel(512);
 
     // Everything that changes without a job behind it. One watcher per
     // process, replacing the timers every UI surface used to keep — see
-    // `crate::watch`. Started before the worker so a sync that begins
+    // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
     crate::watch::spawn((*root).clone(), root_tx.clone());
 
-    // Background sync worker: drains the `sync_jobs` queue the UI fills.
-    // With no sync binary it still runs — UI-triggered syncs fail fast
-    // with a clear message instead of hanging (search is unaffected).
-    let worker_cfg = worker::WorkerConfig {
-        root: root.clone(),
-        dag_bin,
+    let sync = supervisor::SyncControl::new(root.clone());
+    tokio::spawn(supervisor::run(supervisor::HostConfig {
+        control: sync.clone(),
+        repo: app.clone(),
         binary_dir: binary_dir.clone(),
         progress_tx: progress_tx.clone(),
-    };
-    let worker_repo = app.clone();
-    tokio::spawn(async move {
-        worker::run(worker_repo, worker_cfg).await;
-    });
+    }));
 
     // Bytes on disk, over time: a walk of the root folded into a
     // snapshot the storage endpoint reads and appended to
@@ -116,6 +109,7 @@ pub async fn build_state(
         app.clone(),
         root.clone(),
         root_tx.clone(),
+        sync.clone(),
     ));
 
     // Applet discovery execs one child per configured applet, and
@@ -138,6 +132,7 @@ pub async fn build_state(
         root,
         app,
         progress_tx,
+        sync,
         root_tx,
         applets,
         api_token,
@@ -191,11 +186,6 @@ impl datalib_core::repo::AppRepo for NewerRootRepo {
     ) -> Result<app_schema::sync_jobs::SyncJobRow, datalib_core::repo::RepoError> {
         self.refuse()
     }
-    async fn claim_next_job(
-        &self,
-    ) -> Result<Option<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
-        self.refuse()
-    }
     async fn recent_disk_usage(
         &self,
         _limit: usize,
@@ -216,7 +206,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("boot-test-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, None, token)
+        let state = build_state(root.path().to_path_buf(), None, token)
             .await
             .unwrap();
         for p in [
@@ -243,7 +233,7 @@ mod tests {
         let token = ApiToken::from_value("boot-test-token", root.path());
         // A first boot writes the stores; a "newer release" then marks one.
         drop(
-            build_state(root.path().to_path_buf(), None, None, token.clone())
+            build_state(root.path().to_path_buf(), None, token.clone())
                 .await
                 .unwrap(),
         );
@@ -257,7 +247,7 @@ mod tests {
             pool.close().await;
         }
 
-        let state = build_state(root.path().to_path_buf(), None, None, token.clone())
+        let state = build_state(root.path().to_path_buf(), None, token.clone())
             .await
             .expect("boots to show the gate");
         assert_eq!(state.newer_root.len(), 1);
@@ -304,7 +294,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("no-index-token", root.path());
-        build_state(root.path().to_path_buf(), None, None, token)
+        build_state(root.path().to_path_buf(), None, token)
             .await
             .unwrap();
         assert!(
@@ -323,7 +313,7 @@ mod tests {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
-        build_state(root.path().to_path_buf(), None, None, token)
+        build_state(root.path().to_path_buf(), None, token)
             .await
             .unwrap();
 
@@ -343,7 +333,7 @@ mod tests {
     async fn build_state_publishes_the_api_token() {
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("published-token", root.path());
-        let state = build_state(root.path().to_path_buf(), None, None, token)
+        let state = build_state(root.path().to_path_buf(), None, token)
             .await
             .unwrap();
         let path = state.api_token.token_file();

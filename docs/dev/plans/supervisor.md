@@ -813,11 +813,31 @@ last.
    is its parent's". Startup closes the invocations a dead loop left
    open.
 
-   **4b. The server runs the loop** (agreed 2026-09-23; this is the
-   brief for whoever builds it). What the user sees: Sync on a second
-   source starts at once beside the first, instead of reading Queued
-   until the first is done. What the Manage screen shows is otherwise
-   unchanged — that is 4c.
+   **4b. The server runs the loop** (agreed 2026-09-23). *Built*
+   (`http/src/supervisor.rs`, and `supervisor::host` in the library):
+   Sync on a second source starts at once beside the first, instead of
+   reading Queued until the first is done. What the Manage screen shows
+   is otherwise unchanged — that is 4c. Where the build went past the
+   brief below, or away from it:
+   - A request for a step the loaded config lacks is left open for the
+     next busy period, which loads the config again, when it arrives
+     mid-period; one open as a period starts still fails. So a source
+     *added* to the config while a sync runs waits for that sync; one
+     the config already had starts beside it.
+   - The loop tells its host when it takes a request on and when it is
+     done with one (`RequestEvent`). A stopped request is done once the
+     steps only it wanted have exited, so a job reads Stopping until
+     then, as it did under the worker.
+   - A step no open request wants any more settles its row at once (Up
+     to date, Blocked) rather than when the busy period ends, which with
+     several sources in one period can be a long way off.
+   - A step killed at the end of its grace records as stopped, not
+     failed. `CHILD_PIDS` / `kill_children` stay the CLI's exit path;
+     the server's shutdown stops the loop (SIGINT to each step) and
+     leaves the rest to each step's parent pipe. `worker_cancel` became
+     `http_tests::sync_loop`.
+
+   The brief, as agreed:
 
    - *The server holds `runner-lock` for its life and runs the loop in
      busy periods.* Idle, it polls the store's `data_version`; when a

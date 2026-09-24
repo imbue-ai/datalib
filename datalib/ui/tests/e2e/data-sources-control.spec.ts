@@ -10,13 +10,13 @@
 // runner, and no sleeping on a fast one.
 //
 // Two groups of tests. The first is the workflow as the tree supports it
-// today — every sync is its own job and the worker runs them one at a
-// time, so a source started during another's sync waits its turn — and
-// has to stay green. The second is what the workflow needs and does not
-// have yet, marked `test.fail()` or `test.fixme()`: an expected failure
-// passes today, and the day the feature lands Playwright fails it as
-// "expected to fail, but passed", which is the reminder to turn it into
-// a plain test.
+// — every sync is its own job, and the server's one loop takes each on
+// as it arrives, beside whatever is already running — and has to stay
+// green. The second is what the workflow needs and does not have yet,
+// marked `test.fail()` or `test.fixme()`: an expected failure passes
+// today, and the day the feature lands Playwright fails it as "expected
+// to fail, but passed", which is the reminder to turn it into a plain
+// test.
 //
 // Every test leaves the queue empty and the root unlocked behind it: a
 // job left pending by one test would run against the config the next
@@ -72,9 +72,9 @@ type SyncJob = {
   id: string;
   source_ids: string | null;
   state: "pending" | "running" | "done" | "failed" | "canceled";
-  /// The server's word on whether the job still holds the runner: a
-  /// cancel flips `state` at once, and this only once the worker has
-  /// stamped the job finished.
+  /// The server's word on whether the job still holds its sources: a
+  /// cancel flips `state` at once, and this only once its steps have
+  /// exited and the job is stamped finished.
   active: boolean;
 };
 type DagStep = { id: string; current_state: string | null };
@@ -151,12 +151,11 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
     .toBe("Running");
 }
 
-/// Wait until a job has *finished* in one of the given states — the
-/// worker has stamped it, so nothing is still running on its behalf.
-/// A cancel flips the state the moment it is asked for; `active` is
-/// what says the runner has actually gone. `settleRunner` is not enough:
-/// the runner closes its run record before it exits, and the worker
-/// stamps the job only after it has reaped the process.
+/// Wait until a job has *finished* in one of the given states — it has
+/// been stamped, so nothing is still running on its behalf. A cancel
+/// flips the state the moment it is asked for; `active` is what says its
+/// steps have actually gone. `settleRunner` is not enough: the run a job
+/// belongs to may be serving other jobs long after this one is over.
 async function untilJobFinished(
   request: APIRequestContext,
   s: Source,
@@ -182,7 +181,7 @@ async function untilJobFinished(
 
 /// What a failure about a stop would otherwise leave unsaid: the queue
 /// as the API serves it, the runner's record, and the last lines this
-/// spec's backend wrote — where the worker says what it sent and saw.
+/// spec's backend wrote — where the loop says what it sent and saw.
 /// Playwright puts test stdout in the report and in bazel's test log,
 /// which is the only place a CI run can be read from.
 async function dumpStopEvidence(request: APIRequestContext, why: string): Promise<void> {
@@ -208,8 +207,8 @@ async function dumpStopEvidence(request: APIRequestContext, why: string): Promis
   }
 }
 
-/// Empty the queue and wait for the runner to let go of the root, so
-/// the next test starts from nothing in flight.
+/// Empty the queue and wait for the loop to go idle, so the next test
+/// starts from nothing in flight.
 async function drainQueue(page: Page) {
   for (const j of await jobs(page.request)) {
     if (j.active) {
@@ -295,9 +294,9 @@ async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<
   await expandGroup(page, "unified_index");
 }
 
-test.describe("sources run independently, one job at a time", () => {
-  // Three replayed downloads, held while the spec acts and run one after
-  // another by the worker once released, plus a stop and a restart.
+test.describe("sources run independently", () => {
+  // Three replayed downloads, held while the spec acts and finished once
+  // released, plus a stop and a restart.
   test.setTimeout(300_000);
 
   test("sources are added and started one at a time, each while the earlier ones still run", async ({
@@ -313,17 +312,19 @@ test.describe("sources run independently, one job at a time", () => {
     await expect(stopBtn(page, `group:${CHATGPT.id}`)).toBeVisible();
 
     // ── 2. add a second source while the first is still going ─────────
-    // Saving the config rewrites the file under a live runner. The
-    // runner read it at start and must not notice; the row must still
-    // say Running once the table is remounted from the new config — and
-    // with the tape held, it can say nothing else.
+    // Saving the config rewrites the file under a live loop. The loop
+    // read it when this sync began and must not notice; the row must
+    // still say Running once the table is remounted from the new config
+    // — and with the tape held, it can say nothing else.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
-    // The second source is taken on at once — queued behind the first
-    // today, running beside it once the runner can (the test.fail below
-    // says which) — and the first is not disturbed by it.
+    // The second source is taken on at once, and the first is not
+    // disturbed by it. It was added to the config after the loop loaded
+    // it, so it waits, Queued, for the next time the loop loads it — the
+    // end of the first source's sync; a source the loaded config already
+    // has runs beside it at once (the last test in this file).
     await expect
       .poll(() => statusOf(page, ingestOf(CLAUDE)), { timeout: 5_000 })
       .toMatch(/^(Queued|Running)$/);
@@ -345,7 +346,7 @@ test.describe("sources run independently, one job at a time", () => {
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     expect(await statusOf(page, ingestOf(CLAUDE))).toMatch(/^(Queued|Running)$/);
 
-    // ── every source finishes, in whatever order the worker took them ─
+    // ── every source finishes, in whatever order the loop took them ───
     release();
     for (const [id, before] of Object.entries({ ...was, ...claudeWas, ...pdfsWas })) {
       const st = await settleRow(page, id, before, 180_000);
@@ -379,11 +380,11 @@ test.describe("sources run independently, one job at a time", () => {
 
     // ── 4. stop the first, from its own row ───────────────────────────
     await stopBtn(page, `group:${CHATGPT.id}`).click();
-    // Between the click and the runner's exit the worker sends SIGTERM,
-    // the runner forwards SIGINT, and the step stops at its next
-    // consistent point, commits and exits — up to the worker's 15 s
-    // grace, and as little as a fraction of a second: a held request
-    // answers the stop at once, like a backoff. The row says so for as
+    // Between the click and the step's exit the loop sends it SIGINT,
+    // and the step stops at its next consistent point, commits and
+    // exits — up to the 15 s grace before it is killed, and as little as
+    // a fraction of a second: a held request answers the stop at once,
+    // like a backoff. The row says so for as
     // long as that lasts: the button reads Stopping and takes no second
     // click. Sampled until the job is stamped, and asserted only if the
     // window was wide enough to be seen at all — on a fast host it can
@@ -406,7 +407,7 @@ test.describe("sources run independently, one job at a time", () => {
             if (stopped && !stopped.active) return "finished";
             // Read the face without waiting for it: `isDisabled()` waits
             // for the element to exist, and the Stopping button leaves
-            // the DOM the moment the runner is gone — a sample that lands
+            // the DOM the moment the step is gone — a sample that lands
             // in that gap would hang the poll until its timeout, long
             // after the job it is waiting on has finished.
             const faces = await stopping.evaluateAll((els) =>
@@ -444,13 +445,13 @@ test.describe("sources run independently, one job at a time", () => {
     );
     if (seen)
       expect(seen.disabled, "while winding down, Stopping takes no second click").toBe(true);
-    // …and once the runner has gone, both stand down.
+    // …and once the step has gone, both stand down.
     await expect(banner).toBeHidden({ timeout: 10_000 });
     await expect(stopping).toHaveCount(0);
     // Its download's row says what happened: stopped — not failed,
     // nothing went wrong, and not finished, the work is not done. The
-    // step answered SIGINT with a `cancelled` outcome, which the
-    // scheduler records as `stopped`. A stopped download is not a fence
+    // step answered SIGINT with a `cancelled` outcome, which the loop
+    // records as `stopped`, while it goes on with the other source. A stopped download is not a fence
     // over its render (plans/supervisor.md §2.5): the held download
     // sealed nothing, so the render is up to date with what it committed
     // — or, if this root has never rendered the source, it was waiting
@@ -471,7 +472,7 @@ test.describe("sources run independently, one job at a time", () => {
       .toBe("Stopped");
 
     // The other source's job was never touched by the stop: it is still
-    // in the queue, and — once let go — it goes on to finish.
+    // running, and — once let go — it goes on to finish.
     const other = await jobFor(request, CLAUDE);
     expect(other?.state, `${CLAUDE.id}'s job after stopping ${CHATGPT.id}`).toMatch(
       /^(pending|running)$/,
@@ -519,12 +520,8 @@ test.describe("what independent control still needs", () => {
     page,
     request,
   }) => {
-    // Every sync is its own `datalib-dag`, and the runner holds an
-    // exclusive lock on the root, so the worker runs jobs one at a time:
-    // the second source waits until the first is over. Running beside it
-    // means one runner taking on new seeds while it runs — not a second
-    // process on the same stores.
-    test.fail();
+    // One loop takes on the second source while it runs the first — not
+    // a second process on the same stores.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await start(page, CHATGPT);
     await untilRunning(page, ingestOf(CHATGPT));

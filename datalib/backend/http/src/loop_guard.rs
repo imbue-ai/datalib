@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn a_burst_with_no_request_line_continues_nothing() {
         assert_eq!(burst_chain(&[]), None);
-        assert_eq!(burst_chain(&[line("datalib_http::worker", None)]), None);
+        assert_eq!(burst_chain(&[line("datalib_http::supervisor", None)]), None);
     }
 
     #[test]
