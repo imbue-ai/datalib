@@ -858,7 +858,8 @@ function reparse() {
 }
 
 async function loadConfig() {
-  loadError.value = null;
+  // Cleared on success, not before the fetch: a banner that goes and
+  // comes back on every reload moves the table twice.
   try {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
@@ -871,6 +872,7 @@ async function loadConfig() {
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
     configText.value = cfg.text;
+    loadError.value = null;
     reparse();
     if (sources.value.length === 0 && cfg.source_count > 0) {
       // The inspector is the only channel when someone hits this in the
@@ -1455,6 +1457,18 @@ onUnmounted(() => {
 <template>
   <section ref="cardEl" class="m2 m2-card">
     <header class="m2-head">
+      <!-- Here rather than above the table: it comes and goes with each
+           job, and a line appearing above the table moves every row
+           under the pointer. -->
+      <p
+        v-if="banner"
+        class="m2-msg m2-head-msg"
+        :class="banner.ok ? 'good' : 'bad'"
+        :title="banner.text"
+        role="status"
+      >
+        {{ banner.text }}
+      </p>
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
@@ -1512,7 +1526,6 @@ onUnmounted(() => {
       </ul>
       <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
-    <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
       <!-- The typed viewer over the rows the server assembled: a tree,

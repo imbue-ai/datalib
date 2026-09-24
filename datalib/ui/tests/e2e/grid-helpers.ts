@@ -31,6 +31,8 @@ export type GridApi = {
   scrollToRow: (row: number) => void;
   scrollToColumn: (id: string) => void;
   isSelected: (uuid: string) => boolean;
+  /// The record under the active cell, where the arrow keys start.
+  activeUuid: () => string | null;
   hiddenColumns: () => string[];
   showColumns: (ids: string[]) => void;
   groupBy: (ids: string[]) => void;

@@ -42,6 +42,8 @@ import {
   MANAGE_WITH_CONFIG,
   TABLE_ROWS,
   SEARCH_ROWS,
+  searchHeader,
+  selectRowByUuid,
   type GridApi,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
@@ -234,6 +236,14 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
+    // The pipeline DAG, in a third tab: its nodes are recoloured as the
+    // run moves, and stay the elements they were.
+    const dag = await context.newPage();
+    await dag.goto("/sourceDagView()");
+    const dagNodes = dag.locator(".dv-node");
+    await expect(dagNodes).toHaveCount(STEPS.length, { timeout: 10_000 });
+    await dagNodes.evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
+
     const was = await stampsBefore(page, STEPS);
     const pipelinePaints = await watchPaints(page.locator(".tg-grid").first());
     hold();
@@ -301,6 +311,8 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
         throw new Error(`${e.message}\nlast reading: ${JSON.stringify(last, null, 2)}`);
       });
 
+    await expect(dag.locator(".dv-node.running").first()).toBeVisible();
+
     // ── 3. a refetch redraws only what changed ──────────────────────
     const kept = await rowsKeptAcross(page, 3);
     console.log(`[e2e] rows kept across three refetches: ${JSON.stringify(kept)}`);
@@ -312,6 +324,10 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       const st = await settleRow(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
+    await expect(
+      dag.locator(".dv-node[data-probe]"),
+      "a live frame redrew the DAG's nodes rather than recolouring them",
+    ).toHaveCount(STEPS.length);
     // Before `settleRunner`, which reloads the page.
     expectSanePaints(await pipelinePaints(), "the Pipeline table, through a streaming sync");
 
@@ -393,6 +409,59 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       })
       .toBeGreaterThan(before);
     for (const step of steps) await settleRow(page, step, was[step], 120_000);
+    await settleRunner(page, 120_000);
+  });
+
+  // The keyboard's place in a grid is a row index inside the grid.
+  // Rows landing above it must carry it along with its record, or the
+  // next arrow key starts from a row the person never picked.
+  test("the keyboard stays on its row while rows land above it", async ({ page, context }) => {
+    const id = "chatgpt-keys";
+    const steps = [`${id}/ingest`, `${id}/render_markdown`, INDEX];
+    await writeConfig(page, config([[id, "chatgpt"]]));
+    for (const group of [id, "unified_index"]) await expandGroup(page, group);
+    const was = await stampsBefore(page, steps);
+
+    const grid = await context.newPage();
+    await grid.goto("/");
+    await searchAndSettle(grid, `source_id:${id}`);
+    const activeUuid = () =>
+      grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());
+
+    hold();
+    await page.getByRole("button", { name: "Sync everything" }).click();
+    await expect
+      .poll(() => gridRowCount(grid), { timeout: 60_000, message: "no row reached the grid" })
+      .toBeGreaterThan(0);
+    const first = await gridRowCount(grid);
+
+    // Newest first, so the rows the rest of the download brings land
+    // above the ones already there.
+    const created = searchHeader(grid, "created_at");
+    await expect(async () => {
+      if (!(await created.locator(".slick-sort-indicator-desc").count())) await created.click();
+      await expect(created.locator(".slick-sort-indicator-desc")).toHaveCount(1, { timeout: 500 });
+    }).toPass({ timeout: 10_000 });
+
+    const picked = (await grid.evaluate(() =>
+      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
+    ))!;
+    await selectRowByUuid(grid, picked);
+    expect(await activeUuid()).toBe(picked);
+
+    release();
+    for (const step of steps) await settleRow(page, step, was[step], 120_000);
+    await expect
+      .poll(() => gridRowCount(grid), { timeout: 30_000, message: "no row landed above" })
+      .toBeGreaterThan(first);
+    expect(
+      await grid.evaluate(
+        (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rowIndexOf(u),
+        picked,
+      ),
+      "the rows that arrived should sort above the picked one",
+    ).toBeGreaterThan(0);
+    expect(await activeUuid(), "the keyboard was left on another row").toBe(picked);
     await settleRunner(page, 120_000);
   });
 });

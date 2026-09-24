@@ -2,6 +2,7 @@
 import type { CardRender } from "../types";
 import { fetchDag, type DagResponse, type DagStep } from "@/api";
 import { changed, subscribeLive } from "@/live";
+import { dagShape, nodeTitle } from "./dagShape";
 
 /// The node's colour class for a runner state. The legend's words, not
 /// the runner's: `succeeded` reads as done, `skipped_up_to_date` as up
@@ -61,6 +62,14 @@ export function sourceDagView(): CardRender {
     // step id → task state ("running" | "done" | …) from the live job.
     let states = new Map<string, string>();
     let disposed = false;
+    /// The shape last drawn, and each node drawn for it, to recolour in
+    /// place: a node redrawn loses the hover over it, and a redraw puts
+    /// the scroll back at the top left.
+    let paintedShape: string | null = null;
+    const nodes = new Map<
+      string,
+      { step: DagStep; rect: SVGRectElement; title: SVGTitleElement }
+    >();
 
     function layout(list: DagStep[]): NodePos[] {
       // Layer = longest dependency chain below the node. The response
@@ -108,6 +117,9 @@ export function sourceDagView(): CardRender {
     }
 
     function paint(error?: string) {
+      const was = wrap.querySelector<HTMLElement>(".dv-scroll");
+      const scrolled = was ? { left: was.scrollLeft, top: was.scrollTop } : null;
+      nodes.clear();
       wrap.replaceChildren();
       const head = document.createElement("div");
       head.className = "dv-head";
@@ -144,6 +156,10 @@ export function sourceDagView(): CardRender {
       });
       scroll.appendChild(svg);
       wrap.appendChild(scroll);
+      if (scrolled) {
+        scroll.scrollLeft = scrolled.left;
+        scroll.scrollTop = scrolled.top;
+      }
 
       // Edges under nodes.
       for (const p of pos) {
@@ -172,20 +188,12 @@ export function sourceDagView(): CardRender {
           height: String(NODE_H),
           rx: "6",
         });
+        rect.dataset.step = p.step.id;
         const title = svgEl("title", {});
-        title.textContent = [
-          p.step.id,
-          `runs: ${p.step.command}`,
-          p.step.inputs.length
-            ? `reads: ${p.step.inputs.join(", ")}`
-            : "reads: (nothing — download step)",
-          `writes: ${p.step.outputs.join(", ")}`,
-          state !== "todo" ? `state: ${state}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n");
+        title.textContent = nodeTitle(p.step, state);
         rect.appendChild(title);
         svg.appendChild(rect);
+        nodes.set(p.step.id, { step: p.step, rect, title });
 
         const label = svgEl("text", {
           class: "dv-label",
@@ -231,15 +239,34 @@ export function sourceDagView(): CardRender {
       states = next;
     }
 
+    /// Recolour the nodes already drawn, touching only what changed.
+    function restyle() {
+      for (const [id, n] of nodes) {
+        const state = states.get(id) ?? "todo";
+        const cls = `dv-node ${state}`;
+        if (n.rect.getAttribute("class") !== cls) n.rect.setAttribute("class", cls);
+        const title = nodeTitle(n.step, state);
+        if (n.title.textContent !== title) n.title.textContent = title;
+      }
+    }
+
     async function load() {
       try {
         const dag = await fetchDag();
         if (disposed) return;
         steps = dag.steps;
         applyStates(dag);
+        const shape = dagShape(dag);
+        if (shape === paintedShape) {
+          restyle();
+          return;
+        }
+        paintedShape = shape;
         paint(dag.ok ? undefined : (dag.error ?? "unknown error"));
       } catch (e) {
-        if (!disposed) paint((e as Error).message);
+        if (disposed) return;
+        paintedShape = null;
+        paint((e as Error).message);
       }
     }
 

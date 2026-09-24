@@ -31,6 +31,7 @@ import type {
 import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
@@ -290,18 +291,17 @@ async function load(fresh: boolean) {
         // redraw every row and lose the scroll; only the rows the new
         // lines move are redrawn.
         const { slickGrid, dataView } = bundle;
-        redrawChanged(slickGrid, dataView, () => {
-          dataView.beginUpdate();
-          dataView.addItems(got);
-          dataView.reSort();
-          dataView.endUpdate();
+        keepActiveOnRecord(slickGrid, dataView, () => {
+          redrawChanged(slickGrid, dataView, () => {
+            dataView.beginUpdate();
+            dataView.addItems(got);
+            dataView.reSort();
+            dataView.endUpdate();
+          });
+          // Follow the tail only while the reader is already at it: a
+          // scroll up to read something must not be yanked back down.
+          if (atBottom) slickGrid.scrollRowIntoView(slickGrid.getDataLength() - 1);
         });
-        // Follow the tail only while the reader is already at it: a
-        // scroll up to read something must not be yanked back down.
-        if (atBottom) {
-          const grid = bundle.slickGrid;
-          grid.scrollRowIntoView(grid.getDataLength() - 1);
-        }
       }
     } else if (fresh && bundle) {
       bundle.dataset = [];
@@ -839,7 +839,7 @@ function gridOptions(): GridOption {
       // Following the tail scrolls, and a menu open on a line stays
       // open until the reader is done with it.
       hideMenuOnScroll: false,
-      commandItems: menuSlots(4, menuEntries),
+      ...menuSlots(4, menuEntries),
     },
   };
 }
@@ -862,12 +862,17 @@ function createGrid(first: RunLogLine[]) {
   ) as Grid;
   bundle = b;
   b.slickGrid.onScroll.subscribe(onScroll);
+  // A new line keeps the selection on its line, and the grid reports
+  // that as a change of index: only a different line is announced.
+  let selectedSeq: number | null = null;
   b.slickGrid.onSelectedRowsChanged.subscribe((_e, args) => {
     const row = args.rows[args.rows.length - 1];
     if (row == null) return;
     const line = b.dataView.getItem(row) as RunLogLine | undefined;
     // A group row selects nothing.
-    if (line && typeof line.seq === "number") emit("line-selected", line.seq);
+    if (!line || typeof line.seq !== "number" || line.seq === selectedSeq) return;
+    selectedSeq = line.seq;
+    emit("line-selected", line.seq);
   });
   // What the bar's drop does, without the mouse, for the e2e tests:
   // a drag dispatched by hand dies inside SortableJS under load, and

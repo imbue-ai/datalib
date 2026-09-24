@@ -15,12 +15,19 @@ export type Paints = {
   rowsReplaced: number;
   /// How far the grid's viewport scrolled, in pixels.
   scrolledBy: number;
+  /// The furthest the grid itself moved on the page, in pixels, read
+  /// every frame: a banner that comes and goes above it moves every row
+  /// under the pointer twice and leaves no trace at the end.
+  movedBy: number;
 };
 
 type Watch = {
   fullRedraws: number;
   rowsReplaced: number;
   top: number;
+  y: number;
+  moved: number;
+  frame?: number;
   observer?: MutationObserver;
 };
 type Watched = HTMLElement & { __paints?: Watch };
@@ -31,7 +38,19 @@ export async function watchPaints(grid: Locator): Promise<() => Promise<Paints>>
   await grid.evaluate((el: Watched) => {
     const viewport = el.querySelector<HTMLElement>(".slick-viewport");
     const isRow = (n: Node) => n instanceof HTMLElement && n.classList.contains("slick-row");
-    const state: Watch = { fullRedraws: 0, rowsReplaced: 0, top: viewport?.scrollTop ?? 0 };
+    const state: Watch = {
+      fullRedraws: 0,
+      rowsReplaced: 0,
+      top: viewport?.scrollTop ?? 0,
+      y: el.getBoundingClientRect().top,
+      moved: 0,
+    };
+    const sample = () => {
+      const dy = Math.abs(el.getBoundingClientRect().top - state.y);
+      if (dy > state.moved) state.moved = dy;
+      state.frame = requestAnimationFrame(sample);
+    };
+    sample();
     const observer = new MutationObserver((records) => {
       // One callback is one task's worth of DOM changes; a canvas whose
       // every row went in it was redrawn whole.
@@ -60,18 +79,21 @@ export async function watchPaints(grid: Locator): Promise<() => Promise<Paints>>
     grid.evaluate((el: Watched) => {
       const p = el.__paints!;
       p.observer?.disconnect();
+      if (p.frame !== undefined) cancelAnimationFrame(p.frame);
       const viewport = el.querySelector<HTMLElement>(".slick-viewport");
       return {
         fullRedraws: p.fullRedraws,
         rowsReplaced: p.rowsReplaced,
         scrolledBy: (viewport?.scrollTop ?? 0) - p.top,
+        movedBy: Math.max(p.moved, Math.abs(el.getBoundingClientRect().top - p.y)),
       };
     });
 }
 
-/// The two rules every live refresh keeps: no row redrawn wholesale,
-/// no scroll nobody asked for.
+/// The rules every live refresh keeps: no row redrawn wholesale, no
+/// scroll nobody asked for, and the grid where it was on the page.
 export function expectSanePaints(paints: Paints, what: string) {
   expect(paints.fullRedraws, `${what} redrew every row: ${JSON.stringify(paints)}`).toBe(0);
   expect(paints.scrolledBy, `${what} scrolled by itself: ${JSON.stringify(paints)}`).toBe(0);
+  expect(paints.movedBy, `${what} moved on the page: ${JSON.stringify(paints)}`).toBe(0);
 }

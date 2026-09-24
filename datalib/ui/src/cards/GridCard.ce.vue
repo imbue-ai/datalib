@@ -47,6 +47,9 @@ import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
+import { perOpening } from "@/grid/menu";
+import { newlyPicked } from "@/grid/selection";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
 import type { CardCtx } from "./types";
@@ -753,17 +756,19 @@ function applyPatch(patch: RowPatch<SearchRow>) {
   const { dataView, slickGrid: grid } = vueGrid;
   const top = grid.getViewport().top;
   const anchor = rowData(top)?.uuid ?? null;
-  redrawChanged(grid, dataView, () => {
-    dataView.beginUpdate();
-    for (const id of patch.removed) dataView.deleteItem(id);
-    for (const row of patch.changed) dataView.updateItem(row.uuid, row);
-    for (const row of patch.added) dataView.addItem(row);
-    // A new or changed row takes its place in whatever order is showing.
-    dataView.reSort();
-    dataView.endUpdate();
+  keepActiveOnRecord(grid, dataView, () => {
+    redrawChanged(grid, dataView, () => {
+      dataView.beginUpdate();
+      for (const id of patch.removed) dataView.deleteItem(id);
+      for (const row of patch.changed) dataView.updateItem(row.uuid, row);
+      for (const row of patch.added) dataView.addItem(row);
+      // A new or changed row takes its place in whatever order is showing.
+      dataView.reSort();
+      dataView.endUpdate();
+    });
+    const moved = anchor ? dataView.getRowById(anchor) : undefined;
+    if (moved != null && moved !== top) grid.scrollRowToTop(moved);
   });
-  const moved = anchor ? dataView.getRowById(anchor) : undefined;
-  if (moved != null && moved !== top) grid.scrollRowToTop(moved);
 }
 
 onMounted(async () => {
@@ -968,7 +973,7 @@ function entry(
 ): MenuCommandItem {
   return {
     command,
-    itemVisibilityOverride: (args) => label(menuScope(args as MenuFromCellCallbackArgs)) !== null,
+    itemVisibilityOverride: (args) => label(scopeOf(args)) !== null,
     slotRenderer: (_item, args) => {
       const wrap = document.createElement("div");
       // The menu item lays its icon and text out itself; the wrapper
@@ -979,11 +984,11 @@ function entry(
       icon.textContent = "◦";
       const text = document.createElement("span");
       text.className = "slick-menu-content";
-      text.textContent = label(menuScope(args as MenuFromCellCallbackArgs)) ?? "";
+      text.textContent = label(scopeOf(args)) ?? "";
       wrap.append(icon, text);
       return wrap;
     },
-    action: (_e, args) => run(menuScope(args as MenuFromCellCallbackArgs)),
+    action: (_e, args) => run(scopeOf(args)),
   };
 }
 
@@ -992,7 +997,7 @@ function dividerAfter(shown: (m: MenuScope) => boolean): MenuCommandItem {
   return {
     command: "",
     divider: true,
-    itemVisibilityOverride: (args) => shown(menuScope(args as MenuFromCellCallbackArgs)),
+    itemVisibilityOverride: (args) => shown(scopeOf(args)),
   };
 }
 
@@ -1055,6 +1060,11 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     },
   };
 }
+
+/// A right-click's scope, worked out once as the menu opens: see
+/// `perOpening`.
+const scopes = perOpening(menuScope);
+const scopeOf = (args: unknown) => scopes.read(args as MenuFromCellCallbackArgs);
 
 const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
@@ -1257,7 +1267,7 @@ function gridOptions(): GridOption {
       },
     },
     enableContextMenu: true,
-    contextMenu: { commandItems: menuItems },
+    contextMenu: { commandItems: menuItems, onBeforeMenuShow: scopes.onBeforeMenuShow },
   };
 }
 
@@ -1336,6 +1346,10 @@ function createGrid() {
       if (idx != null) grid.scrollColumnIntoView(idx);
     },
     isSelected: (uuid: string) => selectedRows().some((r) => r.uuid === uuid),
+    activeUuid: () => {
+      const active = grid.getActiveCell();
+      return active ? (rowData(active.row)?.uuid ?? null) : null;
+    },
     hiddenColumns: () =>
       grid
         .getColumns()
@@ -1360,12 +1374,15 @@ function createGrid() {
   refreshQmdState();
 }
 
+/// The records selected as of the last change the grid reported.
+let selectedIds = new Set<string>();
+
 function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
   if (!vueGrid) return;
-  const previous = new Set(args.previousSelectedRows ?? []);
-  const added = args.rows.filter((r) => !previous.has(r));
-  if (added.length === 0) return;
-  const data = rowData(added[added.length - 1]);
+  const now = args.rows.map(rowData).filter((d): d is SearchRow => d != null);
+  const { picked, selected } = newlyPicked(selectedIds, now, rowKey);
+  selectedIds = selected;
+  const data = picked[picked.length - 1];
   if (!data) return;
   selectedRow.value = data;
   sel.value = rowKey(data);
