@@ -236,6 +236,14 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     await searchAndSettle(grid, `source_id:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
+    // The pipeline DAG, in a third tab: its nodes are recoloured as the
+    // run moves, and stay the elements they were.
+    const dag = await context.newPage();
+    await dag.goto("/sourceDagView()");
+    const dagNodes = dag.locator(".dv-node");
+    await expect(dagNodes).toHaveCount(STEPS.length, { timeout: 10_000 });
+    await dagNodes.evaluateAll((els) => els.forEach((el) => el.setAttribute("data-probe", "")));
+
     const was = await stampsBefore(page, STEPS);
     const pipelinePaints = await watchPaints(page.locator(".tg-grid").first());
     hold();
@@ -303,9 +311,11 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
         throw new Error(`${e.message}\nlast reading: ${JSON.stringify(last, null, 2)}`);
       });
 
+    await expect(dag.locator(".dv-node.running").first()).toBeVisible();
+
     // Coming back to the tab refetches everything; with the watches
     // armed, that has to land in place like any other refresh.
-    for (const p of [page, grid]) {
+    for (const p of [page, grid, dag]) {
       await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     }
 
@@ -320,6 +330,10 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       const st = await settleRow(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
+    await expect(
+      dag.locator(".dv-node[data-probe]"),
+      "a live frame redrew the DAG's nodes rather than recolouring them",
+    ).toHaveCount(STEPS.length);
     // Before `settleRunner`, which reloads the page.
     expectSanePaints(await pipelinePaints(), "the Pipeline table, through a streaming sync");
 
