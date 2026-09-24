@@ -23,6 +23,24 @@
       "reach": "local"
     }
   ],
+  "calendar": [
+    {
+      "path": "google",
+      "reach": "origin"
+    },
+    {
+      "path": "fastmail",
+      "reach": "origin"
+    },
+    {
+      "path": "caldav",
+      "reach": "origin"
+    },
+    {
+      "path": "ics",
+      "reach": "local"
+    }
+  ],
   "chatgpt": [
     {
       "path": "api",

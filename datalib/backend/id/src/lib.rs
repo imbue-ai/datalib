@@ -62,6 +62,9 @@ pub enum IdNamespace {
     /// mints for them.
     AppleMessages,
     Beeper,
+    /// Every calendar method — Google, CalDAV, `.ics` — one keyspace:
+    /// events keyed by their calendar and their own id.
+    Calendar,
     /// Both `claude_api` and `claude_export` — one raw store, one
     /// keyspace, so an export-seeded mirror kept fresh by the API does
     /// not mint two ids for one conversation.

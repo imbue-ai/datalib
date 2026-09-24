@@ -1,0 +1,25 @@
+[package]
+name = "datalib-etl-calendar-common"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "datalib_etl_calendar_common"
+path = "src/lib.rs"
+
+[dependencies]
+datalib-etl = { path = ".." }
+datalib-etl-render = { path = "../render" }
+datalib-id = { path = "../../id" }
+datalib-schema = { path = "../../schema" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+# An event's `TZID` names an IANA zone, and the grid needs the instant
+# it means. MIT OR Apache-2.0; the zone data is compiled in, with no
+# build script unless a feature asks for one.
+chrono-tz = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -76,6 +76,7 @@ members = [
     "etl/providers/whatsapp_render",
     "etl/chat-common",
     "etl/contact-common",
+    "etl/calendar-common",
     "applets",
     # NOTE: datalib_migrate_config, source_common, and the provider
     # *_config crates are bazel-only (no Cargo.toml). This workspace
@@ -105,6 +106,8 @@ serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
+# IANA zones for chrono: resolves a calendar event's `TZID`.
+chrono-tz = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = "0.8"
 tower-http = { version = "0.7.1", features = ["cors", "fs"] }

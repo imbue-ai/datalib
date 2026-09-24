@@ -587,6 +587,145 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Old mail archive",
     wizard: false,
   },
+  // ── the `calendar` variants ───────────────────────────────────────
+  //
+  // Like `email`: one type, and an entry per way in, each keyed on its
+  // own method table. Every method has a form, so there is no catch-all.
+  {
+    type: "calendar",
+    variantKey: "google",
+    method: "google",
+    label: "Google Calendar",
+    blurb: "Mirror the calendars on a Google account through Google's API.",
+    keywords: ["google", "calendar", "gcal", "events", "meetings", "schedule"],
+    kind: "api",
+    icon: "google_calendar",
+    defaultName: "google_calendar",
+    nameHint: "Work calendar",
+    wizard: true,
+    credentialService: "google-calendar",
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Google account",
+        help:
+          "Which stored Google login to mirror. Leave it empty if latchkey holds only one " +
+          "for google-calendar.",
+      },
+      {
+        kind: "string_list",
+        target: "google.calendars",
+        label: "Only these calendars",
+        help:
+          "Calendar names as Google shows them, comma-separated. Empty mirrors every calendar " +
+          "on the account's list, subscribed ones included. Adding one later downloads it whole.",
+      },
+    ],
+  },
+  {
+    type: "calendar",
+    variantKey: "fastmail",
+    method: "fastmail",
+    label: "Fastmail Calendar",
+    blurb: "Mirror a Fastmail account's calendars over CalDAV.",
+    keywords: ["fastmail", "calendar", "caldav", "events", "meetings", "schedule"],
+    kind: "api",
+    icon: "fastmail",
+    defaultName: "fastmail_calendar",
+    nameHint: "Personal calendar",
+    wizard: true,
+    // CalDAV takes an app password, which is its own latchkey service,
+    // not the OAuth login the `fastmail` mail entry uses.
+    credentialService: "fastmail-dav",
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Fastmail account",
+        help: "Which stored Fastmail app password to use. Leave it empty if latchkey holds only one.",
+      },
+      {
+        kind: "string_list",
+        target: "fastmail.calendars",
+        label: "Only these calendars",
+        help:
+          "Calendar names as Fastmail shows them, comma-separated. Empty mirrors every calendar. " +
+          "Adding one later downloads it whole.",
+      },
+    ],
+  },
+  {
+    type: "calendar",
+    variantKey: "caldav",
+    label: "CalDAV",
+    blurb: "Mirror the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, ….",
+    keywords: ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"],
+    kind: "api",
+    icon: "calendar",
+    defaultName: "caldav_calendar",
+    nameHint: "iCloud calendar",
+    wizard: true,
+    // No `credentialService`: latchkey keys a CalDAV login by the
+    // server's host, and a host it does not ship needs registering
+    // first, with an app password rather than a browser login — which
+    // the Connect flow cannot do. The help text says how.
+    fields: [
+      {
+        kind: "text",
+        required: true,
+        target: "caldav.server_url",
+        label: "Server URL",
+        help:
+          "Where the server's CalDAV starts, e.g. https://caldav.icloud.com/. The host alone is " +
+          "usually enough: discovery tries /.well-known/caldav when it does not answer. The login " +
+          "is latchkey's: `latchkey services register` a service for this host, then " +
+          '`latchkey auth set <service> -u "you@example.com:<app password>"`.',
+      },
+      {
+        kind: "text",
+        target: "latchkey_settings.account",
+        label: "Latchkey account",
+        help: "Which stored login to use, when latchkey holds more than one for this host.",
+      },
+      {
+        kind: "string_list",
+        target: "caldav.calendars",
+        label: "Only these calendars",
+        help:
+          "Calendar names as the server shows them, comma-separated. Empty mirrors every calendar. " +
+          "Adding one later downloads it whole.",
+      },
+    ],
+  },
+  {
+    type: "calendar",
+    variantKey: "ics",
+    label: "Calendar files (.ics)",
+    blurb: "A folder of .ics exports, such as Google Takeout's Calendar folder.",
+    keywords: ["calendar", "ics", "ical", "icalendar", "takeout", "export", "events"],
+    kind: "export",
+    icon: "calendar",
+    defaultName: "ics_calendar",
+    nameHint: "Old calendar export",
+    wizard: true,
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of .ics files",
+        required: true,
+        target: "ics.path",
+        label: "Folder",
+        help:
+          "A folder of .ics files, each one calendar — Takeout/Calendar from a Google export, " +
+          "say. A file's events are the whole of that calendar: an event a re-read file no " +
+          "longer holds is dropped from the mirror.",
+      },
+    ],
+  },
   {
     type: "contacts",
     label: "Contacts",

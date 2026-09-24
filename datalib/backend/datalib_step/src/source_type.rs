@@ -50,6 +50,9 @@ pub enum SourceType {
     /// place here the way it does in `google_takeout`.
     ApplePhotos,
     Beeper,
+    /// Calendars: Google's API, a CalDAV server (Fastmail, iCloud, …) or
+    /// `.ics` files, one raw store.
+    Calendar,
     Chatgpt,
     /// Claude.ai over the API, or an unpacked export; one raw store.
     Claude,
@@ -105,7 +108,8 @@ impl SourceType {
     pub const fn uses_latchkey_account(self) -> bool {
         matches!(
             self,
-            SourceType::Contacts
+            SourceType::Calendar
+                | SourceType::Contacts
                 | SourceType::Chatgpt
                 | SourceType::Claude
                 | SourceType::Email

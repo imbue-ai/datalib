@@ -207,6 +207,8 @@ EXPECTED_PROVIDERS = frozenset(
         # File-backed: the fixture is a `~/.codex` home.
         "codex",
         "beeper",
+        # File-backed: two `.ics` calendars.
+        "calendar",
         "contacts",
         # Not a source: the per-source storage report every render wave
         # emits (what the mirror weighs, and the row counts inside it).

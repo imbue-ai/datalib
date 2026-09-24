@@ -1,0 +1,130 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//Fastmail/2020.5/EN
+X-WR-CALNAME:Bridge
+X-WR-TIMEZONE:America/Los_Angeles
+BEGIN:VTIMEZONE
+TZID:America/Los_Angeles
+BEGIN:STANDARD
+DTSTART:19700101T000000
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+TZOFFSETFROM:-0700
+TZOFFSETTO:-0800
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:19700101T000000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+TZOFFSETFROM:-0800
+TZOFFSETTO:-0700
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:tng-senior-staff-briefing@enterprise.test
+SEQUENCE:3
+DTSTAMP:20260902T160000Z
+CREATED:20260105T180000Z
+LAST-MODIFIED:20260902T160000Z
+SUMMARY:Senior staff briefing
+DESCRIPTION:Ship's status\, then department heads in turn.\nBring your PADD
+ s.
+LOCATION:Observation lounge\, Deck 1
+DTSTART;TZID=America/Los_Angeles:20260105T090000
+DTEND;TZID=America/Los_Angeles:20260105T100000
+RRULE:FREQ=WEEKLY;BYDAY=MO,TH;UNTIL=20261231T170000Z
+EXDATE;TZID=America/Los_Angeles:20260209T090000
+TRANSP:OPAQUE
+ORGANIZER;CN=Jean-Luc Picard:mailto:picard@enterprise.test
+ATTENDEE;CN=Jean-Luc Picard;PARTSTAT=ACCEPTED:mailto:picard@enterprise.test
+ATTENDEE;CN=William Riker;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:riker@enterprise.test
+ATTENDEE;CN=Data;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:data@enterprise.test
+ATTENDEE;CN=Deanna Troi;PARTSTAT=TENTATIVE;RSVP=TRUE:mailto:troi@enterprise.test
+ATTENDEE;CN=Geordi La Forge;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:laforge@enterprise.test
+BEGIN:VALARM
+ACTION:DISPLAY
+TRIGGER:-PT10M
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-senior-staff-briefing@enterprise.test
+RECURRENCE-ID;TZID=America/Los_Angeles:20260312T090000
+SEQUENCE:1
+DTSTAMP:20260310T120000Z
+CREATED:20260105T180000Z
+SUMMARY:Senior staff briefing — Borg incursion
+DESCRIPTION:Moved to Main Engineering so Commander La Forge can show the new
+  shield modulations.
+LOCATION:Main Engineering
+DTSTART;TZID=America/Los_Angeles:20260312T110000
+DTEND;TZID=America/Los_Angeles:20260312T123000
+ORGANIZER;CN=Jean-Luc Picard:mailto:picard@enterprise.test
+ATTENDEE;CN=Jean-Luc Picard;PARTSTAT=ACCEPTED:mailto:picard@enterprise.test
+ATTENDEE;CN=William Riker;PARTSTAT=ACCEPTED:mailto:riker@enterprise.test
+ATTENDEE;CN=Geordi La Forge;PARTSTAT=ACCEPTED:mailto:laforge@enterprise.test
+ATTENDEE;CN=Worf;PARTSTAT=ACCEPTED:mailto:worf@enterprise.test
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-senior-staff-briefing@enterprise.test
+RECURRENCE-ID;TZID=America/Los_Angeles:20260402T090000
+SEQUENCE:2
+DTSTAMP:20260330T090000Z
+CREATED:20260105T180000Z
+SUMMARY:Senior staff briefing
+STATUS:CANCELLED
+DTSTART;TZID=America/Los_Angeles:20260402T090000
+DTEND;TZID=America/Los_Angeles:20260402T100000
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-klingon-reception@enterprise.test
+SEQUENCE:0
+DTSTAMP:20260820T150000Z
+CREATED:20260820T150000Z
+SUMMARY:Reception for the Klingon delegation
+DESCRIPTION:Ambassador K'Ehleyr arrives at 1900. Formal uniforms.\n\nWorf ha
+ s asked that no one serve gagh.
+LOCATION:Ten Forward
+DTSTART;TZID=America/Los_Angeles:20260918T190000
+DTEND;TZID=America/Los_Angeles:20260918T220000
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+ORGANIZER;CN=Deanna Troi:mailto:troi@enterprise.test
+ATTENDEE;CN=Deanna Troi;PARTSTAT=ACCEPTED:mailto:troi@enterprise.test
+ATTENDEE;CN=Worf;PARTSTAT=ACCEPTED;ROLE=REQ-PARTICIPANT:mailto:worf@enterprise.test
+ATTENDEE;CN=Jean-Luc Picard;PARTSTAT=TENTATIVE;ROLE=REQ-PARTICIPANT:mailto:picard@enterprise.test
+ATTENDEE;CN=Guinan;PARTSTAT=DECLINED;ROLE=OPT-PARTICIPANT:mailto:guinan@enterprise.test
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-risa-shore-leave@enterprise.test
+SEQUENCE:0
+DTSTAMP:20260601T120000Z
+CREATED:20260601T120000Z
+SUMMARY:Shore leave on Risa
+DESCRIPTION:Horga'hn optional.
+DTSTART;VALUE=DATE:20260713
+DTEND;VALUE=DATE:20260718
+TRANSP:TRANSPARENT
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-poker-night@enterprise.test
+SEQUENCE:0
+DTSTAMP:20260110T030000Z
+CREATED:20260110T030000Z
+SUMMARY:Officers' poker night
+LOCATION:Commander Riker's quarters
+DTSTART:20260115T200000
+DTEND:20260115T230000
+RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TH
+END:VEVENT
+BEGIN:VEVENT
+UID:tng-academy-lecture-series@starfleet.test
+RECURRENCE-ID;TZID=America/Los_Angeles:20261005T140000
+SEQUENCE:0
+DTSTAMP:20260915T100000Z
+SUMMARY:Starfleet Academy guest lecture: first contact protocols
+DTSTART;TZID=America/Los_Angeles:20261005T140000
+DTEND;TZID=America/Los_Angeles:20261005T153000
+LOCATION:Starfleet Academy\, San Francisco
+ORGANIZER;CN=Admiral Brand:mailto:brand@starfleet.test
+ATTENDEE;CN=Jean-Luc Picard;PARTSTAT=ACCEPTED:mailto:picard@enterprise.test
+END:VEVENT
+END:VCALENDAR

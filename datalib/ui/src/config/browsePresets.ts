@@ -52,6 +52,8 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   // Mail and address books: a correspondent and a mailbox.
   email: ["channel", "author", "account"],
   contacts: ["channel", "author", "account"],
+  // A calendar and the organizer.
+  calendar: ["channel", "author", "account"],
 
   // Assistant chats. `project` is Claude's project name and `org_name`
   // is the owning Anthropic organization — the only provider with one.

@@ -237,6 +237,7 @@ document.
 | notion.comment | `created_time` | `last_edited_time` when it differs, else null |
 | pdf.document | PDF `CreationDate`, else `ModDate` (the file existed by then) | `ModDate` |
 | pdf.page | the document's `created_at` | null |
+| calendar (event, series, changed occurrence) | when it happens: the start (a series' first occurrence), an all-day date as midnight UTC | null — an event is edited before it happens, which would break created ≤ modified; the edit stamp is on the page |
 | contacts (vCard) | null — a person has no creation event | `REV:` |
 | linkedin.contact | "Connected On", as midnight UTC | null |
 | yolink / airvisual timeseries, garmin weight | the first sample | the last sample |
@@ -278,6 +279,7 @@ resolve against". A source with no login at all (a PDF folder, a
 | email | the `accounts` row: `emailAddress` (mbox), `email` (Gmail), else JMAP's `name` — which RFC 8620 defines as the owner's address — else the account id | — | — |
 | linkedin | the `Primary` row of `email_addresses` (else the first, else `profile`'s first + last name); every row of the export, connections included | — | `Connections` for a contact |
 | facebook | `profile_v2.emails.emails[0]` (else `profile_v2.name.full_name`) from `…profile_information`; every row of the export, friends included | — | `Friends` for a contact |
+| calendar | the `accounts` row's `login`: the CalDAV principal's address, the Google account's primary calendar id; null for `.ics` files | — | the calendar's name |
 | github | — | `pull_request.base.repo.full_name` | — |
 | gitlab | — | `merge_request.references.full`, else `project_path` | — |
 | notion | — | — | — |
