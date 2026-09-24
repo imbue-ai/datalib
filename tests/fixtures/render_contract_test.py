@@ -928,6 +928,22 @@ class RenderContractTest(unittest.TestCase):
                 f"[render contract] {source}: {len(tables[source])} table(s)\n"
             )
             db = self.workspace / source / "ingest" / "entities.doltlite_db"
+            # Every table emptied at once, as a clear does
+            # (`doltlite_raw::reset_store`): what takes a source's
+            # documents out of the grid.
+            everything = self._rows(
+                db,
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta';",
+            )
+            checked += self._check(
+                source,
+                "every table",
+                "clear",
+                [" ".join(f'DELETE FROM "{t}";' for t in everything)],
+                failures,
+                skipped,
+            )
             for table, cols in tables[source]:
                 checked += self._check(
                     source,

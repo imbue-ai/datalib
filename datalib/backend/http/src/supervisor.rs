@@ -1,9 +1,9 @@
 //! The server's side of the supervisor loop (`docs/dev/plans/supervisor.md`
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request is open, and between busy periods settles a pause
-//! or a resume into the record and runs a reset.
+//! or a resume into the record and runs a clear.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,9 +16,10 @@ use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{EventSink, Runner};
 use tokio::sync::{oneshot, watch, Notify, OnceCell};
 
-/// A reset the UI asked for, waiting for the loop to be idle.
-struct Reset {
+/// A clear someone asked for, waiting for the loop to be idle.
+struct Clear {
     targets: Vec<ResetTarget>,
+    by: String,
     done: oneshot::Sender<Result<(), String>>,
 }
 
@@ -34,7 +35,7 @@ pub struct SyncControl {
     /// new rows by `PRAGMA data_version`, which a write on its own
     /// connection does not move.
     mailbox: Arc<OnceCell<Store>>,
-    resets: Arc<Mutex<Vec<Reset>>>,
+    clears: Arc<Mutex<Vec<Clear>>>,
     stop: Arc<watch::Sender<bool>>,
     exited: Arc<watch::Sender<bool>>,
 }
@@ -48,7 +49,7 @@ impl SyncControl {
             busy: Arc::new(AtomicBool::new(false)),
             wake: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
-            resets: Arc::new(Mutex::new(Vec::new())),
+            clears: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
         }
@@ -71,33 +72,39 @@ impl SyncControl {
             .await
     }
 
-    /// Something for the loop to look at: a request, a pause, a reset.
+    /// Something for the loop to look at: a request, a pause, a clear.
     pub fn wake(&self) {
         self.wake.notify_one();
     }
 
-    /// Drop what `targets` wrote, once no sync is running. A reset needs
-    /// the root to itself, so it is refused while a sync runs rather than
-    /// left waiting behind one that may take an hour.
-    pub async fn reset(&self, targets: &[String]) -> Result<(), String> {
+    /// Empty what `targets` wrote (`docs/dev/plans/supervisor.md` §2.10),
+    /// once no sync is running, and sync what reads them, so the emptiness
+    /// reaches the grid. It needs the root to itself, so it is refused
+    /// while a sync runs rather than left waiting behind one that may take
+    /// an hour.
+    pub async fn clear(&self, targets: &[String], by: &str) -> Result<(), String> {
         if !self.runs_the_loop.load(Ordering::SeqCst) {
             return Err(
-                "another process is running syncs on this root; reset once it is done".into(),
+                "another process is running syncs on this root; clear once it is done".into(),
             );
         }
         if self.running() {
-            return Err("a sync is running; reset once it is over".into());
+            return Err("a sync is running; clear once it is over".into());
         }
         let (done, answer) = oneshot::channel();
         let targets = targets.iter().map(|t| ResetTarget::parse(t)).collect();
-        self.resets
+        self.clears
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(Reset { targets, done });
+            .push(Clear {
+                targets,
+                by: by.to_string(),
+                done,
+            });
         self.wake();
         answer
             .await
-            .unwrap_or_else(|_| Err("the server stopped before the reset ran".into()))
+            .unwrap_or_else(|_| Err("the server stopped before the clear ran".into()))
     }
 
     /// Stop the loop's steps (SIGINT each, and their requests stay open
@@ -163,11 +170,11 @@ async fn host(cfg: &HostConfig) {
     // first settle, which also clears what a dead loop left running.
     let mut settled: Option<BTreeMap<String, String>> = None;
     while !*stop.borrow() {
-        let resets =
-            std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
-        for reset in resets {
-            let result = run_reset(cfg, &reset.targets).await;
-            let _ = reset.done.send(result);
+        let clears =
+            std::mem::take(&mut *cfg.control.clears.lock().unwrap_or_else(|e| e.into_inner()));
+        for clear in clears {
+            let result = run_clear(cfg, &store, &clear.targets, &clear.by).await;
+            let _ = clear.done.send(result);
         }
         let open = match store.open_requests().await {
             Ok(open) => open,
@@ -344,9 +351,15 @@ async fn fail_open_requests(store: &Store, why: &str) {
     }
 }
 
-/// A reset, between busy periods: each target's step invoked with
-/// `DATALIB_DAG_RESET`, in a run of its own.
-async fn run_reset(cfg: &HostConfig, targets: &[ResetTarget]) -> Result<(), String> {
+/// A clear, between busy periods: each target's step invoked with
+/// `DATALIB_DAG_RESET`, in a run of its own; then a request rooted at what
+/// reads them, opened for whoever asked, which the loop takes on next.
+async fn run_clear(
+    cfg: &HostConfig,
+    store: &Store,
+    targets: &[ResetTarget],
+    by: &str,
+) -> Result<(), String> {
     let root = cfg.control.root.clone();
     let checked = load_config(&root)?;
     let run_id = datalib_dag::scheduler::new_run_id();
@@ -370,7 +383,34 @@ async fn run_reset(cfg: &HostConfig, targets: &[ResetTarget]) -> Result<(), Stri
         .reset(&checked.graph, targets)
         .await;
     cfg.control.busy.store(false, Ordering::SeqCst);
-    result.map_err(|e| format!("{e:#}"))
+    result.map_err(|e| format!("{e:#}"))?;
+    let readers = readers_of(&checked.graph, targets);
+    if !readers.is_empty() {
+        store
+            .open_request(&readers, by)
+            .await
+            .map_err(|e| format!("could not sync what reads it: {e:#}"))?;
+    }
+    Ok(())
+}
+
+/// The steps that read a cleared step and were not cleared themselves:
+/// where the emptiness goes next.
+fn readers_of(graph: &datalib_dag::Graph, targets: &[ResetTarget]) -> Vec<String> {
+    let cleared: BTreeSet<&str> = targets.iter().map(|t| t.step.as_str()).collect();
+    let mut readers: BTreeSet<String> = BTreeSet::new();
+    for step in &cleared {
+        let Some(&i) = graph.by_id.get(*step) else {
+            continue;
+        };
+        for &d in &graph.dependents[i] {
+            let id = &graph.steps[d].id;
+            if !cleared.contains(id.as_str()) {
+                readers.insert(id.clone());
+            }
+        }
+    }
+    readers.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -408,15 +448,15 @@ mod tests {
         assert!(!lock.exists(), "the probe created {}", lock.display());
     }
 
-    /// A reset needs the root to itself; asked for while a sync runs it
+    /// A clear needs the root to itself; asked for while a sync runs it
     /// says so at once rather than hanging behind the sync.
     #[tokio::test]
-    async fn a_reset_is_refused_while_a_sync_runs() {
+    async fn a_clear_is_refused_while_a_sync_runs() {
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         control.runs_the_loop.store(true, Ordering::SeqCst);
         control.busy.store(true, Ordering::SeqCst);
-        let err = control.reset(&["a/ingest".into()]).await.unwrap_err();
+        let err = control.clear(&["a/ingest".into()], "ui").await.unwrap_err();
         assert!(err.contains("a sync is running"), "{err}");
     }
 }

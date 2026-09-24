@@ -49,9 +49,9 @@ pub const ENV_READS: &str = "DATALIB_READS";
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = "DATALIB_DAG_NOW";
 /// Set by `datalib-dag --reset`, and then the step does no work: it
-/// drops what the value names — `store`, or `blobs` for an ingest
-/// step's store and its blob CAS with it — commits that, and exits. The runner has
-/// already forgotten the step ever succeeded, so the next run does its
+/// empties what the value names — `store`, or `blobs` for an ingest
+/// step's store and its blob CAS with it — commits that, and exits. The
+/// runner then forgets the step ever succeeded, so the next run does its
 /// work from the start.
 pub const ENV_RESET: &str = "DATALIB_DAG_RESET";
 /// Seconds between a step's checkpoints, at most — see
@@ -1348,11 +1348,14 @@ mod tests {
             "run\nblobs\n",
             "the reset invocation names the part and does nothing else"
         );
-        assert!(
-            !crate::supervisor::record::recorded(root.path())
-                .await
-                .steps
-                .contains_key("src/raw"),
+        let after = crate::supervisor::record::recorded(root.path())
+            .await
+            .steps
+            .remove("src/raw")
+            .unwrap_or_default();
+        assert_eq!(
+            (after.succeeded, after.last_run, after.last_success_at),
+            (false, None, None),
             "a reset step has never succeeded"
         );
         let err = r

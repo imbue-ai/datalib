@@ -147,10 +147,13 @@ const ACTION_ICONS: Record<string, string> = {
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
   stop: "M6 6h12v12H6z",
+  pause: "M6 5h4v14H6zm8 0h4v14h-4z",
+  // A bar, then play: carry on from where it was held.
+  resume: "M5 5h3v14H5zm5 0v14l10-7z",
 };
 
 /// The buttons of an `actions` cell. One element per row, kept across
-/// repaints and updated in place: a repaint runs on every job event —
+/// repaints and updated in place: a repaint runs on every rows refetch —
 /// a few times a second during a sync — and a button rebuilt under a
 /// press swallows the click (its mousedown landed on the old one). The
 /// grid moves the kept element into the fresh cell.

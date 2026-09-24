@@ -793,9 +793,9 @@ async fn open_inner(
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
     // leaves a store the next open resumes from. A file with no tables
-    // — new, or reset — has nothing to climb: the DDL below creates it
-    // at the ladder's top. And a caller with no DDL (`open_index`, a
-    // reset) does no schema work at all, the ladder included.
+    // — a new one — has nothing to climb: the DDL below creates it at
+    // the ladder's top. And a caller with no DDL (`open_index`, a reset)
+    // does no schema work at all, the ladder included.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
     let stored_version = datalib_store_meta::ladder::stored_version(&pool).await?;
@@ -846,13 +846,17 @@ async fn open_inner(
             .with_context(|| format!("plan schema: {table}"))?;
         plans.push((*stmt, table, plan));
     }
-    let breaks: Vec<(String, String)> = plans
-        .iter()
-        .filter_map(|(_, table, plan)| match plan {
-            TablePlan::Break(what) => Some((table.clone(), what.clone())),
-            _ => None,
-        })
-        .collect();
+    // A break in an empty table loses nothing, so it is rebuilt whatever
+    // the policy: that is how a cleared store gets past a shape this build
+    // cannot reach.
+    let mut breaks: Vec<(String, String)> = Vec::new();
+    for (_, table, plan) in &plans {
+        if let TablePlan::Break(what) = plan {
+            if !table_is_empty(&pool, table).await? {
+                breaks.push((table.clone(), what.clone()));
+            }
+        }
+    }
     if !breaks.is_empty() && on_break == OnSchemaBreak::Refuse {
         pool.close().await;
         return Err(anyhow::Error::new(SchemaBreak {
@@ -1015,6 +1019,17 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
 
 /// Empty vec if the table does not exist (no error).
 /// Every table in the file that is ours to touch.
+async fn table_is_empty(pool: &SqlitePool, table: &str) -> Result<bool> {
+    // Audited: `table` is parsed from our own static DDL.
+    let any: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT EXISTS(SELECT 1 FROM \"{table}\")"
+    )))
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("is {table} empty"))?;
+    Ok(!any)
+}
+
 async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
     sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
@@ -1329,11 +1344,6 @@ async fn apply_table_plan(
             }
         }
         TablePlan::Break(what) => {
-            debug_assert_eq!(
-                on_break,
-                OnSchemaBreak::Rebuild,
-                "a Refuse open never gets here"
-            );
             tracing::warn!(
                 table,
                 what = %what,
@@ -1674,12 +1684,13 @@ pub async fn problem_counts_at_path(
 
 // ── Reset ───────────────────────────────────────────────────────────
 
-/// Drop every table and commit, so the store reads as a source with
-/// nothing in it while its history keeps every row — the run log
-/// included, which is where to look for it. The owner's next open is a
-/// first open: the DDL creates the tables afresh, with nothing to
-/// migrate, so a store whose shape this build refuses resets all the
-/// same. A store that does not exist has nothing to reset.
+/// Empty every table and commit, so the store reads as a source with
+/// nothing in it while its history keeps every row. The tables stay, so
+/// a reader diffing from an earlier commit sees every row deleted — how
+/// a clear takes a source's documents out of what renders it. A table
+/// whose shape this build refuses is rebuilt by the owner's next open,
+/// since it is empty. `_datalib_meta` is kept: it still says who wrote
+/// the file. A store that does not exist has nothing to reset.
 pub async fn reset_store(db_path: &Path) -> Result<()> {
     if !db_path.exists() {
         return Ok(());
@@ -1698,12 +1709,12 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
         // and a query on it inside the transaction would wait forever.
         let tables = user_tables(&pool).await?;
         let mut tx = pool.begin().await.context("begin reset tx")?;
-        for table in tables {
+        for table in tables.iter().filter(|t| *t != datalib_store_meta::TABLE) {
             // Audited: `table` is a name read out of `sqlite_master`.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE \"{table}\"")))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM \"{table}\"")))
                 .execute(&mut *tx)
                 .await
-                .with_context(|| format!("reset: drop {table}"))?;
+                .with_context(|| format!("reset: empty {table}"))?;
         }
         tx.commit().await.context("commit reset tx")?;
         commit_run(&pool, "reset").await.map(|_| ())
@@ -3066,11 +3077,11 @@ mod tests {
         assert_eq!(idx, 1, "idx_widgets_tag should have been created");
     }
 
-    /// A reset drops content, cursors and the run log alike and commits,
-    /// so the rows are still in history and the next open is a first
-    /// open.
+    /// A reset empties content, cursors and the run log alike and
+    /// commits, so the rows are still in history, and the tables stay:
+    /// a reader diffing from before it sees every row deleted.
     #[tokio::test]
-    async fn a_reset_drops_everything_and_keeps_it_in_history() {
+    async fn a_reset_empties_everything_and_keeps_it_in_history() {
         let d = tempdir().unwrap();
         let p = d.path().join("entities.doltlite_db");
         const EDGE: &str =
@@ -3099,14 +3110,21 @@ mod tests {
         }
         assert_eq!(
             count(&pool, "dolt_log").await,
-            commits_before + 2,
-            "the reset and the schema the reopen wrote: the rows are still in history"
+            commits_before + 1,
+            "the reset is one commit, and the reopen finds nothing to change"
         );
-        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~2')")
+        let deleted: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dolt_diff_widgets WHERE diff_type = 'removed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deleted, 1, "the row reads as deleted, not as a table gone");
+        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~1')")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(logged, 1, "and readable there");
+        assert_eq!(logged, 1, "and it is still in history");
         pool.close().await;
     }
 
@@ -3122,8 +3140,8 @@ mod tests {
     /// A column the DDL no longer declares cannot be reached by ADD, so a
     /// raw store refuses the open: the error names the table and the
     /// column, and the file — the column, the row — is exactly as it was.
-    /// A reset drops the table without needing the DDL, and the next open
-    /// creates it afresh.
+    /// A reset empties the table without needing the DDL, and the next
+    /// open, finding nothing to lose, rebuilds it to the new shape.
     #[tokio::test]
     async fn a_removed_column_is_refused_untouched_and_gone_once_reset() {
         let d = tempdir().unwrap();
@@ -3170,7 +3188,7 @@ mod tests {
         reset_store(&p).await.unwrap();
         let pool = open(&p, &[WIDGETS_DDL])
             .await
-            .expect("a reset store opens as a new one");
+            .expect("an emptied table is rebuilt, not refused");
         let cols = table_columns(&pool, "widgets").await.unwrap();
         assert!(
             !cols.iter().any(|c| c.name == "legacy_col"),
@@ -3263,13 +3281,11 @@ mod tests {
             "{err:#}"
         );
 
-        // A new file — or a reset one — has nothing to climb: the DDL
-        // creates it at the top, and the rung never runs against a
-        // table that is not there.
+        // A reset store keeps its version: nothing is left to climb.
         reset_store(&p).await.unwrap();
         let pool = open_migrating(&p, &[V1], LADDER)
             .await
-            .expect("a reset store opens as a new one");
+            .expect("a reset store opens");
         let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
         assert_eq!(meta.schema_version, 1);
         pool.close().await;

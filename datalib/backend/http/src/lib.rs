@@ -185,7 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/requests/{id}/stop", post(request_stop))
         .route("/api/steps/{id}/pause", post(step_pause))
         .route("/api/steps/{id}/resume", post(step_resume))
-        .route("/api/reset", post(reset_steps))
+        .route("/api/clear", post(clear_steps))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -1479,7 +1479,7 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-// --- Intent: requests, pauses, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, pauses, clears (`docs/dev/plans/supervisor.md` §2.9) --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]
@@ -1537,9 +1537,11 @@ struct OpenRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResetRequest {
+struct ClearRequest {
     /// Step ids, each optionally `+blobs`.
     targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
 }
 
 type Refusal = (StatusCode, String);
@@ -1649,17 +1651,19 @@ async fn step_resume(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/reset` — drop what the targets wrote, keeping the history.
-/// Answers once it is done; refused while a sync runs.
-async fn reset_steps(
+/// `POST /api/clear` — empty what the targets wrote, keeping the history,
+/// and sync what reads them so the emptiness reaches the grid. Answers
+/// once the targets are empty; refused while a sync runs.
+async fn clear_steps(
     State(s): State<AppState>,
-    Json(req): Json<ResetRequest>,
+    Json(req): Json<ClearRequest>,
 ) -> Result<StatusCode, Refusal> {
     if req.targets.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "nothing to reset".into()));
+        return Err((StatusCode::BAD_REQUEST, "nothing to clear".into()));
     }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
     s.sync
-        .reset(&req.targets)
+        .clear(&req.targets, &by)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok(StatusCode::NO_CONTENT)

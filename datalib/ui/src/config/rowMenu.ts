@@ -63,8 +63,8 @@ export type MenuAction =
   | "log"
   | "history"
   | "reveal"
-  | "reset"
-  | "reset_blobs"
+  | "clear"
+  | "clear_blobs"
   | "remove";
 
 export type MenuEntry =
@@ -107,16 +107,19 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset (preserve attachments)…" does not apply: a reset drops a
-/// tree's store, and only
-/// a source's steps keep one worth emptying — the index follows its
-/// sources, and an applet writes nothing.
-export function notResettableReason(t: MenuTarget): string | null {
+/// Why "Clear…" does not apply: a clear empties what a source
+/// downloaded, and everything that reads it follows — its documents, the
+/// index — so only a source and its download step offer it.
+export function notClearableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.stopRequestId) return "Busy — stop the sync first";
   if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
-    return "Reset a source; the index follows it";
+    return "Clear a source; the index follows it";
+  }
+  if (t.type === "diff") return "A comparison follows its source; clear that";
+  if (t.kind === "step" && t.func !== "ingest") {
+    return "Clear the download; what it renders follows";
   }
   return null;
 }
@@ -128,14 +131,10 @@ export function notPausableReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset (drop attachments)…" does not apply: only a download keeps
+/// Why "Clear, attachments too…" does not apply: only a download keeps
 /// them.
 export function noAttachmentsReason(t: MenuTarget): string | null {
-  const why = notResettableReason(t);
-  if (why) return why;
-  if (t.type === "diff") return "A comparison downloads nothing";
-  if (t.kind === "step" && t.func !== "ingest") return "Only the download step keeps attachments";
-  return null;
+  return notClearableReason(t);
 }
 
 function firstBlocked(
@@ -249,13 +248,13 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   }
   entries.push({ separator: true });
   entries.push({
-    action: "reset",
-    name: "Reset (preserve attachments)…",
-    disabled: firstBlocked(targets, notResettableReason),
+    action: "clear",
+    name: "Clear…",
+    disabled: firstBlocked(targets, notClearableReason),
   });
   entries.push({
-    action: "reset_blobs",
-    name: "Reset (drop attachments)…",
+    action: "clear_blobs",
+    name: "Clear, attachments too…",
     disabled: firstBlocked(targets, noAttachmentsReason),
   });
   entries.push({

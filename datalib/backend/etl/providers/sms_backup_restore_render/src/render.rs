@@ -102,9 +102,8 @@ pub fn render(
         })
     })?;
 
-    if messages.is_empty() && calls.is_empty() {
-        return Ok(RenderOutcome::default());
-    }
+    // No early return on an empty store: a cleared one still has to
+    // name the conversations it lost, so their documents go.
     let all_chats = build_chats(source_id, &messages, &calls);
 
     // Narrow to the conversations the diff named and the ones the driver
