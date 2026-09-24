@@ -42,6 +42,11 @@ pub struct GarminApi {
     /// before the first run. Move it earlier to backfill.
     #[serde(default)]
     pub since: Option<String>,
+    /// Last calendar day to mirror, `YYYY-MM-DD`. Default: today. A day
+    /// in the past fixes the window, so a mirror of a finished stretch
+    /// stops growing — what a golden test wants.
+    #[serde(default)]
+    pub until: Option<String>,
     /// Days before each metric's cursor to re-fetch every run. Default 7.
     #[serde(default)]
     pub refresh_days: Option<i64>,
@@ -97,6 +102,14 @@ impl GarminConfig {
         if let Some(since) = &api.since {
             if !is_yyyy_mm_dd(since) {
                 anyhow::bail!("garmin: api.since {since:?} is not YYYY-MM-DD");
+            }
+        }
+        if let Some(until) = &api.until {
+            if !is_yyyy_mm_dd(until) {
+                anyhow::bail!("garmin: api.until {until:?} is not YYYY-MM-DD");
+            }
+            if api.since.as_ref().is_some_and(|since| since > until) {
+                anyhow::bail!("garmin: api.until {until:?} is before api.since");
             }
         }
         if api.refresh_days.is_some_and(|d| d < 0) {
@@ -180,6 +193,22 @@ mod tests {
         assert!(api.activity_files());
         assert!(!api.wellness_files());
         assert_eq!(api.refresh_days(), DEFAULT_REFRESH_DAYS);
+    }
+
+    #[test]
+    fn until_must_be_a_date_no_earlier_than_since() {
+        let window = |since: &str, until: &str| {
+            cfg(GarminApi {
+                since: Some(since.into()),
+                until: Some(until.into()),
+                ..Default::default()
+            })
+            .validate()
+        };
+        assert!(window("2025-08-01", "2025-08-31").is_ok());
+        assert!(window("2025-08-01", "2025-08-01").is_ok());
+        assert!(window("2025-08-01", "2025-07-31").is_err());
+        assert!(window("2025-08-01", "31 Aug").is_err());
     }
 
     #[test]

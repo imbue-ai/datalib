@@ -768,6 +768,14 @@ export const CATALOG: CatalogEntry[] = [
           "sync; move it earlier later to backfill.",
       },
       {
+        kind: "date",
+        target: "api.until",
+        label: "Mirror until",
+        help:
+          "The last day to mirror (YYYY-MM-DD). Leave empty to keep up with today; a day in " +
+          "the past fixes the window, so the mirror stops growing.",
+      },
+      {
         kind: "bool",
         target: "api.activity_files",
         label: "Keep each activity's original FIT file",
