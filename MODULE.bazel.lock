@@ -426,7 +426,7 @@
           "REPO_MAPPING:rules_rust+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
-          "FILE:@@//datalib/backend/Cargo.lock 57a102101e3829797d22011dbb4fbb91484c044307a09a7982b6544aee00e949",
+          "FILE:@@//datalib/backend/Cargo.lock 952f12c2ec9c87562fc588b1f637a17b2f24f1f83cf647cc86bb9362c4a2f4b2",
           "FILE:@@//datalib/backend/Cargo.toml 4183b01ad901b21bbead676e5b783939bfcd85bb0c5224d856e76eaa81216577",
           "FILE:@@//datalib/backend/schema/Cargo.toml 94d9eada90b7c3b26d169ac07032c133ca7751f91c24eeabcad7bc875a1f470b",
           "FILE:@@//datalib/backend/etl/macros/Cargo.toml 03c7340aade17e097df9679ee4499ec5ed085388b47716251a91bd43be9d8480",
@@ -503,7 +503,7 @@
           "FILE:@@//datalib/backend/whatsapp-backup/Cargo.toml e3a6d146a23739be1a8aadbe895e53d977c43c87c0ca3e6bc197d99a2f5a64a6",
           "FILE:@@//datalib/backend/etl/providers/whatsapp/Cargo.toml 6e07e50cc950bccf4336c42f413a9f603dbbdd93c724181f7134efe042635c0c",
           "FILE:@@//datalib/backend/etl/providers/whatsapp_render/Cargo.toml be486a4aa6b165e862f5823325749255f5ee68e5016a6e83763b4a43e9433be6",
-          "FILE:@@//datalib/backend/etl/calendar-common/Cargo.toml 80a6061bfd6b1eece19ee1b1df8d41fad8d6e90d48a9e4a2851eca966d68a41f",
+          "FILE:@@//datalib/backend/etl/calendar-common/Cargo.toml 04f9a1fd63bd14b2e64de9f6db7beb581f7f6a9ef08e32d7bf0413a9ef9d8453",
           "FILE:@@//datalib/backend/applets/Cargo.toml d3df592c505919150f20d9e1b98931128f47429ec539241a165d763a7b457795"
         ],
         "generatedRepoSpecs": {

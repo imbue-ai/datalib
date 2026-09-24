@@ -14,7 +14,6 @@ datalib-etl = { path = ".." }
 datalib-etl-render = { path = "../render" }
 datalib-id = { path = "../../id" }
 datalib-schema = { path = "../../schema" }
-datalib-time = { path = "../../time" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 # An event's `TZID` names an IANA zone, and the grid needs the instant
