@@ -79,6 +79,33 @@ way the phone does: newest message for last/display, the spec's
 `last_read_message_id` (else the newest) for the read mark and the read
 receipt, the unseen counters from the mark.
 
+## Names: `wa.db`, beside msgstore
+
+msgstore knows almost nothing about who people are: `lid_display_name`
+names some linked ids, and on the real test phone it was empty, so every
+chat rendered as a phone number or a raw `…@lid`. The names the phone
+shows live in `wa.db`, which WhatsApp backs up as
+`Backups/wa.db.crypt15`, encrypted with the same key. Its `wa_contacts`
+holds `display_name` (the phone's address book), `given_name` /
+`family_name`, and `wa_name` (the name the person set themselves), one
+row per address-book entry, keyed by jid.
+
+The mirror engine mirrors one source per store, so `wa.db` is not
+mirrored: the ingest decrypts it and copies `wa_contacts` into
+`wa_db_contacts`, one row per jid holding all that jid's rows as JSON
+(`schema_raw.rs` says why). A backup without `Backups/wa.db.crypt15`
+leaves the stored contacts as they were, as a missing `Media/` does.
+
+Render names a jid by the first of: its address-book name, its
+`lid_display_name`, the name the person set, its phone number, the raw
+jid — each looked up under the jid and, for a linked id, under the phone
+number `jid_map` gives it.
+
+Profile photos are not in any backup: `wa_contacts` has only their
+timestamps (`photo_ts`, `thumb_ts`), and the images stay in the app's
+private storage. `Media/WhatsApp Profile Photos` holds only photos
+someone saved by hand.
+
 ## `skip_churn`: what moves when nothing happened
 
 Between the two backups above, with no message sent, three tables

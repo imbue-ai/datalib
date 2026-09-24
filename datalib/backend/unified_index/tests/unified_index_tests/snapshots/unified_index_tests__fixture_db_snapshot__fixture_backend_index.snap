@@ -408,9 +408,9 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md",
       "modified_at": "2364-04-11T00:12:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "whatsapp",
-      "title": "+17015550102"
+      "title": "William Riker"
     },
     {
       "bucket_key": "00000000-0000-8470-8240-1b4ee2c9889a",
@@ -552,7 +552,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-84f0-8faa-a404dacb63b6/2364-04.md",
       "modified_at": "2364-04-11T00:16:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "whatsapp",
       "title": "100000000000108@lid"
     },
@@ -696,9 +696,9 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8a99-9206-1d7e42e1b482/2364-04.md",
       "modified_at": "2364-04-11T00:15:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "whatsapp",
-      "title": "+17015550103"
+      "title": "Data"
     },
     {
       "bucket_key": null,
@@ -1272,7 +1272,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8891-ab80-dd17e867538b/2364-04.md",
       "modified_at": "2364-04-11T00:13:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "whatsapp",
       "title": "Bridge Crew"
     },
@@ -1332,9 +1332,9 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8b1c-9241-3a10a9e8b6d0/2364-04.md",
       "modified_at": "2364-04-11T00:17:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "whatsapp",
-      "title": "Worf, Son of Mogh"
+      "title": "Worf"
     },
     {
       "bucket_key": "00000000-0000-8d78-9232-e6b0deeebfb7",
@@ -1585,7 +1585,7 @@ expression: snapshot
       "message": "schema: grid index"
     },
     {
-      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=136 markdowns_read=136 markdowns_removed=1 rows_inserted=583"
+      "message": "datalib-step grid_index (all passes summed): markdowns_loaded=136 markdowns_read=136 markdowns_removed=1 rows_inserted=584"
     }
   ],
   "grid_rows": [
@@ -2493,8 +2493,8 @@ expression: snapshot
       "account": null,
       "author": null,
       "byte_size": 89,
-      "channel": "+17015550102",
-      "conversation_name": "+17015550102",
+      "channel": "William Riker",
+      "conversation_name": "William Riker",
       "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
       "created_at": "2364-04-11T00:08:00+00:00",
       "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
@@ -3123,8 +3123,8 @@ expression: snapshot
       "account": null,
       "author": null,
       "byte_size": 55,
-      "channel": "+17015550103",
-      "conversation_name": "+17015550103",
+      "channel": "Data",
+      "conversation_name": "Data",
       "conversation_uuid": "00000000-0000-8a99-9206-1d7e42e1b482",
       "created_at": "2364-04-11T00:14:00+00:00",
       "entire_chat": "/chat/00000000-0000-87d5-aa33-f523d8017fb7",
@@ -4623,8 +4623,8 @@ expression: snapshot
       "account": null,
       "author": null,
       "byte_size": 50,
-      "channel": "Worf, Son of Mogh",
-      "conversation_name": "Worf, Son of Mogh",
+      "channel": "Worf",
+      "conversation_name": "Worf",
       "conversation_uuid": "00000000-0000-8b1c-9241-3a10a9e8b6d0",
       "created_at": "2364-04-11T00:17:00+00:00",
       "entire_chat": "/chat/00000000-0000-8d70-8098-9100d1daedab",
@@ -6001,7 +6001,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550102",
+      "author": "William Riker",
       "byte_size": 35,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6031,7 +6031,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550103",
+      "author": "Data",
       "byte_size": 38,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6091,7 +6091,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550104",
+      "author": "Geordi La Forge",
       "byte_size": 42,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6181,7 +6181,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550105",
+      "author": "Worf",
       "byte_size": 28,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6301,7 +6301,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550103",
+      "author": "Data",
       "byte_size": 30,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6391,10 +6391,10 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550102",
+      "author": "William Riker",
       "byte_size": 45,
-      "channel": "+17015550102",
-      "conversation_name": "+17015550102",
+      "channel": "William Riker",
+      "conversation_name": "William Riker",
       "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
       "created_at": "2364-04-11T00:08:00+00:00",
       "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
@@ -6421,7 +6421,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550102",
+      "author": "William Riker",
       "byte_size": null,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6481,7 +6481,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550103",
+      "author": "Data",
       "byte_size": null,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6511,7 +6511,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550104",
+      "author": "Geordi La Forge",
       "byte_size": null,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6543,8 +6543,8 @@ expression: snapshot
       "account": null,
       "author": "Me",
       "byte_size": 20,
-      "channel": "+17015550102",
-      "conversation_name": "+17015550102",
+      "channel": "William Riker",
+      "conversation_name": "William Riker",
       "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
       "created_at": "2364-04-11T00:09:00+00:00",
       "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
@@ -6601,7 +6601,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550104",
+      "author": "Geordi La Forge",
       "byte_size": 24,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6631,7 +6631,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550105",
+      "author": "Worf",
       "byte_size": 22,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6661,10 +6661,10 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550102",
+      "author": "William Riker",
       "byte_size": 24,
-      "channel": "+17015550102",
-      "conversation_name": "+17015550102",
+      "channel": "William Riker",
+      "conversation_name": "William Riker",
       "conversation_uuid": "00000000-0000-85d4-ab68-75d0abe7a50d",
       "created_at": "2364-04-11T00:12:00+00:00",
       "entire_chat": "/chat/00000000-0000-841f-8f79-b06ed948a94a",
@@ -6691,7 +6691,7 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550103",
+      "author": "Data",
       "byte_size": 45,
       "channel": "Bridge Crew",
       "conversation_name": "Bridge Crew",
@@ -6721,10 +6721,10 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "+17015550103",
+      "author": "Data",
       "byte_size": 40,
-      "channel": "+17015550103",
-      "conversation_name": "+17015550103",
+      "channel": "Data",
+      "conversation_name": "Data",
       "conversation_uuid": "00000000-0000-8a99-9206-1d7e42e1b482",
       "created_at": "2364-04-11T00:14:00+00:00",
       "entire_chat": "/chat/00000000-0000-87d5-aa33-f523d8017fb7",
@@ -6753,8 +6753,8 @@ expression: snapshot
       "account": null,
       "author": "Me",
       "byte_size": 15,
-      "channel": "+17015550103",
-      "conversation_name": "+17015550103",
+      "channel": "Data",
+      "conversation_name": "Data",
       "conversation_uuid": "00000000-0000-8a99-9206-1d7e42e1b482",
       "created_at": "2364-04-11T00:15:00+00:00",
       "entire_chat": "/chat/00000000-0000-87d5-aa33-f523d8017fb7",
@@ -6811,10 +6811,10 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Worf, Son of Mogh",
+      "author": "Worf",
       "byte_size": 50,
-      "channel": "Worf, Son of Mogh",
-      "conversation_name": "Worf, Son of Mogh",
+      "channel": "Worf",
+      "conversation_name": "Worf",
       "conversation_uuid": "00000000-0000-8b1c-9241-3a10a9e8b6d0",
       "created_at": "2364-04-11T00:17:00+00:00",
       "entire_chat": "/chat/00000000-0000-8d70-8098-9100d1daedab",
@@ -12225,8 +12225,8 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:36a760755fda51e6b9972b3af8362afb5895ab3b2aca6d8a65aa401ac4a5a705",
-      "rows": 147,
+      "members_sha": "sha256:544e42050e99362d27c08f830549629e404a4ed753544c5b8b8218c6d203b8f0",
+      "rows": 148,
       "source": ""
     }
   ],
@@ -12234,6 +12234,6 @@ expression: snapshot
     "documents_count": 131,
     "dolt_log_count": 3,
     "grid_rows_count": 354,
-    "storage_rows_count": 205
+    "storage_rows_count": 206
   }
 }
