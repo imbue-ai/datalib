@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use datalib_dag::supervisor::wake::Listener;
+use datalib_dag::supervisor::announce::{self, Listener};
 use datalib_runs::StorePart;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -235,7 +235,7 @@ impl Seen {
     async fn now(root: &Path) -> Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
-            index_head: index_head(root).await,
+            index_head: index_head(root).await.flatten(),
             log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
@@ -380,12 +380,15 @@ fn merge_chain(a: Option<u32>, b: Option<u32>) -> Option<u32> {
 /// handle held across a rebuild would point at a file that is gone. A
 /// read-only open beside the live `grid_index` writer is measured safe
 /// by `doltlite_two_process_test`.
-async fn index_head(root: &Path) -> Option<String> {
+/// The index's head, or `None` when it could not be read — a writer
+/// holding the file, say — which is not the same as its having none, and
+/// must not read as the head having moved.
+async fn index_head(root: &Path) -> Option<Option<String>> {
     let path = datalib_core::layout::grid_index_db(root);
     let pool = datalib_pin::open_reader(&path).await.ok()?;
-    let head = datalib_pin::head(&pool).await.ok().flatten();
+    let head = datalib_pin::head(&pool).await;
     pool.close().await;
-    head.map(|pin| pin.commit().to_string())
+    Some(head.ok()?.map(|pin| pin.commit().to_string()))
 }
 
 /// The frames one debounced burst of file moves becomes.
@@ -418,7 +421,9 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 out.insert(RootEvent::FrontendChanged);
             }
             Moved::GridIndex => {
-                let head = index_head(root).await;
+                let Some(head) = index_head(root).await else {
+                    continue;
+                };
                 if head != seen.index_head {
                     seen.index_head = head;
                     out.insert(RootEvent::IndexChanged);
@@ -513,6 +518,11 @@ fn spawn_watches(
             }
             for path in &ev.paths {
                 if let Some(moved) = classify(&watch_root, path) {
+                    // The loop re-reads the config when told; an editor
+                    // closes the file, which FSEvents does report.
+                    if moved == Moved::Config {
+                        announce::announce(&announce::listeners_dir(&watch_root), "config changed");
+                    }
                     let _ = raw_tx.send(moved);
                 }
             }
@@ -610,9 +620,9 @@ fn spawn_watches(
 }
 
 /// The loop's record is not a file whose writes FSEvents reports: the
-/// loop holds its connection open, and FSEvents does not announce a write
-/// to a file held open. `wake::Listener` watches it with kqueue (inotify
-/// on Linux) instead, and `PRAGMA data_version` on a connection of our own
+/// loop holds its connection open, and FSEvents does not report a write to
+/// a file held open. Its writers announce each commit instead
+/// (`announce.rs`), and `PRAGMA data_version` on a connection of our own
 /// says whether anything committed moved.
 async fn watch_record(
     root: PathBuf,
@@ -628,7 +638,7 @@ async fn watch_record(
             return;
         }
     };
-    let mut listener = Listener::new(&store, "watch", &[]).await;
+    let mut listener = Listener::new(&store, "watch").await;
     let _ = ready.send(());
     let mut seen = None;
     loop {
@@ -866,6 +876,8 @@ mod tests {
         assert_eq!(classify(root, &root.join("config.tmp")), None);
     }
 
+    const DEADLINE_JOIN: Duration = Duration::from_secs(20);
+
     /// No window and no throttle: one frame per change, in the order the
     /// changes happened, which is what lets [`upto_barrier`] prove a
     /// negative without waiting.
@@ -1006,9 +1018,13 @@ mod tests {
         });
         // Dropping the writer joins its thread, so every write has landed
         // after it. Off the runtime: the watch reads the run store on it.
-        tokio::task::spawn_blocking(move || drop(server))
-            .await
-            .unwrap();
+        tokio::time::timeout(
+            DEADLINE_JOIN,
+            tokio::task::spawn_blocking(move || drop(server)),
+        )
+        .await
+        .expect("the run store's writer did not finish its last flush")
+        .unwrap();
         let before = upto_barrier(td.path(), &mut rx).await;
         assert!(
             before.contains(&RootEvent::TableChanged { table: Table::Log }),

@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use datalib_dag::config::load_graded;
 use datalib_dag::scheduler::RetryPolicy;
+use datalib_dag::supervisor::announce::{self, Listener};
 use datalib_dag::supervisor::record::{Record, StepRecord};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::supervisor::wake::Listener;
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::net::unix::pipe;
 use tokio::sync::{broadcast, watch};
@@ -136,7 +136,7 @@ impl Harness {
         std::fs::create_dir_all(&control).unwrap();
         let config = root.path().join("config.toml");
         let store = Store::open(root.path()).await.unwrap();
-        let listener = Listener::new(&store, "harness", &[]).await;
+        let listener = Listener::new(&store, "harness").await;
         let (tx, events) = broadcast::channel(4096);
         let (stop, stop_rx) = watch::channel(false);
         let mut h = Harness {
@@ -183,6 +183,9 @@ impl Harness {
         let tmp = self.config.with_extension("tmp");
         std::fs::write(&tmp, text).unwrap();
         std::fs::rename(&tmp, &self.config).unwrap();
+        // What the server's watch of `config.toml` does.
+        let root = self.config.parent().expect("a config in the root");
+        announce::announce(&announce::listeners_dir(root), "config changed");
     }
 
     fn ctl(&self, id: &str) -> Ctl {
@@ -434,9 +437,9 @@ impl Harness {
         let _ = self.stop.send(true);
         let _ = tokio::time::timeout(DEADLINE, self.host).await;
         assert_eq!(
-            datalib_dag::supervisor::wake::missed_wakes(),
+            announce::missed_announcements(),
             0,
-            "a commit reached some listener only through its backstop"
+            "a commit reached some listener only through its backstop: nobody announced it"
         );
     }
 }
@@ -451,7 +454,7 @@ async fn host(
     options: Options,
 ) {
     let store = Store::open(&root).await.unwrap();
-    let mut listener = Listener::new(&store, "harness host", &[]).await;
+    let mut listener = Listener::new(&store, "harness host").await;
     while !*stop.borrow() {
         let open = store.open_requests().await.unwrap();
         if open.iter().any(|r| r.stop_requested_by.is_none()) {

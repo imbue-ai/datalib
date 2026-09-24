@@ -32,19 +32,24 @@ impl Harness {
     }
 
     /// Have `consumer` say what the loop started it against, and require
-    /// it to be what the loop has recorded for `producer` now.
+    /// the loop to record that version for `producer`. The loop saves its
+    /// record a moment after starting the consumer, so this waits for it.
     async fn reads_current(&mut self, consumer: &str, producer: &str) -> String {
         let got = self.done(consumer, "reads").await;
-        let want = self
-            .version(producer)
-            .await
-            .expect("the producer has a version");
-        assert_eq!(
-            got,
-            format!("reads {producer}={want}"),
-            "{consumer} was handed another version"
-        );
-        want
+        let handed = got
+            .strip_prefix(&format!("reads {producer}="))
+            .unwrap_or_else(|| panic!("{consumer} said {got:?}"))
+            .to_string();
+        let producer = producer.to_string();
+        let want = handed.clone();
+        self.until(
+            &format!("the record to say {producer} is at {handed}"),
+            move |rec, _| {
+                (rec.steps.get(&producer)?.version.as_deref() == Some(want.as_str())).then_some(())
+            },
+        )
+        .await;
+        handed
     }
 
     async fn last_status(&self, step: &str) -> String {

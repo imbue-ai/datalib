@@ -93,7 +93,8 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
-    path: PathBuf,
+    /// Where this store's listeners are, told after every commit.
+    listeners: PathBuf,
 }
 
 impl Store {
@@ -113,7 +114,7 @@ impl Store {
             .with_context(|| format!("open {}", path.display()))?;
         let store = Store {
             pool,
-            path: path.clone(),
+            listeners: super::announce::listeners_dir(data_root),
         };
         store.refuse_if_newer(&path).await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
@@ -172,9 +173,20 @@ impl Store {
         &self.pool
     }
 
-    /// The file, which a listener watches for commits (`wake.rs`).
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Where a listener for this store's commits makes its FIFO.
+    pub fn listeners(&self) -> &Path {
+        &self.listeners
+    }
+
+    /// Tell every listener what was just committed (`announce.rs`).
+    pub(super) fn announce(&self, what: &str) {
+        super::announce::announce(&self.listeners, what);
+    }
+
+    /// A write no listener is told of, as a `sqlite3` shell makes one.
+    #[cfg(test)]
+    pub async fn write_unannounced(&self, sql: &'static str) {
+        sqlx::query(sql).execute(&self.pool).await.unwrap();
     }
 
     pub async fn close(self) {
@@ -203,6 +215,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request opened {id}"));
         Ok(id)
     }
 
@@ -219,6 +232,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("stop asked {id}"));
         Ok(())
     }
 
@@ -240,6 +254,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request closed {id} {}", outcome.as_str()));
         Ok(())
     }
 
@@ -290,6 +305,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("paused {step}"));
         Ok(())
     }
 
@@ -298,6 +314,7 @@ impl Store {
             .bind(step)
             .execute(&self.pool)
             .await?;
+        self.announce(&format!("resumed {step}"));
         Ok(())
     }
 

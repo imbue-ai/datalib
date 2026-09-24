@@ -332,18 +332,22 @@ impl Walk {
             return;
         }
         self.h.expect(C, "started").await;
-        let recorded = self.h.record(A).await.version.expect("a has a version");
         let got = self.h.done(C, "reads").await;
-        assert_eq!(
-            got,
-            format!("reads {A}={recorded}"),
-            "{ctx}: c handed another version"
-        );
+        let handed = got
+            .strip_prefix(&format!("reads {A}="))
+            .unwrap_or_else(|| panic!("{ctx}: c said {got:?}"))
+            .to_string();
         let a = self.a_version.clone().unwrap();
-        assert!(
-            recorded.ends_with(&a),
-            "{ctx}: the loop recorded {recorded} for {a}"
-        );
+        assert!(handed.ends_with(&a), "{ctx}: c was handed {handed} for {a}");
+        let want = handed.clone();
+        self.h
+            .until(
+                &format!("{ctx}: the record to say a is at {handed}"),
+                move |rec, _| {
+                    (rec.steps.get(A)?.version.as_deref() == Some(want.as_str())).then_some(())
+                },
+            )
+            .await;
         self.h.done(C, "ok").await;
         self.no_invocation_of(C, ctx).await;
         self.status_is(C, "succeeded", ctx).await;

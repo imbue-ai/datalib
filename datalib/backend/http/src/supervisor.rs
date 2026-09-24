@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use datalib_dag::config::ConfigCheck;
 use datalib_dag::scheduler::ResetTarget;
+use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::supervisor::wake::Listener;
 use datalib_dag::{EventSink, Runner};
 use tokio::sync::{oneshot, watch, Notify, OnceCell};
 
@@ -150,7 +150,7 @@ async fn host(cfg: &HostConfig) {
             return;
         }
     };
-    let mut listener = Listener::new(&store, "the idle host", &[]).await;
+    let mut listener = Listener::new(&store, "the idle host").await;
     let Some(_lock) = take_the_lock(cfg, &store, &mut listener, &mut stop).await else {
         return;
     };
@@ -224,7 +224,7 @@ async fn take_the_lock(
     store: &Store,
     listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
-) -> Option<datalib_dag::lock::FileLock> {
+) -> Option<datalib_dag::lock::RunnerLock> {
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(&cfg.control.root) {

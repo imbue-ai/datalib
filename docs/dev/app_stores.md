@@ -30,6 +30,9 @@
                                                   started (plain SQLite; anyone writes
                                                   intent, only the loop's holder writes
                                                   the record)
+<data_root>/system/supervisor-listeners/         one FIFO per process listening to
+                                                  supervisor.sqlite; whoever commits
+                                                  writes a line to each (`announce.rs`)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
 ```
