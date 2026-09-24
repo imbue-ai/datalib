@@ -62,6 +62,15 @@ export const STATUS_GLYPHS: Record<string, string> = {
     "M7 11v2h10v-2H7zm5-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",
 };
 
+/// Icons for the buttons beside a filesystem path.
+export const PATH_GLYPHS = {
+  // file/folder_open — show where it lives.
+  reveal:
+    "M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z",
+  // content/content_copy
+  copy: "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z",
+} as const;
+
 /// Build a `<svg>` carrying one path, sized for a table cell.
 export function glyphSvg(path: string, label: string, size = 16): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
