@@ -47,6 +47,17 @@
 .m2-msg { margin: 12px 0 0; font-size: 13px; }
 .m2-msg.bad { color: var(--datalib-log-error); }
 .m2-msg.good { color: var(--datalib-muted); }
+/* One line beside the header's buttons, whatever its length; the hover
+   has the whole of it. */
+.m2-head-msg {
+  margin: 0;
+  align-self: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .m2-invalid {
   display: flex;
   flex-direction: column;
