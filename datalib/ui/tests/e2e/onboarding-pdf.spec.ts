@@ -183,7 +183,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // run: no status history, nothing on disk. This is the state the
     // sync below has to move. The group reads off its steps, so it
     // says the same.
-    await expect(groupRow(page, "pdfs")).toContainText("PDFs");
+    await expect(groupRow(page, "pdfs").locator("img.tg-brand")).toHaveAttribute("title", "PDFs");
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();
     await expandGroup(page, "pdfs");

@@ -1,4 +1,10 @@
 declare module "*.css";
+// Vite's `import.meta.glob`, as `config/icons.ts` calls it: eager, one
+// export per file. The full signature is in `vite/client`, which would
+// also declare every asset module this file already does.
+interface ImportMeta {
+  glob<T>(pattern: string, options: { eager: true; import: "default" }): Record<string, T>;
+}
 declare module "*.css?inline" {
   const text: string;
   export default text;
