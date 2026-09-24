@@ -19,6 +19,9 @@ pub const DATA_TABLES: &[&str] = &[
     "messages",
     "replies_pages",
     "slack_attachments",
+    "channel_read_states",
+    "bookmarks",
+    "saved_items",
 ];
 
 /// `workspaces` — one row per Slack team (workspace).
@@ -230,6 +233,66 @@ pub struct SlackAttachmentRow {
     pub blake3: Option<String>,
 }
 
+/// `channel_read_states` — how far the account has read in each
+/// mirrored conversation, one row per conversation, from `client.counts`.
+///
+/// Every field but `id` is volatile ([`READ_STATE_VOLATILE_PATHS`]):
+/// reading a channel is not a change to it, so the content payload is
+/// just `{"id": …}` and the state lives in
+/// `channel_read_states_bookkeeping.volatile_payload`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "channel_read_states")]
+pub struct ChannelReadStateRow {
+    pub id_and_payload: WirePayload,
+}
+
+/// The fields of a `client.counts` entry, as the live API returned them
+/// on 2026-09-24. `last_read` and `latest` are message `ts`es; `updated`
+/// and `history_invalid` are `ts`-shaped stamps Slack keeps for its own
+/// cache.
+pub const READ_STATE_VOLATILE_PATHS: &[dr::VolatilePath] = &[
+    &["last_read"],
+    &["latest"],
+    &["updated"],
+    &["history_invalid"],
+    &["mention_count"],
+    &["has_unreads"],
+];
+
+/// `bookmarks` — the links and pinned messages in a conversation's
+/// header bar, from `bookmarks.list`. A bookmark inside a folder names
+/// the folder in `parent_id`; the folder itself is not listed (its label
+/// is a tab in the channel's `properties.tabs`).
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "bookmarks")]
+pub struct BookmarkRow {
+    pub id_and_payload: WirePayload,
+    pub channel_id: String,
+}
+
+pub const BOOKMARKS_BY_CHANNEL_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS bookmarks_by_channel ON bookmarks(channel_id)";
+
+/// `saved_items` — the account's "Saved for later" list, from
+/// `saved.list`: in progress, completed and archived alike. A saved
+/// message is a pointer (`item_id` is its conversation, `ts` the
+/// message), not a copy of it.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "saved_items")]
+pub struct SavedItemRow {
+    pub id_and_payload: WirePayload,
+    pub item_type: String,
+    pub item_id: String,
+    pub ts: Option<String>,
+}
+
+pub const SAVED_ITEMS_BY_ITEM_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS saved_items_by_item ON saved_items(item_id)";
+
+pub fn saved_item_key(item_type: &str, item_id: &str, ts: Option<&str>) -> String {
+    format!("{item_type}#{item_id}#{}", ts.unwrap_or(""))
+}
+
 /// The raw store's keys: the upstream's own, joined with `#`. A
 /// message is `{team}#{channel}#{ts}`, a thread the same over its root's
 /// `ts`, so a channel's messages sort by time and a sync's new ones
@@ -264,6 +327,11 @@ pub fn full_ddl() -> Vec<String> {
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
         REPLIES_PAGES_DDL.to_string(),
+        ChannelReadStateRow::ddl(),
+        BookmarkRow::ddl(),
+        BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),
+        SavedItemRow::ddl(),
+        SAVED_ITEMS_BY_ITEM_INDEX_DDL.to_string(),
     ];
     out.extend(SlackAttachmentRow::all_ddl());
     for table in DATA_TABLES {

@@ -9,6 +9,12 @@ pub const M_CHANNELS: &str = "conversations.list";
 pub const M_USERS: &str = "users.list";
 pub const M_HISTORY: &str = "conversations.history";
 pub const M_REPLIES: &str = "conversations.replies";
+/// Not in Slack's published API: the web client's own call, which a
+/// browser-session token may make. One call answers every conversation.
+pub const M_COUNTS: &str = "client.counts";
+pub const M_BOOKMARKS: &str = "bookmarks.list";
+/// Also the web client's own: "Saved for later".
+pub const M_SAVED: &str = "saved.list";
 
 pub fn items_in_response(
     method: &str,
