@@ -126,6 +126,7 @@ filegroup(
         "//datalib/backend/etl/providers/facebook:tng_fixture",
         "//datalib/backend/etl/providers/claude_code:tng_fixture",
         "//datalib/backend/etl/providers/codex:tng_fixture",
+        "//datalib/backend/etl/providers/calendar:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -245,6 +246,8 @@ genrule(
             "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
             # Codex: a `~/.codex` home (arg 28, appended likewise).
             "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
+            # Calendar: two `.ics` calendars (arg 29, appended likewise).
+            "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         # It lives under the `unified_index/` tree the index steps own
@@ -324,6 +327,8 @@ py_test(
         "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
         # Codex (arg 28, appended likewise).
         "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
+        # Calendar (arg 29, appended likewise).
+        "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
     ],
     data = [
         "run_sync_pipeline.py",
@@ -389,6 +394,8 @@ py_test(
         "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
         # Codex (arg 28, appended likewise).
         "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
+        # Calendar (arg 29, appended likewise).
+        "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
     ],
     data = [
         "run_sync_pipeline.py",

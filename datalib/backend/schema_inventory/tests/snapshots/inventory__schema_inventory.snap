@@ -247,6 +247,76 @@ users_bookkeeping
     volatile_payload
     tz_offset
 
+== calendar/raw ==
+accounts
+    id
+    method
+    server_url
+    principal_href
+    login
+accounts_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+calendars
+    id
+    account_id
+    href
+    display_name
+    description
+    color
+    time_zone
+    sync_token
+calendars_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+google_events
+    id
+    payload
+    calendar_id
+    event_id
+    recurring_event_id
+    status
+google_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+ics_objects
+    id
+    payload
+    calendar_id
+    uid
+    href
+    etag
+ics_objects_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+ingested_files
+    scope
+    rel_path
+    blake3
+    size_bytes
+    last_finished_at_utc
+    tz_offset
+
 == contacts/raw ==
 accounts
     id

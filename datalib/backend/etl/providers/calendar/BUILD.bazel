@@ -1,0 +1,59 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# TNG calendars as `.ics` files: the `ics` method's parse tests and
+# //tests/fixtures:ingested_tng, which renders them into the grid.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/calendar_tng/**/*.ics"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_calendar",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_calendar",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/calendar_config:datalib_etl_calendar_config",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "calendar_unittests",
+    size = "small",
+    crate = ":datalib_etl_calendar",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "calendar_tests",
+    srcs = glob(["tests/calendar_tests/*.rs"]),
+    crate_root = "tests/calendar_tests/main.rs",
+    edition = "2021",
+    env = {"RUST_TEST_THREADS": "1"},
+    deps = [
+        ":datalib_etl_calendar",
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

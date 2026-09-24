@@ -75,6 +75,8 @@ impl HttpMethod {
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum HttpService {
+    /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
+    Caldav,
     /// Contacts over CardDAV. Named for the protocol because that is
     /// what latchkey registers.
     Carddav,
@@ -88,6 +90,8 @@ pub enum HttpService {
     Gitlab,
     /// The Gmail API, one of the `email` source's three download modes.
     Gmail,
+    /// The Google Calendar API, one of the `calendar` source's modes.
+    GoogleCalendar,
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
     Linkedin,

@@ -259,6 +259,12 @@ pub fn plan(
             datalib_etl_beeper,
             datalib_etl_beeper_render
         ),
+        SourceType::Calendar => arm!(
+            datalib_etl_calendar_config::CalendarConfig,
+            datalib_etl_calendar_config::CalendarRenderConfig,
+            datalib_etl_calendar,
+            datalib_etl_calendar_render
+        ),
         SourceType::Contacts => arm!(
             datalib_etl_contacts_config::ContactsConfig,
             datalib_etl_contacts_config::ContactsRenderConfig,

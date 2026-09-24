@@ -104,6 +104,45 @@ no credentials. Lightly used — expect rough edges. It never notices a
 deletion, and `always_clear_before_ingest` is the wrong fix here (the
 provider's `INGEST.md` says why).
 
+## Calendar
+
+`type = "calendar"` — Google Calendar through Google's API (`google`),
+Fastmail over CalDAV (`fastmail`), any other CalDAV server such as
+iCloud or Nextcloud (`caldav`), **or** a folder of `.ics` files
+(`ics`). Mirrors your events.
+
+Every event becomes a page and a row in the grid, dated by when it
+happens. A recurring event is one page that says how it repeats, which
+dates were cancelled, and which were moved or edited; each moved or
+edited date gets a page of its own, linked both ways with the series.
+The dates a series simply repeats on are not written out: there can be
+infinitely many of them, and the rule on the series page is what they
+are.
+
+- **Google.** Built into latchkey; one command opens a browser, you
+  sign in and approve every scope it asks for:
+
+  ```sh
+  latchkey auth browser google-calendar
+  ```
+
+- **Fastmail.** Built into latchkey as `fastmail-dav`, which takes an
+  app password (Settings → Privacy & Security → Integrations → App
+  passwords, with calendar access):
+
+  ```sh
+  latchkey auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"
+  ```
+
+- **Another CalDAV server.** Put the server in `caldav.server_url`, and
+  register a latchkey service for its host that holds the login.
+- **`.ics` files.** Point `ics.path` at a folder of them — Google
+  Takeout's `Calendar/` is one. No credentials.
+
+Each of the first three takes a `calendars` list of names to mirror;
+leave it out for all of them. Adding a calendar to the list later
+downloads it whole.
+
 ## ChatGPT
 
 `type = "chatgpt"` — web API through latchkey (`api`). Mirrors your

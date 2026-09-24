@@ -33,6 +33,9 @@ pub enum Provider {
     /// `apple_photos`: "messages" alone names nothing.
     AppleMessages,
     Beeper,
+    /// Calendar events: Google Calendar, CalDAV (Fastmail, iCloud, …)
+    /// and `.ics` files, one tag for all of them.
+    Calendar,
     Chatgpt,
     /// Both `claude_api` and `claude_export`: one raw store, one tag.
     Claude,

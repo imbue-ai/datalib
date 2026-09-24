@@ -94,6 +94,10 @@ Args (positional):
     28: codex_tng     A `~/.codex` home: two threads and a sub-agent
                       thread. File-backed; the ingest step walks its
                       `sessions/` and `archived_sessions/` directly.
+    29: calendar_tng  Two calendars as `.ics` files. File-backed; the
+                      `ics` method reads them, and renders a document
+                      per event, per recurring series and per changed
+                      occurrence.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -180,6 +184,7 @@ def main() -> int:
     facebook_fx = Path(sys.argv[26]).resolve()
     claude_code_fx = Path(sys.argv[27]).resolve()
     codex_fx = Path(sys.argv[28]).resolve()
+    calendar_fx = Path(sys.argv[29]).resolve()
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -318,6 +323,9 @@ def main() -> int:
         "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
         # The Codex home, as Codex lays it out.
         "codex": ("codex", codex_fx, codex_fx),
+        # Two calendars as `.ics` exports: a series with a moved and a
+        # cancelled occurrence, all-day and floating events.
+        "tng_calendar": ("calendar", calendar_fx, calendar_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -805,6 +813,8 @@ def _source_config(
         pass
     elif type_str in ("claude_code", "codex"):
         source["sessions"] = {"path": str(input_path)}
+    elif type_str == "calendar":
+        source["ics"] = {"path": str(input_path)}
     elif type_str == "airvisual":
         # One device per folder; serial and name come from each folder's
         # latest_config_measurements.json.

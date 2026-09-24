@@ -2,7 +2,7 @@
 // the same files by path, so a mark added here shows up there too.
 //
 // Brand marks are Simple Icons (CC0) in the brand's colour. The generic
-// glyphs — apple_photos, contacts, fsindex, media, pdf, perseus — are
+// glyphs — apple_photos, calendar, contacts, fsindex, media, pdf, perseus — are
 // Material Design Icons (Apache-2.0) in a mid grey that reads on both
 // themes: Apple publishes no vector app icons, and the rest are not
 // products.
@@ -14,6 +14,7 @@ import appleMessagesIconUrl from "@/assets/apple_messages.svg";
 import applePhotosIconUrl from "@/assets/apple_photos.svg";
 // PNG: Beeper publishes no vector mark. This is beeper.com's own favicon.
 import beeperIconUrl from "@/assets/beeper.png";
+import calendarIconUrl from "@/assets/calendar.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import claudeIconUrl from "@/assets/claude.svg";
 // A terminal glyph in Claude's colour, so a list that shows both the
@@ -56,6 +57,7 @@ const ICONS: Record<string, string> = {
   apple_messages: appleMessagesIconUrl,
   apple_photos: applePhotosIconUrl,
   beeper: beeperIconUrl,
+  calendar: calendarIconUrl,
   chatgpt: chatgptIconUrl,
   claude: claudeIconUrl,
   claude_code: claudeCodeIconUrl,

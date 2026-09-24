@@ -109,6 +109,10 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             datalib_etl_claude::ingest::schema_raw::full_ddl(),
         ),
         (
+            "calendar/raw",
+            datalib_etl_calendar::ingest::schema_raw::full_ddl(),
+        ),
+        (
             "contacts/raw",
             datalib_etl_contacts::ingest::schema_raw::full_ddl(),
         ),
