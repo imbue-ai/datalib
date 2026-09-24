@@ -14,6 +14,7 @@ import { changed, subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
+import { PATH_GLYPHS } from "@/config/glyphs";
 
 const { fetchPipelineStorage } = useApi();
 
@@ -119,8 +120,6 @@ async function reveal() {
   if (storage.value) await revealInFileManager(storage.value.root.abs);
 }
 
-// In a browser the file manager is out of reach; the path is what
-// someone pastes into a terminal.
 async function copyPath() {
   if (!storage.value) return;
   const ok = await copyToClipboard(storage.value.root.abs);
@@ -147,7 +146,31 @@ onBeforeUnmount(() => unsubscribe?.());
 <template>
   <div class="root-bar" data-testid="root-storage">
     <span class="root-bar-label">Data root</span>
-    <code class="root-bar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
+    <span class="root-bar-where">
+      <code class="root-bar-path" :title="storage?.root.abs ?? ''">{{ storage?.root.abs }}</code>
+      <button
+        v-if="canReveal && storage"
+        class="root-bar-icon"
+        :title="`${revealLabel} — the data root itself`"
+        :aria-label="revealLabel"
+        @click="reveal"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path :d="PATH_GLYPHS.reveal" fill="currentColor" />
+        </svg>
+      </button>
+      <button
+        v-if="storage"
+        class="root-bar-icon"
+        title="Copy the data root's path"
+        aria-label="Copy path"
+        @click="copyPath"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path :d="PATH_GLYPHS.copy" fill="currentColor" />
+        </svg>
+      </button>
+    </span>
     <span class="root-bar-spark" ref="sparkHost" :title="title"></span>
     <span class="root-bar-size" :title="title">
       <b>{{ storage?.measured_at_utc ? formatBytes(storage.root.bytes) : "—" }}</b>
@@ -155,22 +178,6 @@ onBeforeUnmount(() => unsubscribe?.());
         {{ delta > 0 ? "+" : "−" }}{{ formatBytes(Math.abs(delta)) }}
       </span>
     </span>
-    <button
-      v-if="canReveal && storage"
-      class="root-bar-btn"
-      :title="`${revealLabel} — the data root itself`"
-      @click="reveal"
-    >
-      {{ revealLabel }}
-    </button>
-    <button
-      v-else-if="storage"
-      class="root-bar-btn"
-      title="Copy the data root's path"
-      @click="copyPath"
-    >
-      Copy path
-    </button>
   </div>
 </template>
 
@@ -188,9 +195,17 @@ onBeforeUnmount(() => unsubscribe?.());
   flex: 0 0 auto;
   font-weight: 600;
 }
-/* The path yields first when the window narrows — the number and the
-   plot are the point of the line. */
+/* The path and its buttons, kept together; the path yields first when
+   the window narrows — the number and the plot are the point of the line. */
+.root-bar-where {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 .root-bar-path {
+  margin-right: 4px;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -219,18 +234,23 @@ onBeforeUnmount(() => unsubscribe?.());
 .root-bar-delta {
   color: var(--datalib-accent);
 }
-.root-bar-btn {
-  padding: 2px 9px;
-  border: 1px solid var(--datalib-border);
+.root-bar-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 2px;
+  border: none;
   border-radius: 4px;
-  background: var(--datalib-card-bg);
+  background: none;
   color: inherit;
-  font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
-.root-bar-btn:hover {
+.root-bar-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.root-bar-icon:hover {
   background: var(--datalib-hover);
+  color: var(--datalib-fg);
 }
 </style>
 

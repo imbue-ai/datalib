@@ -68,14 +68,14 @@ pub struct ChildStatus {
 }
 
 /// The status a group row shows, and which child it is read from.
-/// Running if any child is running; paused if any child is; failed if
-/// any child failed; stopped if any child was; otherwise the last step
-/// in pipeline order
+/// Running if any child is running; paused if any child is; queued if
+/// any child is; failed if any child failed; stopped if any child was;
+/// otherwise the last step in pipeline order
 /// — the one whose state says how far the group's data got. A group
 /// with only applets reads its last applet. `children` must already be
 /// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "paused", "failed", "stopped"] {
+    for key in ["running", "paused", "queued", "failed", "stopped"] {
         if let Some(child) = children.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
@@ -294,6 +294,20 @@ mod tests {
         .unwrap();
         assert_eq!(got.0.key, "queued");
         assert_eq!(got.1, "s/render_markdown");
+    }
+
+    /// A source added while another source's sync runs: its ingest waits
+    /// for that sync to end and its render has never run. The row said
+    /// "Never run" beside a Stop button, with nothing to say why.
+    #[test]
+    fn group_status_is_queued_while_an_earlier_step_waits_to_run() {
+        let got = group_status(&[
+            child("s/ingest", "queued", Step, None),
+            child("s/render_markdown", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "queued");
+        assert_eq!(got.1, "s/ingest");
     }
 
     #[test]
