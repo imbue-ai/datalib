@@ -33,15 +33,8 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
-import {
-  fetchLog,
-  fetchProcesses,
-  fetchRuns,
-  healthSnapshot,
-  type ProcessInfo,
-  type RunInfo,
-  type RunLogLine,
-} from "@/api";
+import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import {
   fieldsWithoutSource,
   SOURCE_DEFAULT_REF,
@@ -52,6 +45,8 @@ import {
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
 import { compareStamps, formatDateTime, formatRelative } from "@/config/timeFormat";
+
+const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
 const props = defineProps<{
   /// The run the panel opens on, or `*` for every run.

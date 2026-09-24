@@ -6,8 +6,11 @@
 // before it the default `from`, which is "what the last sync changed".
 import { computed, onMounted, ref } from "vue";
 
-import { fetchTreeHistory, type HistoryCommit } from "@/api";
+import { type HistoryCommit } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { slugify, suggestId } from "@/config/sourceSteps";
+
+const { fetchTreeHistory } = useApi();
 
 const props = defineProps<{
   source: { id: string; name: string };

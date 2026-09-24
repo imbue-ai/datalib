@@ -6,6 +6,7 @@ import {
   navigateEvent,
   nowIso,
   page,
+  stampRequest,
   track,
 } from "../src/telemetry";
 
@@ -144,5 +145,24 @@ describe("isSameOrigin", () => {
     expect(isSameOrigin(`${origin}/api/health`, origin)).toBe(true);
     expect(isSameOrigin("https://example.com/x", origin)).toBe(false);
     expect(isSameOrigin("http://127.0.0.1:9999/api/health", origin)).toBe(false);
+  });
+});
+
+describe("stampRequest", () => {
+  it("names the card a request is for, beside the page", () => {
+    const h = stampRequest(new Headers(), undefined, {
+      id: "0192f6a0-0000-7000-8000-000000000000",
+      type: "gridView",
+    });
+    expect(h.get("X-Datalib-Page")).toBe(page.process_id);
+    expect(h.get("X-Datalib-Card")).toBe("0192f6a0-0000-7000-8000-000000000000");
+    expect(h.get("X-Datalib-Card-Type")).toBe("gridView");
+    expect(h.get("X-Datalib-Cause")).toBeNull();
+  });
+
+  it("says nothing about a card when no card asked", () => {
+    const h = stampRequest(new Headers(), 3, null);
+    expect(h.get("X-Datalib-Card")).toBeNull();
+    expect(h.get("X-Datalib-Cause")).toBe("3");
   });
 });

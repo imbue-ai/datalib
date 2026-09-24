@@ -441,6 +441,16 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
+    // The specs drive the columns layout (`.miller-col-*`, a URL of
+    // several columns); the app opens on tabs. A spec about another
+    // layout picks it with an init script (tabs-rename.spec.ts).
+    storageState: {
+      cookies: [],
+      origins: SERVERS.map((s) => ({
+        origin: s.url,
+        localStorage: [{ name: "datalib-layout", value: "columns" }],
+      })),
+    },
     headless: true,
     trace: "retain-on-failure",
     extraHTTPHeaders: { authorization: `Bearer ${API_TOKEN}` },

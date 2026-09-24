@@ -45,16 +45,8 @@ import {
   type FieldValues,
   type SourceSteps,
 } from "@/config/sourceSteps";
-import {
-  latchkeyService,
-  probeSource,
-  startLatchkeyConnect,
-  latchkeyConnectStatus,
-  type ProbeItem,
-  type ProbeItemKind,
-  type ProbeReport,
-  type StoredAccount,
-} from "@/api";
+import { type ProbeItem, type ProbeItemKind, type ProbeReport, type StoredAccount } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { iconUrl } from "@/config/icons";
 import { ingestReach } from "@/config/ingestMethods";
 import { isDesktopApp, pickPath } from "@/desktop";
@@ -68,6 +60,8 @@ import {
 } from "@/config/byteSize";
 import ProbeItemPicker from "@/components/ProbeItemPicker.vue";
 import { STATUS_GLYPHS } from "@/config/glyphs";
+
+const { latchkeyService, probeSource, startLatchkeyConnect, latchkeyConnectStatus } = useApi();
 
 const props = defineProps<{
   /// Group ids already in the config, plus the id of every step outside

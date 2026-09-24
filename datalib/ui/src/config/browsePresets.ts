@@ -110,6 +110,12 @@ const DIFF_COLUMNS: BrowseColumn[] = [
   "snippet",
 ];
 
+/// The name a Browse card opens with: "Slack documents", or for a diff,
+/// whose browse is what moved, "<name> changes".
+export function browseName(sourceName: string, type: string | null = null): string {
+  return type === DIFF_TYPE ? `${sourceName} changes` : `${sourceName} documents`;
+}
+
 /// The search a Browse of this group opens: the documents filed under
 /// it — one row per thread, conversation, PR or page, not the messages
 /// inside them, which repeat the document's name down the grid and are

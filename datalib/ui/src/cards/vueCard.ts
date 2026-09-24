@@ -8,6 +8,7 @@
 // as children of a card must also be `.ce.vue` and listed in
 // `styleSources` so their CSS lands in the root too.
 import { createApp, h, type Component } from "vue";
+import { CARD_CTX } from "./cardApi";
 import type { CardRender } from "./types";
 
 type CardComponent = Component & { styles?: string[] };
@@ -44,6 +45,7 @@ export function vueCard(
     root.appendChild(el);
 
     const app = createApp({ render: () => h(component, { ...props, ctx }) });
+    app.provide(CARD_CTX, ctx);
     app.mount(el);
     return () => app.unmount();
   };

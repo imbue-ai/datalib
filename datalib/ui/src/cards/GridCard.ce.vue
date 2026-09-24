@@ -28,15 +28,8 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import { FILTER_GRID_OPTIONS, typedColumns, groupTitle } from "./typedColumns";
-import {
-  fetchAccounts,
-  fetchQmdState,
-  fetchSearch,
-  type AccountsMap,
-  type ColumnSpec,
-  type QmdDocState,
-  type SearchRow,
-} from "@/api";
+import { type AccountsMap, type ColumnSpec, type QmdDocState, type SearchRow } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
 import FeedbackModal from "@/components/FeedbackModal.vue";
@@ -51,6 +44,8 @@ import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
 import type { CardCtx } from "./types";
 
+const { fetchAccounts, fetchQmdState, fetchSearch } = useApi();
+
 const props = defineProps<{
   ctx: CardCtx;
   // Initial query from the card source (`gridView({q: "…"})`); the
@@ -63,15 +58,20 @@ const props = defineProps<{
   // wins over it, same as `q`: once the user has moved a column, this
   // card is theirs.
   columns?: string[];
+  // The card's name, from the card source (`gridView({name: "Slack
+  // documents"})`). Without one the card is named for its live query.
+  name?: string;
 }>();
 
 const initialState = new URLSearchParams(props.ctx.initialState);
 
 const query = ref(initialState.get("q") ?? props.q ?? "");
 
-// The card's chrome title tracks the live query, not just the factory
-// argument — searching from inside the card retitles it.
-watch(query, (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"), { immediate: true });
+// An unnamed card's name tracks the live query, not just the factory
+// argument — searching from inside the card renames it.
+watch(query, (q) => props.ctx.setTitle(props.name ?? (q ? `Search: ${q}` : "Search")), {
+  immediate: true,
+});
 const rows = shallowRef<SearchRow[]>([]);
 /// The columns the applet declares for its rows — see `ColumnSpec`.
 const columns = ref<ColumnSpec[]>([]);

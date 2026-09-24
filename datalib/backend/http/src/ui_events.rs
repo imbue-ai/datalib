@@ -11,6 +11,10 @@ use serde::Deserialize;
 
 /// The header a page sends on every request, carrying its process id.
 pub const PAGE_HEADER: &str = "x-datalib-page";
+/// The card a request is for (a UUIDv7) and what kind of card it is,
+/// on the requests a card makes (`ui/src/cards/cardScope.ts`).
+pub const CARD_HEADER: &str = "x-datalib-card";
+pub const CARD_TYPE_HEADER: &str = "x-datalib-card-type";
 
 /// More than this in one batch is a page that has stopped batching.
 const MAX_EVENTS: usize = 500;

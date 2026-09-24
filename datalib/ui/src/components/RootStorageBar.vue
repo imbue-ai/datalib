@@ -6,13 +6,16 @@
 // behind. Read from `GET /api/pipeline/storage`, which the backend
 // walks on a tick *while a sync runs* and otherwise on request.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { fetchPipelineStorage, type PipelineStorage } from "@/api";
+import { type PipelineStorage } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { formatBytes } from "@/config/bytes";
 import { sparkline } from "@/config/sparkline";
 import { changed, subscribeLive } from "@/live";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
+
+const { fetchPipelineStorage } = useApi();
 
 const storage = ref<PipelineStorage | null>(null);
 const canReveal = isDesktopApp();

@@ -17,23 +17,27 @@ import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
 const LAYOUTS = ["columns", "tabs", "tree", "tiling"] as const;
 type Layout = (typeof LAYOUTS)[number];
 const LAYOUT_KEY = "datalib-layout";
+// What a browser that has never picked a layout gets.
+const DEFAULT_LAYOUT: Layout = "tabs";
 
 function storedLayout(): Layout {
   try {
     const s = localStorage.getItem(LAYOUT_KEY);
-    return LAYOUTS.find((l) => l === s) ?? "columns";
+    return LAYOUTS.find((l) => l === s) ?? DEFAULT_LAYOUT;
   } catch {
-    return "columns";
+    return DEFAULT_LAYOUT;
   }
 }
 
-const layout = ref<Layout>("columns");
+const layout = ref<Layout>(DEFAULT_LAYOUT);
+const millerMounted = ref(false);
 const tabsMounted = ref(false);
 const treeMounted = ref(false);
 const tilingMounted = ref(false);
 
 function setLayout(next: Layout) {
   layout.value = next;
+  if (next === "columns") millerMounted.value = true;
   if (next === "tabs") tabsMounted.value = true;
   if (next === "tree") treeMounted.value = true;
   if (next === "tiling") tilingMounted.value = true;
@@ -44,8 +48,9 @@ function setLayout(next: Layout) {
   }
 }
 
-// The tabs layout opens the URL it loads on; mounted later, it keeps
-// the URL the columns layout wrote out of its tabs.
+// A layout mounts the first time it is shown, so a hidden one runs no
+// cards. The tabs layout opens the URL it loads on; mounted later, it
+// keeps the URL another layout wrote out of its tabs.
 const initialLayout = storedLayout();
 setLayout(initialLayout);
 
@@ -73,7 +78,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="cards-root">
-    <MillerView ref="miller" v-show="layout === 'columns'" :active="layout === 'columns'" />
+    <MillerView
+      v-if="millerMounted"
+      ref="miller"
+      v-show="layout === 'columns'"
+      :active="layout === 'columns'"
+    />
     <TabsView
       v-if="tabsMounted"
       ref="tabs"

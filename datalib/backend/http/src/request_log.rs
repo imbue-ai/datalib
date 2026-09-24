@@ -8,6 +8,9 @@
 //! content-hashed assets and the component modules, unless they failed:
 //! a page load is dozens of them and the browser caches them forever.
 //!
+//! A request a card made names the card and its type, so the log can
+//! say which card is noisy.
+//!
 //! A request a `root` frame caused carries that frame's chain; the line
 //! stores it, and a chain long enough to be a loop is warned about here
 //! (`loop_guard`).
@@ -28,11 +31,9 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().and_then(crate::auth::query_without_token);
-    let page = req
-        .headers()
-        .get(crate::ui_events::PAGE_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let page = header_text(&req, crate::ui_events::PAGE_HEADER);
+    let card = header_text(&req, crate::ui_events::CARD_HEADER);
+    let card_type = header_text(&req, crate::ui_events::CARD_TYPE_HEADER);
     let chain = crate::loop_guard::request_chain(
         req.headers()
             .get(crate::loop_guard::CAUSE_HEADER)
@@ -58,7 +59,7 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         tracing::warn!(
             target: crate::loop_guard::TARGET,
             method = %method, path = %path, query = query.as_deref(), chain = c,
-            page = page.as_deref(),
+            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(),
             "{method} {path} is refetching on its own echo: {c} requests in a row, \
              each caused by the frame the one before it caused"
         );
@@ -67,18 +68,25 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
         tracing::warn!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(), chain,
+            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
         );
     } else {
         tracing::info!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(), chain,
+            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
         );
     }
     resp
+}
+
+fn header_text(req: &Request<Body>, name: &str) -> Option<String> {
+    req.headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
 }
 
 fn is_logged(path: &str, status: StatusCode) -> bool {

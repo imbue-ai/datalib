@@ -9,10 +9,6 @@
 //   highlight on the target span when the destination is its own doc.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
-  allowRemote,
-  checkRemote,
-  fetchChat,
-  forgetRemoteAllow,
   REMOTE_ALLOW_TABLE,
   REMOTE_FETCHED_TABLE,
   type AllowScope,
@@ -22,6 +18,7 @@ import {
   type RemoteAllow,
   type RemoteContext,
 } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { copyToClipboard } from "@/clipboard";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
@@ -37,6 +34,8 @@ import {
 import { chatHrefFromClick, isBrowserClick } from "./chatLink";
 import { problemLabel } from "./problems";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
+
+const { allowRemote, checkRemote, fetchChat, forgetRemoteAllow } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;

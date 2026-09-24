@@ -16,6 +16,7 @@ import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, type ColumnSpec } from "@/router/columns";
+import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
 import { devMode } from "@/devMode";
 import { setCardHelp } from "@/cards/help";
@@ -49,13 +50,8 @@ const bus = createBus();
 
 const MIN_WIDTH = 240;
 
-let nextId = 1;
-function freshId(): string {
-  return `card-${nextId++}`;
-}
-
 function newSlot(source: string, state = "", width: number | null = null): Slot {
-  return { id: freshId(), source, state, width, title: null };
+  return { id: newCardId(), source, state, width, title: null };
 }
 
 function slotFor(spec: ColumnSpec): Slot {
@@ -236,6 +232,9 @@ function ctxFor(slot: Slot): CardCtx {
     };
     ctx = {
       cardId,
+      get cardType() {
+        return cardType(slot.source);
+      },
       get initialState() {
         return slot.state;
       },

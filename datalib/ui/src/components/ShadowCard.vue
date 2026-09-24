@@ -8,6 +8,8 @@
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
 import { compileCardSource } from "@/cards/cardSource";
+import { inCard } from "@/cards/cardScope";
+import { track } from "@/telemetry";
 import { setCardHelp } from "@/cards/help";
 import { devMode } from "@/devMode";
 import {
@@ -164,7 +166,9 @@ async function runCard() {
     const { render } = await compileCardSource(props.source);
     // A newer run started while we were awaiting — drop this one.
     if (token !== runToken || shadow.value !== root) return;
-    teardown.value = render(root, props.ctx);
+    const card = { id: props.ctx.cardId, type: props.ctx.cardType };
+    track("card_open", { card: card.id, card_type: card.type, source: props.source });
+    teardown.value = inCard(card, () => render(root, props.ctx));
   } catch (e) {
     if (token !== runToken || shadow.value !== root) return;
     const div = document.createElement("div");

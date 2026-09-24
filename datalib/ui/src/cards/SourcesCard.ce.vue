@@ -3,21 +3,13 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import type { Column } from "@slickgrid-universal/common";
 import {
-  fetchConfig,
-  fetchConfigScaffold,
-  saveConfig,
-  fetchAllJobs,
-  fetchManageRows,
-  fetchRuns,
-  fetchTreeHistory,
-  enqueueJob,
-  cancelJob,
   type ManageResponse,
   type ManageRow,
   type SyncJob,
   type JobProgressEvent,
   type ColumnSpec,
 } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
   listSteps,
@@ -45,7 +37,7 @@ import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
 import { ingestLabel } from "@/config/ingestMethods";
 import { copyToClipboard } from "@/clipboard";
-import { browseColumns, browseQuery } from "@/config/browsePresets";
+import { browseColumns, browseName, browseQuery } from "@/config/browsePresets";
 import { logSource } from "./libs/logView";
 import { pushToast } from "@/toasts";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
@@ -57,6 +49,18 @@ import CompareDialog from "@/components/CompareDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+
+const {
+  fetchConfig,
+  fetchConfigScaffold,
+  saveConfig,
+  fetchAllJobs,
+  fetchManageRows,
+  fetchRuns,
+  fetchTreeHistory,
+  enqueueJob,
+  cancelJob,
+} = useApi();
 
 props.ctx.setTitle("Sources");
 props.ctx.setHelp(`
@@ -311,6 +315,7 @@ function groupBrowse(g: ManageRow): string | null {
   const columns = browseColumns(type);
   const args: string[] = [`q: ${JSON.stringify(browseQuery(g.id, type))}`];
   if (columns) args.push(`columns: ${JSON.stringify(columns)}`);
+  args.push(`name: ${JSON.stringify(browseName(g.name.label, type))}`);
   return `gridView({ ${args.join(", ")} })`;
 }
 

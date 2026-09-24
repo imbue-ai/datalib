@@ -5,9 +5,12 @@
 // the sources card; this only answers "is something running?". Click
 // reveals that card; the tooltip lists the active jobs.
 import { computed, ref, onMounted, onUnmounted } from "vue";
-import { fetchActiveJobs, type SyncJob, type JobProgressEvent } from "@/api";
+import { type SyncJob, type JobProgressEvent } from "@/api";
+import { useApi } from "@/cards/cardApi";
 import { subscribeLive } from "@/live";
 import { showDataSources } from "@/surface";
+
+const { fetchActiveJobs } = useApi();
 
 // Active jobs, keyed by id for O(1) patching from the SSE stream.
 const active = ref<Map<string, SyncJob>>(new Map());

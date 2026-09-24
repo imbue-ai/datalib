@@ -4,6 +4,7 @@
 // is a plain-DOM CardRender, so hosting it takes a shadow root and a
 // stub CardCtx (no host commands / bus / title chrome apply here).
 import { onMounted, onUnmounted, ref } from "vue";
+import { newCardId } from "@/cards/cardId";
 import { sourceDagView } from "@/cards/libs/sourceDagView";
 import type { CardCtx, Teardown } from "@/cards/types";
 
@@ -15,7 +16,8 @@ onMounted(() => {
   if (!el) return;
   const root = el.attachShadow({ mode: "open" });
   const ctx: CardCtx = {
-    cardId: "sources-dag-panel",
+    cardId: newCardId(),
+    cardType: "sourceDagView",
     initialState: "",
     setTitle: () => {},
     setHelp: () => {},

@@ -146,7 +146,9 @@ export function galleryView(): CardRender {
 }
 ```
 
-The grid card retitles itself (`Search: <q>`) as the user searches;
+The grid card retitles itself (`Search: <q>`) as the user searches,
+unless its source gives it a name (`gridView({ name: "Slack documents" })`,
+which is what Browse opens);
 the document card starts as "Document" and switches to the document's
 actual name once its fetch lands. This works the same for builtin
 factories and user-defined aliases. The host resets the title on every
@@ -160,7 +162,8 @@ label for anything else.
 
 ```ts
 type CardCtx = {
-  cardId: string;        // host-assigned, stable for the card's lifetime
+  cardId: string;        // a UUIDv7 minted when the card opens (cards/cardId.ts)
+  cardType: string;      // what its source calls: `gridView`, `comp.user.tetris`
   initialState: string;  // persisted state from the host ("" when absent)
   setTitle(title: string | null): void;  // chrome-bar title (see above)
   setHelp(html: string | null): void;    // the chrome's "?" (see below)
@@ -168,6 +171,14 @@ type CardCtx = {
   host: HostCommands;    // structural + persistence commands
 };
 ```
+
+A card's requests say which card made them: a component inside a card
+takes the api from `useApi()` (`cards/cardApi.ts`), a plain-DOM card
+from `cardApi(ctx)`, and every request they make carries
+`X-Datalib-Card` and `X-Datalib-Card-Type`, which the server's request
+log records. The scope ends at the first `await`, so a function in
+`api.ts` calls `fetch` before awaiting anything
+(`tests/card_api.test.ts` checks).
 
 ### Help
 
@@ -307,7 +318,8 @@ reads or writes the URL; one switched back to puts its own stack back.
 
 ## The tabs layout
 
-One card at a time, full size, beside a sidebar listing every open
+The layout the app opens on, until the person picks another in the
+status bar (the choice is kept in this browser). One card at a time, full size, beside a sidebar listing every open
 card as a tree: each tab sits under the tab that opened it, as in
 Firefox's Tree Style Tab. `views/tabTree.ts` holds the decisions as
 pure functions. Each window has a tree of its own
@@ -329,6 +341,12 @@ children to its own parent; closing a collapsed one closes its whole
 branch. A row's ⇤ makes the tab top-level, taking what is under it
 along, and its ↗ opens the tab alone in a new browser tab (a new
 window in the app).
+
+A tab has one name. Its card gives it one (`ctx.setTitle`) and may
+refine it; right-click → Rename, or a double-click on the name, sets
+it to what the person types, and from then on the card's updates are
+ignored. The name lives in the tab tree, not the URL, so a popped-out
+card is named by its card again.
 
 ## Prebuilt views
 

@@ -16,6 +16,7 @@
 import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
+import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
 import { setCardHelp } from "@/cards/help";
 import { chainHref } from "@/cards/chainHref";
@@ -42,15 +43,10 @@ import TilingNode_ from "./TilingNode.vue";
 
 const bus = createBus();
 
-let nextId = 1;
-function freshId(): string {
-  return `card-${nextId++}`;
-}
-
 // Start as one horizontal root container holding a single card. The
 // root is the sole single-child split allowed (see tilingTree.ts) and is
 // never draggable or collapsible.
-const root = ref<TileNode>(makeRoot(freshId(), makeTile(freshId(), "gridView()")));
+const root = ref<TileNode>(makeRoot(newCardId(), makeTile(newCardId(), "gridView()")));
 
 // Every live tile, flat. Drives the persistent card pool below.
 const tiles = computed(() => listTiles(root.value));
@@ -98,7 +94,7 @@ function titleFor(leaf: TileLeaf): string {
 // parent now, and the user can re-arrange afterwards (container switch
 // / drag). Returns the new id (callers ignore it).
 function openCardFrom(fromId: string, source: string): string {
-  const newTile = makeTile(freshId(), source);
+  const newTile = makeTile(newCardId(), source);
   root.value = addSibling(root.value, fromId, newTile);
   return newTile.id;
 }
@@ -119,7 +115,7 @@ function openCardsFrom(fromId: string, sources: string[]): string[] {
 function closeNode(id: string) {
   // A replacement tile keeps the tree non-empty when the last card
   // goes — a gallery card, same as addCard.
-  root.value = deleteNode(root.value, id, () => makeTile(freshId(), "galleryView()"));
+  root.value = deleteNode(root.value, id, () => makeTile(newCardId(), "galleryView()"));
 }
 
 function setTileState(id: string, state: string) {
@@ -143,6 +139,9 @@ function ctxFor(leaf: TileLeaf): CardCtx {
     };
     ctx = {
       cardId,
+      get cardType() {
+        return cardType(findTile(root.value, cardId)?.source ?? "");
+      },
       get initialState() {
         return findTile(root.value, cardId)?.state ?? "";
       },
@@ -245,7 +244,7 @@ function isRoot(id: string): boolean {
 // ＋ add area: a gallery card (both modes), which the user resolves by
 // picking a component (it replaces itself via host.setSource).
 function addCard(containerId: string) {
-  root.value = appendChild(root.value, containerId, makeTile(freshId(), "galleryView()"));
+  root.value = appendChild(root.value, containerId, makeTile(newCardId(), "galleryView()"));
 }
 
 // The toolbar's "Data sources". Every tile is on screen, so a tile
@@ -253,7 +252,7 @@ function addCard(containerId: string) {
 // root container.
 function showCard(source: string) {
   if (listTiles(root.value).some((t) => t.source === source)) return;
-  root.value = appendChild(root.value, root.value.id, makeTile(freshId(), source));
+  root.value = appendChild(root.value, root.value.id, makeTile(newCardId(), source));
 }
 
 defineExpose({ addCard: () => addCard(root.value.id), showCard });
@@ -316,7 +315,7 @@ function startDrag(id: string, ev: PointerEvent) {
     root.value =
       target.kind === "add"
         ? moveNodeToContainer(root.value, id, target.id)
-        : dropOntoLeaf(root.value, id, target.id, freshId());
+        : dropOntoLeaf(root.value, id, target.id, newCardId());
   };
   window.addEventListener("pointermove", onMove, true);
   window.addEventListener("pointerup", onUp, true);

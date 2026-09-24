@@ -1,6 +1,7 @@
 // Builtin view: visualize the sync pipeline's step DAG.
 import type { CardRender } from "../types";
-import { fetchDag, type DagResponse, type DagStep } from "@/api";
+import type { DagResponse, DagStep } from "@/api";
+import { cardApi } from "../cardApi";
 import { changed, subscribeLive } from "@/live";
 
 /// The node's colour class for a runner state. The legend's words, not
@@ -30,6 +31,7 @@ type NodePos = {
 
 export function sourceDagView(): CardRender {
   return (root, ctx) => {
+    const { fetchDag } = cardApi(ctx);
     ctx.setTitle("Pipeline DAG");
     const style = document.createElement("style");
     style.textContent = `
