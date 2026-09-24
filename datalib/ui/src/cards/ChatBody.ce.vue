@@ -537,6 +537,26 @@ onMounted(() => {
   color: inherit;
   background: var(--datalib-hover, #f0f0f0);
 }
+/* A message the account had not read upstream when it was rendered
+   (chat-common's `unread`). The first one in a document opens with a
+   "New" rule, the way the upstream apps mark where you left off. The
+   rule is drawn inside the card, not above it: a clamped card is
+   `overflow: hidden` and would clip anything outside its box. Declared
+   before `.selected` so a selection still wins the border. */
+.chat-body .msg.unread {
+  border-left-color: #e01e5a;
+}
+.chat-body .msg.first-unread::before {
+  content: "New";
+  display: block;
+  margin: -0.5rem -0.75rem 0.4rem;
+  padding: 0.1rem 0.75rem;
+  border-bottom: 1px solid #e01e5a;
+  color: #e01e5a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: right;
+}
 .chat-body .msg.selected {
   background: var(--datalib-hover, #f0f0f0);
   border-color: var(--datalib-accent, #6366f1);

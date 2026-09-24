@@ -45,6 +45,27 @@ Decide `is_aside` from what the item *is* upstream, not from its
 Call" label as real tool traffic, and a system prompt is content
 someone may want to read.
 
+## Unread messages
+
+A provider that knows the account has not read a message upstream sets
+`unread` on its item. The wrapper then carries an `unread` class, and
+the first unread item in the document also carries `first-unread`,
+which the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing
+reaches the text: the rule is CSS, so qmd's chunks are the same either
+way. `false` means read *or* unknown; a provider that cannot tell leaves
+it there.
+
+Who sets it: Slack, from the conversation's `last_read` for top-level
+messages and a followed thread's own `last_read` for its replies; email,
+from the absence of `$seen`.
+
+A read mark is state that moves while the message does not, so a
+provider that renders it must re-render when it moves, and only the
+documents it moved across. Email's `$seen` is a row of its own
+(`email_keywords`), whose diff already names the email. Slack keeps its
+marks in volatile sidecars, and its diff scan reads the sidecar's diff
+for the threads a moved mark crossed (`slack_render`'s `parse.rs`).
+
 ## Long messages are the frontend's problem, not this crate's
 
 A hundred-line message is one the reader has to scroll past, and none of

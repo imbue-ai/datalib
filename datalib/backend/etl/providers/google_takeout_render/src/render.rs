@@ -374,6 +374,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(msg_id.entity_kind, msg_id.natural_key)),
                     is_aside: false,
+                    unread: false,
                     problems,
                 }
             })
@@ -631,6 +632,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                unread: false,
                 problems: problems.clone(),
             }
         }
@@ -662,6 +664,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                unread: false,
                 problems: problems.clone(),
             }
         }
@@ -688,6 +691,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                unread: false,
                 problems: problems.clone(),
             }
         }

@@ -12,9 +12,11 @@ thread root comes back with `reply_count` advanced, so the sync
 re-walks it through `conversations.replies`, whose tape here has the
 first sync's three messages plus a fourth from Worf.
 
-The account moves too. `client.counts` has the captain read `#bridge`
-through the red alert — a change only to `channel_read_states`' volatile
-sidecar, so the content tables see nothing. In `saved.list` Worf's
+The account's read marks are the first capture's, deliberately: a
+later pipeline run replays the first capture, and `client.counts` takes
+no parameters, so a mark that differed would move back and forth on
+every run. `#bridge` is read through Data's log in both, which leaves
+Riker's red alert unread here. In `saved.list` Worf's
 recommendation has moved from saved to completed. `#bridge`'s bookmarks
 are not asked again: the first sync listed them less than
 `MANIFEST_TTL` ago.

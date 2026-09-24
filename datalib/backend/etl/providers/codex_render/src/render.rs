@@ -660,6 +660,7 @@ fn item(
         kind_label: Some(kind_label.to_string()),
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside,
+        unread: false,
         problems: Vec::new(),
     }
 }

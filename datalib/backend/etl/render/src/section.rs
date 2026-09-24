@@ -51,8 +51,18 @@ pub fn section_attrs(uuid: &str) -> String {
 /// (avatar, accent color, etc.) can apply without each renderer
 /// inventing its own class scheme.
 pub fn msg_div_open(msg_uuid: &str, provider: Provider) -> String {
+    msg_div_open_with(msg_uuid, provider, &[])
+}
+
+/// [`msg_div_open`] with further classes after the two it always has.
+pub fn msg_div_open_with(msg_uuid: &str, provider: Provider, classes: &[&str]) -> String {
+    let mut class = format!("msg msg--{provider}");
+    for c in classes {
+        class.push(' ');
+        class.push_str(c);
+    }
     format!(
-        r#"<div {attrs} class="msg msg--{provider}">"#,
+        r#"<div {attrs} class="{class}">"#,
         attrs = section_attrs(msg_uuid),
     )
 }

@@ -204,6 +204,7 @@ fn build_chats(
                     kind_label: None,
                     source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
                     is_aside: false,
+                    unread: false,
                     problems,
                 }
             })

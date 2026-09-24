@@ -389,6 +389,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                unread: false,
                 problems: Vec::new(),
             }
         }
@@ -453,6 +454,7 @@ fn item(source_id: &str, v: &Value) -> NormalizedChatItem {
                 kind_label: None,
                 source_ref: source_ref.clone(),
                 is_aside: false,
+                unread: false,
                 problems: Vec::new(),
             }
         }

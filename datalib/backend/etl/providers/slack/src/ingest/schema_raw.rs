@@ -170,6 +170,17 @@ pub struct MessageRow {
     pub user_id: Option<String>,
 }
 
+/// Per-fetch account state split out of the `messages` content payload
+/// into `messages_bookkeeping.volatile_payload`. Slack puts both on the
+/// root of a thread the account follows, and only in the copy
+/// `conversations.replies` returns: `last_read` is how far into the
+/// thread the account has read, `subscribed` whether it follows it.
+/// Neither is a change to the message. The `conversations.history` copy
+/// of the same root carries neither, and an upsert that splits nothing
+/// leaves the sidecar as it was, so the two copies no longer overwrite
+/// each other.
+pub const MESSAGE_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["last_read"], &["subscribed"]];
+
 /// Index on `messages(channel_id, ts)` — supports the listing-style
 /// "all messages in a channel, ordered by time" query without a
 /// full table scan.

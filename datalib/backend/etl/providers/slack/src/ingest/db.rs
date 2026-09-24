@@ -22,7 +22,8 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
     slack_thread_key, BookmarkRow, ChannelReadStateRow, ChannelRow, MessageRow, SavedItemRow,
-    UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, USER_VOLATILE_PATHS,
+    UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS, MESSAGE_VOLATILE_PATHS,
+    READ_STATE_VOLATILE_PATHS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -382,13 +383,15 @@ impl RawDb {
         struct Prepared<'a> {
             row: MessageRow,
             payload: &'a Value,
+            volatile: Option<Value>,
         }
         let mut prepared: Vec<Prepared> = Vec::with_capacity(inputs.len());
         for m in inputs {
             let id = slack_message_key(&m.team_id, &m.channel_id, &m.ts);
             let effective_thread_ts = m.thread_ts.as_deref().unwrap_or(m.ts.as_str());
             let thread_root_uuid = slack_thread_key(&m.team_id, &m.channel_id, effective_thread_ts);
-            let payload_str = serde_json::to_string(&m.payload).context("serialize message")?;
+            let (base, volatile) = dr::split_volatile(&m.payload, MESSAGE_VOLATILE_PATHS);
+            let payload_str = serde_json::to_string(&base).context("serialize message")?;
             prepared.push(Prepared {
                 row: MessageRow {
                     id_and_payload: WirePayload {
@@ -404,6 +407,7 @@ impl RawDb {
                     user_id: m.user_id.clone(),
                 },
                 payload: &m.payload,
+                volatile,
             });
         }
         let rows: Vec<MessageRow> = prepared.iter().map(|p| p.row.clone()).collect();
@@ -411,7 +415,18 @@ impl RawDb {
             .iter()
             .map(|p| (p.row.id_and_payload.id.as_str(), p.payload))
             .collect();
-        bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await
+        let volatile_pairs: Vec<(&str, &Value)> = prepared
+            .iter()
+            .filter_map(|p| Some((p.row.id_and_payload.id.as_str(), p.volatile.as_ref()?)))
+            .collect();
+        bulk_upsert_with_tape_split(
+            &self.pool,
+            self.tape_ref(),
+            &rows,
+            &tape_pairs,
+            &volatile_pairs,
+        )
+        .await
     }
 
     /// Delete this channel's stored messages inside a **fully re-walked**
