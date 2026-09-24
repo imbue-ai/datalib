@@ -8,8 +8,8 @@
 
 use datalib_runs::LogRow;
 
-/// The request header a page echoes a frame's `chain` in, when the
-/// fetch was made while that frame was being handled.
+/// The request header a page sends on a fetch it made while handling a
+/// `root` frame: the frame's `chain`, or 0 when the frame had none.
 pub const CAUSE_HEADER: &str = "x-datalib-cause";
 
 /// The tracing target of the warning; `target:http.loop` in the log
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn a_burst_with_no_request_line_continues_nothing() {
         assert_eq!(burst_chain(&[]), None);
-        assert_eq!(burst_chain(&[line("datalib_http::supervisor", None)]), None);
+        assert_eq!(burst_chain(&[line("datalib_http::worker", None)]), None);
     }
 
     #[test]

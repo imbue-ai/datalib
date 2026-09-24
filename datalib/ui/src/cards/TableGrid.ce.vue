@@ -25,6 +25,7 @@ import type { ColumnSpec, Timeseries } from "@/api";
 import { calibrationMax } from "@/config/sparkline";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
@@ -129,7 +130,10 @@ function syncRows(rows: T[]) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
     ceilings = ceilingsOf(rows);
-    bundle.dataset = annotate(rows);
+    const b = bundle;
+    keepActiveOnRecord(b.slickGrid, dataView, () => {
+      b.dataset = annotate(rows);
+    });
     return;
   }
   // A row whose cell is being edited is left as it is: the grid drops
@@ -321,7 +325,7 @@ function options(): GridOption {
       hideMenuOnScroll: false,
       hideCopyCellValueCommand: true,
       hideCommands: ["copy", "clear-grouping", "collapse-all-groups", "expand-all-groups"],
-      commandItems: menuSlots(24, entriesFor),
+      ...menuSlots(24, entriesFor),
     },
   };
 }
@@ -339,6 +343,15 @@ function onCellChange(_e: SlickEventData, args: OnCellChangeEventArgs) {
   if (!bundle || !editing) return;
   const { item, field, before } = editing;
   editing = null;
+  // The grid commits onto whatever row now sits where the edit began.
+  // Every refresh closes the editor first, so a different row here is a
+  // path that does not, and the edit is dropped rather than misapplied.
+  if (args.item !== item) {
+    console.warn("TableGrid: an edit's row moved under it; the edit was dropped", { field });
+    bundle.slickGrid.invalidateRow(args.row);
+    bundle.slickGrid.render();
+    return;
+  }
   const next = String(readPath(item, field) ?? "").trim();
   writePath(item, field, before);
   bundle.slickGrid.updateRow(args.row);

@@ -7,7 +7,7 @@
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
 <data_root>/unified_index/qmd_index/              the qmd index (plain SQLite inside)
 <data_root>/system/feedback.doltlite_db           filed feedback
-<data_root>/system/jobs.doltlite_db               the UI's record of each sync it asked for
+<data_root>/system/jobs.doltlite_db               the sync job queue
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
                                                   load, and the URLs fetched for it
@@ -22,12 +22,9 @@
                                                   it counts with it on the Manage screen
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and pauses: the
-                                                  mailbox the loop reads (plain SQLite;
-                                                  every process writes it, the loop's
-                                                  holder closes requests)
+                                                  mailbox the loop reads (plain SQLite)
 <data_root>/system/dag_state.json                 the runner's record
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
-                                                  (the server holds both while it is up)
 ```
 
 Every store above carries a `_datalib_meta` table — which datalib and
@@ -48,9 +45,8 @@ the index; `datalib-http` owns feedback, jobs, usage and remote media;
 the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
-SQLite in WAL mode, written by whoever runs the loop (its runs) and the
-server (its own log) — one process while the server is up, two while a
-`datalib-dag` runs the loop — which SQLite's own locking makes ordinary —
+SQLite in WAL mode, written by both the runner (its runs) and the server
+(its own log), which SQLite's own locking makes ordinary —
 `runs_two_process_test` is the measurement, not the argument.
 
 Who writes which line of it, how to add one, and how to read it is
@@ -76,16 +72,7 @@ file of its own with one writer. Bazel stamps the binary with the git
 hash via `tools/workspace_status.sh`; cargo builds get it from
 `datalib/backend/core/build.rs`.
 
-**Jobs.** The UI's record of each sync it asked for, never committed.
-A sync job and its request in `supervisor.sqlite` share an id:
-`POST /api/sync/jobs` writes both, and the loop the server runs keeps the
-job in step with the request — `running` when the loop takes it on, with
-`parent_job_id` naming that busy period's run, then `done`, `failed` or
-`canceled` as the request ends (a stopped one once its steps have
-exited). A reset job has no request: it needs the root to itself, and
-the server runs it between busy periods. On boot, a job the last server
-left active is set to match its request, which is still open for the
-loop to run (`http/src/supervisor.rs`).
+**Jobs.** The queue the UI fills and the worker drains; never committed.
 
 **Usage** is the one store nothing ever commits. It is a timeseries —
 `datalib-http` walks the root every five seconds *while a run holds it*

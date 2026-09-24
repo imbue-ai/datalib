@@ -252,10 +252,10 @@ const LAUNCHER_WINDOW: &str = "launcher";
 /// without rebundling); otherwise the copy bundled under
 /// `Contents/Resources/binaries/` (see `tauri.conf.json`
 /// `bundle.resources`), which `resource_dir()` resolves regardless of
-/// where the bundle lives. The sibling `datalib-step` there is found by
-/// the child's own sibling-of-executable lookup
-/// (`binaries::resolve_binary_dir`), so no pipeline path needs to be
-/// threaded through.
+/// where the bundle lives. The sibling `datalib-dag` and `datalib-step`
+/// there are found by the child's own sibling-of-executable lookup
+/// (`worker::resolve_dag_bin` / `resolve_binary_dir`), so no pipeline
+/// path needs to be threaded through.
 fn resolve_http_bin(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(p) = std::env::var("DATALIB_HTTP_BIN") {
         let p = PathBuf::from(p);

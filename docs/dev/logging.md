@@ -100,7 +100,7 @@ has the server's, since the bundle is embedded in the binary.
 | the runner, about a step — a checkpoint sealed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
-| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`); `ui.card_open` says what source that card ran |
+| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
 
 Adding a UI event is one word in the `PageEventName` union and the
@@ -114,16 +114,18 @@ datalib's own crates in every process of that root: the server reads
 it at launch (a change takes a restart), the runner per run, and each
 step gets the resulting filter as `RUST_LOG`. Third-party crates
 follow it down to `info` and no further, and the noisy ones stay at
-`warn` (`datalib_log_filter`). A `RUST_LOG` set where a process was
+`warn` (`datalib_log_filter`); the server's own `http.*` targets count
+as datalib's. A `RUST_LOG` set where a process was
 started wins over all of that. The store keeps every level it is
 handed — `debug` is where a doltlite commit or a batch of rows goes —
 and the log card opens at `min_level:info`, so the lower levels are
 there when asked for and not otherwise. Little emits `trace` today:
 the few `trace!` lines in the tree are a step's progress ticks
 (`etl/src/progress.rs`), so a log with none is the normal case, not a
-sign the level is lost. The server itself writes no `debug` lines in
-ordinary service either — its `debug` sites are in the providers —
-so a store with only a server launch in it is all `info` and `warn`.
+sign the level is lost. The server's one `debug` line in ordinary
+service is a live refetch: a request a page made on a `root` frame,
+which while a sync runs is about one a second for each Manage card
+on screen.
 
 ## What is not a log line
 
@@ -192,13 +194,20 @@ sqlite3 <root>/system/runs/runs.sqlite \
 - **A loop that gets past that rule is counted.** A `root` frame
   that only the server's own request lines moved carries `chain`, one
   more than the longest chain among those lines. A fetch the page makes
-  while handling the frame echoes it as `X-Datalib-Cause`, and the
-  request's line stores it as `fields.chain`. At 5, and again at 50,
+  while handling any frame sends `X-Datalib-Cause` — the frame's chain,
+  or 0 — and the request's line stores a nonzero one as `fields.chain`;
+  the header is also what makes the line a live refetch, and `debug`. At 5, and again at 50,
   500 and so on, the server writes a `warn` with target `http.loop`
   naming the endpoint and the page. Search `target:http.loop` to find
   one. Only a fetch started synchronously inside the frame's handler
   carries the header, so a refetch deferred by a timer is not counted
   (`loop_guard.rs`).
+- **A card off screen is not told.** A card in a hidden tab or layout
+  stays mounted, so a card that subscribes with
+  `subscribeLive(handlers, { onScreen: el })` (`ui/src/live.ts`) has its
+  frames held while `el` is off screen and delivered, once each, when
+  it is back. Every card that refetches on a frame passes its root
+  element.
 - **A step flushes per line.** Arrival order is the log's order, and a
   block-buffered stdout hands the runner its lines in 4KB lumps,
   minutes late. The runner sets `PYTHONUNBUFFERED=1`; anything else is

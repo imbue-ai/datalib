@@ -20,6 +20,7 @@ const rows = ref<Record<string, unknown>[]>([]);
 const tree = ref(false);
 const rowKey = ref("key");
 const error = ref<string | null>(null);
+const cardEl = ref<HTMLElement | null>(null);
 
 props.ctx.setTitle(props.title ?? props.url.replace(/^\/api\//, ""));
 
@@ -49,18 +50,21 @@ async function load() {
 let unsubscribe: (() => void) | null = null;
 onMounted(() => {
   void load();
-  unsubscribe = subscribeLive({
-    root: (e) => {
-      if (refetchesOn(props.url, e)) void load();
+  unsubscribe = subscribeLive(
+    {
+      root: (e) => {
+        if (refetchesOn(props.url, e)) void load();
+      },
+      resync: () => void load(),
     },
-    resync: () => void load(),
-  });
+    { onScreen: cardEl.value ?? undefined },
+  );
 });
 onBeforeUnmount(() => unsubscribe?.());
 </script>
 
 <template>
-  <div class="table-card">
+  <div ref="cardEl" class="table-card">
     <div v-if="error" class="table-card-error">{{ error }}</div>
     <div class="table-card-grid">
       <TableGrid :columns="columns" :rows="rows" :rowKey="rowKey" :tree="tree" :selectable="true" />

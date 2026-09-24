@@ -9,9 +9,10 @@
 pub const DEFAULT_LEVEL: &str = "trace";
 
 /// Every first-party crate is `datalib_*`, plus the two standalone
-/// binaries whose crate is named for the tool. A directive matches a
-/// target by prefix.
-const OUR_TARGETS: [&str; 3] = ["datalib", "fsindex", "dirtree_diff"];
+/// binaries whose crate is named for the tool, plus the server's
+/// hand-named targets (`http.request`, `http.loop`), which no crate's
+/// module path can collide with. A directive matches a target by prefix.
+const OUR_TARGETS: [&str; 4] = ["datalib", "fsindex", "dirtree_diff", "http."];
 
 /// The libraries that would talk over us, kept to warnings whatever
 /// the level. `sqlx` matters most: at `debug` it logs every statement,
@@ -54,7 +55,7 @@ mod tests {
     fn our_crates_take_the_level_and_libraries_stop_at_info() {
         assert_eq!(
             filter_at("trace"),
-            "info,datalib=trace,fsindex=trace,dirtree_diff=trace,\
+            "info,datalib=trace,fsindex=trace,dirtree_diff=trace,http.=trace,\
              sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn,html5ever=error,axum=info"
         );
         assert!(filter_at("debug").starts_with("info,datalib=debug,"));

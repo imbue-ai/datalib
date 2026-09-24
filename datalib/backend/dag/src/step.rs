@@ -284,52 +284,28 @@ pub struct StepCtx {
 }
 
 /// How the host asks one invocation to stop at its next consistent
-/// point. A subprocess step gets SIGINT on its own process group, and
-/// SIGKILL on it if it is still there after `grace`; an in-process step
-/// may await [`StopSignal::requested`].
-#[derive(Clone, Debug)]
-pub struct StopSignal {
-    rx: Option<tokio::sync::watch::Receiver<bool>>,
-    pub grace: std::time::Duration,
-}
-
-/// How long a subprocess step has to checkpoint and exit after its
-/// SIGINT before its process group is killed.
-pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
-
-impl Default for StopSignal {
-    fn default() -> Self {
-        Self::never()
-    }
-}
+/// point. A subprocess step gets SIGINT on its own process group; an
+/// in-process step may await [`StopSignal::requested`].
+#[derive(Clone, Debug, Default)]
+pub struct StopSignal(Option<tokio::sync::watch::Receiver<bool>>);
 
 impl StopSignal {
     pub fn new(rx: tokio::sync::watch::Receiver<bool>) -> Self {
-        Self {
-            rx: Some(rx),
-            grace: STOP_GRACE,
-        }
+        Self(Some(rx))
     }
 
     pub fn never() -> Self {
-        Self {
-            rx: None,
-            grace: STOP_GRACE,
-        }
-    }
-
-    pub fn with_grace(self, grace: std::time::Duration) -> Self {
-        Self { grace, ..self }
+        Self(None)
     }
 
     pub fn is_requested(&self) -> bool {
-        self.rx.as_ref().is_some_and(|rx| *rx.borrow())
+        self.0.as_ref().is_some_and(|rx| *rx.borrow())
     }
 
     /// Resolves once a stop has been asked for; never, for a signal made
     /// with [`StopSignal::never`] or whose sender is gone.
     pub async fn requested(&mut self) {
-        match self.rx.as_mut() {
+        match self.0.as_mut() {
             Some(rx) => {
                 if rx.wait_for(|stop| *stop).await.is_err() {
                     std::future::pending::<()>().await;

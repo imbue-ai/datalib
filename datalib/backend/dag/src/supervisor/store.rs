@@ -153,26 +153,19 @@ impl Store {
 
     pub async fn open_request(&self, roots: &[String], by: &str) -> Result<String> {
         let id = uuid::Uuid::now_v7().to_string();
-        self.open_request_as(&id, roots, by).await?;
-        Ok(id)
-    }
-
-    /// Under an id the caller already has: the server's job id, so the
-    /// job row and the request are one thing seen twice.
-    pub async fn open_request_as(&self, id: &str, roots: &[String], by: &str) -> Result<()> {
         let (now, tz_offset) = now_split();
         sqlx::query(
             "INSERT INTO requests (id, roots, opened_by, opened_at_utc, tz_offset) \
              VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(id)
+        .bind(&id)
         .bind(serde_json::to_string(roots)?)
         .bind(by)
         .bind(now)
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(id)
     }
 
     /// Asking, not doing: the loop stops the request's steps and closes it.

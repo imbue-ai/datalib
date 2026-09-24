@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 pub mod applets;
 pub mod auth;
-pub mod binaries;
 pub mod boot;
 pub mod connect;
 mod embed;
@@ -40,10 +39,10 @@ pub mod loop_guard;
 pub mod manage;
 pub mod remote_media;
 pub mod request_log;
-pub mod supervisor;
 pub mod ui_events;
 pub mod usage;
 pub mod watch;
+pub mod worker;
 
 pub use auth::ApiToken;
 pub use boot::build_state;
@@ -56,14 +55,11 @@ pub struct AppState {
     /// The two stores this process owns and writes: filed feedback and
     /// the sync job queue, one doltlite file each.
     pub app: DynAppRepo,
-    /// Fan-out channel for live sync-job progress. The loop's host (and
-    /// the enqueue/cancel handlers) publish [`supervisor::ProgressEvent`]s
-    /// here; `GET /api/sync/stream` subscribes and pushes them to the UI
-    /// over SSE, so progress is realtime push, not poll.
-    pub progress_tx: supervisor::ProgressTx,
-    /// The supervisor loop this server runs: whether a sync is running,
-    /// and the store requests are written to.
-    pub sync: supervisor::SyncControl,
+    /// Fan-out channel for live sync-job progress. The worker (and the
+    /// enqueue/cancel handlers) publish [`worker::ProgressEvent`]s here;
+    /// `GET /api/sync/stream` subscribes and pushes them to the UI over
+    /// SSE, so progress is realtime push, not poll.
+    pub progress_tx: worker::ProgressTx,
     /// Fan-out channel for everything that changes in the data root *without*
     /// a job behind it — the config, the runner's record, the component store
     /// — plus a heartbeat, so a client can tell an idle stream from a dead
@@ -84,7 +80,7 @@ pub struct AppState {
     pub usage: Arc<usage::UsageMonitor>,
     /// The stores under the root a newer line of datalib wrote, found at
     /// boot. Non-empty means this server runs only to say so: no app
-    /// store is open, no loop runs, and `app_ready` is false
+    /// store is open, no worker runs, and `app_ready` is false
     /// (`datalib_store_meta::guard`).
     pub newer_root: Vec<datalib_store_meta::NewerBuild>,
 }
@@ -1266,11 +1262,14 @@ pub struct DagRecord {
     pub documents: std::collections::HashMap<String, i64>,
 }
 
-/// `sync_running` is [`supervisor::SyncControl::running`]: an open record
-/// with nothing running is a run that died.
-pub async fn dag_record(root: &std::path::Path, sync_running: bool) -> DagRecord {
+pub async fn dag_record(root: &std::path::Path) -> DagRecord {
     let state = datalib_dag::state::DagState::load(root).unwrap_or_default();
-    let live = sync_running;
+    // Is a runner actually holding this root? Momentarily taking the
+    // lock is the cheapest honest test: success means nobody had it.
+    // Racy by nature — a run could start a microsecond later — but the
+    // answer is only ever used to say "that open record belongs to a
+    // run that died", where being one poll stale costs nothing.
+    let live = datalib_dag::lock::runner_is_held(root);
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1361,7 +1360,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         documents: _,
-    } = dag_record(&s.root, s.sync.running()).await;
+    } = dag_record(&s.root).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
@@ -1515,8 +1514,7 @@ async fn pipeline_storage(
 /// A job as the API serves it: the row, plus two verdicts on its
 /// `state` that every reader needs and none should compute for itself.
 /// `active` is [`SyncJobRow::is_active`] (a job told to stop is active
-/// until its steps have exited and it is stamped finished); `stopping`
-/// is that wind-down.
+/// until the worker stamps it finished); `stopping` is that wind-down.
 #[derive(Debug, Serialize)]
 pub struct SyncJobView {
     #[serde(flatten)]
@@ -1592,39 +1590,13 @@ async fn sync_enqueue(
         .enqueue_job(kind, req.source_ids.as_deref())
         .await
         .map_err(repo_err_to_status)?;
-    // Push the new (pending) job so SSE clients show it immediately:
-    // before its request is written, so the loop's "running" cannot
-    // arrive ahead of it.
-    let _ = s.progress_tx.send(supervisor::ProgressEvent::new(
+    // Push the new (pending) job so SSE clients show it immediately,
+    // before the worker even claims it.
+    let _ = s.progress_tx.send(worker::ProgressEvent::new(
         &row,
         row.job_state().unwrap_or(JobState::Pending),
         row.progress_msg.clone(),
     ));
-    // A reset has no request: it needs the root to itself, and the host
-    // runs it between syncs.
-    if kind == JobKind::Reset {
-        s.sync.wake();
-        return Ok(Json(SyncJobView::from(row)));
-    }
-    if let Err(why) = supervisor::open_request_for(&s.sync, &row).await {
-        tracing::warn!(job = %row.id, "sync: could not start it: {why}");
-        s.app
-            .finish_job(&row.id, JobState::Failed, Some(&why))
-            .await
-            .map_err(repo_err_to_status)?;
-        let failed = s
-            .app
-            .get_job(&row.id)
-            .await
-            .map_err(repo_err_to_status)?
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        let _ = s.progress_tx.send(supervisor::ProgressEvent::new(
-            &failed,
-            JobState::Failed,
-            Some(why),
-        ));
-        return Ok(Json(SyncJobView::from(failed)));
-    }
     Ok(Json(SyncJobView::from(row)))
 }
 
@@ -1670,32 +1642,23 @@ async fn sync_job_cancel(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    let job = s.app.get_job(&id).await.map_err(repo_err_to_status)?;
-    let was_running = job
-        .as_ref()
+    let was_running = s
+        .app
+        .get_job(&id)
+        .await
+        .map_err(repo_err_to_status)?
         .is_some_and(|row| row.job_state() == Some(JobState::Running));
     s.app
         .request_cancel_job(&id)
         .await
         .map_err(repo_err_to_status)?;
-    // The job row says "stopping"; the request is what the loop acts on.
-    if job.is_some_and(|row| row.kind != JobKind::Reset.as_str()) {
-        let mailbox = s.sync.mailbox().await.map_err(|e| {
-            tracing::error!(job = %id, "sync: cannot reach the request store to stop it: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        mailbox.request_stop(&id, "ui").await.map_err(|e| {
-            tracing::error!(job = %id, "sync: could not ask its request to stop: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        s.sync.wake();
-    }
-    // A job not yet taken on is over as of now, so say so. A running
-    // job's event is the host's to send, once its steps have exited:
-    // pushing one here would tell the UI the sync was over while they
-    // were still checkpointing.
+    // A pending job that's canceled is never claimed by the worker, so
+    // it would emit nothing — push a terminal event ourselves so the UI
+    // updates. A running job's event is the worker's to send, once the
+    // runner has actually exited: pushing one here would tell the UI
+    // the sync was over while its steps were still checkpointing.
     if !was_running {
-        let _ = s.progress_tx.send(supervisor::ProgressEvent {
+        let _ = s.progress_tx.send(worker::ProgressEvent {
             id,
             kind: String::new(),
             source_ids: None,

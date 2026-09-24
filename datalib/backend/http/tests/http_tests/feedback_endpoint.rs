@@ -38,7 +38,6 @@ async fn post_feedback_inserts_row() {
     let api_token = ApiToken::from_value(TEST_TOKEN, root.as_path());
     let app_state = AppState {
         root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
         progress_tx: tokio::sync::broadcast::channel(16).0,
         root_tx: tokio::sync::broadcast::channel(16).0,

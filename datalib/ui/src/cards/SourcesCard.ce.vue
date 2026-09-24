@@ -863,7 +863,8 @@ function reparse() {
 }
 
 async function loadConfig() {
-  loadError.value = null;
+  // Cleared on success, not before the fetch: a banner that goes and
+  // comes back on every reload moves the table twice.
   try {
     let cfg = await fetchConfig();
     if (!cfg.exists) cfg = await fetchConfigScaffold();
@@ -876,6 +877,7 @@ async function loadConfig() {
     serverSourceCount.value = cfg.source_count;
     configExists.value = cfg.exists;
     configText.value = cfg.text;
+    loadError.value = null;
     reparse();
     if (sources.value.length === 0 && cfg.source_count > 0) {
       // The inspector is the only channel when someone hits this in the
@@ -1405,6 +1407,7 @@ function mergeJob(e: JobProgressEvent) {
 }
 
 let unsubscribe: (() => void) | null = null;
+const cardEl = ref<HTMLElement | null>(null);
 
 /// Everything this table shows, refetched together — which is the point, and
 /// why this is one function rather than three calls at three cadences. Rows come
@@ -1422,27 +1425,30 @@ onMounted(async () => {
   window.addEventListener("keydown", onWindowKeydown);
 
   // Two push channels, and the split matters.
-  unsubscribe = subscribeLive({
-    job: onJobEvent,
-    root: (e) => {
-      if (changed(e, "manage.rows")) {
-        // Deliberately *not* a fresh walk: this fires a few times a second
-        // while a run is going. The sampler is already walking on its own
-        // cadence; this just reads what it found.
-        void loadRows();
-      }
-      // The runner's record moving is the nearest thing to "a step
-      // committed" — nothing watches the stores themselves.
-      if (changed(e, "dag")) refreshHistory();
-      if (e.kind === "config_changed") {
-        // Config and record together, for the "Never run" reason above.
-        void reloadAll();
-      }
+  unsubscribe = subscribeLive(
+    {
+      job: onJobEvent,
+      root: (e) => {
+        if (changed(e, "manage.rows")) {
+          // Deliberately *not* a fresh walk: this fires once a second while
+          // a run is going. The sampler is already walking on its own
+          // cadence; this just reads what it found.
+          void loadRows();
+        }
+        // The runner's record moving is the nearest thing to "a step
+        // committed" — nothing watches the stores themselves.
+        if (changed(e, "dag")) refreshHistory();
+        if (e.kind === "config_changed") {
+          // Config and record together, for the "Never run" reason above.
+          void reloadAll();
+        }
+      },
+      // A reconnect means we may have slept through a whole run, and the
+      // sampler's own last walk with it. Ask for a fresh one.
+      resync: () => void reloadAll(true),
     },
-    // A reconnect means we may have slept through a whole run, and the
-    // sampler's own last walk with it. Ask for a fresh one.
-    resync: () => void reloadAll(true),
-  });
+    { onScreen: cardEl.value ?? undefined },
+  );
 });
 
 onUnmounted(() => {
@@ -1454,8 +1460,20 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="m2 m2-card">
+  <section ref="cardEl" class="m2 m2-card">
     <header class="m2-head">
+      <!-- Here rather than above the table: it comes and goes with each
+           job, and a line appearing above the table moves every row
+           under the pointer. -->
+      <p
+        v-if="banner"
+        class="m2-msg m2-head-msg"
+        :class="banner.ok ? 'good' : 'bad'"
+        :title="banner.text"
+        role="status"
+      >
+        {{ banner.text }}
+      </p>
       <div class="m2-head-actions">
         <button
           class="m2-btn m2-runall"
@@ -1513,7 +1531,6 @@ onUnmounted(() => {
       </ul>
       <button class="m2-btn" @click="openConfig">Show the config</button>
     </div>
-    <p v-if="banner" class="m2-msg" :class="banner.ok ? 'good' : 'bad'">{{ banner.text }}</p>
 
     <div class="m2-grid">
       <!-- The typed viewer over the rows the server assembled: a tree,
