@@ -93,7 +93,7 @@ export, or a backup pulled off a phone.
   <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail-calendar"><img src="datalib/ui/src/assets/fastmail.svg" width="40" height="40" alt=""><br><b>Fastmail Calendar</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/garmin_dark.svg"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""></picture><br><b>Garmin</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""><br><b>Garmin</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/github_dark.svg"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""></picture><br><b>GitHub</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gitlab"><img src="datalib/ui/src/assets/gitlab.svg" width="40" height="40" alt=""><br><b>GitLab</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
