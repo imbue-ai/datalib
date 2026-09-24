@@ -196,6 +196,7 @@ struct Account {
 fn scope_config_blob(api: &GarminApi, since: &str) -> Value {
     json!({
         "since": since,
+        "until": api.until,
         "metrics": api.metrics(),
         "activity_files": api.activity_files(),
         "wellness_files": api.wellness_files(),
@@ -214,6 +215,15 @@ fn days_through(start: NaiveDate, end: NaiveDate) -> u64 {
     ((end - start).num_days() + 1).max(0) as u64
 }
 
+/// Today, or the configured `until` when it is earlier: a window that
+/// ends in the past stays that window, run after run.
+fn walk_end(today: NaiveDate, until: Option<&str>) -> Result<NaiveDate> {
+    Ok(match until {
+        Some(u) => date(u)?.min(today),
+        None => today,
+    })
+}
+
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db;
     let api = opts.api;
@@ -222,6 +232,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         None => ymd(opts.today - Duration::days(DEFAULT_SINCE_DAYS)),
     };
     let since = date(&since_str)?;
+    let end = walk_end(opts.today, api.until.as_deref())?;
     let scope_cfg = scope_config_blob(&api, &since_str);
     let prior = datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
     // A `since` earlier than the one every cursor was walked under means
@@ -252,7 +263,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         account: &account,
         api: &api,
         since,
-        today: opts.today,
+        end,
         refresh,
         since_widened,
         sealer: opts.sealer.as_ref(),
@@ -322,7 +333,8 @@ struct Walk<'a> {
     account: &'a Account,
     api: &'a GarminApi,
     since: NaiveDate,
-    today: NaiveDate,
+    /// The last day this run walks: today, or `until` when it is earlier.
+    end: NaiveDate,
     refresh: Duration,
     since_widened: bool,
     sealer: Option<&'a Sealer>,
@@ -697,18 +709,18 @@ impl Walk<'_> {
         }
         let total: u64 = walks
             .iter()
-            .map(|(_, _, retry, start)| retry.len() as u64 + days_through(*start, self.today))
+            .map(|(_, _, retry, start)| retry.len() as u64 + days_through(*start, self.end))
             .sum();
         self.progress.set_length(Some(total));
         for (metric, scope, retry, start) in walks {
-            info!(event = "garmin_daily_begin", metric, retry = retry.len(), start = %ymd(start), end = %ymd(self.today), "walking one daily metric");
+            info!(event = "garmin_daily_begin", metric, retry = retry.len(), start = %ymd(start), end = %ymd(self.end), "walking one daily metric");
             if !retry.is_empty()
                 && self.walk_days(metric, &scope, &retry, false, s).await? == DaysEnd::Stopped
             {
                 return Ok(());
             }
             let forward: Vec<NaiveDate> =
-                start.iter_days().take_while(|d| *d <= self.today).collect();
+                start.iter_days().take_while(|d| *d <= self.end).collect();
             if self.walk_days(metric, &scope, &forward, true, s).await? == DaysEnd::Stopped {
                 return Ok(());
             }
@@ -828,8 +840,8 @@ impl Walk<'_> {
         let mut chunk_start = start;
         let mut seen: HashSet<String> = HashSet::new();
         let mut complete = true;
-        while chunk_start <= self.today && !self.stopping() {
-            let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(self.today);
+        while chunk_start <= self.end && !self.stopping() {
+            let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(self.end);
             let path = format!(
                 "/weight-service/weight/range/{}/{}?includeAll=true",
                 ymd(chunk_start),
@@ -872,9 +884,9 @@ impl Walk<'_> {
         let keep: HashSet<&str> = seen.iter().map(String::as_str).collect();
         s.weigh_ins_pruned = self
             .db
-            .prune_weigh_ins(&ymd(start), &ymd(self.today), &keep)
+            .prune_weigh_ins(&ymd(start), &ymd(self.end), &keep)
             .await?;
-        self.db.set_cursor(CURSOR_WEIGHT, &ymd(self.today)).await?;
+        self.db.set_cursor(CURSOR_WEIGHT, &ymd(self.end)).await?;
         Ok(())
     }
 
@@ -1038,7 +1050,7 @@ impl Walk<'_> {
         let prune_from = format!("{} 00:00:00", ymd(start + Duration::days(1)));
         s.activities_pruned = self.db.prune_activities(&prune_from, &keep).await?;
         self.db
-            .set_cursor(CURSOR_ACTIVITIES, &ymd(self.today))
+            .set_cursor(CURSOR_ACTIVITIES, &ymd(self.end))
             .await?;
         Ok(())
     }
@@ -1053,7 +1065,7 @@ impl Walk<'_> {
         let stored = self.db.stored_wellness_files().await?;
         let mut day = start;
         let mut edges = CasEdgeAccumulator::new();
-        while day <= self.today && !self.stopping() {
+        while day <= self.end && !self.stopping() {
             let d = ymd(day);
             // Unlike the JSON metrics a day's bundle does not get
             // corrected after the fact, so one already stored is left
@@ -1305,6 +1317,20 @@ pub fn fit_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window that ends in the past stays put; one ending in the
+    /// future cannot walk past today.
+    #[test]
+    fn the_walk_ends_at_until_or_today_whichever_is_first() {
+        let today = date("2026-09-24").unwrap();
+        assert_eq!(walk_end(today, None).unwrap(), today);
+        assert_eq!(
+            walk_end(today, Some("2025-08-31")).unwrap(),
+            date("2025-08-31").unwrap()
+        );
+        assert_eq!(walk_end(today, Some("2027-01-01")).unwrap(), today);
+        assert!(walk_end(today, Some("soon")).is_err());
+    }
 
     #[test]
     fn every_declared_metric_has_a_path() {

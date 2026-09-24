@@ -85,7 +85,7 @@ export type Field =
 /// What a `probe:` field is a picker *of*: which of the probe's items
 /// it takes. The wizard says `labels` and `mailboxes` in the source's
 /// own word for them (`CatalogEntry.mailboxNoun`), the rest as written.
-export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels";
+export type ProbeNoun = "labels" | "mailboxes" | "conversations" | "channels" | "calendars";
 
 export type CatalogEntry = {
   /// The group's `type`: the thing mirrored (`slack`, `email`, …).
@@ -206,6 +206,14 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "Oldest message to fetch (YYYY-MM-DD). This is what decides how far back the " +
           "mirror goes. Moving it earlier backfills on the next run; moving it later does nothing.",
+      },
+      {
+        kind: "date",
+        target: "api.until",
+        label: "Mirror until",
+        help:
+          "The last day to mirror (YYYY-MM-DD). Leave empty to keep up with today; a day in " +
+          "the past fixes the window, so the mirror stops growing.",
       },
       {
         kind: "bool",
@@ -604,6 +612,7 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Work calendar",
     wizard: true,
     credentialService: "google-calendar",
+    canProbe: true,
     fields: [
       {
         kind: "text",
@@ -616,11 +625,27 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "calendars",
         target: "google.calendars",
         label: "Only these calendars",
         help:
           "Calendar names as Google shows them, comma-separated. Empty mirrors every calendar " +
           "on the account's list, subscribed ones included. Adding one later downloads it whole.",
+      },
+      {
+        kind: "date",
+        target: "google.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "google.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
       },
     ],
   },
@@ -639,6 +664,7 @@ export const CATALOG: CatalogEntry[] = [
     // CalDAV takes an app password, which is its own latchkey service,
     // not the OAuth login the `fastmail` mail entry uses.
     credentialService: "fastmail-dav",
+    canProbe: true,
     fields: [
       {
         kind: "text",
@@ -649,11 +675,27 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "calendars",
         target: "fastmail.calendars",
         label: "Only these calendars",
         help:
           "Calendar names as Fastmail shows them, comma-separated. Empty mirrors every calendar. " +
           "Adding one later downloads it whole.",
+      },
+      {
+        kind: "date",
+        target: "fastmail.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "fastmail.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
       },
     ],
   },
@@ -672,6 +714,7 @@ export const CATALOG: CatalogEntry[] = [
     // server's host, and a host it does not ship needs registering
     // first, with an app password rather than a browser login — which
     // the Connect flow cannot do. The help text says how.
+    canProbe: true,
     fields: [
       {
         kind: "text",
@@ -692,11 +735,27 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "string_list",
+        probe: "calendars",
         target: "caldav.calendars",
         label: "Only these calendars",
         help:
           "Calendar names as the server shows them, comma-separated. Empty mirrors every calendar. " +
           "Adding one later downloads it whole.",
+      },
+      {
+        kind: "date",
+        target: "caldav.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "caldav.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
       },
     ],
   },

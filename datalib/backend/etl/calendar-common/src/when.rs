@@ -71,6 +71,13 @@ impl EventTime {
 
     /// Google's `{"date": "2026-09-13"}` or `{"dateTime":
     /// "2026-09-13T09:00:00-07:00", "timeZone": "America/Los_Angeles"}`.
+    ///
+    /// Google writes `dateTime` in the *calendar's* offset and names in
+    /// `timeZone` the zone the event was made in, which can differ: a
+    /// flight booked in Tokyo on a New York calendar comes back as
+    /// `02:00-05:00` beside `Asia/Tokyo`. The wall clock is read in the
+    /// named zone, so it and its label agree; a name the zone database
+    /// does not know is dropped rather than put beside the wrong clock.
     pub fn from_google(
         date: Option<&str>,
         date_time: Option<&str>,
@@ -78,11 +85,23 @@ impl EventTime {
     ) -> Option<Self> {
         if let Some(dt) = date_time {
             let at = DateTime::parse_from_rfc3339(dt).ok()?;
+            let named = zone.and_then(|z| Some((z, z.parse::<chrono_tz::Tz>().ok()?)));
+            let (local, offset_seconds, name) = match named {
+                Some((name, tz)) => {
+                    let there = at.with_timezone(&tz).fixed_offset();
+                    (
+                        there.naive_local(),
+                        there.offset().local_minus_utc(),
+                        Some(name.to_string()),
+                    )
+                }
+                None => (at.naive_local(), at.offset().local_minus_utc(), None),
+            };
             return Some(EventTime::At {
-                local: at.naive_local(),
+                local,
                 zone: Zone::Fixed {
-                    offset_seconds: at.offset().local_minus_utc(),
-                    name: zone.filter(|z| !z.is_empty()).map(str::to_string),
+                    offset_seconds,
+                    name,
                 },
             });
         }
@@ -318,6 +337,36 @@ mod tests {
             "2026-09-18T19:00:00-07:00"
         );
         assert_eq!(t.display(), "Fri 18 Sep 2026, 19:00 (America/Los_Angeles)");
+        let d = EventTime::from_google(Some("2026-07-13"), None, None).unwrap();
+        assert_eq!(
+            d,
+            EventTime::Date(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
+        );
+    }
+
+    /// Measured live: Google writes `dateTime` in the calendar's offset and
+    /// `timeZone` in the event's own zone. The page showed New York's wall
+    /// clock labelled Tokyo — a different instant from the one stored.
+    #[test]
+    fn a_google_time_is_shown_in_its_own_zone_not_the_calendars() {
+        let t = EventTime::from_google(None, Some("2023-12-10T02:00:00-05:00"), Some("Asia/Tokyo"))
+            .unwrap();
+        assert_eq!(t.display(), "Sun 10 Dec 2023, 16:00 (Asia/Tokyo)");
+        assert_eq!(
+            t.instant(None).unwrap().at.with_timezone(&Utc),
+            DateTime::parse_from_rfc3339("2023-12-10T07:00:00Z").unwrap()
+        );
+        let unknown = EventTime::from_google(
+            None,
+            Some("2023-12-10T02:00:00-05:00"),
+            Some("Tokyo Standard Time"),
+        )
+        .unwrap();
+        assert_eq!(unknown.display(), "Sun 10 Dec 2023, 02:00 (UTC−05:00)");
+    }
+
+    #[test]
+    fn a_google_date_is_a_date() {
         let d = EventTime::from_google(Some("2026-07-13"), None, None).unwrap();
         assert_eq!(
             d,

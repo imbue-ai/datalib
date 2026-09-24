@@ -19,7 +19,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow};
-use super::{select_calendars, FetchSummary};
+use super::{select_calendars, FetchSummary, Window};
 
 pub const HTTP_SERVICE: HttpService = HttpService::GoogleCalendar;
 pub const BASE: &str = "https://www.googleapis.com/calendar/v3";
@@ -29,6 +29,8 @@ pub struct FetchOptions {
     /// Calendar names or ids to mirror; empty for every calendar on the
     /// account's list.
     pub calendars: Vec<String>,
+    /// Only what falls in these days; `None` mirrors everything.
+    pub window: Option<Window>,
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -40,10 +42,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     let list = list_calendars(lk, &mut summary).await?;
-    let login = list
-        .iter()
-        .find(|c| c.get("primary").and_then(Value::as_bool) == Some(true))
-        .and_then(|c| str_of(c, "id"));
+    let login = primary_id(&list);
     db.upsert_account(&AccountRow {
         id: "google".into(),
         method: "google".into(),
@@ -71,7 +70,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let label = cal.display_name.as_deref().unwrap_or(&cal.id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        if let Err(e) = sync_calendar(db, &cal.id, lk, &mut summary).await {
+        if let Err(e) = sync_calendar(db, &cal.id, opts.window.as_ref(), lk, &mut summary).await {
             summary.errors += 1;
             problems.push(RunProblem::listing(
                 &format!("calendar {label}"),
@@ -83,7 +82,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(summary)
 }
 
-async fn list_calendars(lk: &LatchkeySettings, summary: &mut FetchSummary) -> Result<Vec<Value>> {
+pub(crate) async fn list_calendars(
+    lk: &LatchkeySettings,
+    summary: &mut FetchSummary,
+) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     let mut page: Option<String> = None;
     loop {
@@ -105,6 +107,13 @@ async fn list_calendars(lk: &LatchkeySettings, summary: &mut FetchSummary) -> Re
     }
 }
 
+/// The primary calendar's id, which is the account's address.
+pub(crate) fn primary_id(list: &[Value]) -> Option<String> {
+    list.iter()
+        .find(|c| c.get("primary").and_then(Value::as_bool) == Some(true))
+        .and_then(|c| str_of(c, "id"))
+}
+
 pub fn calendar_list_url(page: Option<&str>) -> String {
     let mut url = format!("{BASE}/users/me/calendarList?maxResults=250&showHidden=true");
     if let Some(p) = page {
@@ -113,7 +122,7 @@ pub fn calendar_list_url(page: Option<&str>) -> String {
     url
 }
 
-fn calendar_row(c: &Value) -> Option<CalendarRow> {
+pub(crate) fn calendar_row(c: &Value) -> Option<CalendarRow> {
     Some(CalendarRow {
         id: str_of(c, "id")?,
         account_id: "google".into(),
@@ -131,16 +140,26 @@ fn calendar_row(c: &Value) -> Option<CalendarRow> {
 async fn sync_calendar(
     db: &RawDb,
     calendar_id: &str,
+    window: Option<&Window>,
     lk: &LatchkeySettings,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let token = db.sync_token(calendar_id).await?;
+    // Google refuses a sync token beside a time bound, so a windowed
+    // calendar is listed whole every run, and keeps no token for a later
+    // unwindowed run to resume from.
+    let token = match window {
+        Some(_) => None,
+        None => db.sync_token(calendar_id).await?,
+    };
     let full = token.is_none();
     let known = db.google_event_ids(calendar_id).await?;
     let mut seen = Seen::default();
     let mut page: Option<String> = None;
     let next_sync = loop {
-        let url = events_url(calendar_id, token.as_deref(), page.as_deref());
+        let url = match window {
+            Some(w) => windowed_events_url(calendar_id, w, page.as_deref()),
+            None => events_url(calendar_id, token.as_deref(), page.as_deref()),
+        };
         summary.requests += 1;
         let v = match get_json(&url, lk).await {
             Ok(v) => v,
@@ -152,7 +171,7 @@ async fn sync_calendar(
                     "Google expired the sync token; listing the calendar whole"
                 );
                 db.set_sync_token(calendar_id, None).await?;
-                return Box::pin(sync_calendar(db, calendar_id, lk, summary)).await;
+                return Box::pin(sync_calendar(db, calendar_id, window, lk, summary)).await;
             }
             Err(e) => return Err(e),
         };
@@ -172,7 +191,25 @@ async fn sync_calendar(
         summary.events_deleted += gone.len();
         db.delete_google_events(calendar_id, &gone).await?;
     }
+    let next_sync = next_sync.filter(|_| window.is_none());
     db.set_sync_token(calendar_id, next_sync.as_deref()).await
+}
+
+/// The listing of one window: every event with some part inside it —
+/// a series whose occurrences reach into it included — and the changed
+/// occurrences that fall inside it.
+pub fn windowed_events_url(calendar_id: &str, window: &Window, page: Option<&str>) -> String {
+    let mut url = events_url(calendar_id, None, page);
+    if let Some(start) = window.start {
+        url.push_str(&format!(
+            "&timeMin={}",
+            encode(&format!("{start}T00:00:00Z"))
+        ));
+    }
+    if let Some(end) = window.end {
+        url.push_str(&format!("&timeMax={}", encode(&format!("{end}T00:00:00Z"))));
+    }
+    url
 }
 
 pub fn events_url(calendar_id: &str, sync_token: Option<&str>, page: Option<&str>) -> String {
