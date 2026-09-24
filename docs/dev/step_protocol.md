@@ -171,7 +171,7 @@ metrics for it:
 
 A step that seals part of its output while still running says so with
 a `checkpoint` (the streaming protocol in
-`docs/dev/plans/streaming_steps_plan.md`), and should say how many rows
+`docs/dev/plans/completed/streaming_steps_plan.md`), and should say how many rows
 that seal added:
 
 ```json
