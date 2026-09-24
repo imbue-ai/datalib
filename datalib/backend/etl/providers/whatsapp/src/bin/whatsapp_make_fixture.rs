@@ -218,6 +218,8 @@ async fn open_writable_sqlite(path: &Path) -> Result<SqlitePool> {
         .create_if_missing(true);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await
         .context("open fixture sqlite pool")

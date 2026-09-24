@@ -707,6 +707,8 @@ impl World {
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let index = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 SqliteConnectOptions::new()
                     .filename(&db)
