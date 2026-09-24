@@ -250,6 +250,7 @@ rust_binary(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",

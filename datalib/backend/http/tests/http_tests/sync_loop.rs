@@ -12,9 +12,14 @@ use tower::ServiceExt;
 const TOKEN: &str = "sync-loop-test-token";
 
 async fn server(root: &Path) -> AppState {
-    datalib_http::build_state(root.to_path_buf(), None, ApiToken::from_value(TOKEN, root))
-        .await
-        .expect("the server boots")
+    datalib_http::build_state(
+        root.to_path_buf(),
+        None,
+        None,
+        ApiToken::from_value(TOKEN, root),
+    )
+    .await
+    .expect("the server boots")
 }
 
 async fn call(

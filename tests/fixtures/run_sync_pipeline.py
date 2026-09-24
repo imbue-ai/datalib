@@ -98,6 +98,10 @@ Args (positional):
                       `ics` method reads them, and renders a document
                       per event, per recurring series and per changed
                       occurrence.
+    30: datalib-http binary, optional. Given, every sync goes through a
+                      server on the root, driven over its API the way
+                      the web client drives it (`sync_drivers.py`);
+                      absent, through `datalib-dag`.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -118,6 +122,11 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+
+# A py_test's interpreter runs with safe-path on, which leaves this
+# script's own directory off `sys.path`.
+sys.path.insert(0, str(Path(__file__).parent))
+from sync_drivers import CliDriver, HttpDriver, point_playback
 
 # Public fixture AEP — the signal-tng fixture is generated and
 # decrypted with this passphrase. Documented in the signal-backup
@@ -185,6 +194,7 @@ def main() -> int:
     claude_code_fx = Path(sys.argv[27]).resolve()
     codex_fx = Path(sys.argv[28]).resolve()
     calendar_fx = Path(sys.argv[29]).resolve()
+    http_bin = Path(sys.argv[30]).resolve() if len(sys.argv) > 30 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -443,18 +453,21 @@ params = {params}
         # store, so there every source is shaped like a pre-seeded one:
         # a group, a render step with no inputs, no ingest step.
         root_entries.append(group_block + render_block + render_params_line)
-    dag_config = workspace / "dag.toml"
 
-    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
-        """The config, with a diff group per source whose two commits are
-        known. A diff group is `type = "diff"` + `source`; its one step
-        is `render_markdown` reading the source's ingest tree, and the
-        fan-in names it like any render step. Written twice: the DAG's
-        own, and the body of a materialized root's, where the diff step
-        — like every render step there — declares no inputs."""
-        blocks = list(steps)
-        root_blocks = list(root_entries)
-        rendered = [f'"{n}/render_markdown"' for n in sources]
+    def config_texts(
+        diffs: dict[str, tuple[str, str]], count: int | None = None
+    ) -> tuple[str, str]:
+        """The config with the first `count` sources (all by default),
+        and a diff group per source whose two commits are known. A diff
+        group is `type = "diff"` + `source`; its one step is
+        `render_markdown` reading the source's ingest tree, and the
+        fan-in names it like any render step. Two texts: the DAG's own,
+        and the body of a materialized root's, where the diff step — like
+        every render step there — declares no inputs."""
+        names = list(sources)[:count]
+        blocks = steps[: len(names)]
+        root_blocks = root_entries[: len(names)]
+        rendered = [f'"{n}/render_markdown"' for n in names]
         for source_id, (from_commit, to_commit) in diffs.items():
             group = DIFF_GROUPS[source_id]
             group_block = (
@@ -482,11 +495,7 @@ group = "unified_index"
 function = "grid_index"
 inputs = [{rendered_list}]"""
         )
-        dag_config.write_text(
-            f"data_root = {_toml_value(str(workspace))}\n\n"
-            + "\n\n".join(blocks)
-            + "\n"
-        )
+        dag_text = "\n\n".join(blocks) + "\n"
         # Everything a materialized root's config needs but `data_root`
         # and the applet, which only the materializer knows. Both
         # fan-ins are declared and wired the way a real root's are; the
@@ -507,11 +516,12 @@ group = "unified_index"
 function = "qmd_index"
 inputs = [{rendered_list}]"""
         )
-        (workspace / "config_body.toml").write_text("\n\n".join(root_blocks) + "\n")
+        return dag_text, "\n\n".join(root_blocks) + "\n"
 
-    # A workspace shared across pipeline runs already has its diff groups;
-    # the config has to keep naming them, or the index drops their rows.
-    write_config(_load_diff_pairs(workspace))
+    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
+        dag_text, root_text = config_texts(diffs)
+        driver.build_config([dag_text])
+        (workspace / "config_body.toml").write_text(root_text)
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -549,37 +559,51 @@ inputs = [{rendered_list}]"""
     # `DATALIB_HTTP_PLAYBACK` redirects every provider transport to
     # the playback tree (steps inherit the runner's env); the fixture
     # AEP/root key let the signal/whatsapp extractors decrypt the
-    # snapshots generated above.
+    # snapshots generated above. The playback path is a link, so the
+    # second capture can replace the first under a running server.
+    playback_live = workspace / "playback_live"
+    point_playback(playback_live, playback)
     pipeline_env = {
         **os.environ,
-        "DATALIB_HTTP_PLAYBACK": str(playback),
+        "DATALIB_HTTP_PLAYBACK": str(playback_live),
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }
-    pipeline_argv = [
-        str(dag_bin),
-        str(dag_config),
-        "--binary-dir",
-        str(bindir),
-        "--now",
-        now,
-    ]
-    # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
-    # ingested_tng_test's multi-run case: empty every raw store, then run
-    # the pipeline as usual.
-    if reset:
-        _run([*pipeline_argv, "--reset", ",".join(ingest_ids)], env=pipeline_env)
-    _run(pipeline_argv, env=pipeline_env)
-
-    _run_pipeline_twice_and_diff(
-        workspace,
-        carddav_work,
-        carddav_v2,
-        playback_v2,
-        pipeline_argv,
-        pipeline_env,
-        write_config,
+    driver = (
+        HttpDriver(http_bin, workspace, bindir, now, pipeline_env)
+        if http_bin
+        else CliDriver(dag_bin, workspace, bindir, now, pipeline_env)
     )
+    try:
+        # One save per source added, as the app's wizard does it; the last
+        # names every source. A workspace shared across pipeline runs
+        # already has its diff groups, and the config has to keep naming
+        # them, or the index drops their rows.
+        diffs = _load_diff_pairs(workspace)
+        driver.build_config(
+            [config_texts({}, k)[0] for k in range(1, len(sources))]
+            + [config_texts(diffs)[0]]
+        )
+        (workspace / "config_body.toml").write_text(config_texts(diffs)[1])
+
+        # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
+        # ingested_tng_test's multi-run case: empty every raw store, then
+        # run the pipeline as usual.
+        if reset:
+            driver.reset(ingest_ids)
+        driver.sync()
+
+        _run_pipeline_twice_and_diff(
+            workspace,
+            carddav_work,
+            carddav_v2,
+            playback_live,
+            playback_v2,
+            driver,
+            write_config,
+        )
+    finally:
+        driver.close()
     return 0
 
 
@@ -592,9 +616,9 @@ def _run_pipeline_twice_and_diff(
     workspace: Path,
     carddav_work: Path,
     carddav_v2: Path,
+    playback_live: Path,
     playback_v2: Path,
-    pipeline_argv: list[str],
-    pipeline_env: dict[str, str],
+    driver,
     write_config,
 ) -> None:
     """Give two raw stores a second commit, then a diff group for each.
@@ -621,10 +645,10 @@ def _run_pipeline_twice_and_diff(
     before = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
     for f in carddav_v2.glob("*.vcf"):
         shutil.copy(f, carddav_work / f.name)
-    chains = ",".join(f"{s}/ingest" for s in DIFF_GROUPS)
-    env_v2 = {**pipeline_env, "DATALIB_HTTP_PLAYBACK": str(playback_v2)}
+    chains = [f"{s}/ingest" for s in DIFF_GROUPS]
+    point_playback(playback_live, playback_v2)
     print("[run_sync_pipeline] second ingest → v2", flush=True)
-    _run([*pipeline_argv, "--sync", chains], env=env_v2)
+    driver.sync(chains)
     after = {s: _ingest_commit(workspace, s) for s in DIFF_GROUPS}
     for s in DIFF_GROUPS:
         if before[s] == after[s]:
@@ -643,7 +667,7 @@ def _run_pipeline_twice_and_diff(
     # source's ingest and runs as part of that chain. The Slack ingest's
     # incremental request has no tape in either tree now, which it
     # reports and skips, and the store does not move.
-    _run([*pipeline_argv, "--sync", chains], env=env_v2)
+    driver.sync(chains)
 
 
 def _diff_pairs_file(workspace: Path) -> Path:
