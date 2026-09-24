@@ -112,7 +112,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     let log = datalib_http::logging::init(root).expect("the store opens in a temp dir");
     let (tx, mut rx) = broadcast::channel(256);
     let state = state(root, tx.clone()).await;
-    datalib_http::watch::spawn(root.to_path_buf(), tx);
+    datalib_http::watch::spawn(root.to_path_buf(), tx).await;
     // The boot lines `init` just wrote are not a page's doing; let them
     // land before the page starts.
     tokio::time::sleep(Duration::from_millis(1_000)).await;

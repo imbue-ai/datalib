@@ -28,6 +28,23 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// second is live enough.
 const MANAGE_ROWS_EVERY: Duration = Duration::from_secs(1);
 
+/// The windows the stream holds frames back by. A test sets both to zero,
+/// so frames come out one per change, in the order the changes happened.
+#[derive(Debug, Clone, Copy)]
+pub struct Timings {
+    pub debounce: Duration,
+    pub manage_rows_every: Duration,
+}
+
+impl Default for Timings {
+    fn default() -> Self {
+        Timings {
+            debounce: DEBOUNCE,
+            manage_rows_every: MANAGE_ROWS_EVERY,
+        }
+    }
+}
+
 /// How often to publish a [`RootEvent::Heartbeat`] on an otherwise
 /// silent stream.
 pub const HEARTBEAT: Duration = Duration::from_secs(10);
@@ -263,31 +280,45 @@ fn frames(
         .collect()
 }
 
-/// The least time between two frames of this event, when it has one.
-fn min_interval(event: RootEvent) -> Option<Duration> {
-    match event {
-        RootEvent::TableChanged {
-            table: Table::ManageRows,
-        } => Some(MANAGE_ROWS_EVERY),
-        _ => None,
-    }
-}
-
-/// Holds back a frame that comes sooner than [`min_interval`] after the
-/// last one of its event, and lets it out when that interval is up. The
+/// Holds back a frame that comes sooner than its event's interval after
+/// the last one of it, and lets it out when that interval is up. The
 /// first frame after a quiet spell goes at once; a stream of them goes
 /// once per interval, the last one included, so nothing is lost.
-#[derive(Default)]
 struct Throttle {
+    manage_rows_every: Duration,
     last_sent: HashMap<RootEvent, Instant>,
     /// Held frames' events, with the chain they would carry.
     held: HashMap<RootEvent, Option<u32>>,
 }
 
+impl Default for Throttle {
+    fn default() -> Self {
+        Throttle::new(MANAGE_ROWS_EVERY)
+    }
+}
+
 impl Throttle {
+    fn new(manage_rows_every: Duration) -> Self {
+        Throttle {
+            manage_rows_every,
+            last_sent: HashMap::new(),
+            held: HashMap::new(),
+        }
+    }
+
+    /// The least time between two frames of this event, when it has one.
+    fn min_interval(&self, event: RootEvent) -> Option<Duration> {
+        match event {
+            RootEvent::TableChanged {
+                table: Table::ManageRows,
+            } => Some(self.manage_rows_every),
+            _ => None,
+        }
+    }
+
     /// `Some` to send now; `None` when held.
     fn offer(&mut self, frame: RootFrame, now: Instant) -> Option<RootFrame> {
-        let Some(every) = min_interval(frame.event) else {
+        let Some(every) = self.min_interval(frame.event) else {
             return Some(frame);
         };
         let chain = match self.held.remove(&frame.event) {
@@ -334,7 +365,7 @@ impl Throttle {
     }
 
     fn release_at(&self, event: RootEvent) -> Option<Instant> {
-        Some(*self.last_sent.get(&event)? + min_interval(event)?)
+        Some(*self.last_sent.get(&event)? + self.min_interval(event)?)
     }
 }
 
@@ -403,7 +434,35 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
     frames(out, server_log, chain)
 }
 
-pub fn spawn(root: PathBuf, tx: RootTx) {
+/// Start watching `root`. Resolves once every watch is armed and the
+/// stores' counters are read, so a change after that is reported.
+pub fn spawn(root: PathBuf, tx: RootTx) -> impl std::future::Future<Output = ()> + Send {
+    spawn_with(root, tx, Timings::default())
+}
+
+pub fn spawn_with(
+    root: PathBuf,
+    tx: RootTx,
+    timings: Timings,
+) -> impl std::future::Future<Output = ()> + Send {
+    let (watching_tx, watching) = tokio::sync::oneshot::channel::<()>();
+    let (record_tx, record) = tokio::sync::oneshot::channel::<()>();
+    let ready = async move {
+        // A sender dropped on a failure path resolves its half too.
+        let _ = watching.await;
+        let _ = record.await;
+    };
+    spawn_watches(root, tx, timings, watching_tx, record_tx);
+    ready
+}
+
+fn spawn_watches(
+    root: PathBuf,
+    tx: RootTx,
+    timings: Timings,
+    watching_tx: tokio::sync::oneshot::Sender<()>,
+    record_tx: tokio::sync::oneshot::Sender<()>,
+) {
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(HEARTBEAT);
@@ -441,7 +500,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
-    tokio::spawn(watch_record(root.clone(), raw_tx.clone()));
+    tokio::spawn(watch_record(root.clone(), raw_tx.clone(), record_tx));
     let watch_root = root.clone();
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -497,7 +556,8 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         // Started from the stores so the first burst reports only what
         // moved in them, not everything they already held.
         let mut seen = Seen::now(&root).await;
-        let mut throttle = Throttle::default();
+        let mut throttle = Throttle::new(timings.manage_rows_every);
+        let _ = watching_tx.send(());
         loop {
             // Wait for a file to move, or for a held frame to come due.
             let first = match throttle.next_due() {
@@ -519,7 +579,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             // everything that lands inside it. One burst → one message
             // per kind.
             let mut pending = HashSet::from([first]);
-            let deadline = tokio::time::Instant::now() + DEBOUNCE;
+            let deadline = tokio::time::Instant::now() + timings.debounce;
             // Ends on the window closing (`Err`) or the sender going
             // away (`Ok(None)`) — both mean "publish what you have".
             while let Ok(Some(moved)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
@@ -554,7 +614,11 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
 /// to a file held open. `wake::Listener` watches it with kqueue (inotify
 /// on Linux) instead, and `PRAGMA data_version` on a connection of our own
 /// says whether anything committed moved.
-async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<Moved>) {
+async fn watch_record(
+    root: PathBuf,
+    moved: tokio::sync::mpsc::UnboundedSender<Moved>,
+    ready: tokio::sync::oneshot::Sender<()>,
+) {
     let store = match datalib_dag::supervisor::store::Store::open(&root).await {
         Ok(store) => store,
         Err(e) => {
@@ -565,6 +629,7 @@ async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<M
         }
     };
     let mut listener = Listener::new(&store, "watch", &[]).await;
+    let _ = ready.send(());
     let mut seen = None;
     loop {
         match store.data_version().await {
@@ -801,20 +866,48 @@ mod tests {
         assert_eq!(classify(root, &root.join("config.tmp")), None);
     }
 
-    async fn heard(
-        rx: &mut broadcast::Receiver<RootFrame>,
-        want: RootEvent,
-        mut stimulus: impl FnMut(),
-    ) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    /// No window and no throttle: one frame per change, in the order the
+    /// changes happened, which is what lets [`upto_barrier`] prove a
+    /// negative without waiting.
+    const TEST_TIMINGS: Timings = Timings {
+        debounce: Duration::ZERO,
+        manage_rows_every: Duration::ZERO,
+    };
+
+    async fn watching(root: &Path) -> broadcast::Receiver<RootFrame> {
+        let (tx, rx) = broadcast::channel(256);
+        spawn_with(root.to_path_buf(), tx, TEST_TIMINGS).await;
+        rx
+    }
+
+    /// The next frame, or a failure naming what never came.
+    async fn next_frame(rx: &mut broadcast::Receiver<RootFrame>, waiting_for: &str) -> RootEvent {
+        let deadline = Duration::from_secs(20);
+        match tokio::time::timeout(deadline, rx.recv()).await {
+            Ok(Ok(frame)) => frame.event,
+            Ok(Err(e)) => panic!("the stream broke waiting for {waiting_for}: {e}"),
+            Err(_) => panic!("no {waiting_for} within {deadline:?}"),
+        }
+    }
+
+    async fn heard(rx: &mut broadcast::Receiver<RootFrame>, want: RootEvent) {
+        while next_frame(rx, &format!("{want:?}")).await != want {}
+    }
+
+    /// Every frame the changes before this call caused. Writes a component
+    /// file — a change whose one frame is `FrontendChanged` — and returns
+    /// what came before that frame: frames leave in the order their
+    /// changes happened, so anything earlier is in here, and there is no
+    /// event for "nothing happened" to wait for instead.
+    async fn upto_barrier(root: &Path, rx: &mut broadcast::Receiver<RootFrame>) -> Vec<RootEvent> {
+        let barrier = root.join("system/frontend/barrier");
+        std::fs::write(&barrier, uuid::Uuid::now_v7().to_string()).unwrap();
+        let mut before = Vec::new();
         loop {
-            stimulus();
-            match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
-                Ok(Ok(got)) if got.event == want => return,
-                // Some other kind, or a lagged receiver: keep listening.
-                Ok(_) => continue,
-                Err(_) if tokio::time::Instant::now() < deadline => continue,
-                Err(_) => panic!("no {want:?} within 20s"),
+            match next_frame(rx, "the barrier's FrontendChanged").await {
+                RootEvent::FrontendChanged => return before,
+                RootEvent::Heartbeat => {}
+                other => before.push(other),
             }
         }
     }
@@ -826,47 +919,23 @@ mod tests {
     #[tokio::test]
     async fn an_external_config_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
-        let root = td.path().to_path_buf();
-        let mut n = 0;
-        heard(&mut rx, RootEvent::ConfigChanged, move || {
-            n += 1;
-            let tmp = root.join("config.tmp");
-            std::fs::write(&tmp, format!("# rewrite {n}\n")).unwrap();
-            std::fs::rename(&tmp, root.join("config.toml")).unwrap();
-        })
-        .await;
+        let mut rx = watching(td.path()).await;
+        let cfg = td.path().join("config.toml");
+        std::fs::write(&cfg, "# written by someone else\n").unwrap();
+        heard(&mut rx, RootEvent::ConfigChanged).await;
     }
 
-    /// The same for the loop's record, whoever runs the loop. The store is
-    /// opened before the watch starts, as a running loop's is: its file
-    /// appearing once is not what a subscriber needs to hear, its every
-    /// commit is.
+    /// A `datalib-dag` in a terminal writes the loop's store; the UI hears
+    /// it with no poll behind it.
     #[tokio::test]
     async fn a_terminal_loops_record_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await
             .unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
-        let writer = tokio::spawn(async move {
-            loop {
-                store.pause("a/raw", "loop").await.unwrap();
-                store.resume("a/raw").await.unwrap();
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        });
-        heard(
-            &mut rx,
-            RootEvent::TableChanged { table: Table::Dag },
-            || {},
-        )
-        .await;
-        writer.abort();
+        let mut rx = watching(td.path()).await;
+        store.pause("a/raw", "loop").await.unwrap();
+        heard(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
     }
 
     /// A data root reached through a symlink still reports.
@@ -879,30 +948,28 @@ mod tests {
         let link = td.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let (tx, mut rx) = broadcast::channel(64);
         // Watched through the link...
-        spawn(link, tx);
-
-        // ...and written through the real path, the way another
-        // process that resolved it would.
-        let mut n = 0;
-        heard(&mut rx, RootEvent::ConfigChanged, move || {
-            n += 1;
-            let tmp = real.join("config.tmp");
-            std::fs::write(&tmp, format!("# rewrite {n}\n")).unwrap();
-            std::fs::rename(&tmp, real.join("config.toml")).unwrap();
-        })
-        .await;
+        let mut rx = watching(&link).await;
+        // ...and written through the real path, the way another process
+        // that resolved it would.
+        let tmp = real.join("config.tmp");
+        std::fs::write(&tmp, "# rewritten\n").unwrap();
+        std::fs::rename(&tmp, real.join("config.toml")).unwrap();
+        heard(&mut rx, RootEvent::ConfigChanged).await;
     }
 
-    /// Reading the component store is not a change to it.
+    /// Reading the component store is not a change to it — on Linux, a
+    /// read reported as a change is a feedback loop, not just a spurious
+    /// refetch.
     #[tokio::test]
     async fn reading_the_component_store_is_not_a_change_to_it() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
         let frontend = td.path().join("system/frontend");
+        std::fs::create_dir_all(&frontend).unwrap();
+        std::fs::write(frontend.join("card.js"), "x").unwrap();
+        std::fs::write(td.path().join("config.toml"), "x").unwrap();
+        let mut rx = watching(td.path()).await;
+
         for _ in 0..20 {
             // What `FrontendStore::scan` does: walk it and open what
             // it finds.
@@ -912,12 +979,8 @@ mod tests {
             }
             let _ = std::fs::read(td.path().join("config.toml"));
         }
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        assert!(
-            rx.try_recv().is_err(),
-            "reading the data root was reported as changing it — on Linux \
-             that is a feedback loop, not just a spurious refetch"
-        );
+        let before = upto_barrier(td.path(), &mut rx).await;
+        assert!(before.is_empty(), "reads reported as changes: {before:?}");
     }
 
     /// The server's own log line, written through the real writer,
@@ -927,11 +990,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_log_line_reaches_the_log_and_nothing_else() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-        // Let the spawn read the store's counters before the first line
-        // lands, so the line is what moves and not the file appearing.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut rx = watching(td.path()).await;
 
         let server = datalib_runs::ProcessLogWriter::start(
             td.path(),
@@ -940,33 +999,27 @@ mod tests {
             datalib_runs::Retention::default(),
         )
         .unwrap();
-        let mut n = 0;
-        heard(
-            &mut rx,
-            RootEvent::TableChanged { table: Table::Log },
-            || {
-                n += 1;
-                server.log(datalib_runs::LogRow {
-                    level: "debug".into(),
-                    msg: format!("line {n}"),
-                    ..Default::default()
-                });
-            },
-        )
-        .await;
-        drop(server);
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
-        while let Ok(got) = rx.try_recv() {
-            assert!(
-                !matches!(
-                    got.event,
-                    RootEvent::TableChanged {
-                        table: Table::ManageRows
-                    }
-                ),
-                "a server log line was reported as a change to the Manage rows"
-            );
-        }
+        server.log(datalib_runs::LogRow {
+            level: "debug".into(),
+            msg: "a line".into(),
+            ..Default::default()
+        });
+        // Dropping the writer joins its thread, so every write has landed
+        // after it. Off the runtime: the watch reads the run store on it.
+        tokio::task::spawn_blocking(move || drop(server))
+            .await
+            .unwrap();
+        let before = upto_barrier(td.path(), &mut rx).await;
+        assert!(
+            before.contains(&RootEvent::TableChanged { table: Table::Log }),
+            "the line was not reported: {before:?}"
+        );
+        assert!(
+            !before.contains(&RootEvent::TableChanged {
+                table: Table::ManageRows
+            }),
+            "a server log line was reported as a change to the Manage rows: {before:?}"
+        );
     }
 
     /// The grid index reports when its HEAD moves and not when its file
@@ -985,8 +1038,7 @@ mod tests {
         // pass; the watch is armed on it from the start here too.
         let db = datalib_core::layout::grid_index_db(&root);
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(root.clone(), tx);
+        let mut rx = watching(&root).await;
 
         async fn write(db: &Path, id: i64, commit: bool) {
             let writer = datalib_core::store::open_pool(db).await.unwrap();
@@ -1008,59 +1060,23 @@ mod tests {
             }
             writer.close().await;
         }
-        async fn index_changed(rx: &mut broadcast::Receiver<RootFrame>) -> bool {
-            matches!(
-                tokio::time::timeout(Duration::from_millis(500), rx.recv()).await,
-                Ok(Ok(RootFrame {
-                    event: RootEvent::IndexChanged,
-                    ..
-                }))
-            )
-        }
 
-        // Committing until heard, because the watch may start delivering
-        // a little after `spawn` returns — the same shape as `heard`.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        let mut n = 0;
-        loop {
-            n += 1;
-            write(&db, n, true).await;
-            if index_changed(&mut rx).await {
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "no IndexChanged within 20s"
-            );
-        }
-        // Every commit the loop made gets reported; let the reports land
-        // before listening for one that must not come.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        while rx.try_recv().is_ok() {}
+        write(&db, 1, true).await;
+        heard(&mut rx, RootEvent::IndexChanged).await;
+        upto_barrier(&root, &mut rx).await;
 
-        // The watch is live. Now writes with no commit behind them: the
-        // file moves, HEAD does not.
+        // Writes with no commit behind them: the file moves, HEAD does not.
         for i in 100..110 {
             write(&db, i, false).await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        while let Ok(got) = rx.try_recv() {
-            assert_ne!(
-                got.event,
-                RootEvent::IndexChanged,
-                "a write the step has not committed was reported as an index change"
-            );
-        }
+        let before = upto_barrier(&root, &mut rx).await;
+        assert!(
+            !before.contains(&RootEvent::IndexChanged),
+            "a write the step has not committed was reported as an index change"
+        );
 
         write(&db, 200, true).await;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        while !index_changed(&mut rx).await {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the commit was not reported within 20s"
-            );
-        }
+        heard(&mut rx, RootEvent::IndexChanged).await;
     }
 
     /// The control for the filter, and the reason `classify` is not
@@ -1068,22 +1084,15 @@ mod tests {
     #[tokio::test]
     async fn writes_to_the_usage_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
+        let mut rx = watching(td.path()).await;
         let usage = td.path().join("system/usage.doltlite_db");
         for n in 0..20 {
             std::fs::write(&usage, format!("row {n}")).unwrap();
         }
-        // A real sleep, and the one place in this change that earns
-        // one: proving a *negative* means waiting, because there is no
-        // event for "nothing happened". 1.5 s is five debounce windows,
-        // so a report would have been published long before this.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        let got = rx.try_recv();
+        let before = upto_barrier(td.path(), &mut rx).await;
         assert!(
-            got.is_err(),
-            "a write to the usage store was reported as a data-root change: {got:?}"
+            before.is_empty(),
+            "a write to the usage store was reported as a data-root change: {before:?}"
         );
     }
 }
