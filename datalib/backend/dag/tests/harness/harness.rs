@@ -1,7 +1,9 @@
-//! The scenario harness: a data root, a config of driver steps
-//! (`tests/driver/main.rs`), the supervisor loop run in-process as the
-//! server runs it, and a person at the controls — sync, stop, pause,
-//! resume, edit the config — written to the same store the UI writes.
+//! The scenario harness for the loop's management of processes: a data
+//! root, a config of puppet steps (`tests/driver/main.rs`), the supervisor
+//! loop run in-process as the server runs it, and a person at the controls
+//! — sync, stop, pause, resume, edit the config — written to the same store
+//! the UI writes. Steps are opaque here: what they write is not checked,
+//! only what the loop does with them.
 //!
 //! Nothing here sleeps. Every wait is for something observable — a
 //! driver's ack, an event from the loop, a commit to the store — under a
@@ -102,12 +104,6 @@ pub struct Harness {
     pub events: broadcast::Receiver<Event>,
     stop: watch::Sender<bool>,
     host: tokio::task::JoinHandle<()>,
-    /// What each step's tree should hold: the files its acked writes left.
-    pub files: BTreeMap<String, BTreeMap<String, String>>,
-    /// What each step's store should hold on `main`: its acked commits.
-    pub rows: BTreeMap<String, BTreeMap<String, i64>>,
-    /// Batches applied but not yet committed, per step.
-    held: BTreeMap<String, Vec<String>>,
     /// Everything the harness did and heard, in order, for a failure or a
     /// hang to print.
     pub trail: Arc<std::sync::Mutex<Vec<String>>>,
@@ -153,9 +149,6 @@ impl Harness {
             events,
             stop,
             host: tokio::spawn(std::future::pending()),
-            files: BTreeMap::new(),
-            rows: BTreeMap::new(),
-            held: BTreeMap::new(),
             trail: Arc::default(),
             root,
         };
@@ -363,72 +356,7 @@ impl Harness {
     /// Tell, and wait for the ack that says it happened.
     pub async fn done(&mut self, step: &str, instruction: &str) -> String {
         self.tell(step, instruction);
-        let got = self.ack(step).await;
-        self.note(step, instruction, &got);
-        got
-    }
-
-    /// Fold what an acked instruction did into the model.
-    fn note(&mut self, step: &str, instruction: &str, ack: &str) {
-        let (verb, rest) = instruction.split_once(' ').unwrap_or((instruction, ""));
-        match verb {
-            "write" => {
-                assert_eq!(ack, instruction, "{step}");
-                let (rel, text) = rest.split_once(' ').unwrap_or((rest, ""));
-                self.files
-                    .entry(step.into())
-                    .or_default()
-                    .insert(rel.into(), text.into());
-            }
-            "fill" => {
-                assert_eq!(ack, instruction, "{step}");
-                let mut it = rest.split_whitespace();
-                let rel = it.next().unwrap();
-                let n: usize = it.next().unwrap().parse().unwrap();
-                self.files
-                    .entry(step.into())
-                    .or_default()
-                    .insert(rel.into(), "x".repeat(n));
-            }
-            "batch" => {
-                let mut it = rest.split_whitespace();
-                let mode = it.next().unwrap();
-                let ops: Vec<String> = it.map(str::to_string).collect();
-                self.held.entry(step.into()).or_default().extend(ops);
-                if mode == "commit" {
-                    assert!(ack.starts_with("committed"), "{step}: {ack}");
-                    self.fold_held(step);
-                } else {
-                    assert_eq!(ack, "held", "{step}");
-                }
-            }
-            "commit" => {
-                assert!(ack.starts_with("committed"), "{step}: {ack}");
-                self.fold_held(step);
-            }
-            _ => {}
-        }
-    }
-
-    fn fold_held(&mut self, step: &str) {
-        let rows = self.rows.entry(step.into()).or_default();
-        for op in self.held.remove(step).unwrap_or_default() {
-            match op.split(':').collect::<Vec<_>>().as_slice() {
-                ["put", id, n] => {
-                    rows.insert(id.to_string(), n.parse().unwrap());
-                }
-                ["del", id] => {
-                    rows.remove(*id);
-                }
-                _ => panic!("bad op {op}"),
-            }
-        }
-    }
-
-    /// A step whose held batch died with its process: those ops never
-    /// happened.
-    pub fn forget_held(&mut self, step: &str) {
-        self.held.remove(step);
+        self.ack(step).await
     }
 
     // ── what the loop and the store say ──────────────────────────────
@@ -501,56 +429,6 @@ impl Harness {
             .unwrap_or_else(|_| panic!("no {what} within {DEADLINE:?}"))
     }
 
-    // ── the invariant: what was acked happened, and nothing else did ─
-
-    /// `step`'s tree holds exactly the files its acked writes left.
-    pub fn check_files(&self, step: &str) {
-        let dir = self.root.path().join(step);
-        let mut on_disk = BTreeMap::new();
-        if dir.exists() {
-            for e in walk(&dir) {
-                let rel = e.strip_prefix(&dir).unwrap().to_string_lossy().to_string();
-                if rel.ends_with(".driver-tmp") || rel.contains(".doltlite_db") {
-                    continue;
-                }
-                on_disk.insert(rel, std::fs::read_to_string(&e).unwrap());
-            }
-        }
-        let want = self.files.get(step).cloned().unwrap_or_default();
-        assert_eq!(
-            on_disk, want,
-            "{step}'s tree is not what its acked writes left"
-        );
-    }
-
-    /// `step`'s store holds on `main` exactly what its acked commits left.
-    pub async fn check_rows(&self, step: &str) {
-        let db = self.root.path().join(step).join("store.doltlite_db");
-        let want = self.rows.get(step).cloned().unwrap_or_default();
-        let reader = match db.exists() {
-            true => datalib_etl::doltlite_raw::open_reader(&db, None)
-                .await
-                .unwrap(),
-            false => None,
-        };
-        let got: BTreeMap<String, i64> = match reader {
-            Some(reader) => {
-                let rows: Vec<(String, i64)> =
-                    sqlx::query_as("SELECT id, n FROM pinned_rows ORDER BY id")
-                        .fetch_all(reader.pool())
-                        .await
-                        .unwrap();
-                reader.close().await;
-                rows.into_iter().collect()
-            }
-            None => BTreeMap::new(),
-        };
-        assert_eq!(
-            got, want,
-            "{step}'s store is not what its acked commits left"
-        );
-    }
-
     /// Stop the loop and require that nothing it did needed its backstop.
     pub async fn finish(self) {
         let _ = self.stop.send(true);
@@ -561,21 +439,6 @@ impl Harness {
             "a commit reached some listener only through its backstop"
         );
     }
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for e in std::fs::read_dir(dir).unwrap().flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if !p.to_string_lossy().ends_with(".doltlite_db") {
-                out.extend(walk(&p));
-            }
-        } else {
-            out.push(p);
-        }
-    }
-    out
 }
 
 /// The loop as the server runs it: a busy period whenever a request is

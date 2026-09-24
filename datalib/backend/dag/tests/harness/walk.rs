@@ -1,19 +1,24 @@
-//! Seeded random walks over the scenarios the hand-written tests pick
-//! one at a time. Each seed builds a root with a doltlite source `A`, a
-//! file source `B` and a consumer `C` of `A`, and plays episodes: a person
-//! syncs (after maybe pausing a source), each running source does a
-//! random handful of things, and each ends in one of every way a step
-//! ends — finishing, failing, being retried, crashing, being killed,
-//! being stopped or paused mid-stall or mid-spin, ignoring the stop.
-//! After every episode the invariant is checked: what was acknowledged is
-//! on disk and on `main`, and nothing else is. A failure names its seed;
-//! `HARNESS_SEED=<n>` replays that one alone.
+//! Seeded random walks over what the hand-written scenarios pick one at a
+//! time. Each seed builds a root with two sources, `A` and `B`, and a
+//! consumer `C` of `A`, and plays episodes: a person syncs (after maybe
+//! pausing a source), each running source does a random handful of things,
+//! and each ends in one of every way a step ends — finishing (on a new
+//! version or the same one), failing, being retried, crashing, being
+//! killed, being paused mid-stall or mid-spin, or the whole request being
+//! stopped with the source waiting, stalled or spinning, sometimes deaf to
+//! it.
+//!
+//! After every ending the loop's bookkeeping is checked: the invocation
+//! closed, the record says how it ended, `C` ran exactly when `A`'s version
+//! moved and was handed the version the loop recorded, the request closed
+//! as it should, and no step ever ran twice at once. A failure names its
+//! seed and the end of its trail; `HARNESS_SEED=<n>` replays that one.
 
 use std::collections::BTreeSet;
 
 use datalib_dag::supervisor::store::RequestOutcome;
 
-use crate::harness::{reads, step, Harness};
+use crate::harness::{reads, step, Harness, DEADLINE};
 
 const A: &str = "a/ingest";
 const B: &str = "b/ingest";
@@ -51,6 +56,7 @@ impl Rng {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Ending {
     Ok,
+    OkUnmoved,
     FailData,
     FailTransient,
     Crash,
@@ -59,8 +65,9 @@ enum Ending {
     PauseSpinning,
 }
 
-const ENDINGS: [Ending; 7] = [
+const ENDINGS: [Ending; 8] = [
     Ending::Ok,
+    Ending::OkUnmoved,
     Ending::FailData,
     Ending::FailTransient,
     Ending::Crash,
@@ -69,20 +76,28 @@ const ENDINGS: [Ending; 7] = [
     Ending::PauseSpinning,
 ];
 
-/// What the walk knows that the harness's model of files and rows does
-/// not: `A`'s version as the runner computes it, and the one `C` last read.
+impl Ending {
+    /// What the record's last run says after it, retries aside.
+    fn status(self) -> &'static str {
+        match self {
+            Ending::Ok | Ending::OkUnmoved => "succeeded",
+            Ending::FailData | Ending::FailTransient | Ending::Crash | Ending::Kill => "failed",
+            Ending::PauseStalled | Ending::PauseSpinning => "stopped",
+        }
+    }
+}
+
 struct Walk {
     h: Harness,
     rng: Rng,
     seed: u64,
-    /// With a store, its head, moved by the schema commit and by every
-    /// commit that changes something; without one, the tree's hash, taken
-    /// at each success only.
+    /// The version `A` last reported on finishing, which is all the
+    /// loop has for it: the puppet's failures report nothing.
     a_version: Option<String>,
+    /// The version `C` was last handed.
     c_read: Option<String>,
-    a_store_made: bool,
-    a_commits: u32,
-    next_file: u32,
+    versions: u32,
+    files: u32,
 }
 
 pub async fn walk(seed: u64, episodes: u32, trail: std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
@@ -94,9 +109,8 @@ pub async fn walk(seed: u64, episodes: u32, trail: std::sync::Arc<std::sync::Mut
         seed,
         a_version: None,
         c_read: None,
-        a_store_made: false,
-        a_commits: 0,
-        next_file: 0,
+        versions: 0,
+        files: 0,
     };
     for episode in 0..episodes {
         w.episode(episode).await;
@@ -105,14 +119,9 @@ pub async fn walk(seed: u64, episodes: u32, trail: std::sync::Arc<std::sync::Mut
 }
 
 impl Walk {
-    fn ctx(&self, episode: u32) -> String {
-        format!("seed {} episode {episode}", self.seed)
-    }
-
     async fn episode(&mut self, episode: u32) {
-        let ctx = self.ctx(episode);
+        let ctx = format!("seed {} episode {episode}", self.seed);
         self.h.log(format!("── {ctx}"));
-        // Which sources, and whether one sits this sync out paused.
         let roots: Vec<&str> = match self.rng.below(3) {
             0 => vec![A],
             1 => vec![B],
@@ -176,8 +185,8 @@ impl Walk {
                 continue;
             }
             let ending = self.end(s, &ctx).await;
-            failed |= matches!(ending, Ending::FailData | Ending::Crash | Ending::Kill);
-            if matches!(ending, Ending::PauseStalled | Ending::PauseSpinning) {
+            failed |= ending.status() == "failed";
+            if ending.status() == "stopped" {
                 paused_mid.push(s);
             }
             if s == A {
@@ -190,12 +199,12 @@ impl Walk {
             for &s in &running {
                 if deaf.contains(s) {
                     self.h.expect(s, "ignoring a stop").await;
-                    // Killed at the grace, with nothing more to say.
-                    self.no_invocation_of(s, &ctx).await;
                 } else {
                     self.h.expect(s, "stopped").await;
                 }
-                self.h.forget_held(s);
+                // Killed at the grace, if deaf, with nothing more to say.
+                self.no_invocation_of(s, &ctx).await;
+                self.status_is(s, "stopped", &ctx).await;
             }
             assert_eq!(
                 self.h.closed(&request).await,
@@ -215,90 +224,41 @@ impl Walk {
         }
         for s in [A, B, C] {
             self.no_invocation_of(s, &ctx).await;
+            assert_eq!(
+                self.h.pending_acks(s),
+                Vec::<String>::new(),
+                "{ctx}: {s} said more"
+            );
         }
-        self.h.check_files(A);
-        self.h.check_files(B);
-        self.h.check_rows(A).await;
         for s in paused_mid.into_iter().chain(paused_before) {
             self.h.resume(s).await;
         }
     }
 
-    /// A random handful of what a source does while it runs.
+    /// A random handful of what a running source does, none of which the
+    /// loop is asked to judge but all of which it has to carry.
     async fn work(&mut self, s: &str) {
         for _ in 0..self.rng.below(5) {
-            match (s, self.rng.below(4)) {
-                (A, 0) => {
-                    let ops = self.ops();
-                    let ack = self.h.done(A, &format!("batch commit {ops}")).await;
-                    self.store_opened();
-                    self.committed(&ack);
-                }
-                (A, 1) => {
-                    let ops = self.ops();
-                    self.h.done(A, &format!("batch hold {ops}")).await;
-                    self.store_opened();
-                }
-                (A, 2) => {
-                    let ack = self.h.done(A, "commit").await;
-                    self.committed(&ack);
-                }
-                (_, 3) => {
-                    let n = self.rng.below(1000) as i64;
+            match self.rng.below(4) {
+                0 => {
+                    let n = self.rng.below(1000);
                     self.h.done(s, &format!("metric seen {n}")).await;
                 }
+                1 => {
+                    let n = self.rng.below(200_000);
+                    self.files += 1;
+                    self.h.done(s, &format!("fill big{} {n}", self.files)).await;
+                }
+                2 => {
+                    self.h.done(s, "log warn a warning").await;
+                }
                 _ => {
-                    self.next_file += 1;
-                    let f = self.next_file;
-                    if self.rng.chance(20) {
-                        let n = self.rng.below(200_000);
-                        self.h.done(s, &format!("fill big{f} {n}")).await;
-                    } else {
-                        self.h.done(s, &format!("write f{f} v{f}")).await;
-                    }
+                    self.files += 1;
+                    self.h
+                        .done(s, &format!("write f{0} v{0}", self.files))
+                        .await;
                 }
             }
-        }
-    }
-
-    fn ops(&mut self) -> String {
-        (0..1 + self.rng.below(4))
-            .map(|_| {
-                let id = self.rng.below(6);
-                if self.rng.chance(25) {
-                    format!("del:k{id}")
-                } else {
-                    format!("put:k{id}:{}", self.rng.below(100))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// The first open of a store commits its schema, which is a version
-    /// like any other: `C` has something to read from then on.
-    fn store_opened(&mut self) {
-        if !std::mem::replace(&mut self.a_store_made, true) {
-            self.a_head_moved();
-        }
-    }
-
-    fn committed(&mut self, ack: &str) {
-        if ack != "committed -" {
-            self.a_head_moved();
-        }
-    }
-
-    fn a_head_moved(&mut self) {
-        self.a_commits += 1;
-        self.a_version = Some(format!("store:{}", self.a_commits));
-    }
-
-    /// A success with no store is versioned by hashing what the tree holds.
-    fn a_succeeded(&mut self) {
-        if !self.a_store_made {
-            let files = self.h.files.get(A).cloned().unwrap_or_default();
-            self.a_version = Some(format!("files:{files:?}"));
         }
     }
 
@@ -312,10 +272,17 @@ impl Walk {
                 ending = Ending::FailData;
             }
             match ending {
-                Ending::Ok => {
-                    self.h.done(s, "ok").await;
+                Ending::Ok | Ending::OkUnmoved => {
+                    let version = match (ending, self.last_version(s)) {
+                        (Ending::OkUnmoved, Some(v)) => v,
+                        _ => {
+                            self.versions += 1;
+                            format!("v{}", self.versions)
+                        }
+                    };
+                    self.h.done(s, &format!("ok {version}")).await;
                     if s == A {
-                        self.a_succeeded();
+                        self.a_version = Some(version);
                     }
                 }
                 Ending::FailData => {
@@ -341,10 +308,9 @@ impl Walk {
                     self.h.expect(s, "stopped").await;
                 }
             }
-            // Whatever it held uncommitted went with its process.
-            self.h.forget_held(s);
             if ending != Ending::FailTransient {
                 self.no_invocation_of(s, ctx).await;
+                self.status_is(s, ending.status(), ctx).await;
                 return ending;
             }
             // Retried inside the same invocation, by a new process.
@@ -354,30 +320,54 @@ impl Walk {
         }
     }
 
-    /// `C` runs after `A` ends if what it reads moved since it last ran;
-    /// it reads `A` at the version it was started against, which is all
-    /// `A` has committed.
+    /// The version a source last reported, as the puppet reports it.
+    fn last_version(&self, s: &str) -> Option<String> {
+        (s == A).then(|| self.a_version.clone()).flatten()
+    }
+
+    /// `C` runs after `A` ends exactly when `A`'s version moved since `C`
+    /// last read it, and is handed the version the loop recorded.
     async fn consumer(&mut self, ctx: &str) {
         if self.a_version.is_none() || self.a_version == self.c_read {
             return;
         }
         self.h.expect(C, "started").await;
-        let want = self.h.rows.get(A).map_or(0, |r| r.len());
-        let got = self.h.done(C, "count").await;
+        let recorded = self.h.record(A).await.version.expect("a has a version");
+        let got = self.h.done(C, "reads").await;
         assert_eq!(
             got,
-            format!("count {A}={want}"),
-            "{ctx}: C read the wrong version"
+            format!("reads {A}={recorded}"),
+            "{ctx}: c handed another version"
+        );
+        let a = self.a_version.clone().unwrap();
+        assert!(
+            recorded.ends_with(&a),
+            "{ctx}: the loop recorded {recorded} for {a}"
         );
         self.h.done(C, "ok").await;
+        self.no_invocation_of(C, ctx).await;
+        self.status_is(C, "succeeded", ctx).await;
         self.c_read = self.a_version.clone();
     }
 
-    /// Until the loop has seen `s`'s process end: an ack is written just
-    /// before the exit it announces.
+    /// The loop writes a run's outcome the tick after it sees the process
+    /// end, so this waits for one to be written, then compares it.
+    async fn status_is(&mut self, s: &str, want: &str, ctx: &str) {
+        let what = format!("{ctx}: {s}'s last run to say how it ended");
+        let got = self
+            .h
+            .until(&what, |rec, _| {
+                let status = &rec.steps.get(s)?.last_run.as_ref()?.status;
+                (!status.is_empty()).then(|| status.clone())
+            })
+            .await;
+        assert_eq!(got, want, "{ctx}: {s}'s last run");
+    }
+
+    /// Until the loop has seen `s`'s process end.
     async fn no_invocation_of(&mut self, s: &str, ctx: &str) {
         let what = format!("{ctx}: {s}'s invocation to close");
-        let deadline = tokio::time::Instant::now() + crate::harness::DEADLINE;
+        let deadline = tokio::time::Instant::now() + DEADLINE;
         loop {
             let running = self.h.store.running_invocations().await.unwrap();
             if !running.iter().any(|r| r.step == s) {

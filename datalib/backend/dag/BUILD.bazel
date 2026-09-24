@@ -200,20 +200,17 @@ build_test(
     ],
 )
 
-# A step that does only what it is told, for the supervisor's scenario
-# tests. `testonly`: nothing shipped may link `etl` through it.
+# A puppet step for the supervisor's scenario tests: a process the loop
+# manages that does only what it is told.
 rust_binary(
     name = "test_driver",
     testonly = True,
     srcs = ["tests/driver/main.rs"],
     edition = "2021",
     deps = [
-        "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
     ],
 )
 
@@ -232,9 +229,7 @@ rust_test(
     },
     deps = [
         ":datalib_dag",
-        "//datalib/backend/etl:datalib_etl",
         "@datalib_crates//:libc",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
