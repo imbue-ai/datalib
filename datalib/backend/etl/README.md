@@ -134,6 +134,19 @@ load-bearing, and its replacement starts on `main` with a clean working
 set — an fsindex scan on a non-`main` branch would silently start
 writing to `main` after 30 minutes and report success.
 
+Every *other* sqlx pool in the tree turns them off too, for a second
+reason: either setting gives the pool a maintenance task, and in sqlx
+0.9.0 that task can spin forever. It loops `for _ in
+0..pool.num_idle()`, and `num_idle` is an unsigned counter that
+`release` increments only after it has handed back the permit, so a
+concurrent `acquire` can decrement it first and wrap it to
+`usize::MAX` (sqlx issue
+[#3645](https://github.com/launchbadge/sqlx/issues/3645), fixed after
+0.9.0 by #4289). The task never leaves that poll, and dropping the tokio
+runtime waits on its worker forever — a step that has reported its
+outcome and will not exit. That was `render_contract_test`'s CI-only
+stall. `lint_repo.py` check 12 refuses a pool built any other way.
+
 ### One writer per file, by construction
 
 `open` and `open_derived` are the only ways to a handle that can commit,

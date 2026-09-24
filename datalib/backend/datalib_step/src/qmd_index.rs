@@ -84,6 +84,8 @@ async fn read_collection_names(path: &Path) -> Result<Vec<String>> {
         .read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await?;
     let rows = sqlx::query("SELECT name FROM store_collections")
@@ -418,6 +420,8 @@ mod tests {
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(opts)
             .await
             .unwrap();

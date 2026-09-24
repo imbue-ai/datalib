@@ -29,6 +29,8 @@ async fn main() -> Result<()> {
         SqliteConnectOptions::from_str(&format!("sqlite://{}", args.db.display()))?.read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(opts)
         .await?;
 

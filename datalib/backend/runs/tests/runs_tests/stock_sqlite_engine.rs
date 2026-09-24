@@ -33,13 +33,17 @@ async fn without_the_parameter_doltlite_claims_the_file() {
     let td = tempfile::tempdir().unwrap();
     let db = td.path().join("no-opt-out.sqlite");
 
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(&db)
-            .create_if_missing(true),
-    )
-    .await
-    .unwrap();
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
     sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
     pool.close().await;
 
