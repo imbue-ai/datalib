@@ -1266,11 +1266,18 @@ pub struct DagRecord {
     pub documents: std::collections::HashMap<String, i64>,
 }
 
-/// `sync_running` is [`supervisor::SyncControl::running`]: an open record
-/// with nothing running is a run that died.
-pub async fn dag_record(root: &std::path::Path, sync_running: bool) -> DagRecord {
-    let state = datalib_dag::state::DagState::load(root).unwrap_or_default();
-    let live = sync_running;
+/// An open run in the record while nothing is running is a run that died,
+/// so `live` is [`supervisor::SyncControl::running`].
+pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+    let loaded = match sync.mailbox().await {
+        Ok(store) => store.load_record().await,
+        Err(e) => Err(e),
+    };
+    let state = loaded.unwrap_or_else(|e| {
+        tracing::warn!("could not read the loop's record, so nothing reads as run: {e:#}");
+        Default::default()
+    });
+    let live = sync.running();
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1361,7 +1368,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         documents: _,
-    } = dag_record(&s.root, s.sync.running()).await;
+    } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;

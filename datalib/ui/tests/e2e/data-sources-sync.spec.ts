@@ -7,7 +7,7 @@
 //     source that succeeded yesterday came back as "not selected",
 //     stamped with the time of a run that never touched it.
 //   * **The row must show the sync happening.** "Running" only reached
-//     `dag_state.json` when a step *finished*, so pressing Sync looked
+//     the runner's record when a step *finished*, so pressing Sync looked
 //     like nothing had happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why

@@ -66,11 +66,19 @@ function = "render_markdown"
 inputs = ["slack/ingest"]
 "#;
 
-fn write_root(root: &Path, state_json: Option<&str>) {
+async fn write_root(root: &Path, state_json: Option<&str>) {
     std::fs::create_dir_all(root.join("system")).unwrap();
     std::fs::write(root.join("config.toml"), CONFIG).unwrap();
     if let Some(j) = state_json {
-        std::fs::write(root.join("system/dag_state.json"), j).unwrap();
+        let record: datalib_dag::state::DagState = serde_json::from_str(j).unwrap();
+        let store = datalib_dag::supervisor::store::Store::open(root)
+            .await
+            .unwrap();
+        store
+            .save_record(&Default::default(), &record)
+            .await
+            .unwrap();
+        store.close().await;
     }
 }
 
@@ -80,7 +88,7 @@ fn write_root(root: &Path, state_json: Option<&str>) {
 #[tokio::test]
 async fn a_root_that_never_ran_reports_no_history() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), None);
+    write_root(tmp.path(), None).await;
 
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["ok"], true, "{dag}");
@@ -132,7 +140,8 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
               }
             }"#,
         ),
-    );
+    )
+    .await;
 
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["run"]["run_id"], "2026-08-31T10:00:00+01:00");
@@ -184,7 +193,8 @@ async fn an_open_record_with_no_lock_holder_is_not_live() {
               }
             }"#,
         ),
-    );
+    )
+    .await;
 
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["run"]["finished_at"], serde_json::Value::Null);
@@ -215,7 +225,8 @@ async fn an_open_record_is_live_while_a_runner_holds_the_root() {
               }
             }"#,
         ),
-    );
+    )
+    .await;
 
     let _held = datalib_dag::lock::acquire_runner(tmp.path()).expect("take the lock");
     let dag = get_dag(tmp.path()).await;

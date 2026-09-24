@@ -1,7 +1,6 @@
-//! One round of the supervisor, which is what `datalib-dag` runs: a request
-//! rooted at the sources asked for, ticked until it closes. The facts come
-//! from `dag_state.json` and go back to it, and the events are the ones the
-//! run store and the server already read.
+//! The supervisor's loop: every open request ticked until it closes. The
+//! facts come from the record in `system/supervisor.sqlite` and go back to
+//! it, and the events are the ones the run store and the server read.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -9,6 +8,7 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
     tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
@@ -39,7 +39,47 @@ struct Ended {
     pass_ended: bool,
 }
 
+impl Ended {
+    fn as_end(&self) -> InvocationEnd {
+        let failure_kind = match &self.status {
+            StepStatus::Failed { kind } => Some(<&str>::from(*kind).to_string()),
+            _ => None,
+        };
+        InvocationEnd {
+            outcome: self.status.state().as_str().to_string(),
+            failure_kind,
+            error: self.error.clone(),
+            attempts: self.attempts,
+            exit_code: self.exit.and_then(|x| x.code),
+            signal: self.exit.and_then(|x| x.signal),
+        }
+    }
+}
+
 type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
+
+/// The record as the loop holds it, beside the one it last saved: a save
+/// writes the difference.
+struct Recorded<'a> {
+    store: &'a Store,
+    saved: DagState,
+}
+
+impl<'a> Recorded<'a> {
+    async fn load(store: &'a Store) -> Result<Recorded<'a>> {
+        let saved = store.load_record().await.context("load the record")?;
+        Ok(Recorded { store, saved })
+    }
+
+    async fn save(&mut self, state: &DagState) -> Result<()> {
+        self.store
+            .save_record(&self.saved, state)
+            .await
+            .context("save the record")?;
+        self.saved = state.clone();
+        Ok(())
+    }
+}
 
 /// Where the loop's requests and pauses come from.
 enum Mailbox<'a> {
@@ -95,7 +135,12 @@ const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 impl Runner {
     /// One request rooted at the runner's sources, run until it closes.
     pub async fn run(&self, graph: &Graph) -> Result<RunReport> {
-        self.run_loop(graph, Mailbox::Fixed { opened: false }).await
+        let store = Store::open(&self.data_root).await?;
+        let report = self
+            .run_loop(graph, Mailbox::Fixed { opened: false }, &store)
+            .await;
+        store.close().await;
+        report
     }
 
     /// Every request open in the store, and any opened while this runs,
@@ -106,10 +151,15 @@ impl Runner {
             seen: None,
             deferred: BTreeSet::new(),
         };
-        self.run_loop(graph, mailbox).await
+        self.run_loop(graph, mailbox, store).await
     }
 
-    async fn run_loop(&self, graph: &Graph, mut mailbox: Mailbox<'_>) -> Result<RunReport> {
+    async fn run_loop(
+        &self,
+        graph: &Graph,
+        mut mailbox: Mailbox<'_>,
+        store: &Store,
+    ) -> Result<RunReport> {
         let plan: Vec<String> = graph
             .topo
             .iter()
@@ -118,7 +168,8 @@ impl Runner {
         self.sink.emit(&Event::RunPlan {
             steps: plan.clone(),
         });
-        let mut state = DagState::load(&self.data_root).context("load dag state")?;
+        let mut record = Recorded::load(store).await?;
+        let mut state = record.saved.clone();
 
         // One clock and one id for the round: the same values the steps get
         // in `DATALIB_DAG_NOW` and `DATALIB_DAG_RUN_ID`.
@@ -139,7 +190,7 @@ impl Runner {
             plan,
             states: Default::default(),
         });
-        state.save(&self.data_root).context("save dag state")?;
+        record.save(&state).await?;
 
         let n = graph.steps.len();
         let shape = shape_of(graph);
@@ -155,6 +206,7 @@ impl Runner {
         let mut changed_now: HashMap<String, bool> = HashMap::new();
         let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
         let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
+        let mut invocations: Vec<Option<String>> = vec![None; n];
         let mut warned_not_streaming = vec![false; n];
         let mut queue = QueueLedger::new(n);
         // Each step's state the last time a request wanted it, which is
@@ -295,7 +347,20 @@ impl Runner {
                 let (tx, rx) = watch::channel(false);
                 stops[i] = Some(tx);
                 let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
-                mark_running(&mut state, &graph.steps[i].id, &now_stamp());
+                let started_at = now_stamp();
+                mark_running(&mut state, &graph.steps[i].id, &started_at);
+                let invocation = InvocationRow {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    step: graph.steps[i].id.clone(),
+                    run_id: state
+                        .current_run
+                        .as_ref()
+                        .map(|r| r.run_id.clone())
+                        .unwrap_or_default(),
+                    started_at_utc: started_at,
+                };
+                store.open_invocation(&invocation).await?;
+                invocations[i] = Some(invocation.id);
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
@@ -312,7 +377,7 @@ impl Runner {
                     let _ = tx.send(true);
                 }
             }
-            state.save(&self.data_root).context("save dag state")?;
+            record.save(&state).await?;
             for o in open.iter_mut().filter(|o| !o.told) {
                 o.told = true;
                 if let Some(id) = &o.id {
@@ -379,8 +444,11 @@ impl Runner {
                     });
                     attempts_taken[i] = e.attempts;
                     errors[i] = e.error.clone();
+                    if let Some(id) = invocations[i].take() {
+                        store.close_invocation(&id, &e.as_end()).await?;
+                    }
                     ended[i] = Some(e);
-                    state.save(&self.data_root).context("save dag state")?;
+                    record.save(&state).await?;
                 }
             }
         }
@@ -416,7 +484,7 @@ impl Runner {
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
         }
-        state.save(&self.data_root).context("save dag state")?;
+        record.save(&state).await?;
 
         let steps = graph
             .topo
@@ -961,8 +1029,8 @@ fn facts_of(graph: &Graph, state: &DagState) -> Facts {
     Facts { sinks, steps }
 }
 
-/// The versions an invocation was started against, keyed the way
-/// `dag_state.json` keys them: by the producer's output path.
+/// The versions an invocation was started against, keyed the way the
+/// record keys them: by the producer's output path.
 fn paths_of(graph: &Graph, consumed: &Consumed) -> HashMap<String, String> {
     consumed
         .reads
@@ -1256,8 +1324,8 @@ mod tests {
                 break;
             }
         }
-        let recorded = DagState::load(f.root.path())
-            .unwrap()
+        let recorded = crate::supervisor::record::recorded(f.root.path())
+            .await
             .current_run
             .and_then(|r| r.states.get("b/raw").cloned());
         assert_eq!(recorded.as_deref(), Some("running"));
@@ -1411,20 +1479,65 @@ mod tests {
         .await;
 
         other.request_stop(&a, "ui").await.unwrap();
-        let state_of = |step: &str| {
-            DagState::load(f.root.path())
-                .unwrap()
-                .current_run
-                .and_then(|r| r.states.get(step).cloned())
+        let root = f.root.path().to_path_buf();
+        let state_of = |step: &'static str| {
+            let root = root.clone();
+            async move {
+                crate::supervisor::record::recorded(&root)
+                    .await
+                    .current_run
+                    .and_then(|r| r.states.get(step).cloned())
+            }
         };
-        until("a's render to settle while b still runs", || {
-            state_of("a/rendered").as_deref() == Some("skipped_up_to_date")
-        })
-        .await;
-        assert_eq!(state_of("b/raw").as_deref(), Some("running"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while state_of("a/rendered").await.as_deref() != Some("skipped_up_to_date") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for a's render to settle while b still runs"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(state_of("b/raw").await.as_deref(), Some("running"));
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
+    }
+
+    /// Every process the loop starts has a row that says it is running
+    /// until the loop has seen it end, and then how: what `status` and the
+    /// next loop's take-over read.
+    #[tokio::test]
+    async fn a_step_the_loop_starts_is_an_invocation_until_it_ends() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = serve(&f);
+        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let open = loop {
+            let open = other.running_invocations().await.unwrap();
+            if !open.is_empty() {
+                break open;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a's invocation never appeared"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].step, "a/raw");
+
+        f.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert!(other.running_invocations().await.unwrap().is_empty());
+        let outcome: String = sqlx::query_scalar("SELECT outcome FROM invocations WHERE id = ?")
+            .bind(&open[0].id)
+            .fetch_one(other.pool())
+            .await
+            .unwrap();
+        assert_eq!(outcome, "succeeded");
     }
 
     #[tokio::test]

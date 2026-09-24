@@ -1,8 +1,9 @@
-//! Persisted scheduler state, and the only record of what the pipeline
-//! is doing.
+//! The loop's record of what the pipeline did and is doing, as the loop
+//! holds it in memory. It lives in `system/supervisor.sqlite`
+//! (`supervisor::store`); [`changes`] is what a save has to write there.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -10,9 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::run_state::RunState;
 use crate::step::StepId;
 
-pub const STATE_REL_PATH: &str = "system/dag_state.json";
+/// Where the record lived before the store held it. A root that still
+/// has one has it imported, once, by whoever next takes the lock.
+pub const LEGACY_JSON_REL_PATH: &str = "system/dag_state.json";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DagState {
     #[serde(default)]
     pub steps: BTreeMap<StepId, StepState>,
@@ -22,7 +25,7 @@ pub struct DagState {
 }
 
 /// What one run is doing, or did.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CurrentRun {
     /// Identifies this run in logs and in the UI. Not a UUID: the
     /// start timestamp is unique enough for a single-writer store and
@@ -58,7 +61,7 @@ impl CurrentRun {
 /// What a step did the last time a run reached it. Distinct from
 /// [`StepState`]'s change-detection fields: those answer "is it up to
 /// date", this answers "what happened, and when".
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LastRun {
     /// The run this happened in — the key into `system/runs/runs.sqlite`,
     /// where the step's log lines and metrics for it live. Empty for a
@@ -90,7 +93,7 @@ impl LastRun {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepState {
     /// Concrete input artifact path → version observed when this step
     /// last *succeeded*. A failed run never updates this, so the step
@@ -130,112 +133,112 @@ pub struct StepState {
 }
 
 impl DagState {
-    pub fn path(data_root: &Path) -> PathBuf {
-        data_root.join(STATE_REL_PATH)
-    }
-
-    pub fn load(data_root: &Path) -> Result<DagState> {
-        let p = Self::path(data_root);
+    /// The record a root kept as `system/dag_state.json`, if it has one.
+    pub fn read_legacy_json(data_root: &Path) -> Result<Option<DagState>> {
+        let p = data_root.join(LEGACY_JSON_REL_PATH);
         if !p.exists() {
-            return Ok(DagState::default());
+            return Ok(None);
         }
         let bytes = std::fs::read(&p).with_context(|| format!("read {}", p.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", p.display()))
+        let state =
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", p.display()))?;
+        Ok(Some(state))
     }
+}
 
-    pub fn save(&self, data_root: &Path) -> Result<()> {
-        let p = Self::path(data_root);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
+/// One thing the store must write to hold `next` where it held `prev`.
+#[derive(Debug, PartialEq)]
+pub enum Change<'a> {
+    /// The run, and every step's state in it.
+    Run(&'a CurrentRun),
+    Step(&'a str, &'a StepState),
+    /// A step whose record was dropped, by a reset.
+    Forget(&'a str),
+}
+
+/// What changed between two records, so a save writes that and nothing
+/// else: the loop saves after every event, and most change one step.
+pub fn changes<'a>(prev: &'a DagState, next: &'a DagState) -> Vec<Change<'a>> {
+    let mut out = Vec::new();
+    if let Some(run) = next.current_run.as_ref() {
+        if prev.current_run.as_ref() != Some(run) {
+            out.push(Change::Run(run));
         }
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)
-            .with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &p).with_context(|| format!("rename to {}", p.display()))?;
-        Ok(())
     }
+    for (id, step) in &next.steps {
+        if prev.steps.get(id) != Some(step) {
+            out.push(Change::Step(id, step));
+        }
+    }
+    for id in prev.steps.keys() {
+        if !next.steps.contains_key(id) {
+            out.push(Change::Forget(id));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn round_trip() {
-        let td = tempfile::tempdir().unwrap();
-        let mut st = DagState::default();
-        st.steps.insert(
-            "slack/raw".into(),
-            StepState {
-                input_versions: BTreeMap::new(),
-                output_versions: BTreeMap::from([("slack/raw".into(), "abc".into())]),
-                succeeded: true,
-                fingerprint: "fp-1".into(),
-                last_run: Some(LastRun {
-                    run_id: "run-1".into(),
-                    started_at: "2026-08-31T10:00:00+01:00".into(),
-                    finished_at: Some("2026-08-31T10:00:09+01:00".into()),
-                    status: "succeeded".into(),
-                    attempts: 1,
-                    error: None,
-                }),
-                last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
-            },
-        );
-        st.current_run = Some(CurrentRun {
-            run_id: "2026-08-31T10:00:00+01:00".into(),
-            started_at: "2026-08-31T10:00:00+01:00".into(),
-            finished_at: Some("2026-08-31T10:00:10+01:00".into()),
-            plan: vec!["slack/raw".into(), "slack/rendered_md".into()],
-            states: BTreeMap::from([("slack/raw".into(), "succeeded".into())]),
-        });
-        st.save(td.path()).unwrap();
-
-        let back = DagState::load(td.path()).unwrap();
-        let step = &back.steps["slack/raw"];
-        assert!(step.succeeded);
-        assert_eq!(step.output_versions["slack/raw"], "abc");
-        assert_eq!(step.fingerprint, "fp-1");
-        assert_eq!(
-            step.last_success_at.as_deref(),
-            Some("2026-08-31T10:00:09+01:00")
-        );
-        let last = step.last_run.as_ref().expect("last_run survives the trip");
-        assert_eq!(last.status, "succeeded");
-        assert_eq!(last.attempts, 1);
-        assert_eq!(
-            last.finished_at.as_deref(),
-            Some("2026-08-31T10:00:09+01:00")
-        );
-
-        let run = back.current_run.expect("current_run survives the trip");
-        assert_eq!(run.plan.len(), 2);
-        assert_eq!(run.states["slack/raw"], "succeeded");
-        assert!(run.finished_at.is_some(), "a closed run stays closed");
+    fn step(fingerprint: &str) -> StepState {
+        StepState {
+            succeeded: true,
+            fingerprint: fingerprint.into(),
+            output_versions: BTreeMap::from([("a/raw".into(), "v1".into())]),
+            ..Default::default()
+        }
     }
 
-    /// State written before this file carried run records still loads:
-    /// every new field is `#[serde(default)]`, and a missing `last_run`
-    /// reads as "we have no record", not as an error. Without this the
-    /// first run after an upgrade would fail to load its own state.
+    /// The loop saves after every event; a save that rewrote the whole
+    /// record each time would write every step on every tick.
     #[test]
-    fn state_without_run_records_still_loads() {
+    fn a_save_writes_what_changed_and_nothing_else() {
+        let prev = DagState {
+            steps: BTreeMap::from([
+                ("a/raw".into(), step("fp-a")),
+                ("b/raw".into(), step("fp-b")),
+                ("c/raw".into(), step("fp-c")),
+            ]),
+            current_run: Some(CurrentRun {
+                run_id: "r1".into(),
+                ..Default::default()
+            }),
+        };
+        assert!(changes(&prev, &prev).is_empty());
+
+        let mut next = prev.clone();
+        next.steps.insert("b/raw".into(), step("fp-b2"));
+        next.steps.remove("c/raw");
+        next.current_run.as_mut().unwrap().states =
+            BTreeMap::from([("b/raw".into(), "running".into())]);
+        assert_eq!(
+            changes(&prev, &next),
+            [
+                Change::Run(next.current_run.as_ref().unwrap()),
+                Change::Step("b/raw", &next.steps["b/raw"]),
+                Change::Forget("c/raw"),
+            ]
+        );
+    }
+
+    /// A root from before the store still has its record as JSON, and
+    /// state written before this file carried run records still reads:
+    /// every field defaults.
+    #[test]
+    fn a_legacy_json_record_reads_whatever_it_lacks() {
         let td = tempfile::tempdir().unwrap();
+        assert!(DagState::read_legacy_json(td.path()).unwrap().is_none());
         std::fs::create_dir_all(td.path().join("system")).unwrap();
         std::fs::write(
-            DagState::path(td.path()),
+            td.path().join(LEGACY_JSON_REL_PATH),
             r#"{"steps":{"slack/raw":{"succeeded":true,"fingerprint":"fp-1"}}}"#,
         )
         .unwrap();
-        let back = DagState::load(td.path()).unwrap();
+        let back = DagState::read_legacy_json(td.path()).unwrap().unwrap();
         assert!(back.steps["slack/raw"].succeeded);
         assert!(back.steps["slack/raw"].last_run.is_none());
         assert!(back.current_run.is_none());
-    }
-
-    #[test]
-    fn missing_file_is_empty_state() {
-        let td = tempfile::tempdir().unwrap();
-        assert!(DagState::load(td.path()).unwrap().steps.is_empty());
     }
 }

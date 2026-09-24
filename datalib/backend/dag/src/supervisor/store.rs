@@ -1,9 +1,10 @@
-//! `system/supervisor.sqlite`: the mailbox. Anyone writes intent into it —
-//! open a request, ask for one to stop, pause or resume a step — and the one
-//! process running the loop reads it and writes back how each request
-//! ended. Plain SQLite, several writing processes at once; its schema only
-//! grows, because two builds may share it. `docs/dev/plans/supervisor.md`
-//! §2.7–§2.8.
+//! `system/supervisor.sqlite`: the mailbox, and the loop's record. Anyone
+//! writes intent into it — open a request, ask for one to stop, pause or
+//! resume a step — and the one process running the loop reads it and
+//! writes back how each request ended, and what each step did
+//! (`record.rs`). Plain SQLite, several writing processes at once; its
+//! schema only grows, because two builds may share it.
+//! `docs/dev/plans/supervisor.md` §2.7–§2.8.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,7 +18,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 const DDL: [&str; 2] = [
     "CREATE TABLE IF NOT EXISTS requests (
@@ -111,13 +112,14 @@ impl Store {
             .with_context(|| format!("open {}", path.display()))?;
         let store = Store { pool };
         store.refuse_if_newer(&path).await?;
-        for stmt in DDL {
+        let ddl = || DDL.into_iter().chain(super::record::DDL);
+        for stmt in ddl() {
             sqlx::query(stmt).execute(&store.pool).await?;
         }
         datalib_store_meta::write(
             &store.pool,
             datalib_store_meta::StoreKind::Supervisor,
-            &datalib_store_meta::schema_hash(DDL),
+            &datalib_store_meta::schema_hash(ddl()),
             SCHEMA_VERSION,
         )
         .await?;
@@ -137,6 +139,10 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     pub async fn close(self) {

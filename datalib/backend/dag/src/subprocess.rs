@@ -1338,7 +1338,7 @@ mod tests {
         let log = root.path().join("src/raw/log.txt");
         let r = Runner::new(root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
-        assert!(crate::state::DagState::load(root.path()).unwrap().steps["src/raw"].succeeded);
+        assert!(crate::supervisor::record::recorded(root.path()).await.steps["src/raw"].succeeded);
 
         r.reset(&g, &[crate::scheduler::ResetTarget::parse("src/raw+blobs")])
             .await
@@ -1349,8 +1349,8 @@ mod tests {
             "the reset invocation names the part and does nothing else"
         );
         assert!(
-            !crate::state::DagState::load(root.path())
-                .unwrap()
+            !crate::supervisor::record::recorded(root.path())
+                .await
                 .steps
                 .contains_key("src/raw"),
             "a reset step has never succeeded"

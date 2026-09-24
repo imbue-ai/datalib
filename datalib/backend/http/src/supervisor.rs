@@ -161,10 +161,20 @@ async fn host(cfg: &HostConfig) {
         return;
     };
     cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
-    match host::close_dead_loop(&root).await {
-        Ok(Some(run)) => tracing::warn!(run, "supervisor: closed a run a dead loop left open"),
-        Ok(None) => {}
-        Err(e) => tracing::error!("supervisor: could not close a dead loop's run: {e:#}"),
+    match host::take_over(&store, &root).await {
+        Ok(taken) => {
+            if taken.imported_legacy {
+                tracing::info!("supervisor: brought system/dag_state.json into the record");
+            }
+            if let Some(run) = &taken.closed_run {
+                tracing::warn!(
+                    run,
+                    invocations = taken.closed_invocations,
+                    "supervisor: closed a run a dead loop left open"
+                );
+            }
+        }
+        Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     recover(cfg).await;
     tracing::info!("supervisor: running the loop on {}", root.display());
@@ -374,7 +384,7 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
             let _ = store.close_request(&id, RequestOutcome::Failed, None).await;
             finish(cfg, &id, JobState::Failed, Some(&why)).await;
         }
-        if let Err(e) = host::close_dead_loop(&root).await {
+        if let Err(e) = host::take_over(store, &root).await {
             tracing::error!("supervisor: could not close the failed run: {e:#}");
         }
     }

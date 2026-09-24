@@ -1,8 +1,8 @@
 //! What a step is doing in a run, as one named vocabulary.
 //!
 //! These values travel on four surfaces — `Event::StepFinish.status`,
-//! `Event::RunSummary`'s per-step `status`, `dag_state.json`'s
-//! `current_run.states` and `last_run.status`, and the HTTP API's
+//! `Event::RunSummary`'s per-step `status`, the record's `run_steps.state`
+//! and `steps.last_status` (`supervisor/record.rs`), and the HTTP API's
 //! `current_state` — and every producer and consumer has to agree on
 //! the spelling. Naming them once is what keeps those copies from
 //! drifting apart.

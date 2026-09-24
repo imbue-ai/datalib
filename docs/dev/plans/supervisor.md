@@ -119,10 +119,9 @@ Checked against the tree. Most of the storage-side work is done.
   `runs_two_process_test` as the measurement), so the batch CLI can
   write it while a server does. `logs_and_metrics` moved
   progress and logs there, but not the scheduler's memory: versions,
-  fingerprints and `current_run` are still `system/dag_state.json`,
-  rewritten by `scheduler.rs` on every dispatch and terminal state,
-  watched by `watch.rs`, and served by `GET /api/dag`. Two records,
-  half-migrated; this design finishes the move.
+  fingerprints and `current_run` were `system/dag_state.json`, rewritten
+  on every dispatch and terminal state. Two records, half-migrated; this
+  design finishes the move, and slice 4a (§5) has.
 - **Streaming is built for the edges that matter.** `download → render`
   seals per provider boundary for claude, chatgpt, slack and email
   (Gmail and JMAP), and `render → grid_index` runs an index pass per
@@ -493,6 +492,13 @@ running the loop writes facts.
 | `request_steps` | request → step, for every step in the request's scope, with the step's state as of the request's close |
 | `log`, `metrics`, `metric_samples` | as today, in the run store |
 
+*As built (4a):* `steps` holds the facts — fingerprint, what the step read
+at its last success, its last run and last success — and not yet the
+tick's `state`, which 4c adds for rows to read; `sinks`, `invocations`
+(no `pid` or `consumed` yet) as above; and `runs` and `run_steps`, the
+busy period in flight and each step's state in it, which is what
+`GET /api/dag` and the Manage rows read until 4c. `request_steps` is 4c's.
+
 A request *is* the wave — "your Sync of Gmail: ingest done, render
 running, index waiting on its sink" is `request_steps` joined to
 `steps` — so the one thing "a run" gave the user that was worth keeping
@@ -784,13 +790,17 @@ last.
    found the couplings that decide the order; each is named where it is
    dealt with.
 
-   **4a. The store, and the CLI as loop or client.** *Built, narrower
-   than first written:* the store holds `requests` and `pauses` only
-   (steps' states and invocations come with 4c), the facts stay in
-   `dag_state.json`, and the verbs (`stop`, `pause`, `resume` as
-   commands) follow separately — the store takes them already. *Since
-   built:* `datalib-dag status | stop | pause | resume`, each a row
-   written and a return. The
+   **4a. The store, and the CLI as loop or client.** *Built*, in two
+   goes. First the store held `requests` and `pauses` only and the facts
+   stayed in `dag_state.json`; then `datalib-dag status | stop | pause |
+   resume`, each a row written and a return. *Then the facts moved*:
+   `dag_state.json` is gone, and the loop's record is `steps`, `sinks`,
+   `runs`, `run_steps` and `invocations` in `system/supervisor.sqlite`
+   (§2.7 says what each holds as built; `supervisor/record.rs`). The loop
+   saves only what changed since its last save. Whoever takes the lock
+   first imports a root's old `dag_state.json`, once, and closes the run
+   and invocations a dead loop left open (`host::take_over`);
+   `datalib-dag status` lists running steps too. The
    server is untouched but for tagging its requests `--by ui`: its
    worker still runs one job at a time, so the UI's own syncs overlap
    from 4b, and a job whose `datalib-dag` joined a CLI's loop has no run

@@ -651,13 +651,20 @@ def _load_diff_pairs(workspace: Path) -> dict[str, tuple[str, str]]:
 
 
 def _ingest_commit(workspace: Path, source_id: str) -> str:
-    """A source's raw store's HEAD, as the runner recorded it after the
-    ingest step: the `entities.doltlite_db:<hash>` in the step's output
-    version in `system/dag_state.json`, read from the store's `main`
-    (`datalib_dag::sink::read_version`)."""
+    """A source's raw store's HEAD, as the loop recorded it after the
+    ingest step: the `entities.doltlite_db:<hash>` in the step's sink
+    version in `system/supervisor.sqlite`, read from the store's `main`
+    (`datalib_dag::sink::read_version`). The supervisor store is plain
+    SQLite, so the stdlib opens it."""
     step = f"{source_id}/ingest"
-    state = json.loads((workspace / "system" / "dag_state.json").read_text())
-    version = state["steps"][step]["output_versions"][step]
+    db = sqlite3.connect(workspace / "system" / "supervisor.sqlite")
+    try:
+        row = db.execute("SELECT version FROM sinks WHERE path = ?", (step,)).fetchone()
+    finally:
+        db.close()
+    if row is None:
+        raise SystemExit(f"no sink version recorded for {step}")
+    version = row[0]
     m = re.search(r"entities\.doltlite_db:([0-9a-f]+)", version)
     if m is None:
         raise SystemExit(f"no entities commit in {version!r} for {step}")

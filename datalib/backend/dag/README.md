@@ -270,11 +270,11 @@ closes, however the process died. A step the loop stops gets SIGINT on
 its process group and SIGKILL on it fifteen seconds later if it is still
 there (`subprocess::stop_ladder`, `step::STOP_GRACE`), so one that
 ignores its SIGINT cannot hold its store for good. A loop that died
-holding the lock leaves its run open in `dag_state.json` and the run
-store; the next process to take the lock closes it
-(`supervisor::host::close_dead_loop`), and the server's boot sets each
-job it finds active to match its request, which is still open for the
-next loop to run.
+holding the lock leaves its run and its invocations open in the record
+and the run store; the next process to take the lock closes them
+(`supervisor::host::take_over`), and the server's boot sets each job it
+finds active to match its request, which is still open for the next
+loop to run.
 
 `flock(2)` rather than a pid file, because the kernel releases it when the
 holder dies — a crashed process leaves no stale lock to reason about. The
@@ -330,12 +330,28 @@ has learned it will do. Announcing no total at all is fine and means
 "size unknown"; the sink then publishes no `queued`, which is not the
 same as publishing zero, because zero means finished.
 
-## The run record
+## The record
 
-`system/dag_state.json` must carry the plan before anything runs, a terminal
-state for *every* step (including ones that were skipped or blocked and
-never "ran"), a `finished_at` that distinguishes a completed run from a
-crashed one, and per-step timings.
+The loop's memory is its **record**, in `system/supervisor.sqlite` beside
+the requests and pauses (`supervisor/record.rs`). It is plain SQLite, so
+any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
+
+| table | one row per | what it holds |
+|---|---|---|
+| `steps` | step | what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `sinks` | tree a step writes | the version it last published |
+| `runs` | busy period of the loop | when it started and finished, and its plan |
+| `run_steps` | step the newest run has reached | what it is doing in that run |
+| `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
+
+A run must record its plan before anything runs, a state for *every* step
+in scope (including ones that were skipped or blocked and never "ran"), a
+`finished_at` that tells a completed run from a crashed one, and per-step
+timings. The loop holds the record in memory (`state::DagState`) and
+saves only what changed since its last save (`state::changes`), after
+every event. A root that still has the `system/dag_state.json` the record
+used to be is imported once, by the next process to take the lock, and
+the file set aside as `dag_state.json.imported`.
 
 The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
 for one busy period of the loop (`datalib-dag` takes `--run-id` instead
@@ -350,8 +366,8 @@ displaying, `/api/dag` filters every row out on the id mismatch, and the
 UI silently shows no progress at all. `started_at` stays the pinned
 `DATALIB_DAG_NOW`.
 
-State is saved on `running`, not only on terminal states. That file is the
+The record is saved on `running`, not only on terminal states. It is the
 only channel to a reader who did not spawn the run, so without the
-running-state save `dag_state.json` went straight from "not reached yet" to
+running-state save a step went straight from "not reached yet" to
 "succeeded" and pressing Sync looked like nothing had happened until the
 step finished.

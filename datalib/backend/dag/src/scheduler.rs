@@ -1,5 +1,5 @@
 //! The runner's settings and the pieces of a round that are not the
-//! decision: retries, recording an outcome in `dag_state.json`, the
+//! decision: retries, recording an outcome in the record, the
 //! consumers' queue depth, reset. The round itself is
 //! `supervisor/round.rs`; what starts when is `supervisor/tick.rs`.
 //!
@@ -150,11 +150,15 @@ impl Runner {
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
     pub async fn reset(&self, graph: &Graph, targets: &[ResetTarget]) -> Result<()> {
-        let mut state = DagState::load(&self.data_root).context("load dag state")?;
+        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
+        let saved = store.load_record().await.context("load the record")?;
+        let mut state = saved.clone();
         for target in targets {
             state.steps.remove(&target.step);
         }
-        state.save(&self.data_root).context("save dag state")?;
+        let forgotten = store.save_record(&saved, &state).await;
+        store.close().await;
+        forgotten.context("save the record")?;
         for target in targets {
             let &i = graph
                 .by_id
@@ -1879,7 +1883,7 @@ mod tests {
         // And the pass that followed the first one read *both* finals:
         // the second producer's finish arrived while the fan-in was busy
         // with the first's, and held-back is not the same as dropped.
-        let st = DagState::load(root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(root.path()).await;
         let read = &st.steps["unified_index/grid"].input_versions;
         for producer in ["slack/rendered_md", "email/rendered_md"] {
             assert!(
@@ -2325,7 +2329,7 @@ mod tests {
         ]));
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.expect("a run leaves a record");
         assert_eq!(run.run_id, "run-abc");
         assert_eq!(run.started_at, pinned);
@@ -2345,8 +2349,8 @@ mod tests {
             )]));
             assert!(r.run(&g).await.unwrap().all_ok());
             ids.push(
-                DagState::load(fx.root.path())
-                    .unwrap()
+                crate::supervisor::record::recorded(fx.root.path())
+                    .await
                     .current_run
                     .unwrap()
                     .run_id,
@@ -2363,7 +2367,7 @@ mod tests {
         let r = runner(fx.root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.expect("a run leaves a record");
         assert!(run.finished_at.is_some(), "a completed run is closed");
         assert_eq!(run.plan.len(), g.steps.len(), "the plan is the whole graph");
@@ -2386,7 +2390,7 @@ mod tests {
         // a terminal state like any other — the record says so rather
         // than leaving last run's answer in place.
         assert!(r.run(&g).await.unwrap().all_ok());
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.expect("second run recorded");
         assert_eq!(
             run.states["slack/rendered_md"], "skipped_up_to_date",
@@ -2433,7 +2437,7 @@ mod tests {
         .unwrap();
         let _ = runner(fx.root.path()).run(&g).await.unwrap();
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "failed");
         assert_eq!(run.states["unified_index/grid"], "blocked");
@@ -2493,7 +2497,7 @@ mod tests {
         let rep = r.run(&g).await.unwrap();
         assert!(!rep.all_ok(), "a stopped run is not a clean one");
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "stopped");
         assert_eq!(run.states["unified_index/grid"], "blocked");
@@ -2505,7 +2509,7 @@ mod tests {
         // completes.
         let rep = r.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         assert_eq!(
             st.steps["email/rendered_md"]
                 .last_run
@@ -2551,7 +2555,7 @@ mod tests {
         .unwrap();
         let r = runner(fx.root.path());
         r.run(&g).await.unwrap();
-        let mut st = DagState::load(fx.root.path()).unwrap();
+        let mut st = crate::supervisor::record::recorded(fx.root.path()).await;
         let good = st.steps.get_mut("email/rendered_md").unwrap();
         let succeeded_at = good.last_run.as_ref().unwrap().finished_at.clone();
         assert!(succeeded_at.is_some());
@@ -2560,14 +2564,14 @@ mod tests {
         // failure wrongly wrote would equal the real one. Back-date it.
         let succeeded_at = Some("2026-01-01T00:00:00+00:00".to_string());
         good.last_success_at = succeeded_at.clone();
-        st.save(fx.root.path()).unwrap();
+        crate::supervisor::record::record(fx.root.path(), &st).await;
 
         fails.store(true, std::sync::atomic::Ordering::SeqCst);
         // Moving the input is what makes the step run again rather than
         // skip as up to date.
         *fx.email_content.lock().unwrap() = "email v2".to_string();
         r.run(&g).await.unwrap();
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let after = &st.steps["email/rendered_md"];
         assert_eq!(after.last_run.as_ref().unwrap().status, "failed");
         assert_eq!(after.last_success_at, succeeded_at);
@@ -2679,7 +2683,7 @@ mod tests {
         // now is what a poller would see for as long as the step runs.
         let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                let st = DagState::load(root.path()).unwrap();
+                let st = crate::supervisor::record::recorded(root.path()).await;
                 if let Some(cur) = st
                     .current_run
                     .as_ref()
@@ -2694,7 +2698,7 @@ mod tests {
             }
         })
         .await
-        .expect("a step in flight must be readable as running from dag_state.json");
+        .expect("a step in flight must be readable as running from the record");
 
         assert_eq!(seen.0, "running");
         let last = seen.1.expect("a dispatched step has an open last_run");
@@ -2720,7 +2724,9 @@ mod tests {
         let r = runner(fx.root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let before = DagState::load(fx.root.path()).unwrap().steps["email/raw"]
+        let before = crate::supervisor::record::recorded(fx.root.path())
+            .await
+            .steps["email/raw"]
             .last_run
             .clone()
             .expect("the first run recorded email/raw");
@@ -2732,7 +2738,7 @@ mod tests {
         let rep = r2.run(&g).await.unwrap();
         assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let after = st.steps["email/raw"]
             .last_run
             .as_ref()
@@ -2766,7 +2772,7 @@ mod tests {
         let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = DagState::load(fx.root.path()).unwrap();
+        let st = crate::supervisor::record::recorded(fx.root.path()).await;
         assert!(
             st.steps
                 .get("email/raw")

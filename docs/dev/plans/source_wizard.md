@@ -162,7 +162,8 @@ Proposed, checked against the tree on 2026-09-17, and not built:
   `runtime/src/layout.rs` says `datalib-http` reads nothing under
   `unified_index/`.
 - **Renaming an id.** The id is fixed on edit because a rename is a
-  migration — move the directory, remap `system/dag_state.json`, and
+  migration — move the directory, remap the step ids in
+  `system/supervisor.sqlite`'s record, and
   rewrite `markdowns.md_path`, `markdowns.source_id` and
   `grid_rows.qmd_path`, which `grid_index` would otherwise never touch
   since the render store's diff names no row. It wants to be one

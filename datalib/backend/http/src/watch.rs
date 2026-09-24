@@ -49,7 +49,7 @@ pub const HEARTBEAT: Duration = Duration::from_secs(10);
     strum::VariantArray,
 )]
 pub enum Table {
-    /// `GET /api/dag`: the runner's record, `system/dag_state.json`,
+    /// `GET /api/dag`: the loop's record, in `system/supervisor.sqlite`,
     /// written on every step state change. Covers a `datalib-dag` run
     /// started from a terminal, which the job stream never sees because
     /// no job row exists for it.
@@ -137,7 +137,8 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Moved {
     Config,
-    DagState,
+    /// The loop's record and its mailbox, `system/supervisor.sqlite`.
+    Supervisor,
     RunStore,
     Frontend,
     GridIndex,
@@ -161,8 +162,12 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     if path.starts_with(&frontend) && path != frontend {
         return Some(Moved::Frontend);
     }
-    if path.parent() == Some(system.as_path()) && name == "dag_state.json" {
-        return Some(Moved::DagState);
+    // The database and its WAL are one write; `-shm` is only readers'
+    // bookkeeping.
+    if path.parent() == Some(system.as_path())
+        && (name == "supervisor.sqlite" || name == "supervisor.sqlite-wal")
+    {
+        return Some(Moved::Supervisor);
     }
     // `runs.sqlite-wal` / `-journal` are the same write as the
     // database itself, so match on the stem rather than equality.
@@ -372,7 +377,7 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
             }
-            Moved::DagState => {
+            Moved::Supervisor => {
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
             }
@@ -562,10 +567,13 @@ mod tests {
             classify(root, &root.join("config.toml")),
             Some(Moved::Config)
         );
-        assert_eq!(
-            classify(root, &root.join("system/dag_state.json")),
-            Some(Moved::DagState)
-        );
+        for record in ["system/supervisor.sqlite", "system/supervisor.sqlite-wal"] {
+            assert_eq!(
+                classify(root, &root.join(record)),
+                Some(Moved::Supervisor),
+                "{record}"
+            );
+        }
         assert_eq!(
             classify(root, &root.join("system/runs/runs.sqlite-wal")),
             Some(Moved::RunStore)
@@ -758,6 +766,7 @@ mod tests {
             "system/jobs.doltlite_db",
             "system/feedback.doltlite_db",
             "system/api-token",
+            "system/supervisor.sqlite-shm",
             "slack/raw/blobs.doltlite_db",
             "config.yaml",
         ] {
@@ -773,10 +782,6 @@ mod tests {
     fn the_temp_half_of_an_atomic_write_is_not_a_change() {
         let root = Path::new("/data");
         assert_eq!(classify(root, &root.join("config.tmp")), None);
-        assert_eq!(
-            classify(root, &root.join("system/dag_state.json.tmp")),
-            None
-        );
     }
 
     async fn heard(
@@ -818,28 +823,33 @@ mod tests {
         .await;
     }
 
-    /// The same for the runner's own record — the case the sync-job
-    /// stream structurally cannot cover, because a `datalib-dag` run
-    /// started from a terminal has no job row behind it.
+    /// The same for the loop's record — the case the sync-job stream
+    /// structurally cannot cover, because a `datalib-dag` run started from
+    /// a terminal has no job row behind it.
     #[tokio::test]
-    async fn a_terminal_runners_state_write_reaches_a_subscriber() {
+    async fn a_terminal_loops_record_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
         let (tx, mut rx) = broadcast::channel(64);
         spawn(td.path().to_path_buf(), tx);
 
-        let system = td.path().join("system");
-        let mut n = 0;
+        let root = td.path().to_path_buf();
+        let writer = tokio::spawn(async move {
+            let store = datalib_dag::supervisor::store::Store::open(&root)
+                .await
+                .unwrap();
+            loop {
+                store.pause("a/raw", "loop").await.unwrap();
+                store.resume("a/raw").await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
         heard(
             &mut rx,
             RootEvent::TableChanged { table: Table::Dag },
-            move || {
-                n += 1;
-                let tmp = system.join("dag_state.json.tmp");
-                std::fs::write(&tmp, format!("{{\"n\":{n}}}")).unwrap();
-                std::fs::rename(&tmp, system.join("dag_state.json")).unwrap();
-            },
+            || {},
         )
         .await;
+        writer.abort();
     }
 
     /// A data root reached through a symlink still reports.

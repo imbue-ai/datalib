@@ -74,8 +74,8 @@ async fn a_root_a_newer_build_wrote_is_refused_before_any_step_runs() {
         "the step must not have run"
     );
     assert!(
-        !root.join("system/dag_state.json").exists(),
-        "the scheduler state must not have been written"
+        !root.join("system/supervisor.sqlite").exists(),
+        "the record must not have been written"
     );
 
     // The same root, once the store says the running line wrote it, runs.

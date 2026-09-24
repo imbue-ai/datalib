@@ -402,7 +402,7 @@ faster.
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
 │   └── qmd_index/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
-    ├── dag_state.json              # scheduler state (which steps are up to date)
+    ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
     ├── lock                        # held by the running server
     ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
