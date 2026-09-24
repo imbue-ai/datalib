@@ -17,6 +17,7 @@ mod lib_endpoint;
 mod manage_rows;
 mod pipeline_history;
 mod pipeline_storage;
+mod record_json;
 mod remote_media;
 mod request_log;
 mod runs_endpoints;

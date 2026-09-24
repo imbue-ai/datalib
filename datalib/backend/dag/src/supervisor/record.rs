@@ -1,16 +1,112 @@
-//! The loop's record in `system/supervisor.sqlite`: what each step last
-//! did and read, what each sink holds, the run in flight, and one row per
-//! process the loop started. Only the process holding `runner-lock`
-//! writes these; anyone may read them, with any `sqlite3`.
+//! The loop's record: what each step last read and published, what
+//! happened the last time a run reached it, the run in flight, and one row
+//! per process the loop started. The loop holds it in memory as a
+//! [`Record`] and saves what [`changes`] finds into
+//! `system/supervisor.sqlite`. Only the process holding `runner-lock`
+//! writes it; anyone may read it, with any `sqlite3`.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::Row;
 
 use super::store::Store;
-use crate::state::{changes, Change, CurrentRun, DagState, LastRun, StepState};
+use crate::step::StepId;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Record {
+    pub steps: BTreeMap<StepId, StepRecord>,
+    /// The run in flight, or the one that finished last.
+    pub current_run: Option<CurrentRun>,
+}
+
+/// One busy period of the loop: the stretch from taking a request on to
+/// having none left.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CurrentRun {
+    pub run_id: String,
+    pub started_at: String,
+    /// `None` while the run is in flight.
+    pub finished_at: Option<String>,
+    /// Step id → what it is doing in this run, as `RunState::as_str`. A
+    /// step the run has not reached has no entry.
+    pub states: BTreeMap<StepId, String>,
+}
+
+/// What a step did the last time a run reached it: "what happened, and
+/// when", beside [`StepRecord`]'s "is it up to date".
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LastRun {
+    /// The run this happened in — the key into `system/runs/runs.sqlite`,
+    /// where the step's log lines and metrics for it live.
+    pub run_id: String,
+    pub started_at: String,
+    /// `None` while it is running.
+    pub finished_at: Option<String>,
+    /// How it ended, as `RunState::as_str`; empty while it runs.
+    pub status: String,
+    /// How many attempts this took, retries included.
+    pub attempts: u32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StepRecord {
+    /// Each input's path → the version this step read at its last
+    /// success. A failure never updates it, so the step stays out of date
+    /// until it succeeds.
+    pub reads: BTreeMap<String, String>,
+    /// The version of the tree this step writes, after the last
+    /// invocation that moved it — failed ones too, since what a failed
+    /// step committed is read downstream.
+    pub version: Option<String>,
+    pub succeeded: bool,
+    /// The step's definition (argv, params, env, inputs) as of its last
+    /// success. A step whose fingerprint no longer matches is out of date
+    /// however unchanged its inputs: that is how a config edit takes
+    /// effect.
+    pub fingerprint: String,
+    /// What happened the last time a run reached it, whatever the
+    /// outcome: what "last synced" says.
+    pub last_run: Option<LastRun>,
+    /// When a run last left it current: succeeded, or checked and found
+    /// up to date. Kept here rather than read from the run store, which
+    /// ages runs out, and the source failing longest is the one whose last
+    /// success matters most.
+    pub last_success_at: Option<String>,
+}
+
+/// One thing the store must write to hold `next` where it held `prev`.
+#[derive(Debug, PartialEq)]
+pub enum Change<'a> {
+    /// The run, and every step's state in it.
+    Run(&'a CurrentRun),
+    Step(&'a str, &'a StepRecord),
+    /// A step whose record was dropped, by a reset.
+    Forget(&'a str),
+}
+
+/// What changed between two records, so a save writes that and nothing
+/// else: the loop saves after every event, and most change one step.
+pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
+    let mut out = Vec::new();
+    if let Some(run) = next.current_run.as_ref() {
+        if prev.current_run.as_ref() != Some(run) {
+            out.push(Change::Run(run));
+        }
+    }
+    for (id, step) in &next.steps {
+        if prev.steps.get(id) != Some(step) {
+            out.push(Change::Step(id, step));
+        }
+    }
+    for id in prev.steps.keys() {
+        if !next.steps.contains_key(id) {
+            out.push(Change::Forget(id));
+        }
+    }
+    out
+}
 
 pub(super) const DDL: [&str; 5] = [
     // One per busy period of the loop; the newest is the run in flight,
@@ -19,8 +115,7 @@ pub(super) const DDL: [&str; 5] = [
         run_id TEXT PRIMARY KEY,
         started_at_utc TEXT NOT NULL,
         finished_at_utc TEXT,
-        tz_offset TEXT,
-        plan TEXT NOT NULL
+        tz_offset TEXT
     )",
     // What each step is doing in the newest run; a step the run has not
     // reached has no row.
@@ -47,10 +142,10 @@ pub(super) const DDL: [&str; 5] = [
         last_success_at_utc TEXT,
         tz_offset TEXT
     )",
-    // The version of what a step published, by the tree it writes.
+    // The version each tree was last published at, by its path (a
+    // step's tree is its id).
     "CREATE TABLE IF NOT EXISTS sinks (
         path TEXT PRIMARY KEY,
-        step TEXT NOT NULL,
         version TEXT NOT NULL
     )",
     // One per process the loop started. `outcome` is NULL while it runs.
@@ -93,9 +188,9 @@ pub struct InvocationEnd {
 
 impl Store {
     /// The record as the last save left it.
-    pub async fn load_record(&self) -> Result<DagState> {
+    pub async fn load_record(&self) -> Result<Record> {
         let run = sqlx::query(
-            "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, plan FROM runs \
+            "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
              ORDER BY rowid DESC LIMIT 1",
         )
         .fetch_optional(self.pool())
@@ -104,7 +199,6 @@ impl Store {
             None => None,
             Some(r) => {
                 let run_id: String = r.try_get("run_id")?;
-                let plan: String = r.try_get("plan")?;
                 let offset: Option<String> = r.try_get("tz_offset")?;
                 let joined = |utc: String| datalib_time::join_stamp(&utc, offset.as_deref());
                 let states = sqlx::query("SELECT step, state FROM run_steps WHERE run_id = ?")
@@ -120,21 +214,17 @@ impl Store {
                     finished_at: r
                         .try_get::<Option<String>, _>("finished_at_utc")?
                         .map(joined),
-                    plan: serde_json::from_str(&plan).context("a run's plan")?,
                     states,
                 })
             }
         };
 
-        let mut outputs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-        for r in sqlx::query("SELECT path, step, version FROM sinks")
+        let mut versions: BTreeMap<String, String> = BTreeMap::new();
+        for r in sqlx::query("SELECT path, version FROM sinks")
             .fetch_all(self.pool())
             .await?
         {
-            outputs
-                .entry(r.try_get("step")?)
-                .or_default()
-                .insert(r.try_get("path")?, r.try_get("version")?);
+            versions.insert(r.try_get("path")?, r.try_get("version")?);
         }
         let mut steps = BTreeMap::new();
         for r in sqlx::query("SELECT * FROM steps")
@@ -165,9 +255,9 @@ impl Store {
                     error: r.try_get("last_error")?,
                 }),
             };
-            let state = StepState {
-                input_versions: serde_json::from_str(&reads).context("a step's reads")?,
-                output_versions: outputs.remove(&id).unwrap_or_default(),
+            let state = StepRecord {
+                reads: serde_json::from_str(&reads).context("a step's reads")?,
+                version: versions.remove(&id),
                 succeeded: r.try_get::<i64, _>("succeeded")? != 0,
                 fingerprint: r.try_get("fingerprint")?,
                 last_run,
@@ -175,12 +265,12 @@ impl Store {
             };
             steps.insert(id, state);
         }
-        Ok(DagState { steps, current_run })
+        Ok(Record { steps, current_run })
     }
 
     /// Write what changed from `prev` to `next`, in one transaction. The
     /// loop's to call, and only the loop's.
-    pub async fn save_record(&self, prev: &DagState, next: &DagState) -> Result<()> {
+    pub async fn save_record(&self, prev: &Record, next: &Record) -> Result<()> {
         let changes = changes(prev, next);
         if changes.is_empty() {
             return Ok(());
@@ -195,15 +285,14 @@ impl Store {
                         .as_deref()
                         .map(|f| datalib_time::split_stamp(f).utc);
                     sqlx::query(
-                        "INSERT INTO runs (run_id, started_at_utc, finished_at_utc, tz_offset, plan) \
-                         VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET \
-                         finished_at_utc = excluded.finished_at_utc, plan = excluded.plan",
+                        "INSERT INTO runs (run_id, started_at_utc, finished_at_utc, tz_offset) \
+                         VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET \
+                         finished_at_utc = excluded.finished_at_utc",
                     )
                     .bind(&run.run_id)
                     .bind(&started.utc)
                     .bind(finished)
                     .bind(&started.tz_offset)
-                    .bind(serde_json::to_string(&run.plan)?)
                     .execute(&mut *tx)
                     .await?;
                     // Only the newest run's states are ever read.
@@ -240,7 +329,7 @@ impl Store {
                     .bind(id)
                     .bind(st.succeeded)
                     .bind(&st.fingerprint)
-                    .bind(serde_json::to_string(&st.input_versions)?)
+                    .bind(serde_json::to_string(&st.reads)?)
                     .bind(last.map(|l| &l.run_id))
                     .bind(last.map(|l| datalib_time::split_stamp(&l.started_at).utc))
                     .bind(last.and_then(|l| utc(&l.finished_at)))
@@ -251,25 +340,28 @@ impl Store {
                     .bind(offset)
                     .execute(&mut *tx)
                     .await?;
-                    sqlx::query("DELETE FROM sinks WHERE step = ?")
-                        .bind(id)
-                        .execute(&mut *tx)
-                        .await?;
-                    for (path, version) in &st.output_versions {
-                        sqlx::query(
-                            "INSERT OR REPLACE INTO sinks (path, step, version) VALUES (?, ?, ?)",
-                        )
-                        .bind(path)
-                        .bind(id)
-                        .bind(version)
-                        .execute(&mut *tx)
-                        .await?;
+                    match &st.version {
+                        Some(version) => {
+                            sqlx::query(
+                                "INSERT OR REPLACE INTO sinks (path, version) VALUES (?, ?)",
+                            )
+                            .bind(id)
+                            .bind(version)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                        None => {
+                            sqlx::query("DELETE FROM sinks WHERE path = ?")
+                                .bind(id)
+                                .execute(&mut *tx)
+                                .await?;
+                        }
                     }
                 }
                 Change::Forget(id) => {
                     for stmt in [
                         "DELETE FROM steps WHERE step = ?",
-                        "DELETE FROM sinks WHERE step = ?",
+                        "DELETE FROM sinks WHERE path = ?",
                     ] {
                         sqlx::query(stmt).bind(id).execute(&mut *tx).await?;
                     }
@@ -278,27 +370,6 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
-    }
-
-    /// Bring in the record a root kept as `system/dag_state.json`, if it
-    /// has one and the store holds none yet, and set the file aside. For
-    /// the process taking the lock.
-    pub async fn import_legacy_record(&self, data_root: &Path) -> Result<bool> {
-        let Some(legacy) = DagState::read_legacy_json(data_root)? else {
-            return Ok(false);
-        };
-        let held: i64 =
-            sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM steps) + (SELECT COUNT(*) FROM runs)")
-                .fetch_one(self.pool())
-                .await?;
-        if held == 0 {
-            self.save_record(&DagState::default(), &legacy).await?;
-        }
-        let path = data_root.join(crate::state::LEGACY_JSON_REL_PATH);
-        let aside = path.with_extension("json.imported");
-        std::fs::rename(&path, &aside)
-            .with_context(|| format!("set {} aside as {}", path.display(), aside.display()))?;
-        Ok(held == 0)
     }
 
     pub async fn open_invocation(&self, row: &InvocationRow) -> Result<()> {
@@ -377,7 +448,7 @@ impl Store {
 
 /// The record at `root`, as a test reads it back.
 #[cfg(test)]
-pub(crate) async fn recorded(root: &Path) -> DagState {
+pub(crate) async fn recorded(root: &std::path::Path) -> Record {
     let store = Store::open(root).await.unwrap();
     let record = store.load_record().await.unwrap();
     store.close().await;
@@ -386,7 +457,7 @@ pub(crate) async fn recorded(root: &Path) -> DagState {
 
 /// Write `next` over the record at `root`, as a test sets one up.
 #[cfg(test)]
-pub(crate) async fn record(root: &Path, next: &DagState) {
+pub(crate) async fn record(root: &std::path::Path, next: &Record) {
     let store = Store::open(root).await.unwrap();
     let prev = store.load_record().await.unwrap();
     store.save_record(&prev, next).await.unwrap();
@@ -397,88 +468,104 @@ pub(crate) async fn record(root: &Path, next: &DagState) {
 mod tests {
     use super::*;
 
-    fn stepped() -> DagState {
-        DagState {
+    fn step(fingerprint: &str) -> StepRecord {
+        StepRecord {
+            succeeded: true,
+            fingerprint: fingerprint.into(),
+            version: Some("v1".into()),
+            ..Default::default()
+        }
+    }
+
+    fn stepped() -> Record {
+        Record {
             steps: BTreeMap::from([(
                 "slack/raw".into(),
-                StepState {
-                    input_versions: BTreeMap::from([("x/raw".into(), "v0".into())]),
-                    output_versions: BTreeMap::from([("slack/raw".into(), "abc".into())]),
+                StepRecord {
+                    reads: BTreeMap::from([("x/raw".into(), "v0".into())]),
+                    version: Some("abc".into()),
                     succeeded: true,
                     fingerprint: "fp-1".into(),
                     last_run: Some(LastRun {
                         run_id: "run-1".into(),
-                        started_at: "2026-08-31T09:00:00+00:00".into(),
-                        finished_at: Some("2026-08-31T09:00:09+00:00".into()),
+                        started_at: "2026-08-31T10:00:00+01:00".into(),
+                        finished_at: Some("2026-08-31T10:00:09+01:00".into()),
                         status: "succeeded".into(),
                         attempts: 1,
                         error: None,
                     }),
-                    last_success_at: Some("2026-08-31T09:00:09+00:00".into()),
+                    last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
                 },
             )]),
             current_run: Some(CurrentRun {
                 run_id: "run-1".into(),
-                started_at: "2026-08-31T09:00:00+00:00".into(),
-                finished_at: Some("2026-08-31T09:00:10+00:00".into()),
-                plan: vec!["slack/raw".into(), "slack/rendered_md".into()],
+                started_at: "2026-08-31T10:00:00+01:00".into(),
+                finished_at: Some("2026-08-31T10:00:10+01:00".into()),
                 states: BTreeMap::from([("slack/raw".into(), "succeeded".into())]),
             }),
         }
     }
 
+    /// The loop saves after every event; a save that rewrote the whole
+    /// record each time would write every step on every tick.
+    #[test]
+    fn a_save_writes_what_changed_and_nothing_else() {
+        let prev = Record {
+            steps: BTreeMap::from([
+                ("a/raw".into(), step("fp-a")),
+                ("b/raw".into(), step("fp-b")),
+                ("c/raw".into(), step("fp-c")),
+            ]),
+            current_run: Some(CurrentRun {
+                run_id: "r1".into(),
+                ..Default::default()
+            }),
+        };
+        assert!(changes(&prev, &prev).is_empty());
+
+        let mut next = prev.clone();
+        next.steps.insert("b/raw".into(), step("fp-b2"));
+        next.steps.remove("c/raw");
+        next.current_run.as_mut().unwrap().states =
+            BTreeMap::from([("b/raw".into(), "running".into())]);
+        assert_eq!(
+            changes(&prev, &next),
+            [
+                Change::Run(next.current_run.as_ref().unwrap()),
+                Change::Step("b/raw", &next.steps["b/raw"]),
+                Change::Forget("c/raw"),
+            ]
+        );
+    }
+
+    /// Stamps go into the tables as UTC and an offset, and come back as
+    /// the strings they went in as.
     #[tokio::test]
     async fn the_record_reads_back_as_it_was_saved() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&DagState::default(), &st).await.unwrap();
-
-        let back = store.load_record().await.unwrap();
-        let step = &back.steps["slack/raw"];
-        assert!(step.succeeded);
-        assert_eq!(step.fingerprint, "fp-1");
-        assert_eq!(step.input_versions, st.steps["slack/raw"].input_versions);
-        assert_eq!(step.output_versions["slack/raw"], "abc");
-        let last = step.last_run.as_ref().expect("last_run survives the trip");
-        assert_eq!((last.status.as_str(), last.attempts), ("succeeded", 1));
-        assert_eq!(
-            last.finished_at.as_deref(),
-            Some("2026-08-31T09:00:09+00:00")
-        );
-        let run = back.current_run.expect("the run survives the trip");
-        assert_eq!(run.plan.len(), 2);
-        assert_eq!(run.states["slack/raw"], "succeeded");
-        assert!(run.finished_at.is_some());
+        store.save_record(&Record::default(), &st).await.unwrap();
+        assert_eq!(store.load_record().await.unwrap(), st);
     }
 
-    /// A reset forgets a step: its row and its sink's version go, so the
+    /// A reset forgets a step: its row and its tree's version go, so the
     /// next run does its work from the start.
     #[tokio::test]
     async fn a_forgotten_step_leaves_nothing_behind() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&DagState::default(), &st).await.unwrap();
+        store.save_record(&Record::default(), &st).await.unwrap();
         let mut reset = st.clone();
         reset.steps.remove("slack/raw");
         store.save_record(&st, &reset).await.unwrap();
         assert!(store.load_record().await.unwrap().steps.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_legacy_json_record_is_imported_once_and_set_aside() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("system")).unwrap();
-        let json = root.path().join(crate::state::LEGACY_JSON_REL_PATH);
-        std::fs::write(&json, serde_json::to_vec(&stepped()).unwrap()).unwrap();
-        let store = Store::open(root.path()).await.unwrap();
-
-        assert!(store.import_legacy_record(root.path()).await.unwrap());
-        assert!(!json.exists());
-        assert!(json.with_extension("json.imported").exists());
-        assert!(store.load_record().await.unwrap().steps["slack/raw"].succeeded);
-        assert!(!store.import_legacy_record(root.path()).await.unwrap());
+        let sinks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sinks")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(sinks, 0);
     }
 
     #[tokio::test]

@@ -101,15 +101,7 @@ async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
     std::fs::create_dir_all(root.join("system")).unwrap();
     std::fs::write(root.join("config.toml"), config).unwrap();
     if let Some(j) = state_json {
-        let record: datalib_dag::state::DagState = serde_json::from_str(j).unwrap();
-        let store = datalib_dag::supervisor::store::Store::open(root)
-            .await
-            .unwrap();
-        store
-            .save_record(&Default::default(), &record)
-            .await
-            .unwrap();
-        store.close().await;
+        crate::record_json::write(root, j).await;
     }
 }
 
@@ -314,7 +306,6 @@ async fn a_finished_run_reaches_the_rows() {
                 "run_id": "r1",
                 "started_at": "2026-08-31T10:00:00+01:00",
                 "finished_at": "2026-08-31T10:00:12+01:00",
-                "plan": ["slack/ingest", "slack/render_markdown"],
                 "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
               }
             }"#,

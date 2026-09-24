@@ -73,8 +73,8 @@ filegroup(
         # serves the full search experience given a data root path —
         # `datalib-http <data_root>` is the user-facing invocation.
         "//datalib/backend/http:datalib_http_bin",
-        # The DAG runner + step host, spawned by http's sync worker (and
-        # invocable standalone against a data root's config.toml).
+        # The loop as a command, for a root no server is running, and
+        # the step host every loop spawns.
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/datalib_step:datalib_step",
         # The directory-tree scanner, standalone. The pipeline reaches

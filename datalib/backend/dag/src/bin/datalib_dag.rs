@@ -308,9 +308,6 @@ async fn main() -> Result<()> {
     let taken = host::take_over(&store, &data_root).await?;
     #[allow(clippy::disallowed_macros)]
     {
-        if taken.imported_legacy {
-            eprintln!("datalib-dag: brought system/dag_state.json into the record");
-        }
         if let Some(dead) = &taken.closed_run {
             eprintln!(
                 "datalib-dag: closed run {dead} and {} of its steps, which a loop that died \

@@ -41,17 +41,16 @@ source "$(rlocation _main/datalib/dev_runtime.sh)"
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-# Sync worker child binaries: //datalib/backend:bin stages every shipped
-# binary under its public dash-separated name in one directory, which is
-# both what the runner expects on PATH and the layout the installer
-# produces. Honor caller-supplied overrides.
+# The step binaries the server's sync loop spawns: //datalib/backend:bin
+# stages every shipped binary under its public dash-separated name in one
+# directory, which is both what a step's PATH starts with and the layout
+# the installer produces. Honor a caller-supplied override.
 BIN_DIR="$(rlocation _main/datalib/backend/bin || true)"
 if [[ -d "$BIN_DIR" ]]; then
-  : "${DATALIB_DAG_BIN:=$BIN_DIR/datalib-dag}"
   : "${DATALIB_BINARY_DIR:=$BIN_DIR}"
-  export DATALIB_DAG_BIN DATALIB_BINARY_DIR
+  export DATALIB_BINARY_DIR
 fi
-[[ -n "${DATALIB_DAG_BIN:-}" ]] && echo "dag bin: $DATALIB_DAG_BIN"
+[[ -n "${DATALIB_BINARY_DIR:-}" ]] && echo "binary dir: $DATALIB_BINARY_DIR"
 
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 if [[ -z "$WORKSPACE" ]]; then

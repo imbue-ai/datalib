@@ -270,7 +270,7 @@ impl AppRepo for AppStore {
                            progress_pct, progress_msg \
                     FROM sync_jobs";
         // The SQL form of `SyncJobRow::is_active`: a job told to stop is
-        // active until the worker stamps it finished.
+        // active until it is stamped finished.
         let sql = if only_active {
             format!(
                 "{base} WHERE state IN (?, ?) \

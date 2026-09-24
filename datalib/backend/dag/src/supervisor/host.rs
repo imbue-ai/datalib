@@ -79,8 +79,6 @@ pub fn start_record(
 /// What [`take_over`] found to put right.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TakenOver {
-    /// A `system/dag_state.json` it brought into the store.
-    pub imported_legacy: bool,
     /// The run a dead loop left open, which it closed.
     pub closed_run: Option<String>,
     /// How many of that loop's invocations it closed as stopped.
@@ -88,16 +86,11 @@ pub struct TakenOver {
 }
 
 /// For the process that has just taken `runner-lock`, before its first
-/// loop: bring in a root's `dag_state.json` if it still has one, and close
-/// what a loop that died holding the lock left open — its run, in the
-/// record and in the run store, so no row reads its steps as live, and its
-/// invocations. Holding the lock is what makes anything open a thing a
-/// dead loop left.
+/// loop: close what a loop that died holding the lock left open — its
+/// run, in the record and in the run store, so no row reads its steps as
+/// live, and its invocations. Holding the lock is what makes anything open
+/// a thing a dead loop left.
 pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
-    let imported_legacy = store
-        .import_legacy_record(data_root)
-        .await
-        .context("import system/dag_state.json")?;
     let why = "the loop running this ended without closing it; the next to take the lock did";
     let saved = store.load_record().await.context("load the record")?;
     let mut state = saved.clone();
@@ -116,7 +109,6 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
     }
     let closed_invocations = store.close_abandoned_invocations(why).await?;
     Ok(TakenOver {
-        imported_legacy,
         closed_run,
         closed_invocations,
     })
@@ -125,14 +117,14 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{CurrentRun, DagState};
     use crate::supervisor::record::InvocationRow;
+    use crate::supervisor::record::{CurrentRun, Record};
 
     #[tokio::test]
     async fn what_a_dead_loop_left_open_is_closed_and_nothing_else() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        let open = DagState {
+        let open = Record {
             current_run: Some(CurrentRun {
                 run_id: "r1".into(),
                 started_at: "2026-09-23T10:00:00+00:00".into(),
@@ -140,10 +132,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        store
-            .save_record(&DagState::default(), &open)
-            .await
-            .unwrap();
+        store.save_record(&Record::default(), &open).await.unwrap();
         store
             .open_invocation(&InvocationRow {
                 id: "i1".into(),
@@ -158,7 +147,6 @@ mod tests {
         assert_eq!(
             taken,
             TakenOver {
-                imported_legacy: false,
                 closed_run: Some("r1".into()),
                 closed_invocations: 1
             }

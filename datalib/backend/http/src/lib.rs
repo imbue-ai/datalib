@@ -1209,7 +1209,7 @@ fn now_utc() -> String {
         .0
 }
 
-/// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
+/// A step's last outcome, mirroring `datalib_dag::supervisor::record::LastRun`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagStepRun {
     /// The run it happened in — what to pass to `/api/runs/{run}/log`
@@ -1307,14 +1307,6 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .steps
         .iter()
         .filter_map(|(id, st)| st.last_run.as_ref().map(|r| (id.clone(), r)))
-        // A `not_selected` last-run is a record from before the
-        // scheduler stopped writing them — see `Scheduler::finish`. It
-        // says a run walked past this step without touching it, on top
-        // of whatever the step had actually done. The real outcome it
-        // replaced is gone, so the honest report is no record at all:
-        // "never run". It self-heals the next time a run reaches the
-        // step for real.
-        .filter(|(_, r)| r.status != "not_selected")
         .map(|(id, r)| {
             (
                 id,

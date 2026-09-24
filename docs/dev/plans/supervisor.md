@@ -494,8 +494,9 @@ running the loop writes facts.
 
 *As built (4a):* `steps` holds the facts — fingerprint, what the step read
 at its last success, its last run and last success — and not yet the
-tick's `state`, which 4c adds for rows to read; `sinks`, `invocations`
-(no `pid` or `consumed` yet) as above; and `runs` and `run_steps`, the
+tick's `state`, which 4c adds for rows to read; `sinks` (path and
+version only) and `invocations` (no `pid` or `consumed` yet); and `runs`
+and `run_steps`, the
 busy period in flight and each step's state in it, which is what
 `GET /api/dag` and the Manage rows read until 4c. `request_steps` is 4c's.
 
@@ -798,9 +799,14 @@ last.
    `runs`, `run_steps` and `invocations` in `system/supervisor.sqlite`
    (§2.7 says what each holds as built; `supervisor/record.rs`). The loop
    saves only what changed since its last save. Whoever takes the lock
-   first imports a root's old `dag_state.json`, once, and closes the run
-   and invocations a dead loop left open (`host::take_over`);
-   `datalib-dag status` lists running steps too. The
+   closes the run and invocations a dead loop left open
+   (`host::take_over`); `datalib-dag status` lists running steps too.
+   What the batch run left behind went with it: the fixed one-request
+   mailbox (`Runner::run` is a test helper now), `only_fringe`,
+   `not_selected` (a step no request reached is simply not in the run),
+   a step's map of output versions (it writes one tree), and the run's
+   `plan`. An old root's `dag_state.json` is not read: its steps do their
+   work once from the start. The
    server is untouched but for tagging its requests `--by ui`: its
    worker still runs one job at a time, so the UI's own syncs overlap
    from 4b, and a job whose `datalib-dag` joined a CLI's loop has no run

@@ -16,11 +16,11 @@ use anyhow::{Context, Result};
 use crate::events::{Event, EventSink, NoopSink, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
-use crate::state::{DagState, LastRun};
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
     StopSignal,
 };
+use crate::supervisor::record::{LastRun, Record};
 use crate::supervisor::tick::Budgets;
 use crate::version::tree_version;
 
@@ -62,12 +62,6 @@ pub struct Runner {
     pub budgets: Budgets,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Subset-sync mode: the source steps (those with no declared
-    /// inputs) the user asked to sync. The run executes those steps
-    /// plus their transitive dependents and nothing else; `None` (the
-    /// default) selects every source step, so the subgraph is the whole
-    /// graph. See [`Runner::runnable_subgraph`].
-    pub only_fringe: Option<std::collections::HashSet<String>>,
     /// Extra environment applied to every subprocess step — run-wide
     /// settings like `PATH` (with the binary dir prepended) and the
     /// pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win
@@ -90,7 +84,6 @@ impl Runner {
             budgets: Budgets::from_parallelism(4),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
-            only_fringe: None,
             child_env: Arc::new(BTreeMap::new()),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
@@ -110,11 +103,6 @@ impl Runner {
 
     pub fn retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
-        self
-    }
-
-    pub fn only_fringe(mut self, ids: impl IntoIterator<Item = String>) -> Self {
-        self.only_fringe = Some(ids.into_iter().collect());
         self
     }
 
@@ -223,15 +211,9 @@ pub enum StepStatus {
     Succeeded {
         changed: usize,
     },
-    /// In the runnable subgraph, but up to date: same inputs, same
-    /// fingerprint as at its last success. Checked, and current.
+    /// Wanted, but up to date: same inputs, same fingerprint as at its
+    /// last success. Checked, and current.
     SkippedUpToDate,
-    /// Outside the runnable subgraph — this run didn't ask for it, so
-    /// it was never considered. Distinct from `SkippedUpToDate` on
-    /// purpose: "not part of this run" and "checked, and current" are
-    /// different facts, and a per-source sync makes the difference
-    /// visible in the UI's task list.
-    NotSelected,
     /// An upstream step failed (or was itself blocked); not invoked.
     Blocked {
         on: String,
@@ -249,7 +231,6 @@ impl StepStatus {
         match self {
             StepStatus::Succeeded { .. } => RunState::Succeeded,
             StepStatus::SkippedUpToDate => RunState::SkippedUpToDate,
-            StepStatus::NotSelected => RunState::NotSelected,
             StepStatus::Blocked { .. } => RunState::Blocked,
             // A cancel is the one failure kind that is not a failure:
             // the person asked for it, and the step did as asked.
@@ -277,7 +258,7 @@ pub struct StepReport {
 
 #[derive(Debug, Clone)]
 pub struct RunReport {
-    /// One entry per step, in topological order.
+    /// One entry per step a request reached, in topological order.
     pub steps: Vec<StepReport>,
 }
 
@@ -298,7 +279,7 @@ impl Runner {
     pub(crate) fn finish(
         &self,
         graph: &Graph,
-        state: &mut DagState,
+        state: &mut Record,
         status: &mut [Option<StepStatus>],
         i: usize,
         st: StepStatus,
@@ -319,14 +300,7 @@ impl Runner {
             run.states
                 .insert(id.clone(), st.state().as_str().to_string());
         }
-        // `NotSelected` is a fact about this *run*, not about the step:
-        // the run didn't ask for it, so nothing happened to it. Writing
-        // that into `last_run` overwrote a real history — a step that
-        // succeeded yesterday came back as "not selected", stamped with
-        // the time of a run that never touched it, because every
-        // per-source sync walks the whole graph to publish output
-        // versions and reaches every step it isn't running.
-        if st != StepStatus::NotSelected {
+        {
             let run_id = state
                 .current_run
                 .as_ref()
@@ -357,7 +331,7 @@ pub(crate) fn now_stamp() -> String {
 
 /// Open a step's run record when the scheduler dispatches it, so a
 /// reader can tell "running" from "not reached yet".
-pub(crate) fn mark_running(state: &mut DagState, id: &StepId, stamp: &str) {
+pub(crate) fn mark_running(state: &mut Record, id: &StepId, stamp: &str) {
     if let Some(run) = state.current_run.as_mut() {
         run.states
             .insert(id.clone(), RunState::Running.as_str().to_string());
@@ -630,12 +604,25 @@ pub(crate) async fn invoke_with_retry(
 
 #[cfg(test)]
 mod tests {
+    /// A runner and the sources a request of its names, run as one.
+    struct Subset<'a>(Runner, &'a [&'a str]);
+
+    impl Subset<'_> {
+        async fn run(&self, graph: &Graph) -> Result<RunReport> {
+            self.0.run_roots(graph, self.1).await
+        }
+    }
+
+    impl RunReport {
+        fn is_absent(&self, id: &str) -> bool {
+            self.steps.iter().all(|s| s.id != id)
+        }
+    }
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
 
     use super::*;
     use crate::step::StepOutcome;
-    use crate::version::UNKNOWN;
 
     /// Records every event for assertions.
     #[derive(Default)]
@@ -1884,7 +1871,7 @@ mod tests {
         // the second producer's finish arrived while the fan-in was busy
         // with the first's, and held-back is not the same as dropped.
         let st = crate::supervisor::record::recorded(root.path()).await;
-        let read = &st.steps["unified_index/grid"].input_versions;
+        let read = &st.steps["unified_index/grid"].reads;
         for producer in ["slack/rendered_md", "email/rendered_md"] {
             assert!(
                 read.get(producer).is_some_and(|v| v.ends_with(":final")),
@@ -2003,7 +1990,7 @@ mod tests {
     ///
     /// This is the steady-state case, and it is the one streaming can
     /// quietly ruin: if an early pass leaves the consumer's recorded
-    /// `input_versions` incomplete, the next run sees the missing entries as
+    /// `reads` incomplete, the next run sees the missing entries as
     /// movement and re-runs the consumer once per producer — every run,
     /// forever, each pass reading nothing.
     #[tokio::test]
@@ -2069,7 +2056,7 @@ mod tests {
     ///
     /// This is the shape that lost a whole source. An early pass of the
     /// consumer starts, and a producer it has not read yet *finishes while
-    /// that pass is running*. If the pass records its `input_versions` from
+    /// that pass is running*. If the pass records its `reads` from
     /// whatever is current when it lands, it claims that producer's final
     /// version — a version it never read. The final pass then finds nothing
     /// changed, is skipped up-to-date, and that producer's documents are
@@ -2202,7 +2189,7 @@ mod tests {
     }
 
     /// The pleasing half of the design: an early pass records its
-    /// `input_versions` the ordinary way, so the final pass meets the
+    /// `reads` the ordinary way, so the final pass meets the
     /// existing staleness predicate and is *skipped* when nothing moved
     /// after the last checkpoint. Streaming is the same rules, earlier.
     #[tokio::test]
@@ -2361,7 +2348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_run_records_its_plan_and_every_step_outcome() {
+    async fn a_run_records_every_step_outcome() {
         let fx = Fixture::new();
         let g = fx.graph();
         let r = runner(fx.root.path());
@@ -2370,17 +2357,17 @@ mod tests {
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.expect("a run leaves a record");
         assert!(run.finished_at.is_some(), "a completed run is closed");
-        assert_eq!(run.plan.len(), g.steps.len(), "the plan is the whole graph");
-        for id in &run.plan {
+        let every: Vec<&str> = g.steps.iter().map(|s| s.id.as_str()).collect();
+        for id in &every {
             assert_eq!(
-                run.states.get(id).map(String::as_str),
+                run.states.get(*id).map(String::as_str),
                 Some("succeeded"),
                 "{id} has no state in the run record"
             );
         }
 
-        for id in &run.plan {
-            let last = st.steps[id].last_run.as_ref().expect("{id}: no last_run");
+        for id in &every {
+            let last = st.steps[*id].last_run.as_ref().expect("{id}: no last_run");
             assert_eq!(last.status, "succeeded");
             assert!(last.finished_at.is_some());
             assert!(!last.started_at.is_empty());
@@ -2616,16 +2603,16 @@ mod tests {
         // change alone.
         *fx.slack_content.lock().unwrap() = "slack v2".to_string();
         *fx.email_content.lock().unwrap() = "email v2".to_string();
-        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let r2 = Subset(runner(fx.root.path()), &["slack/raw"]);
         let rep = r2.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
 
         assert_eq!(fx.run_count("slack/raw"), 2);
         assert_eq!(fx.run_count("email/raw"), 1, "email must not sync");
-        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
-        assert_eq!(
-            rep.step("email/rendered_md").status,
-            StepStatus::NotSelected
+        assert!(rep.is_absent("email/raw"), "email/raw is in no request");
+        assert!(
+            rep.is_absent("email/rendered_md"),
+            "email/rendered_md is in no request"
         );
         assert_eq!(fx.run_count("slack/rendered_md"), 2);
         assert_eq!(fx.run_count("unified_index/grid"), 2);
@@ -2732,11 +2719,10 @@ mod tests {
             .expect("the first run recorded email/raw");
         assert_eq!(before.status, "succeeded");
 
-        // A sync of a different source. It walks email/raw and reports
-        // it not-selected, but nothing happened to email/raw.
-        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        // A sync of a different source: nothing happened to email/raw.
+        let r2 = Subset(runner(fx.root.path()), &["slack/raw"]);
         let rep = r2.run(&g).await.unwrap();
-        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
+        assert!(rep.is_absent("email/raw"), "email/raw is in no request");
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let after = st.steps["email/raw"]
@@ -2753,23 +2739,22 @@ mod tests {
              'last synced', and it moved on every unrelated sync"
         );
 
-        // The run record still carries the fact, because that map is
-        // about the run rather than about the step.
-        assert_eq!(
-            st.current_run.expect("a run leaves a record").states["email/raw"],
-            "not_selected"
-        );
+        // And the run has no state for it: no request reached it.
+        assert!(!st
+            .current_run
+            .expect("a run leaves a record")
+            .states
+            .contains_key("email/raw"));
     }
 
-    /// A step no run has ever selected has no history to keep, and must
-    /// not acquire a fake one: `not_selected` is not something that
-    /// happened to it, so it stays "never run" rather than becoming a
-    /// row stamped with a run that skipped it.
+    /// A step no request has ever reached has no history to keep, and
+    /// must not acquire a fake one: it stays "never run" rather than
+    /// becoming a row stamped with a run that skipped it.
     #[tokio::test]
     async fn a_never_selected_step_has_no_last_run_at_all() {
         let fx = Fixture::new();
         let g = fx.graph();
-        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let r = Subset(runner(fx.root.path()), &["slack/raw"]);
         assert!(r.run(&g).await.unwrap().all_ok());
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
@@ -2796,7 +2781,7 @@ mod tests {
         let fx = Fixture::new();
         let g = fx.graph();
         // No prior run: nothing in this root has ever succeeded.
-        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let r = Subset(runner(fx.root.path()), &["slack/raw"]);
         let rep = r.run(&g).await.unwrap();
 
         // The selected chain does its work.
@@ -2805,16 +2790,16 @@ mod tests {
 
         // The unselected chain must not be touched at all — not the
         // download (that part already worked), and not the render.
-        assert_eq!(rep.step("email/raw").status, StepStatus::NotSelected);
+        assert!(rep.is_absent("email/raw"), "email/raw is in no request");
         assert_eq!(
             fx.run_count("email/rendered_md"),
             0,
             "render of an unselected chain must not be invoked: its raw \
              store does not exist yet"
         );
-        assert_eq!(
-            rep.step("email/rendered_md").status,
-            StepStatus::NotSelected
+        assert!(
+            rep.is_absent("email/rendered_md"),
+            "email/rendered_md is in no request"
         );
 
         // ...so nothing is poisoned, and the fan-in still indexes the
@@ -2877,14 +2862,14 @@ mod tests {
         // Run 2: sync slack only. The email chain is untouched — no
         // poll, no retry — and slack still reaches the index.
         let g = fx.graph();
-        let r2 = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let r2 = Subset(runner(fx.root.path()), &["slack/raw"]);
         let rep2 = r2.run(&g).await.unwrap();
         assert!(rep2.all_ok(), "{rep2:#?}");
         assert_eq!(fx.run_count("email/raw"), 1, "no poll");
         assert_eq!(fx.run_count("email/rendered_md"), 0, "no retry");
-        assert_eq!(
-            rep2.step("email/rendered_md").status,
-            StepStatus::NotSelected
+        assert!(
+            rep2.is_absent("email/rendered_md"),
+            "email/rendered_md is in no request"
         );
         // The index was blocked in run 1 (email.render failed), so this
         // is its first run: slack reaches it, email contributes nothing.
@@ -2950,16 +2935,10 @@ mod tests {
         // no recorded version, and the runner says so rather than
         // reading the store to invent one.
         let g = fx.graph();
-        let r = runner(fx.root.path()).only_fringe(["slack/raw".to_string()]);
+        let r = Subset(runner(fx.root.path()), &["slack/raw"]);
         let rep2 = r.run(&g).await.unwrap();
         assert!(rep2.all_ok(), "{rep2:#?}");
-        assert_eq!(rep2.step("email/raw").status, StepStatus::NotSelected);
-        assert_eq!(rep2.step("email/raw").outputs[0].1, UNKNOWN);
-        assert_eq!(
-            rep2.step("email/rendered_md").outputs[0].1,
-            UNKNOWN,
-            "never ran, nothing recorded"
-        );
+        assert!(rep2.is_absent("email/raw"), "email/raw is in no request");
         // The chain that was asked for still reaches the index.
         assert_eq!(fx.run_count("unified_index/grid"), 1);
 
@@ -2967,8 +2946,7 @@ mod tests {
         // so the fan-in is not dirtied every single run. This is the
         // property that makes dropping the hash safe — the hash was
         // stable across runs too, just three billion bytes slower.
-        let rep3 = runner(fx.root.path())
-            .only_fringe(["slack/raw".to_string()])
+        let rep3 = Subset(runner(fx.root.path()), &["slack/raw"])
             .run(&g)
             .await
             .unwrap();

@@ -98,8 +98,8 @@ configs.
 Backend resolution at runtime: `$DATALIB_HTTP_BIN` (dev override,
 point it at a fresh Bazel build without rebundling) → the bundled
 `Resources/binaries/datalib-http`. The child finds the pipeline
-binaries itself: `$DATALIB_DAG_BIN` / `$DATALIB_BINARY_DIR`
-(inherited) → a sibling of its own executable, which is exactly where
+binaries itself: `$DATALIB_BINARY_DIR` (inherited) → a sibling of its
+own executable, which is exactly where
 the bundle puts them. The spawned backend logs to
 `$TMPDIR/datalib-http-<pid>.log`;
 startup failures quote the log tail in the error dialog.

@@ -163,9 +163,6 @@ async fn host(cfg: &HostConfig) {
     cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
     match host::take_over(&store, &root).await {
         Ok(taken) => {
-            if taken.imported_legacy {
-                tracing::info!("supervisor: brought system/dag_state.json into the record");
-            }
             if let Some(run) = &taken.closed_run {
                 tracing::warn!(
                     run,

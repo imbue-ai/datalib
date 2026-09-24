@@ -30,13 +30,9 @@ pub enum RunState {
     Running,
     /// Ran to completion.
     Succeeded,
-    /// In the runnable subgraph, but up to date: same inputs, same
-    /// fingerprint as at its last success. Checked, and current.
+    /// Wanted, but up to date: same inputs, same fingerprint as at its
+    /// last success. Checked, and current.
     SkippedUpToDate,
-    /// Outside the runnable subgraph — this run never considered it. A
-    /// per-source sync leaves most of the graph here, which is a
-    /// different fact from [`RunState::SkippedUpToDate`].
-    NotSelected,
     /// An upstream step failed (or was itself blocked); not invoked.
     Blocked,
     Failed,
@@ -65,13 +61,9 @@ impl RunState {
         !matches!(self, RunState::Running)
     }
 
-    /// Whether it finished without failing. `NotSelected` counts: not
-    /// being asked for is not a failure.
+    /// Whether it finished without failing.
     pub const fn is_ok(self) -> bool {
-        matches!(
-            self,
-            RunState::Succeeded | RunState::SkippedUpToDate | RunState::NotSelected
-        )
+        matches!(self, RunState::Succeeded | RunState::SkippedUpToDate)
     }
 }
 

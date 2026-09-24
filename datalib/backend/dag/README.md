@@ -76,30 +76,24 @@ algorithm cannot: it leaves behind everything it could not order, ring and
 tail alike, and telling someone a step three hops below a cycle is *in* it
 sends them looking for an `inputs` entry that isn't there.
 
-## What a run executes, and what makes a step stale
+## What the loop runs, and what makes a step stale
 
-A run executes a **runnable subgraph**: the source steps this run selected
-plus everything downstream of them. With no `--sync` that is the whole
-graph. Steps outside it are reported `NotSelected` and cannot run, whatever
-their state.
+The loop runs what open **requests** want. A request names its roots —
+source steps, every one of them with no `--sync` — and its **scope** is
+those plus everything downstream. A step no open request wants is never
+started, whatever its state, and a run records nothing for it: no state in
+the run, no line in the report, and its `last_run` left as it was, so a
+`--sync slack` never moves email's "last synced".
 
-The subgraph is reachability in the graph, computed once before anything
-runs and deliberately independent of run-time state. That is what makes
-"sync yolink" mean the same thing every time — the set of steps that can
-move is a property of the config, readable off the DAG, rather than
-something you reconstruct from the state file to predict. The cost is that
-pending work elsewhere stays pending; it comes back on the next full run,
-and in exchange a per-source sync never does surprising work on someone
-else's chain.
+Scope is reachability in the graph, deliberately independent of run-time
+state. That is what makes "sync yolink" mean the same thing every time — the
+set of steps that can move is a property of the config, readable off the
+DAG. The cost is that pending work elsewhere stays pending until a request
+reaches it, and in exchange a per-source sync never does surprising work on
+someone else's chain. A step in scope that reads one outside it reads that
+step's recorded version.
 
-Steps outside the subgraph are still *walked*, because an in-subgraph fan-in
-can depend on them: walking publishes their recorded output versions and
-gives every step a terminal status for the report. They are never invoked,
-and `NotSelected` is never written into `last_run` — doing so made a
-`--sync slack` erase email's record, so a source's "last synced" moved every
-time some other source synced.
-
-Inside the subgraph a step runs iff it is **stale**, which is one predicate
+In scope, a step runs iff it is **stale**, which is one predicate
 with four clauses:
 
 - it declares no inputs (its real input is outside the graph, so it always
@@ -340,18 +334,16 @@ any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
 |---|---|---|
 | `steps` | step | what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
-| `runs` | busy period of the loop | when it started and finished, and its plan |
+| `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |
 | `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
 
-A run must record its plan before anything runs, a state for *every* step
-in scope (including ones that were skipped or blocked and never "ran"), a
+A run must record a state for *every* step in scope (including ones that
+were skipped or blocked and never "ran"), a
 `finished_at` that tells a completed run from a crashed one, and per-step
 timings. The loop holds the record in memory (`state::DagState`) and
 saves only what changed since its last save (`state::changes`), after
-every event. A root that still has the `system/dag_state.json` the record
-used to be is imported once, by the next process to take the lock, and
-the file set aside as `dag_state.json.imported`.
+every event.
 
 The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
 for one busy period of the loop (`datalib-dag` takes `--run-id` instead

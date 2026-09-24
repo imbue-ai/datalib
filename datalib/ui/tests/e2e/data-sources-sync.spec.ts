@@ -195,9 +195,8 @@ ${applets()}`;
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
 
-    // Now sync the *other* source. The runner still walks docs/raw, to
-    // publish its output version, and reports it `not_selected` — the
-    // fact that used to be written over its record.
+    // Now sync the *other* source. A run that walked docs/raw used to
+    // write "not selected" over its record.
     const pdfsWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
     expect(await settle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");

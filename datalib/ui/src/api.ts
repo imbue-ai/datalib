@@ -622,7 +622,6 @@ export type DagRunState =
   // Checked, and already up to date.
   | "skipped_up_to_date"
   // Outside this run's subgraph, so it was never considered.
-  | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
   | "failed"
