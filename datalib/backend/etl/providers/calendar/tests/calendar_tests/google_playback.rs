@@ -7,8 +7,10 @@ use std::path::Path;
 use datalib_etl::http::{HttpRequest, HttpResponse, LatchkeySettings, PLAYBACK_ENV};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl::synthesize::{json_response, write_fixture};
-use datalib_etl_calendar::ingest::google::{self, calendar_list_url, events_url};
-use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
+use datalib_etl_calendar::ingest::google::{
+    self, calendar_list_url, events_url, windowed_events_url,
+};
+use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
 use serde_json::{json, Value};
 
 const PRIMARY: &str = "picard@enterprise.test";
@@ -45,11 +47,16 @@ fn calendar_list(root: &Path) {
 }
 
 async fn run(playback: &Path, store: &Path) -> FetchSummary {
+    run_in(playback, store, None).await
+}
+
+async fn run_in(playback: &Path, store: &Path, window: Option<Window>) -> FetchSummary {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = google::fetch(google::FetchOptions {
         db: db.clone(),
         calendars: Vec::new(),
+        window,
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control: Default::default(),
@@ -198,4 +205,62 @@ async fn pages_then_syncs_and_survives_an_expired_token() {
         ids(&store).await,
         vec![format!("{AWAY}#away01"), format!("{PRIMARY}#reception01")],
     );
+}
+
+/// A windowed calendar is listed whole every run with the window's
+/// bounds and no sync token, and what drops out of the window is dropped
+/// from the mirror — the listing is the window as it is now.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_is_listed_whole_every_run_and_keeps_no_token() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, two, store) = (
+        d.path().join("one"),
+        d.path().join("two"),
+        d.path().join("store"),
+    );
+    std::fs::create_dir_all(&store).unwrap();
+    let window = Window {
+        start: chrono::NaiveDate::from_ymd_opt(2026, 3, 1),
+        end: chrono::NaiveDate::from_ymd_opt(2026, 4, 1),
+    };
+    let url = windowed_events_url(PRIMARY, &window, None);
+    assert!(url.contains("timeMin=2026-03-01T00%3A00%3A00Z"), "{url}");
+    assert!(url.contains("timeMax=2026-04-01T00%3A00%3A00Z"), "{url}");
+    assert!(!url.contains("syncToken"), "{url}");
+
+    let series = json!({"id": "staff01", "status": "confirmed", "summary": "Senior staff briefing",
+        "start": {"dateTime": "2026-01-05T09:00:00-08:00"}, "end": {"dateTime": "2026-01-05T10:00:00-08:00"},
+        "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO,TH"]});
+    let moved = json!({"id": "staff01_20260312T170000Z", "status": "confirmed", "recurringEventId": "staff01",
+        "originalStartTime": {"dateTime": "2026-03-12T09:00:00-08:00"},
+        "start": {"dateTime": "2026-03-12T11:00:00-07:00"}, "end": {"dateTime": "2026-03-12T12:30:00-07:00"}});
+    for root in [&one, &two] {
+        calendar_list(root);
+        fixture(
+            root,
+            &windowed_events_url(AWAY, &window, None),
+            page(json!([]), None, Some("a1")),
+        );
+    }
+    // Google hands back a sync token even here; it must not be kept.
+    fixture(
+        &one,
+        &url,
+        page(json!([series.clone(), moved]), None, Some("s1")),
+    );
+    fixture(&two, &url, page(json!([series]), None, Some("s2")));
+
+    let first = run_in(&one, &store, Some(window)).await;
+    assert_eq!((first.events_new, first.errors), (2, 0), "{first:?}");
+    let second = run_in(&two, &store, Some(window)).await;
+    assert_eq!((second.events_deleted, second.errors), (1, 0), "{second:?}");
+    assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
+
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    let tokens: Vec<Option<String>> = sqlx::query_scalar("SELECT sync_token FROM calendars")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    assert!(tokens.iter().all(Option::is_none), "{tokens:?}");
 }

@@ -111,12 +111,21 @@ fn account_fixtures(root: &Path) {
 }
 
 async fn run(playback: &Path, store: &Path) -> FetchSummary {
+    run_in(playback, store, None).await
+}
+
+async fn run_in(
+    playback: &Path,
+    store: &Path,
+    window: Option<datalib_etl_calendar::ingest::Window>,
+) -> FetchSummary {
     std::env::set_var(PLAYBACK_ENV, playback);
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
     let summary = caldav::fetch(caldav::FetchOptions {
         db: db.clone(),
         server_url: format!("{HOST}/"),
         calendars: Vec::new(),
+        window,
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
         control: Default::default(),
@@ -259,5 +268,59 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
             .await
             .as_deref(),
         Some("data:,101")
+    );
+}
+
+/// A windowed CalDAV calendar asks for the window with `calendar-query`
+/// — time range and `limit-recurrence-set` — instead of a sync, and
+/// keeps no token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_queries_the_time_range_and_keeps_no_token() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let (one, store) = (d.path().join("one"), d.path().join("store"));
+    std::fs::create_dir_all(&store).unwrap();
+    account_fixtures(&one);
+    let window = datalib_etl_calendar::ingest::Window {
+        start: chrono::NaiveDate::from_ymd_opt(2026, 9, 1),
+        end: chrono::NaiveDate::from_ymd_opt(2026, 10, 1),
+    };
+    let body = dav::body_query_window(&window);
+    assert!(
+        body.contains(r#"<C:time-range start="20260901T000000Z" end="20261001T000000Z"/>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<C:limit-recurrence-set start="20260901T000000Z" end="20261001T000000Z"/>"#
+        ),
+        "{body}"
+    );
+    fixture(
+        &one,
+        HttpMethod::Report,
+        &format!("{HOST}{BRIDGE}"),
+        "1",
+        &body,
+        xml(
+            207,
+            &multistatus(&resource(
+                &format!("{BRIDGE}reception.ics"),
+                "\"r1\"",
+                RECEPTION,
+            )),
+        ),
+    );
+
+    let first = run_in(&one, &store, Some(window)).await;
+    assert_eq!((first.events_new, first.errors), (1, 0), "{first:?}");
+    assert_eq!(
+        scalar(&store, "SELECT sync_token FROM calendars").await,
+        None
+    );
+    assert_eq!(
+        scalar(&store, "SELECT uid FROM ics_objects")
+            .await
+            .as_deref(),
+        Some("tng-reception@enterprise.test")
     );
 }

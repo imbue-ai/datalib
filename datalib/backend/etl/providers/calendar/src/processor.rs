@@ -19,15 +19,18 @@ pub fn plan_ingest(
     config: CalendarConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let method = match config.method()? {
-        CalendarMethod::Google { calendars } => Method::Google {
+        CalendarMethod::Google { calendars, window } => Method::Google {
             calendars: calendars.to_vec(),
+            window: ingest::Window::from_config(window)?,
         },
         CalendarMethod::Caldav {
             server_url,
             calendars,
+            window,
         } => Method::Caldav {
             server_url: server_url.to_string(),
             calendars: calendars.to_vec(),
+            window: ingest::Window::from_config(window)?,
         },
         CalendarMethod::Ics(path) => Method::Ics { path: path.path() },
     };
@@ -42,10 +45,12 @@ pub fn plan_ingest(
 enum Method {
     Google {
         calendars: Vec<String>,
+        window: Option<ingest::Window>,
     },
     Caldav {
         server_url: String,
         calendars: Vec<String>,
+        window: Option<ingest::Window>,
     },
     Ics {
         path: PathBuf,
@@ -62,14 +67,16 @@ pub struct CalendarIngest {
 impl CalendarIngest {
     fn run_config(&self) -> serde_json::Value {
         match &self.method {
-            Method::Google { calendars } => {
-                serde_json::json!({"method": "google", "calendars": calendars})
-            }
+            Method::Google { calendars, window } => serde_json::json!({
+                "method": "google", "calendars": calendars, "window": window
+            }),
             Method::Caldav {
                 server_url,
                 calendars,
+                window,
             } => serde_json::json!({
-                "method": "caldav", "server_url": server_url, "calendars": calendars
+                "method": "caldav", "server_url": server_url, "calendars": calendars,
+                "window": window
             }),
             Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
         }
@@ -91,10 +98,11 @@ impl DataProcessor for CalendarIngest {
         // changed in each table.
         let run = DownloadRun::start(&pool, &self.run_config()).await?;
         let result = match &self.method {
-            Method::Google { calendars } => {
+            Method::Google { calendars, window } => {
                 ingest::google::fetch(ingest::google::FetchOptions {
                     db,
                     calendars: calendars.clone(),
+                    window: *window,
                     latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
@@ -104,11 +112,13 @@ impl DataProcessor for CalendarIngest {
             Method::Caldav {
                 server_url,
                 calendars,
+                window,
             } => {
                 ingest::caldav::fetch(ingest::caldav::FetchOptions {
                     db,
                     server_url: server_url.clone(),
                     calendars: calendars.clone(),
+                    window: *window,
                     latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),

@@ -16,6 +16,36 @@ use datalib_etl::download_problems;
 
 pub use db::{db_path_for, RawDb};
 
+/// The days a windowed source mirrors, as instants: from midnight UTC
+/// on `since` to midnight UTC after `until`, either end open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Window {
+    pub start: Option<chrono::NaiveDate>,
+    /// The day *after* `until`: the end is exclusive.
+    pub end: Option<chrono::NaiveDate>,
+}
+
+impl Window {
+    /// `None` when the config sets no window.
+    pub fn from_config(w: datalib_etl_calendar_config::Window<'_>) -> Result<Option<Self>> {
+        if w.is_open() {
+            return Ok(None);
+        }
+        let day = |s: &str| {
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map_err(|e| anyhow::anyhow!("date {s:?}: {e}"))
+        };
+        Ok(Some(Self {
+            start: w.since.map(day).transpose()?,
+            end: w
+                .until
+                .map(day)
+                .transpose()?
+                .map(|d| d + chrono::Duration::days(1)),
+        }))
+    }
+}
+
 /// What one run did: the step's summary line, and the run's `sync_runs`
 /// record.
 #[derive(Debug, Default, Clone, serde::Serialize)]

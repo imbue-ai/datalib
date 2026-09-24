@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
-use super::{select_calendars, FetchSummary};
+use super::{select_calendars, FetchSummary, Window};
 use crate::ical;
 use dav::{DavError, DavResponse, Multistatus};
 
@@ -25,6 +25,8 @@ pub struct FetchOptions {
     pub server_url: String,
     /// Calendar names or ids to mirror; empty for all of them.
     pub calendars: Vec<String>,
+    /// Only what falls in these days; `None` mirrors everything.
+    pub window: Option<Window>,
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
@@ -84,7 +86,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let label = cal.row.display_name.as_deref().unwrap_or(&cal.row.id);
         opts.progress
             .set_message(&format!("syncing calendar {label}"));
-        if let Err(e) = sync_calendar(db, cal, lk, &mut summary, &mut record_problems).await {
+        let synced = match &opts.window {
+            Some(w) => list_window(db, cal, w, lk, &mut summary, &mut record_problems).await,
+            None => sync_calendar(db, cal, lk, &mut summary, &mut record_problems).await,
+        };
+        if let Err(e) = synced {
             summary.errors += 1;
             run_problems.push(RunProblem::listing(
                 &format!("calendar {label}"),
@@ -310,6 +316,28 @@ async fn sync_calendar(
         drop_unlisted(db, id, &listed, summary).await?;
     }
     Ok(())
+}
+
+/// A windowed calendar: every event with some part in the window, each
+/// series trimmed to the changed occurrences inside it
+/// (`limit-recurrence-set`), listed whole every run. `sync-collection`
+/// has no time bound, so no token is kept either.
+async fn list_window(
+    db: &RawDb,
+    cal: &Calendar,
+    window: &Window,
+    lk: &LatchkeySettings,
+    summary: &mut FetchSummary,
+    problems: &mut Vec<RecordProblem>,
+) -> Result<()> {
+    summary.requests += 1;
+    let ms = dav::report(&cal.url, "1", &dav::body_query_window(window), lk)
+        .await
+        .map_err(|e| anyhow::anyhow!("calendar-query REPORT: {e}"))?;
+    let listed: HashSet<String> = ms.responses.iter().map(|r| r.href.clone()).collect();
+    apply(db, cal, lk, ms.responses, summary, problems).await?;
+    drop_unlisted(db, &cal.row.id, &listed, summary).await?;
+    db.set_sync_token(&cal.row.id, None).await
 }
 
 /// For a server with no `sync-collection`: list every event, every run.

@@ -147,6 +147,41 @@ pub const BODY_QUERY_ALL_EVENTS: &str = r#"<?xml version="1.0" encoding="utf-8"?
 </C:calendar-query>
 "#;
 
+/// `calendar-query` for one window: the events with an instance in it,
+/// each series trimmed to the overrides that fall in it. RFC 4791 wants
+/// both bounds on `limit-recurrence-set`, so an open end is spelled as
+/// a far one.
+pub fn body_query_window(window: &super::super::Window) -> String {
+    let stamp = |d: chrono::NaiveDate| d.format("%Y%m%dT000000Z").to_string();
+    let start = window
+        .start
+        .map(stamp)
+        .unwrap_or_else(|| "19000101T000000Z".into());
+    let end = window
+        .end
+        .map(stamp)
+        .unwrap_or_else(|| "30000101T000000Z".into());
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-query xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <prop>
+    <getetag/>
+    <C:calendar-data>
+      <C:limit-recurrence-set start="{start}" end="{end}"/>
+    </C:calendar-data>
+  </prop>
+  <C:filter>
+    <C:comp-filter name="VCALENDAR">
+      <C:comp-filter name="VEVENT">
+        <C:time-range start="{start}" end="{end}"/>
+      </C:comp-filter>
+    </C:comp-filter>
+  </C:filter>
+</C:calendar-query>
+"#
+    )
+}
+
 /// RFC 4791 `calendar-multiget`, for the resources a listing named
 /// without their data.
 pub fn body_multiget(hrefs: &[String]) -> String {

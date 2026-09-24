@@ -208,6 +208,14 @@ export const CATALOG: CatalogEntry[] = [
           "mirror goes. Moving it earlier backfills on the next run; moving it later does nothing.",
       },
       {
+        kind: "date",
+        target: "api.until",
+        label: "Mirror until",
+        help:
+          "The last day to mirror (YYYY-MM-DD). Leave empty to keep up with today; a day in " +
+          "the past fixes the window, so the mirror stops growing.",
+      },
+      {
         kind: "bool",
         target: "api.media",
         label: "Download file attachments",
@@ -624,6 +632,21 @@ export const CATALOG: CatalogEntry[] = [
           "Calendar names as Google shows them, comma-separated. Empty mirrors every calendar " +
           "on the account's list, subscribed ones included. Adding one later downloads it whole.",
       },
+      {
+        kind: "date",
+        target: "google.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "google.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
+      },
     ],
   },
   {
@@ -658,6 +681,21 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "Calendar names as Fastmail shows them, comma-separated. Empty mirrors every calendar. " +
           "Adding one later downloads it whole.",
+      },
+      {
+        kind: "date",
+        target: "fastmail.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "fastmail.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
       },
     ],
   },
@@ -703,6 +741,21 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "Calendar names as the server shows them, comma-separated. Empty mirrors every calendar. " +
           "Adding one later downloads it whole.",
+      },
+      {
+        kind: "date",
+        target: "caldav.since",
+        label: "Only events from",
+        help:
+          "The first day to mirror (YYYY-MM-DD). With a last day too, only events with some " +
+          "part in that stretch are mirrored, and a series keeps only the changed dates inside " +
+          "it. A windowed calendar is listed whole every run. Leave both empty for everything.",
+      },
+      {
+        kind: "date",
+        target: "caldav.until",
+        label: "Only events until",
+        help: "The last day to mirror (YYYY-MM-DD), included. Leave empty for no end.",
       },
     ],
   },
@@ -772,14 +825,6 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "The earliest day to mirror (YYYY-MM-DD). Leave empty for a year before the first " +
           "sync; move it earlier later to backfill.",
-      },
-      {
-        kind: "date",
-        target: "api.until",
-        label: "Mirror until",
-        help:
-          "The last day to mirror (YYYY-MM-DD). Leave empty to keep up with today; a day in " +
-          "the past fixes the window, so the mirror stops growing.",
       },
       {
         kind: "bool",

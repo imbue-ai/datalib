@@ -33,6 +33,15 @@ describe("the catalog's calendar variants", () => {
     expect(byKey("ics").canProbe).toBeFalsy();
   });
 
+  // Both ends have a field, so a source with a window stays editable here.
+  it("offers a window of days wherever there is a server to ask", () => {
+    for (const key of ["google", "fastmail", "caldav"]) {
+      const kinds = Object.fromEntries(byKey(key).fields!.map((f) => [f.target, f.kind]));
+      expect(kinds[`${key}.since`], key).toBe("date");
+      expect(kinds[`${key}.until`], key).toBe("date");
+    }
+  });
+
   it("names the latchkey services latchkey actually ships", () => {
     expect(byKey("google").credentialService).toBe("google-calendar");
     expect(byKey("fastmail").credentialService).toBe("fastmail-dav");
