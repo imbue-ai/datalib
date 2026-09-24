@@ -25,6 +25,7 @@ import type { ColumnSpec, Timeseries } from "@/api";
 import { calibrationMax } from "@/config/sparkline";
 import { carryLayout, KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns } from "./typedColumns";
@@ -129,7 +130,10 @@ function syncRows(rows: T[]) {
     painted.clear();
     for (const r of rows) painted.set(keyOf(r), JSON.stringify(r));
     ceilings = ceilingsOf(rows);
-    bundle.dataset = annotate(rows);
+    const b = bundle;
+    keepActiveOnRecord(b.slickGrid, dataView, () => {
+      b.dataset = annotate(rows);
+    });
     return;
   }
   // A row whose cell is being edited is left as it is: the grid drops

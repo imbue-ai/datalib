@@ -31,6 +31,7 @@ import type {
 import { filterToken, replaceToken, tokenValue, withToken } from "@/grid/query";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
@@ -290,18 +291,17 @@ async function load(fresh: boolean) {
         // redraw every row and lose the scroll; only the rows the new
         // lines move are redrawn.
         const { slickGrid, dataView } = bundle;
-        redrawChanged(slickGrid, dataView, () => {
-          dataView.beginUpdate();
-          dataView.addItems(got);
-          dataView.reSort();
-          dataView.endUpdate();
+        keepActiveOnRecord(slickGrid, dataView, () => {
+          redrawChanged(slickGrid, dataView, () => {
+            dataView.beginUpdate();
+            dataView.addItems(got);
+            dataView.reSort();
+            dataView.endUpdate();
+          });
+          // Follow the tail only while the reader is already at it: a
+          // scroll up to read something must not be yanked back down.
+          if (atBottom) slickGrid.scrollRowIntoView(slickGrid.getDataLength() - 1);
         });
-        // Follow the tail only while the reader is already at it: a
-        // scroll up to read something must not be yanked back down.
-        if (atBottom) {
-          const grid = bundle.slickGrid;
-          grid.scrollRowIntoView(grid.getDataLength() - 1);
-        }
       }
     } else if (fresh && bundle) {
       bundle.dataset = [];

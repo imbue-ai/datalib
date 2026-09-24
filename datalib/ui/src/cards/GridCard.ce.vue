@@ -49,6 +49,7 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
+import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
 import type { CardCtx } from "./types";
@@ -755,17 +756,19 @@ function applyPatch(patch: RowPatch<SearchRow>) {
   const { dataView, slickGrid: grid } = vueGrid;
   const top = grid.getViewport().top;
   const anchor = rowData(top)?.uuid ?? null;
-  redrawChanged(grid, dataView, () => {
-    dataView.beginUpdate();
-    for (const id of patch.removed) dataView.deleteItem(id);
-    for (const row of patch.changed) dataView.updateItem(row.uuid, row);
-    for (const row of patch.added) dataView.addItem(row);
-    // A new or changed row takes its place in whatever order is showing.
-    dataView.reSort();
-    dataView.endUpdate();
+  keepActiveOnRecord(grid, dataView, () => {
+    redrawChanged(grid, dataView, () => {
+      dataView.beginUpdate();
+      for (const id of patch.removed) dataView.deleteItem(id);
+      for (const row of patch.changed) dataView.updateItem(row.uuid, row);
+      for (const row of patch.added) dataView.addItem(row);
+      // A new or changed row takes its place in whatever order is showing.
+      dataView.reSort();
+      dataView.endUpdate();
+    });
+    const moved = anchor ? dataView.getRowById(anchor) : undefined;
+    if (moved != null && moved !== top) grid.scrollRowToTop(moved);
   });
-  const moved = anchor ? dataView.getRowById(anchor) : undefined;
-  if (moved != null && moved !== top) grid.scrollRowToTop(moved);
 }
 
 onMounted(async () => {
@@ -1343,6 +1346,10 @@ function createGrid() {
       if (idx != null) grid.scrollColumnIntoView(idx);
     },
     isSelected: (uuid: string) => selectedRows().some((r) => r.uuid === uuid),
+    activeUuid: () => {
+      const active = grid.getActiveCell();
+      return active ? (rowData(active.row)?.uuid ?? null) : null;
+    },
     hiddenColumns: () =>
       grid
         .getColumns()
