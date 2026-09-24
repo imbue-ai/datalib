@@ -2,10 +2,10 @@
 // the same files by path, so a mark added here shows up there too.
 //
 // Brand marks are Simple Icons (CC0) in the brand's colour. The generic
-// glyphs — apple_photos, calendar, contacts, fsindex, media, pdf, perseus — are
-// Material Design Icons (Apache-2.0) in a mid grey that reads on both
-// themes: Apple publishes no vector app icons, and the rest are not
-// products.
+// glyphs — apple_photos, calendar, contacts, fsindex, media, pdf, perseus,
+// search, system — are Material Design Icons (Apache-2.0) in a mid grey
+// that reads on both themes: Apple publishes no vector app icons, and the
+// rest are not products.
 
 // IQAir publishes no vector mark; this redraws the favicon
 // dashboard.iqair.com serves, a white cross on red, from its 48px bitmap.
@@ -33,6 +33,9 @@ import facebookIconUrl from "@/assets/facebook.svg";
 // favicon fastmail.com serves for itself.
 import fastmailIconUrl from "@/assets/fastmail.svg";
 import fsindexIconUrl from "@/assets/fsindex.svg";
+// Garmin's Simple Icons mark is its black wordmark, unreadable at 18px
+// and invisible on the dark theme; this is the delta from it alone, in
+// Garmin blue.
 import garminIconUrl from "@/assets/garmin.svg";
 import githubIconUrl from "@/assets/github.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
@@ -45,9 +48,12 @@ import mediaIconUrl from "@/assets/media.svg";
 import notionIconUrl from "@/assets/notion.svg";
 import pdfIconUrl from "@/assets/pdf.svg";
 import perseusIconUrl from "@/assets/perseus.svg";
+// Not services: the unified index group and the System group.
+import searchIconUrl from "@/assets/search.svg";
 import signalIconUrl from "@/assets/signal.svg";
 import slackIconUrl from "@/assets/slack.svg";
 import smsIconUrl from "@/assets/sms.svg";
+import systemIconUrl from "@/assets/system.svg";
 import whatsappIconUrl from "@/assets/whatsapp.svg";
 // PNG, not SVG: YoLink publishes no vector mark. This is the circle
 // logo shop.yosmart.com serves as its own favicon.
@@ -81,9 +87,11 @@ const ICONS: Record<string, string> = {
   notion: notionIconUrl,
   pdf: pdfIconUrl,
   perseus: perseusIconUrl,
+  search: searchIconUrl,
   signal: signalIconUrl,
   slack: slackIconUrl,
   sms: smsIconUrl,
+  system: systemIconUrl,
   whatsapp: whatsappIconUrl,
   yolink: yolinkIconUrl,
 };

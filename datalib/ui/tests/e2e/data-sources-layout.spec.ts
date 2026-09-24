@@ -64,29 +64,29 @@ async function groupOrder(page: Page): Promise<string[]> {
 test("a dragged column width outlives a sync", async ({ page }) => {
   test.setTimeout(120_000);
   await openSources(page);
-  const type = header(page, "type");
-  const before = (await type.boundingBox())!.width;
-  // Well under the column's declared 120px, which used to be its floor.
-  const grip = (await type.locator(".slick-resizable-handle").boundingBox())!;
+  const col = header(page, "last_synced");
+  const before = (await col.boundingBox())!.width;
+  // Well under the column's declared 150px.
+  const grip = (await col.locator(".slick-resizable-handle").boundingBox())!;
   const x = grip.x + grip.width / 2;
   const y = grip.y + grip.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x - 60, y, { steps: 5 });
   await page.mouse.up();
-  const dragged = (await type.boundingBox())!.width;
+  const dragged = (await col.boundingBox())!.width;
   expect(dragged).toBeLessThan(before - 40);
   expect(dragged).toBeLessThan(100);
 
   await syncEverything(page);
-  expect((await type.boundingBox())!.width).toBe(dragged);
+  expect((await col.boundingBox())!.width).toBe(dragged);
 });
 
 test("a header sort outlives a sync", async ({ page }) => {
   test.setTimeout(120_000);
   await openSources(page);
   const declared = await groupOrder(page);
-  await header(page, "type").click();
+  await header(page, "name").click();
   // The sort is on screen: the order moved off the config's.
   await expect.poll(() => groupOrder(page)).not.toEqual(declared);
   const sorted = await groupOrder(page);
