@@ -276,13 +276,6 @@ pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavEr
                     }
                 }
             }
-            Ok(Event::Text(t)) => {
-                let txt = t.decode().unwrap_or_default().into_owned();
-                text_capture.append(&txt);
-            }
-            Ok(Event::GeneralRef(r)) => {
-                text_capture.append(&datalib_etl::xml::reference_text(&r, false));
-            }
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());
                 if let Some(text) = text_capture.finish(&name) {
@@ -313,7 +306,11 @@ pub fn parse_multistatus(url: &str, body: &str) -> Result<Multistatus, CarddavEr
                     message: format!("xml: {e}"),
                 });
             }
-            _ => {}
+            Ok(event) => {
+                if let Some(text) = datalib_etl::xml::text_of(&event, false) {
+                    text_capture.append(&text);
+                }
+            }
         }
         buf.clear();
     }
@@ -387,7 +384,7 @@ fn parent_is(stack: &[String], parent: &str) -> bool {
 }
 
 /// Tiny helper for accumulating text content per element. We need
-/// it because quick-xml emits text in chunks (whitespace, entities)
+/// it because quick-xml emits text in chunks (text, CDATA, references)
 /// and the leaf element name is the same one we'll see on End.
 #[derive(Default)]
 struct TextCapture {
@@ -747,6 +744,75 @@ END:VCARD&#13;
             deleted,
             vec!["/dav/addressbooks/user/u%40example.com/Default/gone.vcf".to_string()]
         );
+    }
+
+    /// Fastmail's listing, verified against a live account: unprefixed
+    /// `DAV:`, every value in CDATA, a 404 propstat after the 200 one.
+    const ADDRESSBOOK_LIST_FASTMAIL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<multistatus xmlns="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" xmlns:cs="http://calendarserver.org/ns/">
+  <response>
+    <href>/dav/addressbooks/user/picard@enterprise.test/Default/</href>
+    <propstat>
+      <prop>
+        <resourcetype>
+          <collection/>
+          <card:addressbook/>
+        </resourcetype>
+        <displayname><![CDATA[Personal]]></displayname>
+        <cs:getctag>1780602923-240</cs:getctag>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+    <propstat>
+      <prop>
+        <card:addressbook-description/>
+      </prop>
+      <status>HTTP/1.1 404 Not Found</status>
+    </propstat>
+  </response>
+</multistatus>"#;
+
+    /// Fastmail's `sync-collection` reply: the vCard arrives in CDATA
+    /// with CRLF line ends.
+    const SYNC_COLLECTION_FASTMAIL: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<multistatus xmlns=\"DAV:\" xmlns:card=\"urn:ietf:params:xml:ns:carddav\">
+  <response>
+    <href>/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf</href>
+    <propstat>
+      <prop>
+        <getetag>\"35513e3f\"</getetag>
+        <card:address-data><![CDATA[BEGIN:VCARD\r\nVERSION:3.0\r\nUID:riker-1\r\nFN:William Riker\r\nEND:VCARD\r\n]]></card:address-data>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <sync-token>data:,1780602923-240</sync-token>
+</multistatus>";
+
+    /// Fastmail wraps every value in CDATA. Before the reader took CDATA
+    /// as text, the addressbook had no name (so an `addressbooks` filter
+    /// matched nothing) and every vCard was dropped as having no data.
+    #[test]
+    fn reads_fastmail_cdata_values() {
+        let ms = parse_multistatus("url", ADDRESSBOOK_LIST_FASTMAIL).unwrap();
+        let book = &ms.responses[0];
+        assert!(book.is_addressbook);
+        assert_eq!(book.display_name.as_deref(), Some("Personal"));
+        assert_eq!(book.ctag.as_deref(), Some("1780602923-240"));
+
+        let ms = parse_multistatus("url", SYNC_COLLECTION_FASTMAIL).unwrap();
+        assert_eq!(ms.sync_token.as_deref(), Some("data:,1780602923-240"));
+        let changed = changed_contacts(&ms);
+        let (etag, vcard) = changed
+            .get("/dav/addressbooks/user/picard@enterprise.test/Default/riker.vcf")
+            .expect("the CDATA vCard is kept");
+        assert_eq!(etag.as_deref(), Some("\"35513e3f\""));
+        assert_eq!(
+            vcard,
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:riker-1\r\nFN:William Riker\r\nEND:VCARD\r\n"
+        );
+        assert_eq!(vcard_uid(vcard).as_deref(), Some("riker-1"));
+        assert_eq!(vcard_fn(vcard).as_deref(), Some("William Riker"));
     }
 
     #[test]
