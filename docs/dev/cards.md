@@ -333,10 +333,8 @@ tab even after its state has moved on. A URL naming a card no tab
 shows opens a new root tab (a miller link of several columns opens
 as a spine).
 
-A card a card opened is a **preview** (italic in the sidebar) until
-the person visits it from the sidebar or it opens something itself;
-the next card its opener opens replaces it. Without that, clicking
-down a grid's rows would leave a tab per row. Closing a tab hands its
+A card a card opens becomes a new tab under its opener, and stays
+until the person closes it. Closing a tab hands its
 children to its own parent; closing a collapsed one closes its whole
 branch. A row's ⇤ makes the tab top-level, taking what is under it
 along, and its ↗ opens the tab alone in a new browser tab (a new

@@ -57,19 +57,15 @@ describe("openChain", () => {
     ]);
   });
 
-  it("replaces the caller's preview child in place, so a row click per row is one tab", () => {
+  it("adds beside the caller's other children rather than replacing any", () => {
     const next = counter();
-    const kept = { ...newTab("t2", "kept()", "t1"), preview: false };
-    const first = openChain([grid, kept], "t1", ['documentView("a")'], next).tabs;
+    const first = openChain([grid], "t1", ['documentView("a")'], next).tabs;
     const second = openChain(first, "t1", ['documentView("b")'], next);
-    expect(second.tabs.map((t) => t.source)).toEqual(["gridView()", "kept()", 'documentView("b")']);
-  });
-
-  it("keeps a preview child that has a visited tab under it", () => {
-    const preview = { ...newTab("t2", "a()", "t1"), preview: true };
-    const visited = newTab("t3", "b()", "t2");
-    const { tabs } = openChain([grid, preview, visited], "t1", ["c()"], counter());
-    expect(tabs.map((t) => t.id)).toEqual(["t1", "t2", "t3", "t100"]);
+    expect(second.tabs.map((t) => [t.source, t.parentId])).toEqual([
+      ["gridView()", null],
+      ['documentView("a")', "t1"],
+      ['documentView("b")', "t1"],
+    ]);
   });
 });
 
@@ -94,7 +90,7 @@ describe("openStack", () => {
 
 describe("makeTopLevel", () => {
   it("detaches a tab with its subtree, listed right after the root it came from", () => {
-    const a = { ...newTab("t2", "a()", "t1"), preview: true };
+    const a = newTab("t2", "a()", "t1");
     const b = newTab("t3", "b()", "t2");
     const other = newTab("t4", "other()", null);
     const next = makeTopLevel([grid, a, b, other], "t2");
@@ -104,7 +100,6 @@ describe("makeTopLevel", () => {
       ["t3", 1],
       ["t4", 0],
     ]);
-    expect(next.find((t) => t.id === "t2")?.preview).toBe(false);
   });
 
   it("leaves a root where it is", () => {

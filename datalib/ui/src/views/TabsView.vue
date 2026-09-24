@@ -192,16 +192,8 @@ function select(id: string) {
   writeUrl("push");
 }
 
-// A tab the person picked out of the sidebar is one they meant to keep.
-function visit(tab: Tab) {
-  tab.preview = false;
-  select(tab.id);
-}
-
 function openFrom(parentId: string, sources: string[]): string[] {
   if (sources.length === 0) return [];
-  const caller = tabById(parentId);
-  if (caller) caller.preview = false;
   const { tabs: next, ids } = openChain(tabs.value, parentId, sources, newCardId);
   tabs.value = next;
   select(ids[ids.length - 1]);
@@ -272,7 +264,7 @@ function addCard() {
 
 function showCard(source: string) {
   const existing = tabs.value.find((t) => t.source === source);
-  if (existing) visit(existing);
+  if (existing) select(existing.id);
   else openRoot(source);
 }
 
@@ -361,8 +353,6 @@ function commitRename(tab: Tab, typed: string) {
   if (name === "" || name === nameOf(tab)) return;
   tab.name = name;
   tab.renamed = true;
-  // A tab the person named is one they mean to keep.
-  tab.preview = false;
   track("card_rename", { card: tab.id, card_type: cardType(tab.source), name });
 }
 
@@ -447,17 +437,14 @@ function resetSidebarWidth() {
           v-for="row in sidebarRows"
           :key="row.tab.id"
           class="tabs-row"
-          :class="{
-            'is-selected': row.tab.id === selectedId,
-            'is-preview': row.tab.preview,
-          }"
+          :class="{ 'is-selected': row.tab.id === selectedId }"
           role="treeitem"
           :aria-selected="row.tab.id === selectedId"
           :aria-expanded="row.hasChildren ? !row.tab.collapsed : undefined"
           :data-tab-id="row.tab.id"
           :style="{ paddingLeft: 0.3 + row.depth * 0.9 + 'rem' }"
           :title="nameOf(row.tab)"
-          @click="visit(row.tab)"
+          @click="select(row.tab.id)"
           @contextmenu.prevent="openMenu(row.tab, $event)"
           @auxclick.prevent="(e: MouseEvent) => e.button === 1 && close(row.tab.id)"
         >
@@ -535,7 +522,7 @@ function resetSidebarWidth() {
           v-if="parentOfSelected"
           class="tabs-from"
           :title="`opened from ${nameOf(parentOfSelected)}`"
-          @click="visit(parentOfSelected)"
+          @click="select(parentOfSelected.id)"
         >
           ↰ {{ nameOf(parentOfSelected) }}
         </button>
@@ -633,11 +620,6 @@ function resetSidebarWidth() {
   background: color-mix(in srgb, var(--datalib-accent) 18%, transparent);
   color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
   font-weight: 600;
-}
-/* Opened by a card and not visited yet: the next card its opener
-   opens takes its place (tabTree.ts openChain). */
-.tabs-row.is-preview .tabs-label {
-  font-style: italic;
 }
 .tabs-twisty {
   flex: 0 0 1rem;
