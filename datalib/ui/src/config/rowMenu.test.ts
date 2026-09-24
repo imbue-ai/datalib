@@ -65,6 +65,8 @@ describe("rowMenu", () => {
     );
     const busy = target({ stopRequestId: "req-1" });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
+    const ingest = target({ kind: "step", func: "ingest" });
+    expect(entry(rowMenu([ingest], opts), "reset_blobs").disabled).toBeNull();
     const render = target({ kind: "step", func: "render_markdown" });
     expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
     expect(entry(rowMenu([render], opts), "reset_blobs").disabled).toBe(

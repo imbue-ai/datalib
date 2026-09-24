@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use datalib_etl::download_run::DownloadRun;
 use datalib_etl::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl::http::LatchkeySettings;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
@@ -18,15 +19,18 @@ pub fn plan_ingest(
     config: CalendarConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let method = match config.method()? {
-        CalendarMethod::Google { calendars } => Method::Google {
+        CalendarMethod::Google { calendars, window } => Method::Google {
             calendars: calendars.to_vec(),
+            window: ingest::Window::from_config(window)?,
         },
         CalendarMethod::Caldav {
             server_url,
             calendars,
+            window,
         } => Method::Caldav {
             server_url: server_url.to_string(),
             calendars: calendars.to_vec(),
+            window: ingest::Window::from_config(window)?,
         },
         CalendarMethod::Ics(path) => Method::Ics { path: path.path() },
     };
@@ -41,10 +45,12 @@ pub fn plan_ingest(
 enum Method {
     Google {
         calendars: Vec<String>,
+        window: Option<ingest::Window>,
     },
     Caldav {
         server_url: String,
         calendars: Vec<String>,
+        window: Option<ingest::Window>,
     },
     Ics {
         path: PathBuf,
@@ -58,6 +64,25 @@ pub struct CalendarIngest {
     method: Method,
 }
 
+impl CalendarIngest {
+    fn run_config(&self) -> serde_json::Value {
+        match &self.method {
+            Method::Google { calendars, window } => serde_json::json!({
+                "method": "google", "calendars": calendars, "window": window
+            }),
+            Method::Caldav {
+                server_url,
+                calendars,
+                window,
+            } => serde_json::json!({
+                "method": "caldav", "server_url": server_url, "calendars": calendars,
+                "window": window
+            }),
+            Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
+        }
+    }
+}
+
 #[async_trait]
 impl DataProcessor for CalendarIngest {
     fn id(&self) -> &str {
@@ -68,43 +93,54 @@ impl DataProcessor for CalendarIngest {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let summary = match &self.method {
-            Method::Google { calendars } => {
+        let pool = db.pool().clone();
+        // The run's own record in `sync_runs`: its summary, and what it
+        // changed in each table.
+        let run = DownloadRun::start(&pool, &self.run_config()).await?;
+        let result = match &self.method {
+            Method::Google { calendars, window } => {
                 ingest::google::fetch(ingest::google::FetchOptions {
                     db,
                     calendars: calendars.clone(),
+                    window: *window,
                     latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
             Method::Caldav {
                 server_url,
                 calendars,
+                window,
             } => {
                 ingest::caldav::fetch(ingest::caldav::FetchOptions {
                     db,
                     server_url: server_url.clone(),
                     calendars: calendars.clone(),
+                    window: *window,
                     latchkey: self.latchkey.clone(),
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
             Method::Ics { path } => {
+                let cache =
+                    FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?;
                 ingest::ics_dir::fetch(ingest::ics_dir::FetchOptions {
                     db,
                     input_path: path.clone(),
-                    cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?)
-                        .await?,
+                    cache,
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
-                .await?
+                .await
             }
         };
+        let summary = result.as_ref().cloned().unwrap_or_default();
+        run.finish(&result, &summary).await;
+        let summary = result?;
         session.finish(ctx, summary.line()).await
     }
 }

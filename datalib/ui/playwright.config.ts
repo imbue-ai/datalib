@@ -193,6 +193,15 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
         DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_PLAYBACK_HOLD"),
       }
     : {},
+  // The sync spec asserts the row shows a run in flight. A local source
+  // on a warm root is over before the rows repaint, so it watches a
+  // replayed download instead, held until the in-flight frame is seen.
+  "data-sources-sync": PLAYBACK_DIR
+    ? {
+        DATALIB_HTTP_PLAYBACK: PLAYBACK_DIR,
+        DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD"),
+      }
+    : {},
 };
 
 // Where a spec holds and releases its tapes, one file per spec, named

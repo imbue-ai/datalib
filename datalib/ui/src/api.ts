@@ -1022,8 +1022,8 @@ export async function resumeStep(id: string): Promise<void> {
   await post(`/api/steps/${encodeURIComponent(id)}/resume`);
 }
 
-/// Drop what the targets wrote; answers once it is done. Refused while a
-/// sync runs.
+/// Empty what the targets wrote, keeping the history, and sync what reads
+/// them; answers once they are empty. Refused while a sync runs.
 export async function resetSteps(targets: string[]): Promise<void> {
   await post("/api/reset", { targets });
 }
@@ -1330,7 +1330,7 @@ export type ServiceRegistration = {
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM) or
 /// `channel` (a Slack channel).
-export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel";
+export type ProbeItemKind = "mailbox" | "keyword" | "conversation" | "channel" | "calendar";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.

@@ -1540,6 +1540,8 @@ struct OpenRequest {
 struct ResetRequest {
     /// Step ids, each optionally `+blobs`.
     targets: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
 }
 
 type Refusal = (StatusCode, String);
@@ -1649,8 +1651,9 @@ async fn step_resume(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/reset` — drop what the targets wrote, keeping the history.
-/// Answers once it is done; refused while a sync runs.
+/// `POST /api/reset` — empty what the targets wrote, keeping the history,
+/// and sync what reads them so the emptiness reaches the grid. Answers
+/// once the targets are empty; refused while a sync runs.
 async fn reset_steps(
     State(s): State<AppState>,
     Json(req): Json<ResetRequest>,
@@ -1658,8 +1661,9 @@ async fn reset_steps(
     if req.targets.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "nothing to reset".into()));
     }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
     s.sync
-        .reset(&req.targets)
+        .reset(&req.targets, &by)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok(StatusCode::NO_CONTENT)

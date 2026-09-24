@@ -60,7 +60,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-80a6-93ad-832002566f74/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Warp core maintenance"
     },
@@ -204,7 +204,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-81a3-9b5c-946dc4b441a8/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Starfleet Academy guest lecture: first contact protocols"
     },
@@ -420,7 +420,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-8470-8240-1b4ee2c9889a/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Shore leave on Risa"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-8488-9b56-8b957035e673/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Senior staff briefing"
     },
@@ -624,7 +624,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-872d-a4f4-3355175938a9/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Officers' poker night"
     },
@@ -720,7 +720,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-87f7-ac79-138f8424fdb5/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Senior staff briefing — Borg incursion"
     },
@@ -768,7 +768,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-8899-a213-737545dc9ea2/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Dilithium shipment arrives"
     },
@@ -804,7 +804,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-891b-9146-098a54f0815e/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Reception for the Klingon delegation"
     },
@@ -1416,7 +1416,7 @@ expression: snapshot
       "md_path": "tng_calendar/render_markdown/00000000-0000-8eca-8033-c38531904ecf/index.md",
       "modified_at": null,
       "provider": "calendar",
-      "renderer_version": "rust-v1.1",
+      "renderer_version": "rust-v1.2",
       "source_id": "tng_calendar",
       "title": "Data's activation day"
     },

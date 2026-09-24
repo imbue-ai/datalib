@@ -195,8 +195,13 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     .await;
     let (ra, rb) = (row(&state, "a/out").await, row(&state, "b/out").await);
     assert_eq!(ra["stop_request_id"], a.as_str(), "{ra}");
-    assert_eq!(action(&ra, "stop")["label"], "Stop the sync");
-    assert_eq!(action(&rb, "stop")["label"], "Stop the sync by claude");
+    // Named for the sync it stops, and for who started it if not the UI:
+    // a row can be part of a sync started anywhere.
+    assert_eq!(action(&ra, "stop")["label"], "Stop the sync of a");
+    assert_eq!(
+        action(&rb, "stop")["label"],
+        "Stop the sync of b, started by claude"
+    );
     let dag = call(&state, "GET", "/api/dag", None).await;
     assert_eq!(dag["run"]["live"], true, "{dag}");
     assert_eq!(
@@ -374,6 +379,15 @@ async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
     let paused = row(&state, "a/out").await;
     assert_eq!(paused["paused_by"], "claude", "{paused}");
     assert_eq!(paused["status"]["detail"], "paused by claude", "{paused}");
+    // The row's button is Resume, and so is its group's: every step
+    // under it is paused.
+    assert_eq!(
+        action(&paused, "resume")["label"],
+        "Resume (paused by claude)"
+    );
+    let group = row(&state, "group:a").await;
+    assert_eq!(group["paused_by"], "claude", "{group}");
+    assert_eq!(action(&group, "resume")["enabled"], true, "{group}");
 
     let id = sync(&state, "a/out").await;
     until("the request to close", Duration::from_secs(30), || async {
@@ -388,7 +402,13 @@ async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
         Duration::from_secs(10),
         || async {
             let r = row(&state, "a/out").await;
-            r["status"]["key"] == "never_run" && r["paused_by"].is_null()
+            r["status"]["key"] == "never_run"
+                && r["paused_by"].is_null()
+                && r["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["id"] == "pause")
         },
     )
     .await;

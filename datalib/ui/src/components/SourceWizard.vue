@@ -701,6 +701,7 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   mailboxes: ["mailbox"],
   conversations: ["conversation"],
   channels: ["channel"],
+  calendars: ["calendar"],
 };
 
 /// What a `probe:` field should offer, given what came back.
@@ -730,6 +731,10 @@ function namesItem(value: string, item: ProbeItem): boolean {
       return v.replace(/^#/, "") === item.path;
     case "conversation":
       return v.split(/[?#]/)[0]?.split("/").includes(item.path) ?? false;
+    // The `calendars` filter matches a name without regard to case, and
+    // an id as well; the id is what the probe puts in `title`.
+    case "calendar":
+      return v.toLowerCase() === item.path.toLowerCase() || v === item.title;
     default:
       return false;
   }
@@ -757,6 +762,7 @@ const KIND_NOUNS: Record<ProbeItemKind, ProbeNoun> = {
   keyword: "labels",
   conversation: "conversations",
   channel: "channels",
+  calendar: "calendars",
 };
 
 /// What the probe came back with, counted by kind: "3 channels, 2

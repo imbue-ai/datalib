@@ -107,10 +107,10 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset (preserve attachments)…" does not apply: a reset drops a
-/// tree's store, and only
-/// a source's steps keep one worth emptying — the index follows its
-/// sources, and an applet writes nothing.
+/// Why "Reset (preserve attachments)…" does not apply: a reset empties
+/// what a source downloaded or rendered, and what reads it follows — so
+/// the index, which follows every source, is not reset by hand, and an
+/// applet writes nothing.
 export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";

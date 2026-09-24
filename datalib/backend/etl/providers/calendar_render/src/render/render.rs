@@ -18,8 +18,8 @@ use super::parse::Parsed;
 use super::{google, ics, ids};
 
 /// Bump when the rendered layout changes enough that every event needs
-/// re-rendering.
-pub const RENDER_VERSION: u32 = 1;
+/// re-rendering: 2 when a Google time started showing in its own zone.
+pub const RENDER_VERSION: u32 = 2;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

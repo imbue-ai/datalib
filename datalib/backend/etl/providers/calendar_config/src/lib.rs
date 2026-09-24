@@ -42,13 +42,56 @@ pub struct CalendarConfig {
 pub enum CalendarMethod<'a> {
     Google {
         calendars: &'a [String],
+        window: Window<'a>,
     },
     /// CalDAV, with the server it starts discovery from.
     Caldav {
         server_url: &'a str,
         calendars: &'a [String],
+        window: Window<'a>,
     },
     Ics(&'a LocalPath),
+}
+
+/// The stretch of days a source mirrors, `YYYY-MM-DD`, both ends
+/// included; either end may be open. An event is in it when any of it
+/// falls inside — a series is, when an occurrence does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Window<'a> {
+    pub since: Option<&'a str>,
+    pub until: Option<&'a str>,
+}
+
+impl Window<'_> {
+    pub fn is_open(&self) -> bool {
+        self.since.is_none() && self.until.is_none()
+    }
+
+    fn validate(&self, table: &str) -> anyhow::Result<()> {
+        for (key, v) in [("since", self.since), ("until", self.until)] {
+            if let Some(v) = v {
+                if !is_yyyy_mm_dd(v) {
+                    anyhow::bail!("`{table}.{key}` must be a date, YYYY-MM-DD; got {v:?}");
+                }
+            }
+        }
+        if let (Some(s), Some(u)) = (self.since, self.until) {
+            if s > u {
+                anyhow::bail!("`{table}.until` ({u}) is before `{table}.since` ({s})");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_yyyy_mm_dd(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
 impl CalendarConfig {
@@ -60,6 +103,7 @@ impl CalendarConfig {
                 "google",
                 CalendarMethod::Google {
                     calendars: &s.calendars,
+                    window: s.window(),
                 },
             ));
         }
@@ -69,6 +113,7 @@ impl CalendarConfig {
                 CalendarMethod::Caldav {
                     server_url: FASTMAIL_CALDAV_URL,
                     calendars: &s.calendars,
+                    window: s.window(),
                 },
             ));
         }
@@ -78,6 +123,10 @@ impl CalendarConfig {
                 CalendarMethod::Caldav {
                     server_url: &c.server_url,
                     calendars: &c.calendars,
+                    window: Window {
+                        since: c.since.as_deref(),
+                        until: c.until.as_deref(),
+                    },
                 },
             ));
         }
@@ -104,12 +153,24 @@ impl CalendarConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if let CalendarMethod::Caldav { server_url, .. } = self.method()? {
-            if !(server_url.starts_with("https://") || server_url.starts_with("http://")) {
-                anyhow::bail!("`caldav.server_url` must be an http(s) URL, got {server_url:?}");
+        let (table, window) = match self.method()? {
+            CalendarMethod::Caldav {
+                server_url, window, ..
+            } => {
+                if !(server_url.starts_with("https://") || server_url.starts_with("http://")) {
+                    anyhow::bail!("`caldav.server_url` must be an http(s) URL, got {server_url:?}");
+                }
+                let table = if self.fastmail.is_some() {
+                    "fastmail"
+                } else {
+                    "caldav"
+                };
+                (table, window)
             }
-        }
-        Ok(())
+            CalendarMethod::Google { window, .. } => ("google", window),
+            CalendarMethod::Ics(_) => return Ok(()),
+        };
+        window.validate(table)
     }
 }
 
@@ -123,6 +184,24 @@ pub struct CalendarSelection {
     /// whole on the next run.
     #[serde(default)]
     pub calendars: Vec<String>,
+    /// The first day to mirror, `YYYY-MM-DD`. With `until`, a window:
+    /// only events with some part inside it are mirrored, and only the
+    /// changed occurrences of a series that fall inside it. A windowed
+    /// calendar is listed whole every run rather than resumed.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// The last day to mirror, `YYYY-MM-DD`, included.
+    #[serde(default)]
+    pub until: Option<String>,
+}
+
+impl CalendarSelection {
+    fn window(&self) -> Window<'_> {
+        Window {
+            since: self.since.as_deref(),
+            until: self.until.as_deref(),
+        }
+    }
 }
 
 /// The `caldav` table: a server, plus the same selection.
@@ -137,6 +216,12 @@ pub struct CaldavSync {
     /// As [`CalendarSelection::calendars`].
     #[serde(default)]
     pub calendars: Vec<String>,
+    /// As [`CalendarSelection::since`].
+    #[serde(default)]
+    pub since: Option<String>,
+    /// As [`CalendarSelection::until`].
+    #[serde(default)]
+    pub until: Option<String>,
 }
 
 pub type CalendarRenderConfig = datalib_source_common::BareRenderConfig;
@@ -165,6 +250,7 @@ mod tests {
             CalendarMethod::Caldav {
                 server_url,
                 calendars,
+                ..
             } => {
                 assert_eq!(server_url, FASTMAIL_CALDAV_URL);
                 assert_eq!(calendars, ["Work"]);
@@ -183,6 +269,24 @@ mod tests {
             panic!("caldav");
         };
         assert_eq!(calendars, ["Home"]);
+    }
+
+    #[test]
+    fn a_window_is_two_dates_in_order() {
+        let google = |since: &str, until: &str| {
+            parse(serde_json::json!({"google": {"since": since, "until": until}}))
+        };
+        let c = google("2025-11-01", "2025-11-30");
+        c.validate().unwrap();
+        let CalendarMethod::Google { window, .. } = c.method().unwrap() else {
+            panic!("google");
+        };
+        assert_eq!(window.since, Some("2025-11-01"));
+        assert!(!window.is_open());
+        assert!(google("2025-11-30", "2025-11-01").validate().is_err());
+        assert!(google("Nov 1", "2025-11-30").validate().is_err());
+        let open = parse(serde_json::json!({"fastmail": {"since": "2025-11-01"}}));
+        open.validate().unwrap();
     }
 
     #[test]

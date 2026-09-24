@@ -3,7 +3,7 @@
 //! whenever a request is open, and between busy periods settles a pause
 //! or a resume into the record and runs a reset.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,9 +16,10 @@ use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{EventSink, Runner};
 use tokio::sync::{oneshot, watch, Notify, OnceCell};
 
-/// A reset the UI asked for, waiting for the loop to be idle.
+/// A reset someone asked for, waiting for the loop to be idle.
 struct Reset {
     targets: Vec<ResetTarget>,
+    by: String,
     done: oneshot::Sender<Result<(), String>>,
 }
 
@@ -76,10 +77,12 @@ impl SyncControl {
         self.wake.notify_one();
     }
 
-    /// Drop what `targets` wrote, once no sync is running. A reset needs
-    /// the root to itself, so it is refused while a sync runs rather than
-    /// left waiting behind one that may take an hour.
-    pub async fn reset(&self, targets: &[String]) -> Result<(), String> {
+    /// Empty what `targets` wrote (`docs/dev/plans/supervisor.md` §2.10),
+    /// once no sync is running, and sync what reads them, so the emptiness
+    /// reaches the grid. It needs the root to itself, so it is refused
+    /// while a sync runs rather than left waiting behind one that may take
+    /// an hour.
+    pub async fn reset(&self, targets: &[String], by: &str) -> Result<(), String> {
         if !self.runs_the_loop.load(Ordering::SeqCst) {
             return Err(
                 "another process is running syncs on this root; reset once it is done".into(),
@@ -93,7 +96,11 @@ impl SyncControl {
         self.resets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(Reset { targets, done });
+            .push(Reset {
+                targets,
+                by: by.to_string(),
+                done,
+            });
         self.wake();
         answer
             .await
@@ -170,7 +177,7 @@ async fn host(cfg: &HostConfig) {
         let resets =
             std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
         for reset in resets {
-            let result = run_reset(cfg, &reset.targets).await;
+            let result = run_reset(cfg, &store, &reset.targets, &reset.by).await;
             let _ = reset.done.send(result);
         }
         let open = match store.open_requests().await {
@@ -355,8 +362,14 @@ async fn fail_open_requests(store: &Store, why: &str) {
 }
 
 /// A reset, between busy periods: each target's step invoked with
-/// `DATALIB_DAG_RESET`, in a run of its own.
-async fn run_reset(cfg: &HostConfig, targets: &[ResetTarget]) -> Result<(), String> {
+/// `DATALIB_DAG_RESET`, in a run of its own; then a request rooted at what
+/// reads them, opened for whoever asked, which the loop takes on next.
+async fn run_reset(
+    cfg: &HostConfig,
+    store: &Store,
+    targets: &[ResetTarget],
+    by: &str,
+) -> Result<(), String> {
     let root = cfg.control.root.clone();
     let checked = load_config(&root)?;
     let run_id = datalib_dag::scheduler::new_run_id();
@@ -380,7 +393,40 @@ async fn run_reset(cfg: &HostConfig, targets: &[ResetTarget]) -> Result<(), Stri
         .reset(&checked.graph, targets)
         .await;
     cfg.control.busy.store(false, Ordering::SeqCst);
-    result.map_err(|e| format!("{e:#}"))
+    result.map_err(|e| format!("{e:#}"))?;
+    let roots = after_reset(&checked.graph, targets);
+    if !roots.is_empty() {
+        store
+            .open_request(&roots, by)
+            .await
+            .map_err(|e| format!("could not sync what follows the reset: {e:#}"))?;
+    }
+    Ok(())
+}
+
+/// What a reset syncs next. A step that reads something is rebuilt from
+/// it at once, and what reads it follows; a download is not refilled —
+/// that is its next Sync — so only what reads it runs, and takes the
+/// emptiness downstream.
+fn after_reset(graph: &datalib_dag::Graph, targets: &[ResetTarget]) -> Vec<String> {
+    let reset: BTreeSet<&str> = targets.iter().map(|t| t.step.as_str()).collect();
+    let mut roots: BTreeSet<String> = BTreeSet::new();
+    for step in &reset {
+        let Some(&i) = graph.by_id.get(*step) else {
+            continue;
+        };
+        if !graph.deps[i].is_empty() {
+            roots.insert(step.to_string());
+            continue;
+        }
+        for &d in &graph.dependents[i] {
+            let id = &graph.steps[d].id;
+            if !reset.contains(id.as_str()) {
+                roots.insert(id.clone());
+            }
+        }
+    }
+    roots.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -418,6 +464,32 @@ mod tests {
         assert!(!lock.exists(), "the probe created {}", lock.display());
     }
 
+    /// A reset download is not refilled — only what reads it runs — and a
+    /// reset render is rebuilt from what it reads at once.
+    #[test]
+    fn a_reset_syncs_what_reads_a_download_and_rebuilds_a_render() {
+        use datalib_dag::{StepOutcome, StepRun, StepSpec};
+        let step = |id: &str| {
+            StepSpec::new(
+                id,
+                StepRun::in_process(|_| async { Ok(StepOutcome::default()) }),
+            )
+        };
+        let graph = datalib_dag::Graph::build(vec![
+            step("a/ingest"),
+            step("a/render").input("a/ingest"),
+            step("idx/grid").input("a/render"),
+        ])
+        .unwrap();
+        let after = |ids: &[&str]| {
+            let targets: Vec<ResetTarget> = ids.iter().map(|id| ResetTarget::parse(id)).collect();
+            after_reset(&graph, &targets)
+        };
+        assert_eq!(after(&["a/ingest+blobs"]), ["a/render"]);
+        assert_eq!(after(&["a/render"]), ["a/render"]);
+        assert_eq!(after(&["a/ingest", "a/render"]), ["a/render"]);
+    }
+
     /// A reset needs the root to itself; asked for while a sync runs it
     /// says so at once rather than hanging behind the sync.
     #[tokio::test]
@@ -426,7 +498,7 @@ mod tests {
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         control.runs_the_loop.store(true, Ordering::SeqCst);
         control.busy.store(true, Ordering::SeqCst);
-        let err = control.reset(&["a/ingest".into()]).await.unwrap_err();
+        let err = control.reset(&["a/ingest".into()], "ui").await.unwrap_err();
         assert!(err.contains("a sync is running"), "{err}");
     }
 }
