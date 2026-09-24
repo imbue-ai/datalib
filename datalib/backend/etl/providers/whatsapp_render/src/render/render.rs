@@ -25,7 +25,7 @@ use datalib_schema::providers::Provider;
 /// the configured source, every row carries its backpointer, and a message's
 /// id carries its stamp in its leading bits (`datalib_id`'s v8 layout).
 /// Every uuid moved, `chat_uuid` among them.
-pub const RENDER_VERSION: u32 = 7;
+pub const RENDER_VERSION: u32 = 8;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
