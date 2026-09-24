@@ -486,9 +486,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
 
-    def _diff_markdown(self, group: str, needle: str) -> str:
-        """A diff group's one document whose rows' text carries `needle`,
-        off the tree."""
+    def _markdown(self, group: str, needle: str) -> str:
+        """A group's one document whose rows' text carries `needle`, off
+        the tree."""
         qmd_path = self._scalar(
             self._index_db,
             "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
@@ -949,7 +949,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._diff_markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
+        picard = self._markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
@@ -957,10 +957,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertIn(
             '<div class="diff-removed">',
-            self._diff_markdown(CONTACTS_DIFF_GROUP, "Data"),
+            self._markdown(CONTACTS_DIFF_GROUP, "Data"),
         )
         self.assertIn(
-            '<div class="diff-added">', self._diff_markdown(CONTACTS_DIFF_GROUP, "Worf")
+            '<div class="diff-added">', self._markdown(CONTACTS_DIFF_GROUP, "Worf")
         )
 
         # The Slack diff, which is chat-common under a diff: three #bridge
@@ -992,14 +992,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the reply added to the grown thread, whose own row grew with it",
         )
-        status_report = self._diff_markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
+        status_report = self._markdown(SLACK_DIFF_GROUP, "Warbird, decloaking")
         self.assertEqual(
             status_report.count('<div class="diff-added">'),
             1,
             "one added section in the grown thread, the rest verbatim",
         )
         self.assertNotIn("<ins>", status_report.split('<div class="diff-added">')[0])
-        worf = self._diff_markdown(SLACK_DIFF_GROUP, "raising shields")
+        worf = self._markdown(SLACK_DIFF_GROUP, "raising shields")
         self.assertIn(
             "raising <del>shields,</del><ins>shields **now**,</ins> Captain.",
             worf,
@@ -1085,6 +1085,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # agreeing. Register them relative to `Media/` instead and every
         # attachment becomes a placeholder, with no failure anywhere
         # else in this test.
+        # The Bridge Crew chat is read through message 12 (its
+        # `last_read_message_row_id`), so Data's later sweep report is the
+        # one unread message, and the chat's only one.
+        bridge = self._markdown("whatsapp", "Sensor sweep complete")
+        unread = [
+            s for s in bridge.split('<div id="m-') if " unread" in s.split(">", 1)[0]
+        ]
+        self.assertEqual(len(unread), 1, bridge)
+        self.assertIn("first-unread", unread[0].split(">", 1)[0])
+        self.assertIn("Sensor sweep complete", unread[0])
+
         linked, missing, placeholders = self._whatsapp_attachments()
         self.assertEqual(
             len(linked),

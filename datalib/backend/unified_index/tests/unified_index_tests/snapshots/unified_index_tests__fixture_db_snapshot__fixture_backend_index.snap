@@ -384,7 +384,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-85d4-ab68-75d0abe7a50d/2364-04.md",
       "modified_at": "2364-04-11T00:12:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "whatsapp",
       "title": "+17015550102"
     },
@@ -528,7 +528,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-84f0-8faa-a404dacb63b6/2364-04.md",
       "modified_at": "2364-04-11T00:16:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "whatsapp",
       "title": "100000000000108@lid"
     },
@@ -672,7 +672,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8a99-9206-1d7e42e1b482/2364-04.md",
       "modified_at": "2364-04-11T00:15:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "whatsapp",
       "title": "+17015550103"
     },
@@ -1224,7 +1224,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8891-ab80-dd17e867538b/2364-04.md",
       "modified_at": "2364-04-11T00:13:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "whatsapp",
       "title": "Bridge Crew"
     },
@@ -1284,7 +1284,7 @@ expression: snapshot
       "md_path": "whatsapp/render_markdown/00000000-0000-8b1c-9241-3a10a9e8b6d0/2364-04.md",
       "modified_at": "2364-04-11T00:17:00+00:00",
       "provider": "whatsapp",
-      "renderer_version": "rust-v1.7",
+      "renderer_version": "rust-v1.8",
       "source_id": "whatsapp",
       "title": "Worf, Son of Mogh"
     },

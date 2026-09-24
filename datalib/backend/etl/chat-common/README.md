@@ -64,9 +64,9 @@ Who sets it, always only on a message someone else sent:
 - Signal: `IncomingMessageDetails.read` false.
 - SMS Backup & Restore: `read="0"`, from the newest backup file that
   has the message.
+- WhatsApp: a `_id` past its chat's `last_read_message_row_id`.
 
-WhatsApp keeps only per-chat counts (`unseen_message_count`), not a
-per-message flag, and has not been wired. LinkedIn, Facebook, Beeper
+LinkedIn, Facebook, Beeper
 and Google Takeout carry no read state we store; the assistant
 transcripts have none to carry.
 
