@@ -1086,7 +1086,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # attachment becomes a placeholder, with no failure anywhere
         # else in this test.
         # The Bridge Crew chat is read through message 12 (its
-        # `last_read_message_row_id`), so Worf's later sweep report is the
+        # `last_read_message_row_id`), so Data's later sweep report is the
         # one unread message, and the chat's only one.
         bridge = self._markdown("whatsapp", "Sensor sweep complete")
         unread = [
