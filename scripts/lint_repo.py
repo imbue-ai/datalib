@@ -29,6 +29,9 @@ instead from `bazel run //:precommit` and as a plain step in
      and none is built by a shortcut that takes sqlx's defaults: either
      setting gives the pool a maintenance task, and sqlx 0.9's can spin
      forever and hang the process at exit.
+ 13. Every source icon is one file in datalib/ui/src/assets/ that both
+     catalogs name alike, that shows on the light and the dark theme,
+     and that the README's source grid uses rather than a copy.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -314,6 +317,7 @@ def main() -> int:
     rc |= _check_workflows_no_empty_arrays(root)
     rc |= _check_no_floating_npx(root)
     rc |= _check_pools_never_recycle(root)
+    rc |= _check_icons(root)
     return rc
 
 
@@ -851,6 +855,172 @@ def _check_pools_never_recycle(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Build it with `SqlitePoolOptions::new()` and chain\n"
         "  `.idle_timeout(None).max_lifetime(None)`. See lint_repo.py check 12.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 13: one icon file per mark, for both themes and both places --
+#
+# An icon is a file in datalib/ui/src/assets/, named by its stem. Four
+# things used to drift from it by hand: the Rust catalog the rows are
+# built from and the browser's catalog the wizard reads (each names
+# icons for the same types), the README's source grid, and the dark-theme
+# copies the grid kept for solid-black marks. The copies are gone: a mark
+# that would vanish on one theme flips its own fill under
+# `prefers-color-scheme`. So: every icon a catalog names is a file; the
+# two catalogs agree type for type; every SVG shows on each background it
+# is drawn on; the grid uses the app's files, and docs/assets/ never holds
+# a copy of one.
+_ICON_DIR = "datalib/ui/src/assets"
+_RUST_CATALOG = "datalib/backend/columns/src/source_catalog.rs"
+_RUST_ENTRY = re.compile(
+    r'\be\(\s*"([a-z_]+)",\s*(?:None|Some\("([a-z_]+)"\)),\s*"[^"]*",'
+    r'\s*(?:None|Some\("([a-z_]+)"\)),?\s*\)'
+)
+_TS_FIELD = re.compile(r'^    (type|variantKey|icon): "([a-z_]+)",$')
+_HEX = r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b"
+_SVG_FILL = re.compile(r'\b(?:fill|stroke)="(' + _HEX + r')"')
+_SVG_DARK = re.compile(
+    r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{(.*?\})\s*\}", re.DOTALL
+)
+_CSS_FILL = re.compile(r"\b(?:fill|stroke):\s*(" + _HEX + ")")
+_APP_BG = re.compile(r"--datalib-bg:\s*(#[0-9A-Fa-f]{6});")
+# GitHub's own dark background; its light one is the app's white.
+_GITHUB_DARK_BG = "#0d1117"
+# A filled brand mark in its own colour clears this easily (WhatsApp's
+# green on white is 2.0); black on the dark theme is 1.0.
+_MIN_CONTRAST = 1.5
+
+
+def _luminance(hex_colour: str) -> float:
+    h = hex_colour.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+
+    def channel(c: str) -> float:
+        v = int(c, 16) / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(h[i : i + 2]) for i in (0, 2, 4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a: str, b: str) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _svg_palettes(svg: str) -> tuple[set[str], set[str]]:
+    """The colours an SVG draws with on a light page and on a dark one.
+    A dark-mode rule replaces the attribute colours rather than adding
+    to them, which is how every mark here uses one."""
+    dark_rule = _SVG_DARK.search(svg)
+    light = set(_SVG_FILL.findall(svg))
+    dark = set(_CSS_FILL.findall(dark_rule.group(1))) if dark_rule else light
+    return light, dark
+
+
+def _rust_catalog_icons(root: Path) -> dict[tuple[str, str | None], str | None]:
+    text = (root / _RUST_CATALOG).read_text(encoding="utf-8")
+    return {(t, v or None): icon or None for t, v, icon in _RUST_ENTRY.findall(text)}
+
+
+def _ts_catalog_icons(root: Path) -> dict[tuple[str, str | None], str | None]:
+    text = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
+    body = text[text.index("export const CATALOG") :]
+    body = body[: body.index("\n];")]
+    out: dict[tuple[str, str | None], str | None] = {}
+    for entry in re.split(r"^  \{$", body, flags=re.MULTILINE)[1:]:
+        fields: dict[str, str] = {}
+        for line in entry.splitlines():
+            if m := _TS_FIELD.match(line):
+                fields[m.group(1)] = m.group(2)
+        out[(fields["type"], fields.get("variantKey"))] = fields.get("icon")
+    return out
+
+
+def _check_icons(root: Path) -> int:
+    bad: list[str] = []
+    icon_dir = root / _ICON_DIR
+    files = {p.stem: p for p in icon_dir.iterdir() if p.suffix in (".svg", ".png")}
+
+    rust = _rust_catalog_icons(root)
+    ts = _ts_catalog_icons(root)
+    if not rust or not ts:
+        bad.append(f"read no entries from {_RUST_CATALOG} or catalog.ts")
+    for where, catalog in ((_RUST_CATALOG, rust), ("catalog.ts", ts)):
+        for (t, v), icon in sorted(catalog.items(), key=str):
+            if icon and icon not in files:
+                bad.append(
+                    f"{where}: {t}/{v} names icon `{icon}`, not a file in {_ICON_DIR}/"
+                )
+    for key in sorted(ts, key=str):
+        if key not in rust:
+            bad.append(f"catalog.ts has {key[0]}/{key[1]}, which {_RUST_CATALOG} lacks")
+        elif ts[key] != rust[key]:
+            bad.append(
+                f"{key[0]}/{key[1]}: catalog.ts says `{ts[key]}`, "
+                f"{_RUST_CATALOG} says `{rust[key]}`"
+            )
+
+    app_bgs = _APP_BG.findall(
+        (root / "datalib/ui/src/App.vue").read_text(encoding="utf-8")
+    )
+    if len(app_bgs) < 2:
+        bad.append("App.vue no longer sets --datalib-bg for a light and a dark theme")
+    else:
+        backgrounds = [
+            ("the light theme", app_bgs[0], False),
+            ("the app's dark theme", app_bgs[1], True),
+            ("GitHub's dark theme", _GITHUB_DARK_BG, True),
+        ]
+        for stem, path in sorted(files.items()):
+            if path.suffix != ".svg":
+                continue
+            light, dark = _svg_palettes(path.read_text(encoding="utf-8"))
+            if not light:
+                bad.append(
+                    f"{path.name} draws with no #hex fill this check can measure"
+                )
+                continue
+            for name, bg, is_dark in backgrounds:
+                palette = dark if is_dark else light
+                best = max(_contrast(c, bg) for c in palette)
+                if best < _MIN_CONTRAST:
+                    bad.append(
+                        f"{path.name} all but vanishes on {name} ({bg}): "
+                        f"best contrast {best:.2f}, under {_MIN_CONTRAST}"
+                    )
+
+    grid = _readme_grid(root)
+    if "<picture" in grid or "srcset" in grid:
+        bad.append(
+            "the README grid picks an image per theme; the icon should do that itself"
+        )
+    for rel in _GRID_IMAGE.findall(grid):
+        if not rel.startswith((f"{_ICON_DIR}/", "docs/assets/")):
+            bad.append(
+                f"README grid image {rel} is in neither {_ICON_DIR}/ nor docs/assets/"
+            )
+    for path in (root / "docs/assets").iterdir():
+        if (stem := path.stem.removesuffix("_dark")) in files:
+            bad.append(
+                f"docs/assets/{path.name} copies {files[stem].relative_to(root)}"
+            )
+
+    if not bad:
+        print(
+            f"OK: {len(files)} icons, each named alike by both catalogs, "
+            "visible on both themes, and used by the README as they are."
+        )
+        return 0
+    print("ERROR: the source icons have drifted:", file=sys.stderr)
+    for b in bad:
+        print(f"  - {b}", file=sys.stderr)
+    print(
+        f"\nAn icon is one file in {_ICON_DIR}/, named by its stem, drawn for both\n"
+        "themes; see the README.md beside it.",
         file=sys.stderr,
     )
     return 1

@@ -127,7 +127,6 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         [
             "identity",
             "actions",
-            "identity",
             "status",
             "chips",
             "chips",
@@ -154,6 +153,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(system["kind"], "system");
     assert_eq!(system["path"], serde_json::json!(["system"]));
     assert_eq!(system["name"]["label"], "System");
+    assert_eq!(system["name"]["icon"], "system");
     assert_eq!(system["type"], serde_json::Value::Null);
     assert_eq!(system["status"]["key"], "");
     let actions = system["actions"].as_array().unwrap();
@@ -188,6 +188,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(slack["type"]["id"], "slack");
     assert_eq!(slack["type"]["label"], "Slack");
     assert_eq!(slack["type"]["icon"], "slack");
+    // The Name cell leads with the type's mark; its label is the hover.
+    assert_eq!(slack["name"]["icon"], "slack");
+    assert_eq!(slack["name"]["detail"], "Slack");
     assert_eq!(slack["path"], serde_json::json!(["group:slack"]));
     assert_eq!(slack["status"]["key"], "never_run");
     assert_eq!(slack["status"]["from"], serde_json::Value::Null);
@@ -261,8 +264,10 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         .as_str()
         .unwrap()
         .contains("no rows of its own"));
-    // The index group mirrors nothing, so it has no type to show.
+    // The index group mirrors nothing, so it has no type; its mark is
+    // the search it serves.
     assert_eq!(index["type"], serde_json::Value::Null);
+    assert_eq!(index["name"]["icon"], "search");
 }
 
 /// A finished run: the step rows read the record, and the group reads

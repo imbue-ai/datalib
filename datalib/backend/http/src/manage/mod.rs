@@ -95,12 +95,10 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it; its id — the folder under the data root — beside it when they differ.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors; its id — the folder under the data root — beside it when they differ.")
             .editable(),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
             .describe("Browse this row's data, and sync it \u{2014} or stop the sync in progress."),
-        ColumnSpec::new("type", "Type", ColumnType::Identity)
-            .describe("The service this source mirrors."),
         ColumnSpec::new("status", "Status", ColumnType::Status)
             .describe("What it is doing now, or did last. Hover for why; double-click for the log."),
         ColumnSpec::new("activity", "Activity", ColumnType::Chips)
@@ -144,14 +142,14 @@ pub struct ManageRow {
     pub function: Option<String>,
     /// A step's `params`, as JSON. `{}` off a step.
     pub params: serde_json::Value,
-    /// The Name column: the label the config gives it and the glyph for
-    /// its role. Under a group a step is labelled by what it does there
-    /// ("Render markdown"); the browser reads an ingest step's
-    /// "Download" / "Import" off `params` against what its provider
-    /// declares, and overrides that one label.
+    /// The Name column: the label the config gives it, led by a group's
+    /// mark or followed by a step's role glyph. Under a group a step is
+    /// labelled by what it does there ("Render markdown"); the browser
+    /// reads an ingest step's "Download" / "Import" off `params` against
+    /// what its provider declares, and overrides that one label.
     pub name: Identity,
-    /// The Type column: the source type, resolved. None for a group
-    /// that mirrors nothing and the steps under it.
+    /// The source type, resolved. None for a group that mirrors nothing
+    /// and the steps under it.
     pub r#type: Option<Identity>,
     /// The loader's reason this entry is not in the pipeline, or null
     /// if it is. A dropped entry still has a row — it is still in the
@@ -371,6 +369,22 @@ fn default_name(id: &str) -> String {
     .to_string()
 }
 
+/// A group's Name cell leads with its source's mark, the type's label
+/// on hover. A group that mirrors nothing — the unified index — is the
+/// search over every source, and is marked as that.
+fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
+    let (icon, detail) = match r#type {
+        Some(t) => (t.icon.clone(), t.label.clone()),
+        None => (Some("search".to_string()), "Search index".to_string()),
+    };
+    Identity {
+        id: g.id.clone(),
+        label: g.name.clone().unwrap_or_else(|| g.id.clone()),
+        icon,
+        detail: Some(detail),
+    }
+}
+
 /// What a step under a group is called in the Name column. Derived
 /// from the function, never written: the group owns the name, and a
 /// step's label says what it does with that group's data.
@@ -529,8 +543,8 @@ impl Snapshot<'_> {
             Identity {
                 id: dir.to_string(),
                 label: "System".into(),
-                icon: None,
-                detail: Some("Group".into()),
+                icon: Some("system".into()),
+                detail: Some("System".into()),
             },
             Timeseries {
                 value: dir_disk.map(|t| t.bytes as i64),
@@ -1018,6 +1032,17 @@ impl RowCtx<'_> {
 
     /// The row for one `[[groups]]` entry, read off its children's rows.
     fn group_row(&self, g: &WrittenGroup, children: &[&(Entry<'_>, ManageRow)]) -> ManageRow {
+        let r#type = g.r#type.as_deref().map(|t| {
+            let ingest = children
+                .iter()
+                .find_map(|(e, r)| match e {
+                    Entry::Step(s) if r.phase == Phase::Ingest => Some(&s.params),
+                    _ => None,
+                })
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            source_catalog::source_type(t, &ingest)
+        });
         let entries: Vec<Entry<'_>> = children.iter().map(|(e, _)| e.clone()).collect();
         let ordered = group::pipeline_order(&entries);
         let row_of = |id: &str| -> &ManageRow {
@@ -1230,25 +1255,8 @@ impl RowCtx<'_> {
             phase: Phase::Other,
             function: None,
             params: serde_json::Value::Object(Default::default()),
-            name: Identity {
-                id: g.id.clone(),
-                label: g.name.clone().unwrap_or_else(|| g.id.clone()),
-                icon: None,
-                detail: Some("Group".into()),
-            },
-            // A group that mirrors nothing — the unified index — has no
-            // type, and a blank cell is the honest mark for it.
-            r#type: g.r#type.as_deref().map(|t| {
-                let ingest = children
-                    .iter()
-                    .find_map(|(e, r)| match e {
-                        Entry::Step(s) if r.phase == Phase::Ingest => Some(&s.params),
-                        _ => None,
-                    })
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                source_catalog::source_type(t, &ingest)
-            }),
+            name: group_name(g, r#type.as_ref()),
+            r#type,
             dropped: dropped.cloned(),
             status,
             status_from,
