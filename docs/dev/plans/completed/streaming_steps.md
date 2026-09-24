@@ -1,8 +1,11 @@
 # Streaming steps: letting a consumer start before its producer finishes
 
-**Status: proposal (2026-09-03). Nothing here is built.** The claims
+**Status: landed, as [`streaming_steps_plan.md`](streaming_steps_plan.md)
+built it and the supervisor ([`../supervisor.md`](../supervisor.md))
+later took over its scheduling; kept as the record of the design. The
+paragraphs below are the proposal as written (2026-09-03).** The claims
 about what doltlite can do are verified against doltlite 0.50.3 — the
-reproducer is [`hack/doltlite_concurrent_reader/`](../../../hack/doltlite_concurrent_reader/),
+reproducer is [`hack/doltlite_concurrent_reader/`](../../../../hack/doltlite_concurrent_reader/),
 and every number quoted below comes from running it. The design that
 follows is a proposal and has not been implemented.
 
