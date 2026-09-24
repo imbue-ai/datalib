@@ -125,25 +125,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Everything root-derived (the feedback and job stores, the config
-    // path, the sync worker) is assembled by the bootstrap shared with
+    // path, the supervisor loop) is assembled by the bootstrap shared with
     // the Tauri shell — see `datalib_http::boot`.
     let state = datalib_http::build_state(
         root,
-        datalib_http::worker::resolve_dag_bin(),
-        datalib_http::worker::resolve_binary_dir(),
+        datalib_http::binaries::resolve_binary_dir(),
         api_token,
     )
     .await?;
 
     tracing::info!("config: {}", state.config_path().display());
 
-    // Serve until a signal, then stop the applets on the way out.
+    // Serve until a signal, then stop the applets and the loop's steps
+    // on the way out.
     let applets = state.applets.clone();
+    let sync = state.sync.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(terminated(parent_gone))
         .await?;
-    tracing::info!("datalib-http: shutting down, stopping applets");
+    tracing::info!("datalib-http: shutting down, stopping applets and syncs");
     applets.shutdown();
+    if !sync.shutdown(SYNC_STOP_WAIT).await {
+        // A step still checkpointing on its SIGINT would be SIGKILLed by
+        // the runtime's teardown, which drops its handle. Exiting instead
+        // leaves it to finish stopping, and the next boot closes the run.
+        tracing::info!("datalib-http: steps still stopping; exiting without waiting for them");
+        drop(_log);
+        std::process::exit(0);
+    }
     Ok(())
 }
 
@@ -152,6 +161,8 @@ async fn main() -> anyhow::Result<()> {
 /// (the UI reconnects when it drops). So a shutdown that is still running
 /// this long after its cause is a hang, and the process exits instead.
 const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+/// How much of [`SHUTDOWN_DEADLINE`] the loop gets to see its steps go.
+const SYNC_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Longer for a dead parent: nobody is watching, and the desktop shell's
 /// own kill is the fallback there.
 const PARENT_GONE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);

@@ -515,7 +515,7 @@ pub async fn probe(
     Json(req): Json<ProbeRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let source_type = validated_type(&req.source_type)?;
-    let step_bin = crate::worker::resolve_step_bin().ok_or_else(|| {
+    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \

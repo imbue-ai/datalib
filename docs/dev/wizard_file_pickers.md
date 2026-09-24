@@ -159,11 +159,10 @@ What is established by reading the tree:
   so typing `~/Documents/WhatsApp` into the field can earn an
   "Operation not permitted" that choosing the same folder would not.
 - **The picking process is not the reading process.** The panel opens
-  in the shell; the file is opened four processes down and much later:
-  `Datalib.app` → `datalib-http` (`tauri/src/main.rs`, `start_backend`)
-  → `datalib-dag` (`http/src/worker.rs`) → `datalib-step`
-  (`dag/src/subprocess.rs`), when a sync is queued rather than when the
-  folder is chosen. TCC attributes a child to its responsible process,
+  in the shell; the file is opened three processes down and much later:
+  `Datalib.app` → `datalib-http` (`tauri/src/main.rs`, `start_backend`),
+  whose loop spawns `datalib-step` (`dag/src/subprocess.rs`), when a sync
+  is queued rather than when the folder is chosen. TCC attributes a child to its responsible process,
   normally the app.
 
 What was measured, against the Photos library — the most locked-down

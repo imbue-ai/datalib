@@ -471,6 +471,25 @@ async function runIsClosed(page: Page): Promise<boolean> {
   return !dag.run || dag.run.finished_at != null;
 }
 
+/// A row's status and Last-synced stamp, read from one paint of it. Read
+/// one after the other, the two can come from different paints: a sync
+/// the loop takes on at once can finish between the reads, and "Stopped"
+/// from before it beside the stamp it just wrote reads as that sync
+/// having stopped.
+async function statusAndStampOf(
+  page: Page,
+  id: string,
+): Promise<{ status: string | null; stamp: string | null }> {
+  const [reading] = await pipelineRow(page, id).evaluateAll((rows) =>
+    rows.slice(0, 1).map((row) => ({
+      status:
+        row.querySelector('[col-id="status"] [role="img"]')?.getAttribute("aria-label") ?? null,
+      stamp: row.querySelector('[col-id="last_synced"] [title]')?.getAttribute("title") ?? null,
+    })),
+  );
+  return reading ?? { status: null, stamp: null };
+}
+
 /// Wait for a row to finish a run newer than the one it was showing.
 async function settleRowOnly(
   page: Page,
@@ -483,8 +502,9 @@ async function settleRowOnly(
     await expect
       .poll(
         async () => {
-          last = (await statusOf(page, id)) ?? "(no status)";
-          const stamp = await stampOf(page, id);
+          const reading = await statusAndStampOf(page, id);
+          last = reading.status ?? "(no status)";
+          const stamp = reading.stamp;
           const done = TERMINAL.test(last) && stamp !== before;
           // "Interrupted" is the one terminal status the UI INFERS rather
           // than reads: `stepStatus` reports it when a step says
@@ -525,7 +545,8 @@ async function settleRowOnly(
   return last;
 }
 
-/// Wait until no runner holds the data root, then remount so the page
+/// Wait until no sync is running — the server's loop is idle, or, before
+/// it has the lock, no `datalib-dag` holds it — then remount so the page
 /// is not a beat behind it.
 export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
   await expect
@@ -534,21 +555,34 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
         const dag = await (await page.request.get("/api/dag")).json();
         return dag.run?.live === true;
       },
-      { timeout, intervals: [200], message: "a runner still holds the data root" },
+      { timeout, intervals: [200], message: "a sync is still running" },
     )
     .toBe(false);
   await page.reload();
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
+/// Resolves once the wall clock is in a later second than when it was
+/// called. A stamp is to the second, and the server's loop takes a sync
+/// on the moment it is asked: without this, a run started straight after
+/// another can carry the same stamp, and a settle that waits for the
+/// stamp to move waits for ever. Every stamp read before calling this is
+/// of a run already over, so a run started after it stamps later.
+export async function untilTheSecondTurns() {
+  const now = Math.floor(Date.now() / 1000);
+  await expect.poll(() => Math.floor(Date.now() / 1000), { intervals: [50] }).toBeGreaterThan(now);
+}
+
 /// Every row's stamp, keyed by id — the reading a settle compares
-/// against. Taken for the whole set before the click that starts a run.
+/// against. Taken for the whole set before the click that starts a run,
+/// which it holds until a run started then would stamp later.
 export async function stampsBefore(
   page: Page,
   ids: readonly string[],
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {};
   for (const id of ids) out[id] = await stampOf(page, id);
+  await untilTheSecondTurns();
   return out;
 }
 
