@@ -84,13 +84,13 @@ pressed on, or every source step for `datalib-dag` with no `--sync` —
 and who opened it (`by`). Its **scope** is the roots and everything
 downstream of them. Anyone may open one, or ask one to stop, or pause a
 step: that is a row too. Only the process holding `runner-lock` runs the
-loop. It never polls for new rows: every write to the store, from any
-process, rings a doorbell — one FIFO per listener in
-`system/supervisor-bells/` (`supervisor/bell.rs`) — and so do a config
-edit the server sees and letting `runner-lock` go. A SQLite commit
-reaches no other connection by itself, and macOS does not announce an
-append to a WAL held open. A 5 s backstop looks anyway, and a write it
-finds that nobody rang for is a bug, logged at ERROR. A **run** is one busy period of the loop — from taking a
+loop. It never polls for new rows: a commit to the store, from any
+process, is a write to its file (or its `-wal`, in WAL mode), and the
+loop watches both — kqueue on macOS, inotify on Linux
+(`supervisor/wake.rs`) — and the config beside them. FSEvents, which the
+server's other watches use, does not report a write to a file its writer
+holds open; kqueue does, within microseconds. A 5 s backstop looks anyway, and a commit it finds that no
+watch saw is a bug, logged at ERROR. A **run** is one busy period of the loop — from taking a
 request on while idle to having none left — and every request served in
 it shares that run's id.
 

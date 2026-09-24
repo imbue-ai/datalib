@@ -4,25 +4,10 @@
 //! The runner and the server take separate locks on separate files; the
 //! crate README says why they cannot share one.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub use datalib_flock::{FileLock, LockError};
-
-/// The runner's claim. Letting go rings the store's bell, so a process
-/// waiting to run the loop takes it at once rather than at its backstop.
-#[derive(Debug)]
-pub struct RunnerLock {
-    lock: Option<FileLock>,
-    bells: PathBuf,
-}
-
-impl Drop for RunnerLock {
-    fn drop(&mut self) {
-        drop(self.lock.take());
-        crate::supervisor::bell::ring(&self.bells);
-    }
-}
 
 /// The runner's claim, relative to the data root. A sibling of
 /// `system/supervisor.sqlite`, whose record is the thing it guards.
@@ -36,27 +21,22 @@ pub const RUNNER_LOCK_REL_PATH: &str = "system/runner-lock";
 const PROBE_GRACE: Duration = Duration::from_secs(2);
 const PROBE_POLL: Duration = Duration::from_millis(10);
 
-pub fn acquire_runner(data_root: &Path) -> Result<RunnerLock, LockError> {
+pub fn acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
     acquire_runner_within(data_root, PROBE_GRACE)
 }
 
 /// One attempt, no grace: for a client that retries on its own schedule.
-pub fn try_acquire_runner(data_root: &Path) -> Result<RunnerLock, LockError> {
+pub fn try_acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
     acquire_runner_within(data_root, Duration::ZERO)
 }
 
-fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<RunnerLock, LockError> {
+fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<FileLock, LockError> {
     let path = data_root.join(RUNNER_LOCK_REL_PATH);
     let deadline = Instant::now() + grace;
     loop {
         match FileLock::acquire(&path) {
             Err(e) if e.is_held() && Instant::now() < deadline => std::thread::sleep(PROBE_POLL),
-            claimed => {
-                return claimed.map(|lock| RunnerLock {
-                    lock: Some(lock),
-                    bells: crate::supervisor::bell::bells_dir(data_root),
-                })
-            }
+            claimed => return claimed,
         }
     }
 }

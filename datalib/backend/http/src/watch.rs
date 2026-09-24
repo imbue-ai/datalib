@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use datalib_dag::supervisor::bell::{self, Listener};
+use datalib_dag::supervisor::wake::Listener;
 use datalib_runs::StorePart;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -454,11 +454,6 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             }
             for path in &ev.paths {
                 if let Some(moved) = classify(&watch_root, path) {
-                    // The loop re-reads the config when rung; an editor
-                    // closes the file, which the filesystem does report.
-                    if moved == Moved::Config {
-                        bell::ring(&bell::bells_dir(&watch_root));
-                    }
                     let _ = raw_tx.send(moved);
                 }
             }
@@ -554,11 +549,11 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     });
 }
 
-/// The loop's record is not a file whose writes the filesystem reports:
-/// the loop holds its connection open, so a commit is an append to a WAL
-/// already open, which macOS never announces. Every writer rings the
-/// store's bell instead, and `PRAGMA data_version` on a connection of our
-/// own says whether anything committed moved.
+/// The loop's record is not a file whose writes FSEvents reports: the
+/// loop holds its connection open, and FSEvents does not announce a write
+/// to a file held open. `wake::Listener` watches it with kqueue (inotify
+/// on Linux) instead, and `PRAGMA data_version` on a connection of our own
+/// says whether anything committed moved.
 async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<Moved>) {
     let store = match datalib_dag::supervisor::store::Store::open(&root).await {
         Ok(store) => store,
@@ -569,7 +564,7 @@ async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<M
             return;
         }
     };
-    let mut listener = Listener::new(&store, "watch").await;
+    let mut listener = Listener::new(&store, "watch", &[]).await;
     let mut seen = None;
     loop {
         match store.data_version().await {

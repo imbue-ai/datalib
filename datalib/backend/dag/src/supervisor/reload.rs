@@ -18,6 +18,12 @@ pub trait GraphSource: Send + Sync {
     /// The graph as the source describes it now, and the version it was
     /// built from.
     fn load(&self) -> Result<(String, Graph)>;
+
+    /// A file whose writes mean the graph may have changed, for the loop
+    /// to wake on.
+    fn watched(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// A config file, read whole: its text is its version.
@@ -49,5 +55,9 @@ impl GraphSource for ConfigFile {
             self.path.display()
         );
         Ok((text, checked.graph))
+    }
+
+    fn watched(&self) -> Option<PathBuf> {
+        Some(self.path.clone())
     }
 }

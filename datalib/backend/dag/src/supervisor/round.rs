@@ -22,9 +22,9 @@ use crate::scheduler::{
     QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
-use crate::supervisor::bell::Listener;
 use crate::supervisor::record::{CurrentRun, Record};
 use crate::supervisor::reload::GraphSource;
+use crate::supervisor::wake::Listener;
 use crate::version::UNKNOWN;
 
 /// How an invocation ended, held until the step runs again (it was a
@@ -201,9 +201,15 @@ impl Runner {
         )
         .await?;
 
-        // Every write to the store rings it, and so does a config edit the
-        // server sees; the loop wakes for both.
-        let mut listener = Listener::new(store, "the sync loop").await;
+        // A commit to the store, from any process, wakes the loop, and so
+        // does a write to the config.
+        let config: Vec<std::path::PathBuf> = self
+            .reload
+            .as_ref()
+            .and_then(|s| s.watched())
+            .into_iter()
+            .collect();
+        let mut listener = Listener::new(store, "the sync loop", &config).await;
         let (cp_tx, mut checkpoints) = tokio::sync::mpsc::unbounded_channel();
         let checkpoint = crate::step::CheckpointSink::new(cp_tx);
         let mut set: JoinSet<Done> = JoinSet::new();
@@ -1499,18 +1505,18 @@ mod tests {
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
     }
 
-    /// A config a test rewrites while the loop runs. A rewrite rings the
-    /// bell, as the server's file watch does for `config.toml`.
+    /// A config a test rewrites while the loop runs. A rewrite touches a
+    /// file the loop watches, as saving `config.toml` does.
     struct Swappable {
         now: std::sync::Mutex<(u64, Graph)>,
-        bells: std::path::PathBuf,
+        file: std::path::PathBuf,
     }
 
     impl Swappable {
         fn new(graph: &Graph, root: &std::path::Path) -> Arc<Self> {
             Arc::new(Self {
                 now: std::sync::Mutex::new((0, graph.clone())),
-                bells: crate::supervisor::bell::bells_dir(root),
+                file: root.join("config.toml"),
             })
         }
 
@@ -1519,7 +1525,7 @@ mod tests {
                 let mut now = self.now.lock().unwrap();
                 *now = (now.0 + 1, Graph::build(specs).unwrap());
             }
-            crate::supervisor::bell::ring(&self.bells);
+            std::fs::write(&self.file, self.version().unwrap()).unwrap();
         }
     }
 
@@ -1531,6 +1537,10 @@ mod tests {
         fn load(&self) -> Result<(String, Graph)> {
             let now = self.now.lock().unwrap();
             Ok((now.0.to_string(), now.1.clone()))
+        }
+
+        fn watched(&self) -> Option<std::path::PathBuf> {
+            Some(self.file.clone())
         }
     }
 

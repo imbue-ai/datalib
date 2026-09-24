@@ -93,9 +93,7 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
-    /// Rung after every write, so a listener hears it at once
-    /// (`bell.rs`).
-    bells: PathBuf,
+    path: PathBuf,
 }
 
 impl Store {
@@ -115,7 +113,7 @@ impl Store {
             .with_context(|| format!("open {}", path.display()))?;
         let store = Store {
             pool,
-            bells: super::bell::bells_dir(data_root),
+            path: path.clone(),
         };
         store.refuse_if_newer(&path).await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
@@ -174,13 +172,9 @@ impl Store {
         &self.pool
     }
 
-    /// Where a listener for this store's writes makes its FIFO.
-    pub fn bells(&self) -> &Path {
-        &self.bells
-    }
-
-    pub(super) fn ring(&self) {
-        super::bell::ring(&self.bells);
+    /// The file, which a listener watches for commits (`wake.rs`).
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub async fn close(self) {
@@ -209,7 +203,6 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        self.ring();
         Ok(id)
     }
 
@@ -226,7 +219,6 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        self.ring();
         Ok(())
     }
 
@@ -248,7 +240,6 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        self.ring();
         Ok(())
     }
 
@@ -299,7 +290,6 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        self.ring();
         Ok(())
     }
 
@@ -308,7 +298,6 @@ impl Store {
             .bind(step)
             .execute(&self.pool)
             .await?;
-        self.ring();
         Ok(())
     }
 

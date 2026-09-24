@@ -403,7 +403,6 @@ impl Store {
             }
         }
         tx.commit().await?;
-        self.ring();
         Ok(())
     }
 
@@ -432,7 +431,6 @@ impl Store {
         .bind(&started.tz_offset)
         .execute(self.pool())
         .await?;
-        self.ring();
         Ok(())
     }
 
@@ -452,7 +450,6 @@ impl Store {
         .bind(id)
         .execute(self.pool())
         .await?;
-        self.ring();
         Ok(())
     }
 
@@ -471,7 +468,6 @@ impl Store {
         .execute(self.pool())
         .await?
         .rows_affected();
-        self.ring();
         Ok(closed)
     }
 

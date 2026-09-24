@@ -23,11 +23,11 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::events::FanOutSink;
-use datalib_dag::supervisor::bell::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::Budgets;
+use datalib_dag::supervisor::wake::Listener;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
@@ -427,18 +427,17 @@ async fn main() -> Result<()> {
 
 enum Taken {
     /// This process runs the loop.
-    Lock(datalib_dag::lock::RunnerLock),
+    Lock(datalib_dag::lock::FileLock),
     /// Another process ran it, and the request is over.
     Closed(Option<RequestOutcome>),
 }
 
 /// Take the loop, or follow the request while someone else runs it. The
-/// lock is tried again at every ring, not just once: the loop that was
-/// running may end between our look and our request landing, and then
-/// nobody is left to serve it but us. Closing a request rings, and so
-/// does letting the lock go.
+/// lock is tried again at every commit to the store, not just once: the
+/// loop that was running may end between our look and our request
+/// landing, and then nobody is left to serve it but us.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    let mut listener = Listener::new(store, "datalib-dag following a request").await;
+    let mut listener = Listener::new(store, "datalib-dag following a request", &[]).await;
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -473,7 +472,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::RunnerLock> {
+fn acquire_or_explain(data_root: &Path) -> Result<datalib_dag::lock::FileLock> {
     datalib_dag::lock::acquire_runner(data_root).map_err(|e| {
         if e.is_held() {
             anyhow::anyhow!(
