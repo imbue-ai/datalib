@@ -39,8 +39,8 @@ describe("rowMenu", () => {
       "log",
       "history",
       "reveal",
-      "clear",
-      "clear_blobs",
+      "reset",
+      "reset_blobs",
       "remove",
     ]);
     for (const m of menu) if (!m.separator) expect(m.disabled).toBeNull();
@@ -58,22 +58,22 @@ describe("rowMenu", () => {
     ).toBe("Not in the pipeline");
   });
 
-  it("offers Clear on a source and its steps, and says why not elsewhere", () => {
+  it("offers Reset on a source and its steps, and says why not elsewhere", () => {
     const index = target({ id: "unified_index", type: null, statusFrom: null });
-    expect(entry(rowMenu([index], opts), "clear").disabled).toBe(
-      "Clear a source; the index follows it",
+    expect(entry(rowMenu([index], opts), "reset").disabled).toBe(
+      "Reset a source; the index follows it",
     );
     const busy = target({ stopRequestId: "req-1" });
-    expect(entry(rowMenu([busy], opts), "clear").disabled).toBe("Busy — stop the sync first");
+    expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
     const ingest = target({ kind: "step", func: "ingest" });
-    expect(entry(rowMenu([ingest], opts), "clear_blobs").disabled).toBeNull();
+    expect(entry(rowMenu([ingest], opts), "reset_blobs").disabled).toBeNull();
     const render = target({ kind: "step", func: "render_markdown" });
-    expect(entry(rowMenu([render], opts), "clear").disabled).toBe(
-      "Clear the download; what it renders follows",
+    expect(entry(rowMenu([render], opts), "reset").disabled).toBe(
+      "Reset the download; what it renders follows",
     );
     const diff = target({ type: "diff" });
-    expect(entry(rowMenu([diff], opts), "clear").disabled).toBe(
-      "A comparison follows its source; clear that",
+    expect(entry(rowMenu([diff], opts), "reset").disabled).toBe(
+      "A comparison follows its source; reset that",
     );
   });
 

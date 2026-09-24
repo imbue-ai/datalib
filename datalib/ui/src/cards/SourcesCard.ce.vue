@@ -56,7 +56,7 @@ const {
   stopRequest,
   pauseStep,
   resumeStep,
-  clearSteps,
+  resetSteps,
 } = useApi();
 
 props.ctx.setTitle("Sources");
@@ -93,14 +93,14 @@ search; on a group row, the log of the step its status came from.
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
 <p><b>Browse</b>, <b>Sync</b> and <b>Pause</b> are buttons: they are what a row does
 often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
-remove, the log, a rename (on the Name cell), <b>Clear</b>, and its
+remove, the log, a rename (on the Name cell), <b>Reset</b>, and its
 <b>commit history</b>: every store under it
 is versioned, and the panel lists each commit — when, what it said, what it did to
 each table, and the run that made it — newest first, updating while a sync runs.
 Right-click inside a selection and the menu acts on all of it; outside one, on that
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
 and says why on hover.</p>
-<p><b>Clear</b> empties what a source holds: every row goes, and the history keeps
+<p><b>Reset</b> empties what a source holds: every row goes, and the history keeps
 them, so a wrong click is a revert. What reads it catches up at once, so its
 documents leave the grid; the next Sync downloads it all again from nothing.</p>
 <p><b>Documents</b> is how many things this source holds — what <b>Browse</b> opens —
@@ -597,7 +597,7 @@ function contextMenuItems(anchor: Row, targets: Row[], column: string): MenuEntr
       : {
           name: entry.name,
           disabled: entry.disabled,
-          danger: ["remove", "clear", "clear_blobs"].includes(entry.action),
+          danger: ["remove", "reset", "reset_blobs"].includes(entry.action),
           action: () => void runMenuAction(entry.action, targets, anchor),
         },
   );
@@ -656,11 +656,11 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
     case "reveal":
       for (const t of targets) await reveal(t.key);
       return;
-    case "clear":
-      await clearRows(targets, false);
+    case "reset":
+      await resetRows(targets, false);
       return;
-    case "clear_blobs":
-      await clearRows(targets, true);
+    case "reset_blobs":
+      await resetRows(targets, true);
       return;
     case "remove":
       await deleteRows(targets);
@@ -1239,10 +1239,10 @@ async function runRows(targets: Row[]) {
   }
 }
 
-/// The download steps a clear of these rows empties: a step is itself, a
+/// The download steps a reset of these rows empties: a step is itself, a
 /// group its download; with `blobs`, the blob store goes with it
 /// (`docs/dev/step_protocol.md` § Reset). What they render follows.
-function clearTargets(targets: Row[], blobs: boolean): string[] {
+function resetTargets(targets: Row[], blobs: boolean): string[] {
   const steps = targets.flatMap((t) => (t.kind === "group" ? stepsUnder(t) : [t]));
   const ids = steps
     .filter((r) => r.function === "ingest")
@@ -1254,15 +1254,15 @@ function clearTargets(targets: Row[], blobs: boolean): string[] {
 /// them catch up, so their documents leave the grid
 /// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
 /// is running, and refuses it while one is.
-async function clearRows(targets: Row[], blobs: boolean) {
-  const ids = clearTargets(targets, blobs);
+async function resetRows(targets: Row[], blobs: boolean) {
+  const ids = resetTargets(targets, blobs);
   const shown = targets.map((t) => t.name.label).join(", ");
   if (ids.length === 0) {
-    say(false, `Nothing under ${shown} downloads anything to clear.`);
+    say(false, `Nothing under ${shown} downloads anything to reset.`);
     return;
   }
   const what =
-    `Clear ${shown}${blobs ? ", attachments too" : ""}?\n\n` +
+    `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
     `Every row goes, and the history keeps them; its documents leave the grid. ` +
     `The next Sync downloads it all again from nothing. ` +
     (blobs
@@ -1272,9 +1272,9 @@ async function clearRows(targets: Row[], blobs: boolean) {
   busy.value = true;
   clearBanner();
   try {
-    say(true, `Clearing ${shown}…`);
-    await clearSteps(ids);
-    say(true, `Cleared ${shown}.`);
+    say(true, `Resetting ${shown}…`);
+    await resetSteps(ids);
+    say(true, `Reset ${shown}.`);
     await loadRows(true);
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };

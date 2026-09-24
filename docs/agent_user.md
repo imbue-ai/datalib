@@ -187,15 +187,15 @@ who made it, so the screen shows "paused by claude" or "Stop the sync of
 Work Slack, started by claude". **Don't resume or stop what a person
 started without saying so.**
 
-**Clearing** empties what a source downloaded: every row of its store
+**Resetting** empties what a source downloaded: every row of its store
 goes (with `+blobs`, its attachments too), and the doltlite history
 keeps them. Then what reads it runs, so its documents leave the grid,
 and its next sync downloads everything again from nothing. It needs the
 root to itself, so it runs only when nothing is syncing. With the app
-up, use `POST /api/clear {"targets": ["slack/ingest+blobs"], "by":
+up, use `POST /api/reset {"targets": ["slack/ingest+blobs"], "by":
 "claude"}`: it answers once the store is empty, opens the request that
 carries the emptiness downstream, and refuses while a sync runs. The
-Manage screen's row menu offers the same, as Clear. With no app up,
+Manage screen's row menu offers the same. With no app up,
 `datalib-dag --reset slack/ingest` empties the store alone; add
 `--sync slack/ingest` to download it again at once.
 

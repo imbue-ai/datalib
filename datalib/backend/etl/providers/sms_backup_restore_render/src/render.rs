@@ -102,7 +102,7 @@ pub fn render(
         })
     })?;
 
-    // No early return on an empty store: a cleared one still has to
+    // No early return on an empty store: a reset one still has to
     // name the conversations it lost, so their documents go.
     let all_chats = build_chats(source_id, &messages, &calls);
 

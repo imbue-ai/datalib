@@ -847,7 +847,7 @@ async fn open_inner(
         plans.push((*stmt, table, plan));
     }
     // A break in an empty table loses nothing, so it is rebuilt whatever
-    // the policy: that is how a cleared store gets past a shape this build
+    // the policy: that is how a reset store gets past a shape this build
     // cannot reach.
     let mut breaks: Vec<(String, String)> = Vec::new();
     for (_, table, plan) in &plans {
@@ -1692,7 +1692,7 @@ pub async fn problem_counts_at_path(
 /// Empty every table and commit, so the store reads as a source with
 /// nothing in it while its history keeps every row. The tables stay, so
 /// a reader diffing from an earlier commit sees every row deleted — how
-/// a clear takes a source's documents out of what renders it. A table
+/// a reset takes a source's documents out of what renders it. A table
 /// whose shape this build refuses is rebuilt by the owner's next open,
 /// since it is empty. `_datalib_meta` is kept: it still says who wrote
 /// the file. A store that does not exist has nothing to reset.

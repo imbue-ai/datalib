@@ -436,7 +436,7 @@ the log card that reads them: [`logging.md`](logging.md).
 
 ## Reset (optional)
 
-`datalib-dag --reset <step-id>[+<more>]` (the app's Clear) empties
+`datalib-dag --reset <step-id>[+<more>]` empties
 what a step wrote so the next run does its work from the start: the
 runner invokes the step once with `DATALIB_DAG_RESET` set to `store`, or
 to whatever followed the `+` (`blobs`: the built-in ingest step's store
@@ -448,7 +448,7 @@ A command that does not know the verb exits non-zero and nothing is
 changed. `datalib-step` deletes every row of the tree's store in one
 commit, keeping the tables, plus a render tree's documents; the run log
 and the rest are still in the history. Keeping the tables is what lets
-a reader take the emptiness in as ordinary deletions: the app's Clear
+a reader take the emptiness in as ordinary deletions: the app's Reset
 then syncs what reads the step, so its documents leave the grid.
 
 ## Signals: graceful cancellation (optional)

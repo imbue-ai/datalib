@@ -1024,8 +1024,8 @@ export async function resumeStep(id: string): Promise<void> {
 
 /// Empty what the targets wrote, keeping the history, and sync what reads
 /// them; answers once they are empty. Refused while a sync runs.
-export async function clearSteps(targets: string[]): Promise<void> {
-  await post("/api/clear", { targets });
+export async function resetSteps(targets: string[]): Promise<void> {
+  await post("/api/reset", { targets });
 }
 
 // --- The run store -----------------------------------------------------------

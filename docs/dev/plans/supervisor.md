@@ -3,7 +3,7 @@
 **Status: chosen over the join (2026-09-23); slices 0–5 are built —
 `datalib-dag` and the server run one loop over requests in
 `system/supervisor.sqlite`, a Manage row reads the loop's record and
-carries Sync, Stop, Pause and Clear — and 6–7 are not.** This is the alternative to
+carries Sync, Stop, Pause and Reset — and 6–7 are not.** This is the alternative to
 [`join_running_sync.md`](join_running_sync.md), which patches the runner
 we have. Both start from the same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
@@ -630,6 +630,11 @@ applied to operators.
 
 ### 2.10 Clear is its own operation
 
+*As built (5): the operation below is built, and the verb stayed
+`reset` — `datalib-dag --reset`, `POST /api/reset`, the row menu's
+Reset — because the CLI, the step protocol and the code already said
+reset, and one name beats two.*
+
 Emptying a sink is something a person asks for, on purpose, and it
 deserves its own verb and its own button rather than a flag on a
 download. **`clear <sink>`** is a framework step, not a provider's: it
@@ -964,14 +969,14 @@ last.
    part of a sync started on another row. There is no `request_steps`
    table: a row names the one request it serves, which is all its Stop
    needs. Pause and Resume are row buttons; on a group they act on every
-   step under it. **Clear** (the row menu, `POST /api/clear`) empties a
+   step under it. **Reset** (the row menu, `POST /api/reset`) now empties a
    source's download and then opens a request rooted at what reads it,
    so its documents leave the grid. That needed two changes below the
-   UI, measured by a clear case added to `render_contract_test`: a reset
+   UI, measured by a reset case added to `render_contract_test`: a reset
    *empties* every table instead of dropping it — with the tables gone,
    20 of 22 renders failed and the other two kept every document — and a
    shape break in an empty table is rebuilt rather than refused, so a
-   clear is still the way past a store this build cannot reach. The one
+   reset is still the way past a store this build cannot reach. The one
    render that then kept its documents (sms-backup-restore) returned
    early on an empty store. A reset records the store's new version
    rather than forgetting it, so its readers see it move. The help text

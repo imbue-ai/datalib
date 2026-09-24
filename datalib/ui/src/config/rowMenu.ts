@@ -63,8 +63,8 @@ export type MenuAction =
   | "log"
   | "history"
   | "reveal"
-  | "clear"
-  | "clear_blobs"
+  | "reset"
+  | "reset_blobs"
   | "remove";
 
 export type MenuEntry =
@@ -107,19 +107,19 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Clear…" does not apply: a clear empties what a source
+/// Why "Reset (preserve attachments)…" does not apply: a reset empties what a source
 /// downloaded, and everything that reads it follows — its documents, the
 /// index — so only a source and its download step offer it.
-export function notClearableReason(t: MenuTarget): string | null {
+export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.stopRequestId) return "Busy — stop the sync first";
   if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
-    return "Clear a source; the index follows it";
+    return "Reset a source; the index follows it";
   }
-  if (t.type === "diff") return "A comparison follows its source; clear that";
+  if (t.type === "diff") return "A comparison follows its source; reset that";
   if (t.kind === "step" && t.func !== "ingest") {
-    return "Clear the download; what it renders follows";
+    return "Reset the download; what it renders follows";
   }
   return null;
 }
@@ -131,10 +131,10 @@ export function notPausableReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Clear, attachments too…" does not apply: only a download keeps
+/// Why "Reset (drop attachments)…" does not apply: only a download keeps
 /// them.
 export function noAttachmentsReason(t: MenuTarget): string | null {
-  return notClearableReason(t);
+  return notResettableReason(t);
 }
 
 function firstBlocked(
@@ -248,13 +248,13 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   }
   entries.push({ separator: true });
   entries.push({
-    action: "clear",
-    name: "Clear…",
-    disabled: firstBlocked(targets, notClearableReason),
+    action: "reset",
+    name: "Reset (preserve attachments)…",
+    disabled: firstBlocked(targets, notResettableReason),
   });
   entries.push({
-    action: "clear_blobs",
-    name: "Clear, attachments too…",
+    action: "reset_blobs",
+    name: "Reset (drop attachments)…",
     disabled: firstBlocked(targets, noAttachmentsReason),
   });
   entries.push({

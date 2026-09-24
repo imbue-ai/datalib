@@ -653,7 +653,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     ).toHaveAttribute("title", succeeded!);
   });
 
-  test("Clear empties a source, and its documents leave the rows at once", async ({ page }) => {
+  test("Reset empties a source, and its documents leave the rows at once", async ({ page }) => {
     await writeConfigAndOpenGroups(page, config());
     const render = "pdfs/render_markdown";
     const documents = async () =>
@@ -665,7 +665,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await settleRow(page, render, was[render]);
     await expect.poll(documents, { message: "the sync counted no documents" }).not.toMatch(/^0?$/);
 
-    // The confirm says what a clear does, and the history is why it can
+    // The confirm says what a reset does, and the history is why it can
     // be a menu entry at all.
     let asked = "";
     page.on("dialog", (d) => {
@@ -673,13 +673,18 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
       void d.accept();
     });
     const rendered = await stampsBefore(page, [render]);
-    await pickRowMenu(page, groupRow(page, "pdfs"), "Clear…", page.getByText("Cleared pdfs."));
+    await pickRowMenu(
+      page,
+      groupRow(page, "pdfs"),
+      "Reset (preserve attachments)…",
+      page.getByText("Reset pdfs."),
+    );
     expect(asked).toContain("Every row goes, and the history keeps them");
 
     // Nothing more to click: the render catches up on the emptied store
     // by itself and takes its documents out.
     expect(await settleRow(page, render, rendered[render])).toMatch(/^(Succeeded|Up to date)$/);
-    await expect.poll(documents, { message: "the documents stayed after a clear" }).toBe("0");
+    await expect.poll(documents, { message: "the documents stayed after a reset" }).toBe("0");
     // The download keeps no history of its own: its next Sync starts from
     // nothing.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
