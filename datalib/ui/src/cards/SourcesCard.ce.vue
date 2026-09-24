@@ -1440,7 +1440,11 @@ onMounted(async () => {
       },
       // A reconnect means we may have slept through a whole run, and the
       // sampler's own last walk with it. Ask for a fresh one.
-      resync: () => void reloadAll(true),
+      // An open commit history may have slept through commits too.
+      resync: () => {
+        void reloadAll(true);
+        refreshHistory();
+      },
     },
     { onScreen: cardEl.value ?? undefined },
   );
@@ -1578,6 +1582,11 @@ onUnmounted(() => {
                   <code>{{ historyTruncated.join(", ") }}</code
                   >.
                 </span>
+                <!-- A failed refresh leaves the log already read in place,
+                     and whatever was opened in it. -->
+                <span v-if="historyError && historyLines.length" class="bad">
+                  The last refresh failed ({{ historyError }}); this is the log as last read.
+                </span>
               </p>
             </div>
             <button class="m2-btn" @click="historyFor = []">Close</button>
@@ -1586,7 +1595,9 @@ onUnmounted(() => {
           <p v-if="historyBusy && historyLines.length === 0" class="m2-logs-note">
             Reading the commit log…
           </p>
-          <p v-else-if="historyError" class="m2-logs-note bad">{{ historyError }}</p>
+          <p v-else-if="historyError && historyLines.length === 0" class="m2-logs-note bad">
+            {{ historyError }}
+          </p>
           <p v-else-if="historyLines.length === 0" class="m2-logs-note">
             No doltlite store under <code>{{ historyStoreNote }}</code> yet. A step that has never
             run has written nothing, and the QMD index keeps no store of its own.

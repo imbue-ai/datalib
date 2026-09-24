@@ -46,9 +46,23 @@ test("a group's commit history opens from the context menu as a tree", async ({ 
 
   // Opening a commit shows what it did to each table.
   await commit.locator(".slick-tree-toggle.collapsed").click();
-  await expect(rows.filter({ has: page.locator(".m2-history-table") }).first()).toContainText(
-    "grid_rows",
+  const table = rows.filter({ has: page.locator(".m2-history-table") }).first();
+  await expect(table).toContainText("grid_rows");
+
+  // A refresh that fails leaves the log on screen, and the commit
+  // opened in it open. The tab coming back to the foreground is a
+  // resync, which re-reads an open history.
+  await table.evaluate((el) => el.setAttribute("data-probe", ""));
+  await page.route("**/api/pipeline/history**", (r) =>
+    r.fulfill({ status: 500, contentType: "text/plain", body: "store busy" }),
   );
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(dialog.getByText(/The last refresh failed/)).toBeVisible();
+  await expect(
+    rows.and(page.locator("[data-probe]")),
+    "a failed refresh took the history grid down",
+  ).toBeVisible();
+  await page.unroute("**/api/pipeline/history**");
 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

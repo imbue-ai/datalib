@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterView } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
@@ -33,14 +33,33 @@ const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => 
   return c.app_ready ? null : "config-error";
 });
 
+/// Set once the cards have been shown. From then on the gate hides
+/// them rather than unmounting them: a config broken for a moment (an
+/// agent's write caught half done, a `git checkout`) must not cost every
+/// open card its scroll, selection and query.
+const cardsShown = ref(false);
+watch(
+  () => checked.value && !gate.value,
+  (open) => {
+    if (open) cardsShown.value = true;
+  },
+  { immediate: true },
+);
+
+/// Only the newest answer is kept: an older "not ready" landing after a
+/// newer "ready" would put the gate up over a config that is fine.
+let asked = 0;
 async function refresh() {
+  const mine = ++asked;
+  let next: ConfigResponse | null = null;
   try {
-    config.value = await fetchConfig();
+    next = await fetchConfig();
   } catch {
-    config.value = null;
-  } finally {
-    checked.value = true;
+    next = null;
   }
+  if (mine !== asked) return;
+  config.value = next;
+  checked.value = true;
 }
 
 // Initializing just wrote the config, so drop the gate on the click
@@ -89,7 +108,9 @@ onUnmounted(() => stop?.());
     />
     <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
     <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
-    <RouterView v-else-if="checked" />
+    <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
+      <RouterView />
+    </div>
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the config editor. -->
@@ -98,6 +119,11 @@ onUnmounted(() => stop?.());
 </template>
 
 <style>
+/* Only there to be hidden behind the gate; lays nothing out itself. */
+.datalib-cards {
+  display: contents;
+}
+
 :root {
   color-scheme: light dark;
   --datalib-bg: #ffffff;
