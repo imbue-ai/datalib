@@ -1,6 +1,7 @@
 //! Map parsed vCards into [`NormalizedContact`]s and hand them to the
 //! shared [`datalib_etl_contact_common`] renderer.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -23,8 +24,12 @@ use datalib_schema::providers::Provider;
 /// richer grid-row search text); to 3 when `account` stopped carrying
 /// the source name; to 4 when ids moved onto `datalib_id` under
 /// the configured source and every row gained its backpointer — every uuid
-/// moved.
-pub const RENDER_VERSION: u32 = 4;
+/// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
+/// `CREATED` became `created_at`, and groups listed their members.
+pub const RENDER_VERSION: u32 = 5;
+
+/// Every card by `(addressbook, UID)`, for a group to name its members.
+type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
 
 /// Every bucket a pass looked at — named first with nothing, then the
 /// rendered ones with what they read — for the processor to declare.
@@ -36,19 +41,24 @@ pub fn render_all(
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Buckets> {
-    let profile = ContactRenderProfile {
+    let profile = |contact_kind: &str| ContactRenderProfile {
         provider: Provider::Contacts,
         source_label: humanize_source_label(source_id),
-        contact_kind: "Contact".to_string(),
+        contact_kind: contact_kind.to_string(),
         contact_entity_kind: ids::KIND_CONTACT,
         // A `.vcf` file has no login behind it.
         account: None,
         render_version: RENDER_VERSION,
     };
-    let mut contacts: Vec<NormalizedContact> = parsed
+    let cards: Cards = parsed
         .contacts
         .iter()
-        .map(|c| normalize(c, source_id))
+        .map(|c| ((c.addressbook.as_str(), c.uid.as_str()), c))
+        .collect();
+    let mut contacts: Vec<(bool, NormalizedContact)> = parsed
+        .contacts
+        .iter()
+        .map(|c| (c.is_group, normalize(c, source_id, &cards)))
         .collect();
 
     // What to render: the contacts the driver found stale, plus every
@@ -58,6 +68,7 @@ pub fn render_all(
     let forward = parsed.changed.as_ref().map(|changed| {
         contacts
             .iter()
+            .map(|(_, c)| c)
             .filter(|c| {
                 c.inputs
                     .iter()
@@ -76,22 +87,40 @@ pub fn render_all(
         })
         .collect();
     if let Some(render) = &render {
-        contacts.retain(|c| render.contains(&c.contact_uuid));
+        contacts.retain(|(_, c)| render.contains(&c.contact_uuid));
     }
-    let summary = cc_render_all(
-        &profile,
-        &contacts,
-        out_dir,
-        source_id,
-        progress,
-        on_doc_complete,
-    )?;
-    buckets.extend(summary.buckets);
+    let (groups, people): (Vec<_>, Vec<_>) = contacts.into_iter().partition(|(g, _)| *g);
+    for (kind, cards) in [("Contact", people), ("Contact group", groups)] {
+        let cards: Vec<NormalizedContact> = cards.into_iter().map(|(_, c)| c).collect();
+        let summary = cc_render_all(
+            &profile(kind),
+            &cards,
+            out_dir,
+            source_id,
+            progress,
+            on_doc_complete,
+        )?;
+        buckets.extend(summary.buckets);
+    }
     Ok(buckets)
 }
 
-fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
+fn normalize(contact: &ParsedContact, source_id: &str, cards: &Cards) -> NormalizedContact {
     let mut fields: Vec<ContactField> = Vec::new();
+    let mut inputs = contact.inputs.clone();
+    for member in &contact.members {
+        let uid = member
+            .get(..9)
+            .filter(|p| p.eq_ignore_ascii_case("urn:uuid:"))
+            .map_or(member.as_str(), |_| &member[9..]);
+        let card = cards.get(&(contact.addressbook.as_str(), uid));
+        // The member's name is part of this page, so its card is an input.
+        inputs.extend(card.iter().flat_map(|c| c.inputs.iter().cloned()));
+        let name = card
+            .and_then(|c| c.display_name.clone())
+            .unwrap_or_else(|| member.clone());
+        fields.push(ContactField::new("Member", name));
+    }
     if let Some(org) = &contact.org {
         fields.push(ContactField::new("Org", org.replace(';', " — ")));
     }
@@ -100,20 +129,20 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
     }
     for e in &contact.emails {
         fields.push(ContactField::new(
-            field_label("Email", &e.type_label()),
+            field_label("Email", &e.label()),
             e.value.clone(),
         ));
     }
     for p in &contact.phones {
         fields.push(ContactField::new(
-            field_label("Phone", &p.type_label()),
+            field_label("Phone", &p.label()),
             p.value.clone(),
         ));
     }
     for a in &contact.addresses {
         // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
         fields.push(ContactField::new(
-            field_label("Address", &a.type_label()),
+            field_label("Address", &a.label()),
             a.value.replace(';', ", "),
         ));
     }
@@ -129,8 +158,10 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
         display_name: contact.display_name.clone(),
         external_id: Some(id.natural_key),
         upstream_account: None,
-        // A card carries no creation stamp.
-        created_at: None,
+        created_at: contact
+            .created
+            .as_deref()
+            .and_then(datalib_time::coerce_record_stamp),
         // vCard `REV` is the revision stamp. Fastmail emits *basic* ISO
         // 8601 (`20260605T191839Z`), which isn't RFC 3339 and would be
         // rejected at `GridRow::build`; coerce it (already-valid values
@@ -148,12 +179,12 @@ fn normalize(contact: &ParsedContact, source_id: &str) -> NormalizedContact {
             content_type: p.content_type.clone(),
         }),
         photo_url: contact.photo_url.clone(),
-        inputs: contact.inputs.clone(),
+        inputs,
     }
 }
 
-fn field_label(base: &str, type_label: &Option<String>) -> String {
-    match type_label {
+fn field_label(base: &str, label: &Option<String>) -> String {
+    match label {
         Some(s) if !s.is_empty() => format!("{base} ({s})"),
         _ => base.to_string(),
     }
@@ -191,6 +222,7 @@ fn humanize_source_label(source_id: &str) -> String {
 mod tests {
     use super::*;
     use datalib_etl_contacts::ingest::api::VcardProp;
+    use datalib_etl_render::inputs::Input;
 
     fn prop(value: &str, ty: Option<&str>) -> VcardProp {
         VcardProp {
@@ -198,6 +230,7 @@ mod tests {
             params: ty
                 .map(|t| vec![("TYPE".to_string(), t.to_string())])
                 .unwrap_or_default(),
+            ab_label: None,
         }
     }
 
@@ -209,6 +242,9 @@ mod tests {
             source_path: std::path::PathBuf::from("Bridge.vcf"),
             display_name: Some("Jean-Luc Picard".to_string()),
             revision: Some("2370-04-15T00:00:00Z".to_string()),
+            created: None,
+            is_group: false,
+            members: Vec::new(),
             emails: vec![prop("jlp@enterprise", Some("WORK"))],
             phones: vec![prop("+1-555", Some("WORK"))],
             addresses: vec![prop(";;Ready Room;Deck 1;;;", Some("WORK"))],
@@ -222,7 +258,7 @@ mod tests {
 
     #[test]
     fn normalize_maps_fields_uuids_and_stamps() {
-        let n = normalize(&sample(), "tng_contacts");
+        let n = normalize(&sample(), "tng_contacts", &Cards::new());
         assert_eq!(
             n.contact_uuid,
             ids::contact("tng_contacts", "Bridge", "tng-picard").uuid
@@ -235,7 +271,7 @@ mod tests {
         assert_eq!(n.display_name.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(n.external_id.as_deref(), Some("Bridge#tng-picard"));
         assert_eq!(n.upstream_account, None);
-        assert_eq!(n.created_at, None, "a card has no creation stamp");
+        assert_eq!(n.created_at, None, "this card has no CREATED");
         assert_eq!(n.modified_at.as_deref(), Some("2370-04-15T00:00:00Z"));
         // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.
         let labels: Vec<&str> = n.fields.iter().map(|f| f.label.as_str()).collect();
@@ -262,11 +298,53 @@ mod tests {
     fn normalize_canonicalizes_basic_iso_rev() {
         let mut c = sample();
         c.revision = Some("20260605T191839Z".to_string());
-        let n = normalize(&c, "fastmail_contacts");
+        let n = normalize(&c, "fastmail_contacts", &Cards::new());
         assert_eq!(n.modified_at.as_deref(), Some("2026-06-05T19:18:39+00:00"));
         // The grid's own contract must accept it (this is what was failing).
         datalib_time::validate_iso_offset(n.modified_at.as_deref().unwrap())
             .expect("normalized modified_at must satisfy GridRow's RFC 3339 contract");
+    }
+
+    /// A group card lists its members by name, and a renamed member
+    /// re-renders the group because the member's row is its input.
+    #[test]
+    fn a_group_names_its_members_and_reads_their_rows() {
+        let picard = ParsedContact {
+            inputs: vec![Input::new("contacts", "row-picard")],
+            ..sample()
+        };
+        let group = ParsedContact {
+            uid: "tng-senior-staff".to_string(),
+            display_name: Some("Senior Staff".to_string()),
+            created: Some("23700101T000000Z".to_string()),
+            is_group: true,
+            members: vec![
+                "urn:uuid:tng-picard".to_string(),
+                "urn:uuid:tng-q".to_string(),
+            ],
+            emails: Vec::new(),
+            phones: Vec::new(),
+            addresses: Vec::new(),
+            org: None,
+            title: None,
+            note: None,
+            inputs: vec![Input::new("contacts", "row-group")],
+            ..sample()
+        };
+        let cards: Cards = [(("Bridge", "tng-picard"), &picard)].into_iter().collect();
+        let n = normalize(&group, "tng_contacts", &cards);
+        let members: Vec<(&str, &str)> = n
+            .fields
+            .iter()
+            .map(|f| (f.label.as_str(), f.value.as_str()))
+            .collect();
+        assert_eq!(
+            members,
+            vec![("Member", "Jean-Luc Picard"), ("Member", "urn:uuid:tng-q")]
+        );
+        assert_eq!(n.created_at.as_deref(), Some("2370-01-01T00:00:00+00:00"));
+        let rows: Vec<&str> = n.inputs.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(rows, vec!["row-group", "row-picard"]);
     }
 
     #[test]
