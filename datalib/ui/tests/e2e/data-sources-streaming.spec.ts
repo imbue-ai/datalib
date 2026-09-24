@@ -313,6 +313,12 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     await expect(dag.locator(".dv-node.running").first()).toBeVisible();
 
+    // Coming back to the tab refetches everything; with the watches
+    // armed, that has to land in place like any other refresh.
+    for (const p of [page, grid, dag]) {
+      await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    }
+
     // ── 3. a refetch redraws only what changed ──────────────────────
     const kept = await rowsKeptAcross(page, 3);
     console.log(`[e2e] rows kept across three refetches: ${JSON.stringify(kept)}`);

@@ -123,6 +123,11 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await page.goto("/data_sources");
   await expect(tabs(page)).toBeVisible();
   await expect(gate(page)).toHaveCount(0);
+  // The Manage table's element, marked: the cards wait behind the gate
+  // rather than being thrown away, so the same one comes back.
+  const table = page.locator(".tg-grid").first();
+  await expect(table).toBeVisible();
+  await table.evaluate((el) => el.setAttribute("data-probe", ""));
 
   // Break it under the running app, the way an editor or an agent
   // would. No reload below this line: the gate has to arrive on the
@@ -153,6 +158,10 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   // depends on.
   await expect(gate(page)).toHaveCount(0);
   await expect(tabs(page)).toBeVisible();
+  await expect(
+    page.locator(".tg-grid[data-probe]"),
+    "the cards were rebuilt behind the gate, losing their state",
+  ).toBeVisible();
 });
 
 test("a config with no unified_index applet blocks too", async ({ page, request }) => {
