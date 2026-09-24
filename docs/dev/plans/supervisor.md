@@ -971,7 +971,8 @@ last.
    needs. Pause and Resume are row buttons; on a group they act on every
    step under it. **Reset** (the row menu, `POST /api/reset`) now empties a
    source's download and then opens a request rooted at what reads it,
-   so its documents leave the grid. That needed two changes below the
+   so its documents leave the grid; reset on a render opens a request
+   rooted at the render itself, which rebuilds it from what it reads. That needed two changes below the
    UI, measured by a reset case added to `render_contract_test`: a reset
    *empties* every table instead of dropping it — with the tables gone,
    20 of 22 renders failed and the other two kept every document — and a

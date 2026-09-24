@@ -190,7 +190,9 @@ started without saying so.**
 **Resetting** empties what a source downloaded: every row of its store
 goes (with `+blobs`, its attachments too), and the doltlite history
 keeps them. Then what reads it runs, so its documents leave the grid,
-and its next sync downloads everything again from nothing. It needs the
+and its next sync downloads everything again from nothing. Resetting a
+render step (`slack/render_markdown`) instead rebuilds its documents
+from what is downloaded, at once. It needs the
 root to itself, so it runs only when nothing is syncing. With the app
 up, use `POST /api/reset {"targets": ["slack/ingest+blobs"], "by":
 "claude"}`: it answers once the store is empty, opens the request that

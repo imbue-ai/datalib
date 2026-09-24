@@ -384,33 +384,39 @@ async fn run_reset(
         .await;
     cfg.control.busy.store(false, Ordering::SeqCst);
     result.map_err(|e| format!("{e:#}"))?;
-    let readers = readers_of(&checked.graph, targets);
-    if !readers.is_empty() {
+    let roots = after_reset(&checked.graph, targets);
+    if !roots.is_empty() {
         store
-            .open_request(&readers, by)
+            .open_request(&roots, by)
             .await
-            .map_err(|e| format!("could not sync what reads it: {e:#}"))?;
+            .map_err(|e| format!("could not sync what follows the reset: {e:#}"))?;
     }
     Ok(())
 }
 
-/// The steps that read a reset step and were not reset themselves:
-/// where the emptiness goes next.
-fn readers_of(graph: &datalib_dag::Graph, targets: &[ResetTarget]) -> Vec<String> {
+/// What a reset syncs next. A step that reads something is rebuilt from
+/// it at once, and what reads it follows; a download is not refilled —
+/// that is its next Sync — so only what reads it runs, and takes the
+/// emptiness downstream.
+fn after_reset(graph: &datalib_dag::Graph, targets: &[ResetTarget]) -> Vec<String> {
     let reset: BTreeSet<&str> = targets.iter().map(|t| t.step.as_str()).collect();
-    let mut readers: BTreeSet<String> = BTreeSet::new();
+    let mut roots: BTreeSet<String> = BTreeSet::new();
     for step in &reset {
         let Some(&i) = graph.by_id.get(*step) else {
             continue;
         };
+        if !graph.deps[i].is_empty() {
+            roots.insert(step.to_string());
+            continue;
+        }
         for &d in &graph.dependents[i] {
             let id = &graph.steps[d].id;
             if !reset.contains(id.as_str()) {
-                readers.insert(id.clone());
+                roots.insert(id.clone());
             }
         }
     }
-    readers.into_iter().collect()
+    roots.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -446,6 +452,32 @@ mod tests {
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         assert!(!control.running());
         assert!(!lock.exists(), "the probe created {}", lock.display());
+    }
+
+    /// A reset download is not refilled — only what reads it runs — and a
+    /// reset render is rebuilt from what it reads at once.
+    #[test]
+    fn a_reset_syncs_what_reads_a_download_and_rebuilds_a_render() {
+        use datalib_dag::{StepOutcome, StepRun, StepSpec};
+        let step = |id: &str| {
+            StepSpec::new(
+                id,
+                StepRun::in_process(|_| async { Ok(StepOutcome::default()) }),
+            )
+        };
+        let graph = datalib_dag::Graph::build(vec![
+            step("a/ingest"),
+            step("a/render").input("a/ingest"),
+            step("idx/grid").input("a/render"),
+        ])
+        .unwrap();
+        let after = |ids: &[&str]| {
+            let targets: Vec<ResetTarget> = ids.iter().map(|id| ResetTarget::parse(id)).collect();
+            after_reset(&graph, &targets)
+        };
+        assert_eq!(after(&["a/ingest+blobs"]), ["a/render"]);
+        assert_eq!(after(&["a/render"]), ["a/render"]);
+        assert_eq!(after(&["a/ingest", "a/render"]), ["a/render"]);
     }
 
     /// A reset needs the root to itself; asked for while a sync runs it

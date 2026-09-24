@@ -68,12 +68,14 @@ describe("rowMenu", () => {
     const ingest = target({ kind: "step", func: "ingest" });
     expect(entry(rowMenu([ingest], opts), "reset_blobs").disabled).toBeNull();
     const render = target({ kind: "step", func: "render_markdown" });
-    expect(entry(rowMenu([render], opts), "reset").disabled).toBe(
-      "Reset the download; what it renders follows",
+    expect(entry(rowMenu([render], opts), "reset").disabled).toBeNull();
+    expect(entry(rowMenu([render], opts), "reset_blobs").disabled).toBe(
+      "Only the download step keeps attachments",
     );
     const diff = target({ type: "diff" });
-    expect(entry(rowMenu([diff], opts), "reset").disabled).toBe(
-      "A comparison follows its source; reset that",
+    expect(entry(rowMenu([diff], opts), "reset").disabled).toBeNull();
+    expect(entry(rowMenu([diff], opts), "reset_blobs").disabled).toBe(
+      "A comparison downloads nothing",
     );
   });
 

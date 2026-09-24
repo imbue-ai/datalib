@@ -107,19 +107,16 @@ export function noStoreReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Reset (preserve attachments)…" does not apply: a reset empties what a source
-/// downloaded, and everything that reads it follows — its documents, the
-/// index — so only a source and its download step offer it.
+/// Why "Reset (preserve attachments)…" does not apply: a reset empties
+/// what a source downloaded or rendered, and what reads it follows — so
+/// the index, which follows every source, is not reset by hand, and an
+/// applet writes nothing.
 export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.stopRequestId) return "Busy — stop the sync first";
   if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
     return "Reset a source; the index follows it";
-  }
-  if (t.type === "diff") return "A comparison follows its source; reset that";
-  if (t.kind === "step" && t.func !== "ingest") {
-    return "Reset the download; what it renders follows";
   }
   return null;
 }
@@ -134,7 +131,11 @@ export function notPausableReason(t: MenuTarget): string | null {
 /// Why "Reset (drop attachments)…" does not apply: only a download keeps
 /// them.
 export function noAttachmentsReason(t: MenuTarget): string | null {
-  return notResettableReason(t);
+  const why = notResettableReason(t);
+  if (why) return why;
+  if (t.type === "diff") return "A comparison downloads nothing";
+  if (t.kind === "step" && t.func !== "ingest") return "Only the download step keeps attachments";
+  return null;
 }
 
 function firstBlocked(

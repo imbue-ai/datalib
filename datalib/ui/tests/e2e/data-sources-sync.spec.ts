@@ -691,6 +691,35 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await settleRunner(page);
   });
 
+  test("Reset on a render renders its documents again at once", async ({ page }) => {
+    await writeConfigAndOpenGroups(page, config());
+    const render = "pdfs/render_markdown";
+    const documents = async () =>
+      (await row(page, render).locator('[col-id="documents"]').innerText()).trim();
+
+    const was = await stampsBefore(page, ["pdfs/ingest", render]);
+    await syncBtn(page, "pdfs/ingest").click();
+    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await settleRow(page, render, was[render]);
+    await expect.poll(documents, { message: "the sync counted no documents" }).not.toMatch(/^0?$/);
+    const counted = await documents();
+
+    page.on("dialog", (d) => void d.accept());
+    const rendered = await stampsBefore(page, [render]);
+    await pickRowMenu(
+      page,
+      row(page, render),
+      "Reset (preserve attachments)…",
+      page.getByText("Reset Render markdown."),
+    );
+    // Rebuilt from what is downloaded, with nothing more to click; the
+    // download itself is untouched.
+    expect(await settleRow(page, render, rendered[render])).toBe("Succeeded");
+    await expect.poll(documents).toBe(counted);
+    expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
+    await settleRunner(page);
+  });
+
   test("a downstream step can't be synced on its own, and says what would carry it", async ({
     page,
   }) => {

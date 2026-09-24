@@ -100,9 +100,11 @@ each table, and the run that made it — newest first, updating while a sync run
 Right-click inside a selection and the menu acts on all of it; outside one, on that
 row alone, without changing the selection. An entry that doesn’t apply stays, greyed,
 and says why on hover.</p>
-<p><b>Reset</b> empties what a source holds: every row goes, and the history keeps
-them, so a wrong click is a revert. What reads it catches up at once, so its
-documents leave the grid; the next Sync downloads it all again from nothing.</p>
+<p><b>Reset</b> empties what a step holds: every row goes, and the history keeps
+them, so a wrong click is a revert. Reset a source, or its download, and what reads
+it catches up at once, so its documents leave the grid; the next Sync downloads it
+all again from nothing. Reset a render and it renders its documents again from what
+is downloaded, at once.</p>
 <p><b>Documents</b> is how many things this source holds — what <b>Browse</b> opens —
 counted over the whole store, not this run, by the render step: on its own row and on
 the group above it. It moves while a render runs, each time the step seals what it has
@@ -1239,35 +1241,47 @@ async function runRows(targets: Row[]) {
   }
 }
 
-/// The download steps a reset of these rows empties: a step is itself, a
-/// group its download; with `blobs`, the blob store goes with it
-/// (`docs/dev/step_protocol.md` § Reset). What they render follows.
+/// The steps a reset of these rows empties: a step is itself; a group is
+/// its download, what it renders following — or, for a comparison, which
+/// downloads nothing, its render. With `blobs`, a download's blob store
+/// goes with it (`docs/dev/step_protocol.md` § Reset).
 function resetTargets(targets: Row[], blobs: boolean): string[] {
-  const steps = targets.flatMap((t) => (t.kind === "group" ? stepsUnder(t) : [t]));
+  const steps = targets.flatMap((t) => {
+    if (t.kind !== "group") return [t];
+    const under = stepsUnder(t);
+    const downloads = under.filter((r) => r.function === "ingest");
+    return downloads.length ? downloads : under.filter((r) => r.function === "render_markdown");
+  });
   const ids = steps
-    .filter((r) => r.function === "ingest")
-    .map((r) => (blobs ? `${r.id}+blobs` : r.id));
+    .filter((r) => r.function === "ingest" || r.function === "render_markdown")
+    .map((r) => (blobs && r.function === "ingest" ? `${r.id}+blobs` : r.id));
   return [...new Set(ids)];
 }
 
-/// Empty what these rows wrote, keeping the history, and let what reads
-/// them catch up, so their documents leave the grid
+/// Empty what these rows wrote, keeping the history. A render is rebuilt
+/// from what it reads at once; a download is not refilled, but what reads
+/// it catches up, so its documents leave the grid
 /// (`docs/dev/plans/supervisor.md` §2.10). The server runs it once no sync
 /// is running, and refuses it while one is.
 async function resetRows(targets: Row[], blobs: boolean) {
   const ids = resetTargets(targets, blobs);
   const shown = targets.map((t) => t.name.label).join(", ");
   if (ids.length === 0) {
-    say(false, `Nothing under ${shown} downloads anything to reset.`);
+    say(false, `Nothing under ${shown} keeps anything to reset.`);
     return;
   }
+  const download = ids.some(
+    (id) => rows.value.find((r) => r.id === id.split("+")[0])?.function === "ingest",
+  );
   const what =
     `Reset ${shown}${blobs ? ", attachments included" : ""}?\n\n` +
-    `Every row goes, and the history keeps them; its documents leave the grid. ` +
-    `The next Sync downloads it all again from nothing. ` +
-    (blobs
-      ? `Attachments already downloaded are deleted and fetched again.`
-      : `Attachments already downloaded are kept.`);
+    `Every row goes, and the history keeps them. ` +
+    (download
+      ? `Its documents leave the grid, and the next Sync downloads it all again from nothing. ` +
+        (blobs
+          ? `Attachments already downloaded are deleted and fetched again.`
+          : `Attachments already downloaded are kept.`)
+      : `Its documents are rendered again from what it has downloaded, now.`);
   if (!window.confirm(what)) return;
   busy.value = true;
   clearBanner();
