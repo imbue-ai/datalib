@@ -71,6 +71,9 @@ struct ChatSpec {
     subject: Option<String>,
     #[serde(default)]
     group_type: i64,
+    /// The last message the account has read here. Absent: all of them.
+    #[serde(default)]
+    last_read_message_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +208,7 @@ async fn build_msgstore(spec: &Spec) -> Result<Vec<u8>> {
         insert_jid_map(&pool, &spec.jid_map, &spec.lid_display_names).await?;
         insert_chats(&pool, &spec.chats).await?;
         let msg_id_to_pk = insert_messages(&pool, &spec.messages).await?;
+        set_chat_pointers(&pool, &spec.chats).await?;
         insert_reactions(&pool, &spec.reactions, &msg_id_to_pk).await?;
         pool.close().await;
     }
@@ -253,6 +257,11 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             hidden INTEGER,
             subject TEXT,
             created_timestamp INTEGER,
+            display_message_row_id INTEGER,
+            last_message_row_id INTEGER,
+            last_read_message_row_id INTEGER,
+            last_read_receipt_sent_message_row_id INTEGER,
+            last_important_message_row_id INTEGER,
             archived INTEGER,
             sort_timestamp INTEGER,
             mod_tag INTEGER,
@@ -264,6 +273,7 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             unseen_row_count INTEGER,
             plaintext_disabled INTEGER,
             vcard_ui_dismissed INTEGER,
+            change_number_notified_message_row_id INTEGER,
             show_group_description INTEGER,
             ephemeral_expiration INTEGER,
             ephemeral_setting_timestamp INTEGER,
@@ -271,10 +281,16 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
             ephemeral_disappearing_messages_initiator INTEGER,
             unseen_important_message_count INTEGER NOT NULL DEFAULT 0,
             group_type INTEGER NOT NULL DEFAULT 0,
+            last_message_reaction_row_id INTEGER,
+            last_seen_message_reaction_row_id INTEGER,
             unseen_message_reaction_count INTEGER,
             unseen_comment_message_count INTEGER,
             growth_lock_level INTEGER,
             growth_lock_expiration_ts INTEGER,
+            last_read_message_sort_id INTEGER,
+            display_message_sort_id INTEGER,
+            last_message_sort_id INTEGER,
+            last_read_receipt_sent_message_sort_id INTEGER,
             has_new_community_admin_dialog_been_acknowledged INTEGER NOT NULL DEFAULT 0,
             history_sync_progress INTEGER,
             chat_lock INTEGER,
@@ -471,6 +487,45 @@ async fn insert_chats(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
             .execute(pool)
             .await
             .context("insert chat")?;
+    }
+    Ok(())
+}
+
+/// The per-chat message pointers WhatsApp keeps, filled the way a real
+/// backup has them (measured 2026-09-24): the last and display message
+/// are the newest, the read mark is where reading stopped, the read
+/// receipt went out at the read mark, sort ids equal row ids, and the
+/// unseen counters count the incoming messages past the mark. A chat
+/// with no message keeps them all NULL.
+async fn set_chat_pointers(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
+    for c in chats {
+        let newest: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(_id) FROM message WHERE chat_row_id = ?")
+                .bind(c.id)
+                .fetch_one(pool)
+                .await
+                .context("newest message")?;
+        let Some(newest) = newest else { continue };
+        let read = c.last_read_message_id.unwrap_or(newest);
+        sqlx::query(
+            "UPDATE chat SET \
+                display_message_row_id = ?1, display_message_sort_id = ?1, \
+                last_message_row_id = ?1, last_message_sort_id = ?1, \
+                last_read_message_row_id = ?2, last_read_message_sort_id = ?2, \
+                last_read_receipt_sent_message_row_id = ?2, \
+                last_read_receipt_sent_message_sort_id = ?2, \
+                unseen_message_count = u.n, unseen_row_count = u.n, \
+                unseen_earliest_message_received_time = u.earliest \
+             FROM (SELECT COUNT(*) AS n, MIN(timestamp) AS earliest FROM message \
+                    WHERE chat_row_id = ?3 AND from_me = 0 AND _id > ?2) AS u \
+             WHERE chat._id = ?3",
+        )
+        .bind(newest)
+        .bind(read)
+        .bind(c.id)
+        .execute(pool)
+        .await
+        .context("set chat pointers")?;
     }
     Ok(())
 }

@@ -60,6 +60,25 @@ graph to natural keys and mints the uuids from those
 (`schema_raw::whatsapp_message_uuid`), so a uuid never contains a rowid
 even though the store is keyed on them.
 
+## Read state: one mark per chat
+
+msgstore has no per-message "read" flag. Each `chat` row carries a read
+mark instead, `last_read_message_row_id`: an incoming message whose
+`_id` is past it is unread. Checked on the real backup above
+(2026-09-24): that rule counts exactly each chat's
+`unseen_message_count`. A chat nothing was read in points the mark at
+the seed row, `_id` 1, so everything in it counts; a chat with only the
+account's own messages leaves it NULL. `last_read_message_sort_id` is
+the same mark in `sort_id` terms, and `sort_id` equals `_id` on every
+row we have seen. Render reads the row-id form (`whatsapp_render`'s
+`parse.rs`).
+
+The fixture (`whatsapp_make_fixture`) now builds `chat` with the real
+table's columns in the real order, and fills the message pointers the
+way the phone does: newest message for last/display, the spec's
+`last_read_message_id` (else the newest) for the read mark and the read
+receipt, the unseen counters from the mark.
+
 ## `skip_churn`: what moves when nothing happened
 
 Between the two backups above, with no message sent, three tables

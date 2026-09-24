@@ -100,11 +100,21 @@ async fn parse_async(
 
     // 1) Chats, with their display label. Group chats use `subject`; 1:1
     //    chats fall back to what the JID resolves to.
-    let chat_rows =
-        sqlx::query("SELECT _id, jid_row_id, subject FROM pinned_chat chat ORDER BY _id")
-            .fetch_all(&pool)
-            .await
-            .context("select chat")?;
+    //    `last_read_message_row_id` is the read mark: an incoming message
+    //    with a greater `_id` is unread. On a real backup that rule gives
+    //    back each chat's `unseen_message_count` exactly; a chat nothing
+    //    was read in points it at the seed row, `_id` 1.
+    let has_read_mark =
+        datalib_etl::doltlite_raw::column_exists(&pool, "chat", "last_read_message_row_id").await?;
+    let chat_sql = if has_read_mark {
+        "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+    } else {
+        "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM pinned_chat chat ORDER BY _id"
+    };
+    let chat_rows = sqlx::query(chat_sql)
+        .fetch_all(&pool)
+        .await
+        .context("select chat")?;
     let mut chats: Vec<ChatHeader> = Vec::with_capacity(chat_rows.len());
     let mut chat_idx_by_rowid: HashMap<i64, usize> = HashMap::with_capacity(chat_rows.len());
     for r in &chat_rows {
@@ -130,6 +140,7 @@ async fn parse_async(
         chats.push(ChatHeader {
             chat_jid,
             display,
+            last_read_rowid: r.get("last_read_message_row_id"),
             items_by_period: HashMap::new(),
             inputs,
         });
@@ -332,6 +343,9 @@ async fn parse_async(
             chats[idx].inputs.read("jid", &i.to_string());
         }
         let sender_jid = sender_jid_row_id.and_then(|i| jids.get(&i).cloned());
+        let rowid: i64 = r.get("_id");
+        let unread =
+            key.from_me == 0 && chats[idx].last_read_rowid.is_some_and(|mark| rowid > mark);
         let item = build_item(
             source_id,
             key,
@@ -341,6 +355,7 @@ async fn parse_async(
             &chats[idx].inputs,
             media_by_msg.remove(key).unwrap_or_default(),
             reactions_by_parent.remove(key).unwrap_or_default(),
+            unread,
         );
         let period_key = match r.get::<Option<i64>, _>("timestamp") {
             Some(ts) => period.key_for_ms(ts),
@@ -452,6 +467,7 @@ fn build_item(
     inputs: &Inputs,
     attachments: Vec<NormalizedAttachment>,
     reactions: Vec<NormalizedReaction>,
+    unread: bool,
 ) -> NormalizedChatItem {
     let timestamp: Option<i64> = r.get("timestamp");
     let message_type: Option<i64> = r.get("message_type");
@@ -513,7 +529,7 @@ fn build_item(
         kind_label: None,
         source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
         is_aside: false,
-        unread: false,
+        unread,
         problems: Vec::new(),
     }
 }
@@ -521,6 +537,7 @@ fn build_item(
 struct ChatHeader {
     chat_jid: String,
     display: String,
+    last_read_rowid: Option<i64>,
     items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
     inputs: Inputs,
 }

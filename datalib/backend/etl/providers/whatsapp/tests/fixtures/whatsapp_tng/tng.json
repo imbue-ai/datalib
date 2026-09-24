@@ -22,7 +22,7 @@
     { "lid_row_id": 9, "display_name": "Worf, Son of Mogh" }
   ],
   "chats": [
-    { "id": 100, "jid_row_id": 6, "subject": "Bridge Crew", "group_type": 1 },
+    { "id": 100, "jid_row_id": 6, "subject": "Bridge Crew", "group_type": 1, "last_read_message_id": 12 },
     { "id": 101, "jid_row_id": 2, "subject": null,           "group_type": 0 },
     { "id": 102, "jid_row_id": 7, "subject": null,           "group_type": 0 },
     { "id": 103, "jid_row_id": 8, "subject": null,           "group_type": 0 },
