@@ -18,10 +18,6 @@ export type Tab = {
   // The person renamed the tab, so the card no longer names it.
   renamed: boolean;
   collapsed: boolean;
-  // Opened by a card and not visited since: the next card its parent
-  // opens replaces it rather than piling up beside it, so clicking
-  // down a grid's rows does not leave a tab per row.
-  preview: boolean;
 };
 
 export type Row = { tab: Tab; depth: number; hasChildren: boolean };
@@ -35,12 +31,7 @@ export function newTab(id: string, source: string, parentId: string | null, stat
     name: null,
     renamed: false,
     collapsed: false,
-    preview: false,
   };
-}
-
-export function childrenOf(tabs: Tab[], id: string | null): Tab[] {
-  return tabs.filter((t) => t.parentId === id);
 }
 
 // `id` and everything below it.
@@ -79,36 +70,22 @@ export function rows(tabs: Tab[]): Row[] {
 }
 
 // Open `sources` as a chain under `parentId`: the first is its child,
-// each next one a child of the one before. The chain replaces the
-// parent's preview child when that child's whole subtree is still
-// preview. Returns the new list and the ids of the chain.
+// each next one a child of the one before. Returns the new list and
+// the ids of the chain.
 export function openChain(
   tabs: Tab[],
   parentId: string,
   sources: string[],
   freshId: () => string,
 ): { tabs: Tab[]; ids: string[] } {
-  const stale = childrenOf(tabs, parentId).find((c) => c.preview);
-  let doomed = new Set<string>();
-  if (stale) {
-    const under = subtree(tabs, stale.id);
-    if (tabs.every((t) => !under.has(t.id) || t.preview)) doomed = under;
-  }
   const chain: Tab[] = [];
   let prev = parentId;
   for (const source of sources) {
-    const tab = { ...newTab(freshId(), source, prev), preview: true };
+    const tab = newTab(freshId(), source, prev);
     chain.push(tab);
     prev = tab.id;
   }
-  // The replacement takes the replaced tab's place among its siblings.
-  const next: Tab[] = [];
-  for (const t of tabs) {
-    if (t.id === stale?.id && doomed.size > 0) next.push(...chain);
-    else if (!doomed.has(t.id)) next.push(t);
-  }
-  if (doomed.size === 0) next.push(...chain);
-  return { tabs: next, ids: chain.map((t) => t.id) };
+  return { tabs: [...tabs, ...chain], ids: chain.map((t) => t.id) };
 }
 
 // A URL of several columns (a miller link): a new root and a spine
@@ -127,15 +104,14 @@ export function openStack(
 }
 
 // Detach a tab, with everything under it, and make it a root, listed
-// right after the top-level tab it came from. A tab the person moved
-// is one they mean to keep, so it is no longer a preview.
+// right after the top-level tab it came from.
 export function makeTopLevel(tabs: Tab[], id: string): Tab[] {
   const tab = tabs.find((t) => t.id === id);
   if (!tab || tab.parentId === null) return tabs;
   const byId = new Map(tabs.map((t) => [t.id, t]));
   let root = tab;
   while (root.parentId !== null && byId.has(root.parentId)) root = byId.get(root.parentId)!;
-  const moved = { ...tab, parentId: null, preview: false };
+  const moved = { ...tab, parentId: null };
   const rest = tabs.filter((t) => t.id !== id);
   const at = rest.findIndex((t) => t.id === root.id) + 1;
   return [...rest.slice(0, at), moved, ...rest.slice(at)];
@@ -223,7 +199,6 @@ export function parseStored(text: string | null): Stored | null {
       name: typeof t.name === "string" ? t.name : null,
       renamed: t.renamed === true,
       collapsed: t.collapsed === true,
-      preview: t.preview === true,
     });
   }
   const selectedId = typeof raw.selectedId === "string" ? raw.selectedId : null;
