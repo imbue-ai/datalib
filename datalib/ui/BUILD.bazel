@@ -133,10 +133,6 @@ _E2E_DATA = [
     # binary has to be in the runfiles. `fsindex` is the step it runs:
     # file-backed, no network, no credentials, and read-only against the
     # tree it scans (`stamp` defaults off).
-    # The DAG runner the http server's sync worker shells out to. Without
-    # it every sync fails at startup with "datalib-dag binary not found",
-    # which no spec noticed until one of them actually ran a sync.
-    "//datalib/backend/dag:datalib_dag_bin",
     "//datalib/backend/datalib_step:datalib_step",
     # A local PDF corpus for that same spec. `pdf` is the local-only
     # provider that has BOTH halves — download and render — so a config
@@ -205,7 +201,6 @@ _E2E_ENV = {
     # time. Through `rlocationpath` the same mistake is an analysis-time
     # error naming the label.
     "DATALIB_TEST_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
-    "DATALIB_TEST_E2E_DAG_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_dag_bin)",
     "DATALIB_TEST_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
     "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root_embed_only)",
     # The fixture root carries the embedding model alone (see that

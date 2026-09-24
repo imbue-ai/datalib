@@ -496,8 +496,42 @@ pub fn split_stamp(iso: &str) -> StoredStamp {
     }
 }
 
+/// A stored stamp back as the one offset-bearing string it was split
+/// from: the UTC instant in the offset it was made in, to the precision
+/// it carries. [`split_stamp`] undone. A UTC value that will not parse is
+/// handed back as it is, and so is one whose offset will not.
+pub fn join_stamp(utc: &str, tz_offset: Option<&str>) -> String {
+    let (Ok(at), Some(Ok(offset))) = (
+        parse_strict(utc),
+        tz_offset.map(|o| o.parse::<FixedOffset>()),
+    ) else {
+        return utc.to_string();
+    };
+    IsoOffsetTimestamp(at.inner().with_timezone(&offset)).to_rfc3339()
+}
+
 #[cfg(test)]
 mod tests {
+    /// A stamp that went into a table comes back out as it went in, so
+    /// the wire never sees the storage form.
+    #[test]
+    fn a_split_stamp_joins_back_to_what_was_split() {
+        use super::{join_stamp, split_stamp};
+        for stamp in [
+            "2026-08-31T10:00:12+01:00",
+            "2026-08-31T10:00:12.250+01:00",
+            "2026-08-31T10:00:12-07:00",
+            "2026-08-31T10:00:12+00:00",
+        ] {
+            let stored = split_stamp(stamp);
+            assert_eq!(join_stamp(&stored.utc, stored.tz_offset.as_deref()), stamp);
+        }
+        assert_eq!(join_stamp("not a stamp", Some("+01:00")), "not a stamp");
+        assert_eq!(
+            join_stamp("2026-08-31T09:00:12.000000+00:00", None),
+            "2026-08-31T09:00:12.000000+00:00"
+        );
+    }
     /// `stored_ms` is what the stored stamp reads back as, so an id
     /// minted from it matches the row's `created_at`. Floors toward
     /// minus infinity so a pre-1970 stamp behaves like the string does.

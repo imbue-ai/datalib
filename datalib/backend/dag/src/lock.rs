@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 pub use datalib_flock::{FileLock, LockError};
 
 /// The runner's claim, relative to the data root. A sibling of
-/// `system/dag_state.json`, which is the thing it guards.
+/// `system/supervisor.sqlite`, whose record is the thing it guards.
 pub const RUNNER_LOCK_REL_PATH: &str = "system/runner-lock";
 
 /// How long a starting runner keeps trying a lock someone holds. The

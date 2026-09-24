@@ -1209,7 +1209,7 @@ fn now_utc() -> String {
         .0
 }
 
-/// A step's last outcome, mirroring `datalib_dag::state::LastRun`.
+/// A step's last outcome, mirroring `datalib_dag::supervisor::record::LastRun`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagStepRun {
     /// The run it happened in — what to pass to `/api/runs/{run}/log`
@@ -1266,11 +1266,18 @@ pub struct DagRecord {
     pub documents: std::collections::HashMap<String, i64>,
 }
 
-/// `sync_running` is [`supervisor::SyncControl::running`]: an open record
-/// with nothing running is a run that died.
-pub async fn dag_record(root: &std::path::Path, sync_running: bool) -> DagRecord {
-    let state = datalib_dag::state::DagState::load(root).unwrap_or_default();
-    let live = sync_running;
+/// An open run in the record while nothing is running is a run that died,
+/// so `live` is [`supervisor::SyncControl::running`].
+pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+    let loaded = match sync.mailbox().await {
+        Ok(store) => store.load_record().await,
+        Err(e) => Err(e),
+    };
+    let state = loaded.unwrap_or_else(|e| {
+        tracing::warn!("could not read the loop's record, so nothing reads as run: {e:#}");
+        Default::default()
+    });
+    let live = sync.running();
     let run = state.current_run.as_ref().map(|r| DagRunInfo {
         run_id: r.run_id.clone(),
         started_at: r.started_at.clone(),
@@ -1300,14 +1307,6 @@ pub async fn dag_record(root: &std::path::Path, sync_running: bool) -> DagRecord
         .steps
         .iter()
         .filter_map(|(id, st)| st.last_run.as_ref().map(|r| (id.clone(), r)))
-        // A `not_selected` last-run is a record from before the
-        // scheduler stopped writing them — see `Scheduler::finish`. It
-        // says a run walked past this step without touching it, on top
-        // of whatever the step had actually done. The real outcome it
-        // replaced is gone, so the honest report is no record at all:
-        // "never run". It self-heals the next time a run reaches the
-        // step for real.
-        .filter(|(_, r)| r.status != "not_selected")
         .map(|(id, r)| {
             (
                 id,
@@ -1361,7 +1360,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         progress,
         problems: _,
         documents: _,
-    } = dag_record(&s.root, s.sync.running()).await;
+    } = dag_record(&s.root, &s.sync).await;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;

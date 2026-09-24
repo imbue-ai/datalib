@@ -13,7 +13,6 @@ pub mod run_state;
 pub mod runs_sink;
 pub mod scheduler;
 pub mod sink;
-pub mod state;
 pub mod step;
 pub mod subprocess;
 pub mod supervisor;

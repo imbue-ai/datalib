@@ -247,7 +247,7 @@ pub async fn get_manage_rows(
     // The grid is still useful without the queue; the columns it feeds
     // just read as idle.
     let jobs = s.app.list_jobs(false, 200).await.unwrap_or_default();
-    let record = crate::dag_record(&s.root, s.sync.running()).await;
+    let record = crate::dag_record(&s.root, &s.sync).await;
     let storage = s
         .usage
         .snapshot(s.root.as_path(), &usage::measured_trees(&config_path))

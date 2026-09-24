@@ -22,10 +22,13 @@
                                                   it counts with it on the Manage screen
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and pauses: the
-                                                  mailbox the loop reads (plain SQLite;
-                                                  every process writes it, the loop's
-                                                  holder closes requests)
-<data_root>/system/dag_state.json                 the runner's record
+                                                  mailbox the loop reads; and the loop's
+                                                  record — each step's last run and
+                                                  last success, each sink's version,
+                                                  the run in flight, every process it
+                                                  started (plain SQLite; anyone writes
+                                                  intent, only the loop's holder writes
+                                                  the record)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
 ```

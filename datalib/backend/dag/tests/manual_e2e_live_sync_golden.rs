@@ -1043,8 +1043,8 @@ fn assert_step_statuses_ok(summary: &Value) {
     assert!(!steps.is_empty(), "run_summary carried zero steps");
     // The runner's own definition of "finished without failing", so a
     // state it adds is judged here the way it judges it: run 2 is full of
-    // `skipped_up_to_date` (that is what incrementality looks like) and
-    // run 3, a per-source sync, leaves every other step `not_selected`.
+    // `skipped_up_to_date` (that is what incrementality looks like), and
+    // run 3, a per-source sync, lists only the steps its request reached.
     // A spelling this build cannot parse is a failure, not a pass.
     let bad: Vec<String> = steps
         .iter()

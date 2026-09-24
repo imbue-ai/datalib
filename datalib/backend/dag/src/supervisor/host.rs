@@ -1,7 +1,7 @@
 //! What a process running the loop builds around it, the same whichever
 //! process that is (`datalib-dag`, or the app's server): the steps'
-//! environment and the run store's record of one busy period, and the
-//! books a loop that died holding the lock left open.
+//! environment and the run store's record of one busy period, and what it
+//! puts right when it takes the lock.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::state::DagState;
 use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RUN_ID};
+use crate::supervisor::store::Store;
 
 /// The environment every step of one busy period gets on top of the
 /// host's own, and the log filter it was built with.
@@ -76,43 +76,55 @@ pub fn start_record(
     RunStoreSink::start(data_root, run_id, now, commit, retention)
 }
 
-/// Close the run a loop left open when it died holding `runner-lock`:
-/// in `dag_state.json`, so no row reads its steps as live, and in the
-/// run store, so none reads `running` for ever. Only for the holder of
-/// the lock, which is what makes an open run a dead one. The run's id,
-/// if there was one to close.
-pub async fn close_dead_loop(data_root: &Path) -> Result<Option<String>> {
-    let mut state = DagState::load(data_root).context("load dag state")?;
-    let Some(run) = state
-        .current_run
-        .as_mut()
-        .filter(|r| r.finished_at.is_none())
-    else {
-        return Ok(None);
+/// What [`take_over`] found to put right.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TakenOver {
+    /// The run a dead loop left open, which it closed.
+    pub closed_run: Option<String>,
+    /// How many of that loop's invocations it closed as stopped.
+    pub closed_invocations: u64,
+}
+
+/// For the process that has just taken `runner-lock`, before its first
+/// loop: close what a loop that died holding the lock left open — its
+/// run, in the record and in the run store, so no row reads its steps as
+/// live, and its invocations. Holding the lock is what makes anything open
+/// a thing a dead loop left.
+pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
+    let why = "the loop running this ended without closing it; the next to take the lock did";
+    let saved = store.load_record().await.context("load the record")?;
+    let mut state = saved.clone();
+    let closed_run = match state.current_run.as_mut() {
+        Some(run) if run.finished_at.is_none() => {
+            run.finished_at = Some(crate::scheduler::now_stamp());
+            Some(run.run_id.clone())
+        }
+        _ => None,
     };
-    run.finished_at = Some(crate::scheduler::now_stamp());
-    let run_id = run.run_id.clone();
-    state.save(data_root).context("save dag state")?;
-    datalib_runs::close_abandoned_run(
-        data_root,
-        &run_id,
-        RunState::Stopped.as_str(),
-        "the loop running this ended without closing it; the next to take the lock did",
-    )
-    .await
-    .with_context(|| format!("close run {run_id} in the run store"))?;
-    Ok(Some(run_id))
+    store.save_record(&saved, &state).await?;
+    if let Some(run_id) = &closed_run {
+        datalib_runs::close_abandoned_run(data_root, run_id, RunState::Stopped.as_str(), why)
+            .await
+            .with_context(|| format!("close run {run_id} in the run store"))?;
+    }
+    let closed_invocations = store.close_abandoned_invocations(why).await?;
+    Ok(TakenOver {
+        closed_run,
+        closed_invocations,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::CurrentRun;
+    use crate::supervisor::record::InvocationRow;
+    use crate::supervisor::record::{CurrentRun, Record};
 
     #[tokio::test]
-    async fn a_run_a_dead_loop_left_open_is_closed_and_a_closed_one_left_alone() {
+    async fn what_a_dead_loop_left_open_is_closed_and_nothing_else() {
         let root = tempfile::tempdir().unwrap();
-        let open = DagState {
+        let store = Store::open(root.path()).await.unwrap();
+        let open = Record {
             current_run: Some(CurrentRun {
                 run_id: "r1".into(),
                 started_at: "2026-09-23T10:00:00+00:00".into(),
@@ -120,14 +132,31 @@ mod tests {
             }),
             ..Default::default()
         };
-        open.save(root.path()).unwrap();
+        store.save_record(&Record::default(), &open).await.unwrap();
+        store
+            .open_invocation(&InvocationRow {
+                id: "i1".into(),
+                step: "a/raw".into(),
+                run_id: "r1".into(),
+                started_at_utc: "2026-09-23T10:00:01+00:00".into(),
+            })
+            .await
+            .unwrap();
 
+        let taken = take_over(&store, root.path()).await.unwrap();
         assert_eq!(
-            close_dead_loop(root.path()).await.unwrap().as_deref(),
-            Some("r1")
+            taken,
+            TakenOver {
+                closed_run: Some("r1".into()),
+                closed_invocations: 1
+            }
         );
-        let after = DagState::load(root.path()).unwrap();
+        let after = store.load_record().await.unwrap();
         assert!(after.current_run.unwrap().finished_at.is_some());
-        assert_eq!(close_dead_loop(root.path()).await.unwrap(), None);
+        assert!(store.running_invocations().await.unwrap().is_empty());
+        assert_eq!(
+            take_over(&store, root.path()).await.unwrap(),
+            TakenOver::default()
+        );
     }
 }

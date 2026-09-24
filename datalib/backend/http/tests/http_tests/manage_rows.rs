@@ -97,11 +97,11 @@ group = "unified_index"
 command = "datalib-applet unified_index"
 "#;
 
-fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
+async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
     std::fs::create_dir_all(root.join("system")).unwrap();
     std::fs::write(root.join("config.toml"), config).unwrap();
     if let Some(j) = state_json {
-        std::fs::write(root.join("system/dag_state.json"), j).unwrap();
+        crate::record_json::write(root, j).await;
     }
 }
 
@@ -111,7 +111,7 @@ fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
 #[tokio::test]
 async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), CONFIG, None);
+    write_root(tmp.path(), CONFIG, None).await;
 
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["ok"], true, "{got}");
@@ -306,12 +306,12 @@ async fn a_finished_run_reaches_the_rows() {
                 "run_id": "r1",
                 "started_at": "2026-08-31T10:00:00+01:00",
                 "finished_at": "2026-08-31T10:00:12+01:00",
-                "plan": ["slack/ingest", "slack/render_markdown"],
                 "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
               }
             }"#,
         ),
-    );
+    )
+    .await;
 
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["run"]["run_id"], "r1");
@@ -361,7 +361,7 @@ async fn a_finished_run_reaches_the_rows() {
 #[tokio::test]
 async fn problem_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), CONFIG, None);
+    write_root(tmp.path(), CONFIG, None).await;
     {
         let w = datalib_runs::RunWriter::start(
             tmp.path(),
@@ -445,7 +445,7 @@ group = \"photos\"
 function = \"ingest\"
 "
     );
-    write_root(tmp.path(), &config, None);
+    write_root(tmp.path(), &config, None).await;
 
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["ok"], true, "{got}");
@@ -468,7 +468,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
         "function = \"render_markdown\"\n",
         "function = \"render_markdown\"\ntitle = \"not a key\"\n",
     );
-    write_root(tmp.path(), &config, None);
+    write_root(tmp.path(), &config, None).await;
 
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["ok"], true, "{got}");
@@ -501,7 +501,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
 #[tokio::test]
 async fn a_file_that_is_not_toml_is_an_error_not_an_empty_table() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), "[[steps", None);
+    write_root(tmp.path(), "[[steps", None).await;
     let got = get_rows(tmp.path()).await;
     assert_eq!(got["ok"], false);
     assert!(got["error"].as_str().is_some_and(|e| !e.is_empty()));
@@ -515,7 +515,7 @@ async fn a_file_that_is_not_toml_is_an_error_not_an_empty_table() {
 #[tokio::test]
 async fn document_counts_reach_the_rows_from_the_run_store() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), CONFIG, None);
+    write_root(tmp.path(), CONFIG, None).await;
     {
         let w = datalib_runs::RunWriter::start(
             tmp.path(),
@@ -570,10 +570,15 @@ impl datalib_core::repo::AppRepo for LoopActsWhileListed {
         limit: usize,
     ) -> Result<Vec<app_schema::sync_jobs::SyncJobRow>, datalib_core::repo::RepoError> {
         if !self.acted.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let mut state = datalib_dag::state::DagState::load(&self.root).unwrap();
+            let store = datalib_dag::supervisor::store::Store::open(&self.root)
+                .await
+                .unwrap();
+            let saved = store.load_record().await.unwrap();
+            let mut state = saved.clone();
             let run = state.current_run.as_mut().unwrap();
             run.states.insert("slack/ingest".into(), "running".into());
-            state.save(&self.root).unwrap();
+            store.save_record(&saved, &state).await.unwrap();
+            store.close().await;
             self.inner.start_job(&self.job, "busy-period", None).await?;
         }
         self.inner.list_jobs(only_active, limit).await
@@ -602,7 +607,7 @@ async fn a_row_never_pairs_a_running_job_with_the_record_from_before_it() {
             "states": {"slack/ingest": "not_selected"}
         }
     });
-    write_root(tmp.path(), CONFIG, Some(&state.to_string()));
+    write_root(tmp.path(), CONFIG, Some(&state.to_string())).await;
     // A sync is running: a process holds the root.
     let _runner = datalib_dag::lock::acquire_runner(tmp.path()).unwrap();
 

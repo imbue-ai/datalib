@@ -1,7 +1,6 @@
-//! One round of the supervisor, which is what `datalib-dag` runs: a request
-//! rooted at the sources asked for, ticked until it closes. The facts come
-//! from `dag_state.json` and go back to it, and the events are the ones the
-//! run store and the server already read.
+//! The supervisor's loop: every open request ticked until it closes. The
+//! facts come from the record in `system/supervisor.sqlite` and go back to
+//! it, and the events are the ones the run store and the server read.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -9,6 +8,7 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
     tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
@@ -22,8 +22,8 @@ use crate::scheduler::{
     invoke_with_retry, mark_running, new_run_id, now_stamp, resolve_outputs, step_summary,
     QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
-use crate::state::{CurrentRun, DagState};
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
+use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
 
 /// How an invocation ended, held until the step runs again (it was a
@@ -39,28 +39,62 @@ struct Ended {
     pass_ended: bool,
 }
 
-type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
-
-/// Where the loop's requests and pauses come from.
-enum Mailbox<'a> {
-    /// One request rooted at the runner's sources, opened by the loop and
-    /// closed by it: a round, as `datalib-dag` without a store runs it.
-    Fixed { opened: bool },
-    /// Whatever `system/supervisor.sqlite` holds, read again whenever
-    /// another process writes to it.
-    Store {
-        store: &'a Store,
-        seen: Option<i64>,
-        /// Requests naming a step this loop's graph lacks, left for the
-        /// next loop: it loads the config again, and may know them.
-        deferred: BTreeSet<String>,
-    },
+impl Ended {
+    fn as_end(&self) -> InvocationEnd {
+        let failure_kind = match &self.status {
+            StepStatus::Failed { kind } => Some(<&str>::from(*kind).to_string()),
+            _ => None,
+        };
+        InvocationEnd {
+            outcome: self.status.state().as_str().to_string(),
+            failure_kind,
+            error: self.error.clone(),
+            attempts: self.attempts,
+            exit_code: self.exit.and_then(|x| x.code),
+            signal: self.exit.and_then(|x| x.signal),
+        }
+    }
 }
 
-/// An open request as the loop holds it: its row's id (`None` for the
-/// fixed one) and the tick's view of it.
+type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
+
+/// The record as the loop holds it, beside the one it last saved: a save
+/// writes the difference.
+struct Recorded<'a> {
+    store: &'a Store,
+    saved: Record,
+}
+
+impl<'a> Recorded<'a> {
+    async fn load(store: &'a Store) -> Result<Recorded<'a>> {
+        let saved = store.load_record().await.context("load the record")?;
+        Ok(Recorded { store, saved })
+    }
+
+    async fn save(&mut self, state: &Record) -> Result<()> {
+        self.store
+            .save_record(&self.saved, state)
+            .await
+            .context("save the record")?;
+        self.saved = state.clone();
+        Ok(())
+    }
+}
+
+/// Where the loop's requests and pauses come from: the store, read again
+/// whenever another process writes to it.
+struct Mailbox<'a> {
+    store: &'a Store,
+    seen: Option<i64>,
+    /// Requests naming a step this loop's graph lacks, left for the next
+    /// loop: it loads the config again, and may know them.
+    deferred: BTreeSet<String>,
+}
+
+/// An open request as the loop holds it: its row's id and the tick's view
+/// of it.
 struct Open {
-    id: Option<String>,
+    id: String,
     request: Request,
     /// Whether the host has been told the loop took it on. Only once the
     /// record has been saved with its steps in it: told sooner, a job
@@ -92,33 +126,42 @@ impl Winding {
 /// same pace.
 const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// A request for every source, served until it closes: what a test that
+/// is not about requests wants of the loop.
+#[cfg(test)]
 impl Runner {
-    /// One request rooted at the runner's sources, run until it closes.
-    pub async fn run(&self, graph: &Graph) -> Result<RunReport> {
-        self.run_loop(graph, Mailbox::Fixed { opened: false }).await
+    pub(crate) async fn run(&self, graph: &Graph) -> Result<RunReport> {
+        let sources: Vec<&str> = graph.fringe_ids();
+        self.run_roots(graph, &sources).await
     }
 
+    pub(crate) async fn run_roots(&self, graph: &Graph, roots: &[&str]) -> Result<RunReport> {
+        let store = Store::open(&self.data_root).await?;
+        let roots: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
+        store.open_request(&roots, "test").await?;
+        let report = self.serve(graph, &store).await;
+        store.close().await;
+        report
+    }
+}
+
+impl Runner {
     /// Every request open in the store, and any opened while this runs,
     /// until none is left. The caller holds `runner-lock`.
     pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
-        let mailbox = Mailbox::Store {
+        let mut mailbox = Mailbox {
             store,
             seen: None,
             deferred: BTreeSet::new(),
         };
-        self.run_loop(graph, mailbox).await
-    }
-
-    async fn run_loop(&self, graph: &Graph, mut mailbox: Mailbox<'_>) -> Result<RunReport> {
         let plan: Vec<String> = graph
             .topo
             .iter()
             .map(|&i| graph.steps[i].id.clone())
             .collect();
-        self.sink.emit(&Event::RunPlan {
-            steps: plan.clone(),
-        });
-        let mut state = DagState::load(&self.data_root).context("load dag state")?;
+        self.sink.emit(&Event::RunPlan { steps: plan });
+        let mut record = Recorded::load(store).await?;
+        let mut state = record.saved.clone();
 
         // One clock and one id for the round: the same values the steps get
         // in `DATALIB_DAG_NOW` and `DATALIB_DAG_RUN_ID`.
@@ -136,10 +179,9 @@ impl Runner {
             run_id,
             started_at,
             finished_at: None,
-            plan,
             states: Default::default(),
         });
-        state.save(&self.data_root).context("save dag state")?;
+        record.save(&state).await?;
 
         let n = graph.steps.len();
         let shape = shape_of(graph);
@@ -155,6 +197,7 @@ impl Runner {
         let mut changed_now: HashMap<String, bool> = HashMap::new();
         let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
         let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
+        let mut invocations: Vec<Option<String>> = vec![None; n];
         let mut warned_not_streaming = vec![false; n];
         let mut queue = QueueLedger::new(n);
         // Each step's state the last time a request wanted it, which is
@@ -174,18 +217,6 @@ impl Runner {
             &mut winding,
         )
         .await?;
-        for i in (0..n).filter(|&i| !ever_in_scope[i]) {
-            self.finish(
-                graph,
-                &mut state,
-                &mut status,
-                i,
-                StepStatus::NotSelected,
-                None,
-                None,
-                0,
-            );
-        }
 
         let (cp_tx, mut checkpoints) = tokio::sync::mpsc::unbounded_channel();
         let checkpoint = crate::step::CheckpointSink::new(cp_tx);
@@ -203,16 +234,6 @@ impl Runner {
                     &mut winding,
                 )
                 .await?;
-                // A step a later request reaches was not "not selected"
-                // after all: it settles like any other.
-                for i in 0..n {
-                    if ever_in_scope[i] && status[i] == Some(StepStatus::NotSelected) {
-                        status[i] = None;
-                        if let Some(run) = state.current_run.as_mut() {
-                            run.states.remove(&graph.steps[i].id);
-                        }
-                    }
-                }
             }
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
@@ -295,7 +316,20 @@ impl Runner {
                 let (tx, rx) = watch::channel(false);
                 stops[i] = Some(tx);
                 let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
-                mark_running(&mut state, &graph.steps[i].id, &now_stamp());
+                let started_at = now_stamp();
+                mark_running(&mut state, &graph.steps[i].id, &started_at);
+                let invocation = InvocationRow {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    step: graph.steps[i].id.clone(),
+                    run_id: state
+                        .current_run
+                        .as_ref()
+                        .map(|r| r.run_id.clone())
+                        .unwrap_or_default(),
+                    started_at_utc: started_at,
+                };
+                store.open_invocation(&invocation).await?;
+                invocations[i] = Some(invocation.id);
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
@@ -312,36 +346,32 @@ impl Runner {
                     let _ = tx.send(true);
                 }
             }
-            state.save(&self.data_root).context("save dag state")?;
+            record.save(&state).await?;
             for o in open.iter_mut().filter(|o| !o.told) {
                 o.told = true;
-                if let Some(id) = &o.id {
-                    self.tell(RequestEvent::Admitted { id: id.clone() });
-                }
+                self.tell(RequestEvent::Admitted { id: o.id.clone() });
             }
 
             for &(r, outcome) in t.closed.iter().rev() {
                 let closed = open.remove(r);
-                if let (Some(id), Mailbox::Store { store, .. }) = (&closed.id, &mailbox) {
-                    let (outcome, step) = match outcome {
-                        Outcome::Done => (RequestOutcome::Done, None),
-                        Outcome::Failed { step } => {
-                            (RequestOutcome::Failed, Some(graph.steps[step].id.as_str()))
-                        }
-                    };
-                    store.close_request(id, outcome, step).await?;
-                    self.tell(RequestEvent::Closed {
-                        id: id.clone(),
-                        outcome,
-                        failed_step: step.map(str::to_string),
-                        stopped_by: None,
-                    });
-                }
+                let (outcome, step) = match outcome {
+                    Outcome::Done => (RequestOutcome::Done, None),
+                    Outcome::Failed { step } => {
+                        (RequestOutcome::Failed, Some(graph.steps[step].id.as_str()))
+                    }
+                };
+                store.close_request(&closed.id, outcome, step).await?;
+                self.tell(RequestEvent::Closed {
+                    id: closed.id,
+                    outcome,
+                    failed_step: step.map(str::to_string),
+                    stopped_by: None,
+                });
             }
             if open.is_empty() && set.is_empty() {
                 break;
             }
-            let polling = matches!(mailbox, Mailbox::Store { .. }) && !cancelled;
+            let polling = !cancelled;
             anyhow::ensure!(
                 !set.is_empty() || polling,
                 "the round is open with nothing running and nothing to start: {:?}",
@@ -379,8 +409,11 @@ impl Runner {
                     });
                     attempts_taken[i] = e.attempts;
                     errors[i] = e.error.clone();
+                    if let Some(id) = invocations[i].take() {
+                        store.close_invocation(&id, &e.as_end()).await?;
+                    }
                     ended[i] = Some(e);
-                    state.save(&self.data_root).context("save dag state")?;
+                    record.save(&state).await?;
                 }
             }
         }
@@ -400,7 +433,7 @@ impl Runner {
             }
         }
         for i in 0..n {
-            if status[i].is_some() {
+            if status[i].is_some() || !ever_in_scope[i] {
                 continue;
             }
             let st = settled(graph, &last_states, i, cancelled);
@@ -416,24 +449,25 @@ impl Runner {
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
         }
-        state.save(&self.data_root).context("save dag state")?;
+        record.save(&state).await?;
 
+        // A step no request reached took no part, and has no line.
         let steps = graph
             .topo
             .iter()
-            .map(|&i| {
+            .filter_map(|&i| {
                 let path = graph.steps[i].output().as_str().to_string();
                 let now = facts.sinks[i]
                     .clone()
                     .unwrap_or_else(|| UNKNOWN.to_string());
                 let changed = changed_now.get(&path).copied().unwrap_or(false);
-                StepReport {
+                Some(StepReport {
                     id: graph.steps[i].id.clone(),
-                    status: status[i].clone().expect("every step has a status"),
+                    status: status[i].clone()?,
                     attempts: attempts_taken[i],
                     error: errors[i].clone(),
                     outputs: vec![(path, now, changed)],
-                }
+                })
             })
             .collect();
         let report = RunReport { steps };
@@ -457,7 +491,7 @@ impl Runner {
         ever_in_scope: &mut [bool],
         winding: &mut Vec<Winding>,
     ) -> Result<()> {
-        let mut admit = |id: Option<String>, roots: Vec<usize>, open: &mut Vec<Open>| {
+        let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
             for (i, reached) in downstream_of(graph, &roots).into_iter().enumerate() {
                 ever_in_scope[i] |= reached;
             }
@@ -471,18 +505,13 @@ impl Runner {
                 },
             });
         };
-        match mailbox {
-            Mailbox::Fixed { opened } => {
-                if !*opened {
-                    *opened = true;
-                    admit(None, self.roots(graph), open);
-                }
-            }
-            Mailbox::Store {
-                store,
-                seen,
-                deferred,
-            } => {
+        let Mailbox {
+            store,
+            seen,
+            deferred,
+        } = mailbox;
+        {
+            {
                 let version = store.data_version().await?;
                 if *seen == Some(version) {
                     return Ok(());
@@ -494,9 +523,9 @@ impl Runner {
                 *seen = Some(version);
                 let rows = store.open_requests().await?;
                 let still_open: BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-                open.retain(|o| o.id.as_deref().is_none_or(|id| still_open.contains(id)));
+                open.retain(|o| still_open.contains(o.id.as_str()));
                 for row in rows {
-                    let known = open.iter().position(|o| o.id.as_deref() == Some(&row.id));
+                    let known = open.iter().position(|o| o.id == row.id);
                     if let Some(by) = row.stop_requested_by {
                         store
                             .close_request(&row.id, RequestOutcome::Stopped, None)
@@ -561,7 +590,7 @@ impl Runner {
                         continue;
                     }
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
-                    admit(Some(row.id), roots, open);
+                    admit(row.id, roots, open);
                 }
                 *paused = store
                     .paused()
@@ -578,17 +607,6 @@ impl Runner {
         if let Some(tx) = &self.requests {
             let _ = tx.send(event);
         }
-    }
-
-    fn roots(&self, graph: &Graph) -> Vec<usize> {
-        (0..graph.steps.len())
-            .filter(|&i| graph.steps[i].inputs.is_empty())
-            .filter(|&i| {
-                self.only_fringe
-                    .as_ref()
-                    .is_none_or(|only| only.contains(&graph.steps[i].id))
-            })
-            .collect()
     }
 
     fn ctx_for(
@@ -659,7 +677,7 @@ impl Runner {
         graph: &Graph,
         signal: crate::step::StepSignal,
         facts: &mut Facts,
-        state: &mut DagState,
+        state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
         warned_not_streaming: &mut [bool],
@@ -698,12 +716,7 @@ impl Runner {
         let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
-        state
-            .steps
-            .entry(step.clone())
-            .or_default()
-            .output_versions
-            .insert(out.clone(), qualified.clone());
+        state.steps.entry(step.clone()).or_default().version = Some(qualified.clone());
         changed_now.insert(out, moved);
         queue.sealed(graph, p, &qualified, rows, &*self.sink);
         if moved {
@@ -739,17 +752,13 @@ impl Runner {
         res: Result<StepOutcome, StepError>,
         consumed: &Consumed,
         facts: &mut Facts,
-        state: &mut DagState,
+        state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
         let fingerprint = &graph.fingerprints[i];
-        let prior = state
-            .steps
-            .get(&spec.id)
-            .map(|s| s.output_versions.clone())
-            .unwrap_or_default();
+        let prior = state.steps.get(&spec.id).and_then(|s| s.version.clone());
         let exit = match &res {
             Ok(o) => o.exit,
             Err(e) => e.exit,
@@ -784,7 +793,7 @@ impl Runner {
                 };
                 let mut changed = 0usize;
                 for (path, v) in &resolved {
-                    let moved = prior.get(path) != Some(v);
+                    let moved = prior.as_ref() != Some(v);
                     changed += moved as usize;
                     facts.sinks[i] = Some(v.clone());
                     changed_now.insert(path.clone(), moved);
@@ -804,8 +813,8 @@ impl Runner {
                     &*self.sink,
                 );
                 let entry = state.steps.entry(spec.id.clone()).or_default();
-                entry.input_versions = consumed_paths.into_iter().collect();
-                entry.output_versions = resolved.into_iter().collect();
+                entry.reads = consumed_paths.into_iter().collect();
+                entry.version = resolved.into_iter().next().map(|(_, v)| v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
                 facts.steps[i].last_success = Some(consumed.clone());
@@ -824,14 +833,9 @@ impl Runner {
                 // reported, since an unreported tree may be mid-write.
                 if let Some(v) = read {
                     let path = spec.output().as_str().to_string();
-                    changed_now.insert(path.clone(), prior.get(&path) != Some(&v));
+                    changed_now.insert(path, prior.as_ref() != Some(&v));
                     facts.sinks[i] = Some(v.clone());
-                    state
-                        .steps
-                        .entry(spec.id.clone())
-                        .or_default()
-                        .output_versions
-                        .insert(path, v);
+                    state.steps.entry(spec.id.clone()).or_default().version = Some(v);
                 } else if !step_err.outputs.is_empty() {
                     if let Ok(resolved) = resolve_outputs(
                         &self.data_root,
@@ -842,9 +846,9 @@ impl Runner {
                     ) {
                         let entry = state.steps.entry(spec.id.clone()).or_default();
                         for (path, v) in resolved {
-                            changed_now.insert(path.clone(), prior.get(&path) != Some(&v));
+                            changed_now.insert(path, prior.as_ref() != Some(&v));
                             facts.sinks[i] = Some(v.clone());
-                            entry.output_versions.insert(path, v);
+                            entry.version = Some(v);
                         }
                     }
                 }
@@ -927,14 +931,13 @@ fn shape_of(graph: &Graph) -> Shape {
     }
 }
 
-fn facts_of(graph: &Graph, state: &DagState) -> Facts {
+fn facts_of(graph: &Graph, state: &Record) -> Facts {
     let recorded = |i: usize| state.steps.get(&graph.steps[i].id);
     let sinks: Vec<Option<String>> = (0..graph.steps.len())
         .map(|i| {
             recorded(i)
-                .and_then(|s| s.output_versions.get(graph.steps[i].output().as_str()))
+                .and_then(|s| s.version.clone())
                 .filter(|v| v.as_str() != UNKNOWN)
-                .cloned()
         })
         .collect();
     let steps = (0..graph.steps.len())
@@ -945,7 +948,7 @@ fn facts_of(graph: &Graph, state: &DagState) -> Facts {
                     .deps_in_order(i)
                     .map(|p| {
                         let v = s
-                            .input_versions
+                            .reads
                             .get(graph.steps[p].output().as_str())
                             .filter(|v| v.as_str() != UNKNOWN)
                             .cloned();
@@ -961,8 +964,8 @@ fn facts_of(graph: &Graph, state: &DagState) -> Facts {
     Facts { sinks, steps }
 }
 
-/// The versions an invocation was started against, keyed the way
-/// `dag_state.json` keys them: by the producer's output path.
+/// The versions an invocation was started against, keyed the way the
+/// record keys them: by the producer's output path.
 fn paths_of(graph: &Graph, consumed: &Consumed) -> HashMap<String, String> {
     consumed
         .reads
@@ -1256,8 +1259,8 @@ mod tests {
                 break;
             }
         }
-        let recorded = DagState::load(f.root.path())
-            .unwrap()
+        let recorded = crate::supervisor::record::recorded(f.root.path())
+            .await
             .current_run
             .and_then(|r| r.states.get("b/raw").cloned());
         assert_eq!(recorded.as_deref(), Some("running"));
@@ -1411,20 +1414,65 @@ mod tests {
         .await;
 
         other.request_stop(&a, "ui").await.unwrap();
-        let state_of = |step: &str| {
-            DagState::load(f.root.path())
-                .unwrap()
-                .current_run
-                .and_then(|r| r.states.get(step).cloned())
+        let root = f.root.path().to_path_buf();
+        let state_of = |step: &'static str| {
+            let root = root.clone();
+            async move {
+                crate::supervisor::record::recorded(&root)
+                    .await
+                    .current_run
+                    .and_then(|r| r.states.get(step).cloned())
+            }
         };
-        until("a's render to settle while b still runs", || {
-            state_of("a/rendered").as_deref() == Some("skipped_up_to_date")
-        })
-        .await;
-        assert_eq!(state_of("b/raw").as_deref(), Some("running"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while state_of("a/rendered").await.as_deref() != Some("skipped_up_to_date") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for a's render to settle while b still runs"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(state_of("b/raw").await.as_deref(), Some("running"));
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
+    }
+
+    /// Every process the loop starts has a row that says it is running
+    /// until the loop has seen it end, and then how: what `status` and the
+    /// next loop's take-over read.
+    #[tokio::test]
+    async fn a_step_the_loop_starts_is_an_invocation_until_it_ends() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = serve(&f);
+        until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let open = loop {
+            let open = other.running_invocations().await.unwrap();
+            if !open.is_empty() {
+                break open;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a's invocation never appeared"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].step, "a/raw");
+
+        f.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert!(other.running_invocations().await.unwrap().is_empty());
+        let outcome: String = sqlx::query_scalar("SELECT outcome FROM invocations WHERE id = ?")
+            .bind(&open[0].id)
+            .fetch_one(other.pool())
+            .await
+            .unwrap();
+        assert_eq!(outcome, "succeeded");
     }
 
     #[tokio::test]

@@ -32,11 +32,9 @@ sh_binary(
     srcs = ["serve_dev.sh"],
     data = [
         "//datalib/backend/http:datalib_http_bin",
-        # The HTTP backend's sync worker shells out to the runner, which
-        # spawns step binaries off PATH. `:bin` is that whole set under
-        # their public dash-separated names in one directory; serve_dev.sh
-        # exports it as $DATALIB_BINARY_DIR and takes $DATALIB_DAG_BIN
-        # from inside it.
+        # The HTTP backend's sync loop spawns step binaries off PATH.
+        # `:bin` is that whole set under their public dash-separated names
+        # in one directory; serve_dev.sh exports it as $DATALIB_BINARY_DIR.
         "//datalib/backend:bin",
     ] + _DEV_RUNTIME_DATA,
     env = _DEV_RUNTIME_ENV,
@@ -53,9 +51,9 @@ sh_binary(
     srcs = ["dev.sh"],
     data = [
         "//datalib/backend/http:datalib_http_bin",
-        # Sync worker children, staged under their public names by
-        # `:bin`; dev.sh exports $DATALIB_DAG_BIN and $DATALIB_BINARY_DIR
-        # from it so UI-triggered syncs run end-to-end.
+        # The sync loop's step binaries, staged under their public names
+        # by `:bin`; dev.sh exports $DATALIB_BINARY_DIR from it so
+        # UI-triggered syncs run end-to-end.
         "//datalib/backend:bin",
     ] + _DEV_RUNTIME_DATA,
     env = _DEV_RUNTIME_ENV,

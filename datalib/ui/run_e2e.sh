@@ -215,13 +215,6 @@ export DATALIB_TEST_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
 STEP_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_STEP_BIN_RLOC:-}" -x)"
 export DATALIB_TEST_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
 
-# The DAG runner. The http server's sync worker resolves it from
-# $DATALIB_DAG_BIN, then from its own directory, then PATH — and under
-# `bazel test` it sits in the runfiles rather than beside the server, so
-# the env var is the only one of the three that finds it.
-DAG_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_DAG_BIN_RLOC:-}" -x)"
-export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
-
 # A directory holding every shipped binary under its **public
 # dash-separated name** — the layout `scripts/install.sh` produces on a
 # user's machine, and the one `//datalib/backend:bin` builds.
@@ -233,7 +226,7 @@ export DATALIB_DAG_BIN="$DAG_BIN_RUNFILE"
 # PATH. Every other spec's config names an absolute runfiles path
 # instead, which is why they have never needed this. Symlinks rather
 # than a copy_to_directory dep: bazel names each output after its target
-# (`datalib_step`, `datalib_dag_bin`), and the rename is the whole point.
+# (`datalib_step`, `datalib_applet`), and the rename is the whole point.
 BIN_STAGE="$DATALIB_TEST_E2E_RUN_DIR/bin"
 mkdir -p "$BIN_STAGE"
 APPLET_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_APPLET_BIN_RLOC:-}" -x)"
@@ -243,7 +236,6 @@ APPLET_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_APPLET_BIN_RLOC:-}" -x)"
 export DATALIB_TEST_E2E_DATALIB_APPLET="$APPLET_BIN_RUNFILE"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
-  "datalib-dag:$DAG_BIN_RUNFILE" \
   "datalib-applet:$APPLET_BIN_RUNFILE"; do
   ln -sfn "${pair#*:}" "$BIN_STAGE/${pair%%:*}"
 done

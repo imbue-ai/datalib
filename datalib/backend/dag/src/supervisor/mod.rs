@@ -4,6 +4,7 @@
 //! act on its answer live beside it. Design: `docs/dev/plans/supervisor.md`.
 
 pub mod host;
+pub mod record;
 pub mod round;
 pub mod store;
 pub mod tick;

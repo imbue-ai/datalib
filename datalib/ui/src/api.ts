@@ -614,15 +614,14 @@ export function progressFraction(p: DagStepProgress | null | undefined): number 
 
 // What a step is doing, or did, in one run — the runner's own
 // vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
-// Keep the two in step: the backend writes these words into
-// system/dag_state.json and the UI switches on them.
+// Keep the two in step: the backend writes these words into the
+// record in system/supervisor.sqlite and the UI switches on them.
 export type DagRunState =
   | "running"
   | "succeeded"
   // Checked, and already up to date.
   | "skipped_up_to_date"
   // Outside this run's subgraph, so it was never considered.
-  | "not_selected"
   // Something upstream failed, so this was not invoked.
   | "blocked"
   | "failed"

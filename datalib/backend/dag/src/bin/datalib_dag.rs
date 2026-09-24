@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
          `cli`). If another process is already running the loop on this root — the app, \
          or another datalib-dag — this one hands it the request and follows it; either \
          way it exits with the request's outcome. Ctrl-C asks for this request to stop.\n\n\
-         datalib-dag status <config.toml>                          open requests and pauses\n\
+         datalib-dag status <config.toml>                          open requests, pauses, running steps\n\
          datalib-dag stop <config.toml> <request-id> [--by WHO]    ask a request to stop\n\
          datalib-dag pause <config.toml> <step-id> [--by WHO]      keep a step from running\n\
          datalib-dag resume <config.toml> <step-id>                lift a pause\n\n\
@@ -160,10 +160,9 @@ async fn main() -> Result<()> {
         );
     }
     // A root a newer line of datalib wrote is refused here, before the
-    // runner lock and before the scheduler state is read — an older
-    // build rewriting `dag_state.json` drops the fields it does not
-    // know, and every step's open would refuse anyway
-    // (`datalib_store_meta::guard`). `--check` reports it the same way.
+    // runner lock and before the record is read: every step's open would
+    // refuse anyway (`datalib_store_meta::guard`). `--check` reports it
+    // the same way.
     let newer = datalib_store_meta::inspect_root(&data_root).await;
     if !newer.is_empty() {
         let lines: Vec<String> = newer.iter().map(ToString::to_string).collect();
@@ -306,10 +305,15 @@ async fn main() -> Result<()> {
     };
 
     // Whoever held the lock before us may have died holding it.
-    if let Some(dead) = host::close_dead_loop(&data_root).await? {
-        #[allow(clippy::disallowed_macros)]
-        {
-            eprintln!("datalib-dag: closed run {dead}, which a loop that died left open");
+    let taken = host::take_over(&store, &data_root).await?;
+    #[allow(clippy::disallowed_macros)]
+    {
+        if let Some(dead) = &taken.closed_run {
+            eprintln!(
+                "datalib-dag: closed run {dead} and {} of its steps, which a loop that died \
+                 left open",
+                taken.closed_invocations
+            );
         }
     }
 
@@ -606,8 +610,14 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
     for (step, who) in store.paused().await? {
         lines.push(format!("paused {step}  by {who}"));
     }
+    for inv in store.running_invocations().await? {
+        lines.push(format!(
+            "running {}  since {}  in run {}",
+            inv.step, inv.started_at_utc, inv.run_id
+        ));
+    }
     if lines.is_empty() {
-        lines.push("nothing open, nothing paused".to_string());
+        lines.push("nothing open, nothing paused, nothing running".to_string());
     }
     Ok(lines)
 }

@@ -237,7 +237,8 @@ fan-in steps under `unified_index` index every render tree their
 `qmd_index` (semantic search, one collection per group). Both are read
 by the `unified_index` applet; `datalib-http` never opens them. A render
 store is readable at every commit: the documents between two checkpoints
-share one transaction. Scheduler state is `system/dag_state.json`. A
+share one transaction. The loop's record — each step's last run and
+success, each sink's version — is in `system/supervisor.sqlite`. A
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-dag --check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI

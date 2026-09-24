@@ -386,11 +386,6 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// succeeded. The last success is history whatever the step is doing
 /// now, so every status carries it — except a dropped entry's, for
 /// the reason that one carries no `at`.
-///
-/// `not_selected` appears nowhere. It is a fact about a *run* ("this
-/// one didn't ask for me"), not about the step; the runner no longer
-/// records it as a `last_run`, and `GET /api/dag` drops the ones
-/// already on disk.
 pub fn step_status(args: StatusArgs<'_>) -> StatusView {
     let last_success_at = args
         .dropped
@@ -448,11 +443,9 @@ fn current_status(args: StatusArgs<'_>) -> StatusView {
     }
 
     // Claimed, and the runner hasn't reached it. `current` being set at
-    // all means it has — including `not_selected`, which is the runner
-    // saying this row is out of scope after all. But only the claiming
-    // job's own run can say so: while a run the job does not belong to
-    // is in flight, its `not_selected` means that run left this step
-    // alone — not that the job queued behind it did.
+    // all means it has — but only in the claiming job's own run: while a
+    // run the job does not belong to is in flight, what that run says of
+    // this step is not the job's doing.
     let spoken_for =
         |claim: &SyncJobRow| run_in_flight.is_none_or(|r| belongs_to(claim, &r.run_id));
     if let Some(claim) = args
@@ -683,35 +676,11 @@ mod tests {
         assert!(s.detail.unwrap().contains("killed or crashed"));
     }
 
-    /// The runner walks every step to publish output versions, so a
-    /// subset sync reaches this one and reports it out of scope. That
-    /// is a fact about the run; the row goes on showing the step's own
-    /// history.
+    /// "Sync a", then "Sync b" while a is still going: b's job is pending
+    /// behind it, and its row has to say so, not fall through to
+    /// yesterday's Succeeded under a Stop button.
     #[test]
-    fn a_not_selected_current_state_falls_through_to_what_the_step_last_did() {
-        let f = Frame {
-            jobs: vec![],
-            run: Some(live_run()),
-            dag: dag(&[(
-                "b/ingest",
-                rec(
-                    Some("not_selected"),
-                    Some(last_run("r", YESTERDAY, Some(YESTERDAY), "succeeded")),
-                ),
-            )]),
-        };
-        let s = status_in(&f, "b/ingest");
-        assert_eq!(s.key, "succeeded");
-        assert_eq!(s.at.as_deref(), Some(YESTERDAY));
-    }
-
-    /// "Sync a", then "Sync b" while a is still going: a's run walks
-    /// past b/ingest and reports it out of scope, which is true of
-    /// *a's* run. b's job is pending behind it, and its row has to say
-    /// so — this used to fall through to yesterday's Succeeded, under a
-    /// Stop button.
-    #[test]
-    fn a_step_queued_by_its_own_job_stays_queued_while_another_jobs_run_reports_it_not_selected() {
+    fn a_step_queued_by_its_own_job_stays_queued_while_another_jobs_run_goes_on() {
         let mut a = job("running", true);
         a.id = "job-a".into();
         let mut b = job("pending", false);
@@ -719,29 +688,17 @@ mod tests {
         b.source_ids = Some("b/ingest".into());
         let b_done = last_run("r", YESTERDAY, Some(YESTERDAY), "succeeded");
         let f = Frame {
-            jobs: vec![a.clone(), b],
+            jobs: vec![a, b],
             run: Some(run("job-a", RUN_START, None, true)),
             dag: dag(&[
                 ("a/ingest", rec(Some("running"), None)),
-                ("b/ingest", rec(Some("not_selected"), Some(b_done.clone()))),
+                ("b/ingest", rec(None, Some(b_done))),
             ]),
         };
         let s = status_in(&f, "b/ingest");
         assert_eq!(s.key, "queued");
         assert!(s.detail.unwrap().contains("Waiting for this sync to start"));
         assert_eq!(status_in(&f, "a/ingest").key, "running");
-
-        // The same `not_selected`, reported by the claiming job's *own*
-        // run, still means what it always did: out of scope, show the
-        // history. b/ingest is in job-a's closure only if job-a syncs
-        // everything.
-        a.source_ids = None;
-        let own = Frame {
-            jobs: vec![a],
-            run: Some(run("job-a", RUN_START, None, true)),
-            dag: dag(&[("b/ingest", rec(Some("not_selected"), Some(b_done)))]),
-        };
-        assert_eq!(status_in(&own, "b/ingest").key, "succeeded");
     }
 
     /// Stop flips the row to `canceled` at once; the runner is still

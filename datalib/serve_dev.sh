@@ -21,18 +21,16 @@ source "$(rlocation _main/datalib/dev_runtime.sh)"
 BIN="$(rlocation _main/datalib/backend/http/datalib_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-# The backend's sync worker shells out to the datalib-dag runner (which
-# spawns datalib-step via PATH). Hand it //datalib/backend:bin, which
-# stages every shipped binary under its public dash-separated name in
-# one directory, so UI-triggered "Sync" runs the real pipeline. Honor
-# caller-supplied overrides.
+# The backend's sync loop spawns datalib-step via PATH. Hand it
+# //datalib/backend:bin, which stages every shipped binary under its
+# public dash-separated name in one directory, so UI-triggered "Sync"
+# runs the real pipeline. Honor a caller-supplied override.
 BIN_DIR="$(rlocation _main/datalib/backend/bin || true)"
 if [[ -d "$BIN_DIR" ]]; then
-  : "${DATALIB_DAG_BIN:=$BIN_DIR/datalib-dag}"
   : "${DATALIB_BINARY_DIR:=$BIN_DIR}"
-  export DATALIB_DAG_BIN DATALIB_BINARY_DIR
+  export DATALIB_BINARY_DIR
 fi
-[[ -n "${DATALIB_DAG_BIN:-}" ]] && echo "dag bin: $DATALIB_DAG_BIN"
+[[ -n "${DATALIB_BINARY_DIR:-}" ]] && echo "binary dir: $DATALIB_BINARY_DIR"
 
 # Default to an ephemeral port so concurrent `serve_dev.sh` runs (e.g. one
 # agent per checkout) don't fight over a hardcoded 8731. Honor a caller-

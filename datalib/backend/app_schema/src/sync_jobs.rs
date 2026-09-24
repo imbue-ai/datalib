@@ -41,9 +41,10 @@ impl JobKind {
     }
 }
 
-/// A job's lifecycle state. `Pending` becomes `Running` when the worker
-/// picks it up, then `Done` or `Failed` at completion; either of the
-/// first two becomes `Canceled` when the UI asks to stop it.
+/// A job's lifecycle state, following its request's. `Pending` becomes
+/// `Running` when the server's loop takes the request on, then `Done` or
+/// `Failed` as it ends; either of the first two becomes `Canceled` when
+/// the UI asks to stop it.
 #[derive(
     Debug,
     Clone,
@@ -58,9 +59,9 @@ impl JobKind {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum JobState {
-    /// Enqueued, waiting for the worker.
+    /// Enqueued, waiting for the loop to take its request on.
     Pending,
-    /// The worker is driving a `datalib-dag` child for it.
+    /// The loop is serving its request.
     Running,
     Done,
     Failed,
@@ -87,9 +88,9 @@ impl JobState {
     }
 }
 
-/// One row in the `sync_jobs` table. UI polls `GET /api/sync/jobs/{id}`
-/// to render the Lightroom-style progress chrome; cancel flips `state`
-/// to `canceled` and the worker SIGTERMs its child.
+/// One row in the `sync_jobs` table: the UI's record of a sync it asked
+/// for, kept in step with the request of the same id. Cancel flips
+/// `state` to `canceled` and asks the request to stop.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "sync_jobs", primary_key = "id")]
 pub struct SyncJobRow {
@@ -117,12 +118,12 @@ pub struct SyncJobRow {
     /// When the backend enqueued the row, in UTC.
     #[col(sql = "VARCHAR(40)")]
     pub created_at_utc: String,
-    /// When the worker flipped `state` to [`JobState::Running`], in
-    /// UTC. NULL while still pending.
+    /// When the loop took its request on, in UTC. NULL while still
+    /// pending.
     #[col(sql = "VARCHAR(40)")]
     pub started_at_utc: Option<String>,
-    /// When the worker flipped `state` to a terminal [`JobState`], in
-    /// UTC. NULL while still pending/running.
+    /// When it reached a terminal [`JobState`], in UTC. NULL while still
+    /// pending/running.
     #[col(sql = "VARCHAR(40)")]
     pub finished_at_utc: Option<String>,
     /// The server's offset when it stamped the latest of the three
@@ -130,15 +131,12 @@ pub struct SyncJobRow {
     #[col(sql = "VARCHAR(8)")]
     pub tz_offset: Option<String>,
     /// Human-readable error message when `state` is
-    /// [`JobState::Failed`]. The full
-    /// structured log lives in `<root>/state/job-logs/<id>.log`; this
-    /// column is just the summary the UI shows in the chrome.
+    /// [`JobState::Failed`]: the summary the UI shows. The steps' own
+    /// words are in the run store.
     #[col(sql = "TEXT")]
     pub error: Option<String>,
-    /// OS pid of the active child process while the job is
-    /// [`JobState::Running`]. On worker startup, any running row whose
-    /// pid is no longer alive gets flipped to [`JobState::Failed`]
-    /// (state recovery).
+    /// Always NULL: a job has no process of its own. Its steps' processes
+    /// are the record's `invocations`.
     #[col(sql = "INT")]
     pub pid: Option<i64>,
     /// Latest reported progress, 0.0..1.0. May be NULL when the underlying
@@ -148,7 +146,7 @@ pub struct SyncJobRow {
     pub progress_pct: Option<f64>,
     /// Latest human-readable progress line (e.g. `downloaded 14/200
     /// conversations`). Shown on hover over the chrome's progress bar so
-    /// the user can see what the worker is actually doing — useful for
+    /// the user can see what the sync is actually doing — useful for
     /// distinguishing 'slow but working' from 'stuck'.
     #[col(sql = "VARCHAR(512)")]
     pub progress_msg: Option<String>,
@@ -161,12 +159,11 @@ impl SyncJobRow {
         JobState::parse(&self.state)
     }
 
-    /// Is this job still holding the runner: queued, running, or told
+    /// Is this job still holding its sources: queued, running, or told
     /// to stop and not yet stopped? A cancel flips `state` to
-    /// [`JobState::Canceled`] the moment it is asked for — that is how
-    /// the worker learns to send SIGTERM — while the steps behind it go
-    /// on checkpointing for up to the worker's grace period. The run is
-    /// over when the worker stamps `finished_at_utc`, and not before.
+    /// [`JobState::Canceled`] the moment it is asked for, while the steps
+    /// behind it go on checkpointing for up to their grace period. It is
+    /// over when `finished_at_utc` is stamped, and not before.
     /// `AppStore::list_jobs` asks the same question in SQL; keep the two
     /// together.
     pub fn is_active(&self) -> bool {

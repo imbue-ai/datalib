@@ -40,7 +40,7 @@ index). A step's function is the directory it writes:
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   └── qmd_index/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
-    ├── dag_state.json              # scheduler state (per-step versions)
+    ├── supervisor.sqlite           # sync requests, pauses, and the loop's record (plain SQLite)
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
     ├── jobs.doltlite_db            # sync job queue + history
@@ -157,7 +157,7 @@ open; reset from the app then (below).
 To steer what is running — yours, the app's, anyone's — without SQL:
 
 ```sh
-datalib-dag status <data_root>/config.toml                    # open requests and pauses
+datalib-dag status <data_root>/config.toml                    # open requests, pauses, running steps
 datalib-dag stop   <data_root>/config.toml <request-id> --by claude
 datalib-dag pause  <data_root>/config.toml slack/ingest --by claude
 datalib-dag resume <data_root>/config.toml slack/ingest
@@ -166,8 +166,9 @@ datalib-dag resume <data_root>/config.toml slack/ingest
 Each writes a row and returns at once; whatever is running the loop acts
 on it within a second (a pause stops a running step and keeps it from
 starting until resumed; it does not hold a sync open). `status` prints a
-line per open request (`request <id>  by <who>  roots <ids>`) and per
-pause (`paused <step>  by <who>`). **Don't resume what a person paused
+line per open request (`request <id>  by <who>  roots <ids>`), per
+pause (`paused <step>  by <who>`) and per step running now (`running
+<step>  since <utc>  in run <id>`). **Don't resume what a person paused
 without saying so** — `status` says who did.
 
 Via the server instead: `POST /api/sync/jobs` enqueues —
@@ -323,10 +324,13 @@ document.
   contains the provider-specific `latchkey` walkthrough. Cloudflare
   403s despite a fresh cookie usually mean a flagged IP/UA; wait or
   change networks.
-- **"Why did/didn't this step run?"**: `system/dag_state.json`
-  records each step's last input/output versions; a step re-runs when
-  an input version moved (download steps always run — their input is a
-  remote service).
+- **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
+  plain SQLite. `select step, reads, last_status, last_error from steps`
+  gives each step's input versions at its last success and how it last
+  ended; `select * from sinks` the version each tree was published at.
+  A step re-runs when an input version moved (download steps always run
+  — their input is a remote service). `select step, started_at_utc from
+  invocations where outcome is null` is what is running now.
 - **Wedged doltlite file** (`commit conflict` after a stray writer):
   recovery recipes in [`docs/dev/doltlite.md`](dev/doltlite.md).
 - **A config the runner rejects**: `datalib-dag --check
