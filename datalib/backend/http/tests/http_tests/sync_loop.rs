@@ -232,6 +232,46 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A Sync pressed while the same sync is open is that sync: the POST
+/// answers with the open request rather than opening a second, which the
+/// loop would run once more when the first ends.
+#[tokio::test]
+async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(
+        root.join("config.toml"),
+        source(root, "a", HELD) + &source(root, "b", HELD),
+    )
+    .unwrap();
+    let state = server(root).await;
+
+    let first = sync(&state, "a/out").await;
+    assert_eq!(sync(&state, "a/out").await, first);
+    let both = call(
+        &state,
+        "POST",
+        "/api/requests",
+        Some(serde_json::json!({ "roots": ["a/out", "b/out"] })),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(both, first, "other steps are another sync");
+    let open = call(&state, "GET", "/api/requests", None).await;
+    let open: Vec<&serde_json::Value> = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["state"] == "open")
+        .collect();
+    assert_eq!(open.len(), 2, "{open:?}");
+
+    std::fs::write(root.join("release"), "").unwrap();
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Whether a pid still names a live process. Signal 0 checks without
 /// sending anything.
 fn alive(pid: i32) -> bool {
