@@ -231,73 +231,70 @@ reader, and a writer publishing the way `commit_run` does: commit on
 - **It sees only published work.** The writer is on its own branch,
   which `writer_branches.md` measured too.
 
-So **option A** is a read transaction as the snapshot. The applet
-holds one dedicated connection out of the pool with a transaction open
+So **the applet's snapshot is a read transaction.** It holds one
+dedicated read-only connection out of the pool with a transaction open
 on it, and `COMMIT; BEGIN` is how it moves to the newest `main`.
 
-**Option B is a real read branch, `reader`, that the applet
-fast-forwards itself** with `SELECT dolt_merge('main')`, from a
-connection on `reader`. (`dolt_reset('--hard', 'main')` works too. What
-does *not* work is `dolt_branch('-f', 'reader', …)` from a connection on
-`reader`: "cannot force-update the current branch".) Reads come from
-read-only connections that `dolt_connect_branch('reader')` and query
-plain tables, with their indexes. Only the one updating connection opens
-the file read-write, and all it ever runs is the merge.
+**Measured at full size (step 1).** `hack/read_transaction_at_scale/`
+ran a writer sealing 40 times against a copy of `stay_alive_1`'s index
+(1.3 GB, 74k rows), each seal changing 1,000 rows through `commit_run`.
+It ran once with the writer alone and once beside a read-only connection
+holding transactions:
 
-Measured with three processes on a small store:
-
-- a writer sealing 100 times, as `commit_run` does;
-- a read-write connection on `reader` merging `main` and reading;
-- a read-only reader on `reader`.
-
-| merging | writer | merging side | read-only reader |
+| 40 seals | writer alone | beside 200 ms transactions | beside one transaction held across every seal |
 |---|---|---|---|
-| every 20 ms (144 merges) | 0 errors | 2 × `merge conflict: another connection committed to this branch. Please retry` | 0 errors, counts only rise |
-| flat out (60,068 merges) | 0 errors | 0 errors | 0 errors, counts only rise |
+| seals refused | 0 | 0 | 0, 0, 0 (three runs) |
+| median seal | 842 ms | 840 ms | 871, 828, 1,091 ms (alone, back to back: 832, 1,131 ms) |
+| file growth | 572.8 MB | 572.8 MB | 572.8 MB |
 
-Every seal reached `main` as its own commit. A merge that takes
-something new grew the file by about 1 KB, and one with nothing to take
-wrote nothing. A merge conflict lands only on the merging side, and
-it retries.
+The reader added nothing to the file, and every transaction read
+exactly one commit, including the one held for all 40 seals. One
+long-hold run had a stretch of seals at 2.5–10.8 s. It recovered while
+the transaction was still open, and did not repeat in two back-to-back
+reruns. In the second of those, the load average reached 8.4 and the
+writer *alone* hit 3 s. So the stretch is the machine, not the reader. `doltlite_two_process_test`'s
+`a_held_read_transaction_is_a_snapshot_while_the_writer_seals` keeps
+the property: 500 seals flat out, no seal refused, every transaction
+one commit. Nothing runs `dolt_gc` on the index (only `fsindex` and
+`sqlite_mirror` call it), so compaction cannot pull chunks out from
+under an open snapshot.
 
-Moving the branch with `dolt_branch('-f', …)` from a second connection
-behaved worse. Flat out, 5 of the writer's operations were refused
-with `database is locked`: doltlite takes its file lock without
-waiting, even with a 5 s busy timeout. The merge avoids that in these
-runs, probably because a merge with nothing new writes nothing.
+**A read branch was tried and rejected.** The alternative was a branch
+of the applet's own, `reader`, fast-forwarded with `dolt_merge('main')`
+from a read-write connection on it, with every query on read-only
+connections on that branch. It would have let any number of connections
+share one named snapshot. But the merging connection is a second writer
+on the file, and the real writer pays for it. Run through the real
+`commit_run` seal, 300 seals flat out, three runs each:
+
+| reader beside the writer | writer refused |
+|---|---|
+| read branch, merging every 20 ms | 7, **hung forever**, 9 |
+| read branch, merging every 100 ms | 1, 2, 1 |
+| held read transaction | 0, 0, 0 |
+
+A refused seal fails with `commit conflict: another connection
+committed to this branch` from `dolt_commit`, or `database is locked`
+from moving `main`. That is a failed sync step. Once the writer blocked
+in doltlite's file lock and never came back. Merging flat out also left
+the read branch with a dirty working set ("uncommitted changes — commit
+or reset before merging"). An earlier probe through the `doltlite` shell
+had shown the writer never refused. It was wrong, because the shell's
+writer was not `commit_run`'s commit-then-publish. This is
 `etl/README.md` § "A branch each is not a way around the one-writer
-rule" measured failures on both sides, but there both processes were
-*committing*.
+rule" again, now from a writer of one ref. (Keeping the indexes only on
+such a branch was also measured, and was slower anyway; see "The
+indexes live on `main`".)
 
-| | A: read transaction | B: read branch |
-|---|---|---|
-| writes to the file | none | a ref move per index seal, ~1 KB |
-| who sees the pinned commit | the one connection holding the transaction | any number of read-only connections, and it survives an applet restart |
-| held open | a transaction, for as long as the snapshot lives | nothing |
-| the one-writer rule | untouched | an exception, for ref moves only, outside our `flock` |
-| the risk to measure | a long-held transaction at full size | the writer ever refused at full size |
+The applet answers each request with the commit its transaction read,
+as `at`. When that changes, the UI treats it like `index_changed` and
+re-reads the key range it holds. The `pinned_<table>` views and their
+catalog races do not apply: the snapshot includes the catalog.
 
-The recommendation is **B if step 1 shows the writer is never refused**.
-The pin becomes a named ref that every reader shares, and nothing holds
-a transaction for minutes. If the writer is refused, A. Either way the
-applet answers each request with the commit it read as `at`. When that
-changes, the UI treats it like `index_changed` and re-reads the key
-range it holds. The `pinned_<table>` views and their catalog races do
-not apply to either: the snapshot includes the catalog.
-
-Both go against a rule in `AGENTS.md` ("a reader … pins a commit"
-through `dolt_at_`), so the rule's text changes with the one chosen.
-Neither has been checked at scale. Step 1 runs both against a
-full-size store, with a writer sealing repeatedly for minutes, and
-answers four things:
-
-- the writer is never refused and its seal times stay flat;
-- the file does not grow beyond the ~1 KB per merge;
-- nothing that compacts the store (`dolt_gc`, if anything runs it on
-  the index) breaks the snapshot;
-- B's merge conflicts stay rare and retry cleanly.
-
-Passes that already use `dolt_at_` keep it.
+This goes against a rule in `AGENTS.md` ("a reader … pins a commit"
+through `dolt_at_`), so step 2 changes the rule's text: a reader pins
+a commit with `dolt_at_` *or* a held read transaction, and the second is
+for a reader that needs indexes. Passes that already use `dolt_at_` keep it.
 
 Worth filing upstream anyway (dolthub/doltlite): `dolt_at_` seeking on
 a non-integer primary key, which would at least make pinned lookups by
@@ -361,15 +358,31 @@ loaded rows' uuids, cache `summary()` against the qmd index's mtime,
 and compute the per-hash aggregate once per call. It is its own PR,
 and it can land first.
 
+## Every branch earns its keep
+
+Each step's PR ends with a coverage run over the code it added. Every
+uncovered branch is either deleted or given a test, and the PR says
+which. A branch nobody can reach from a test is usually one nobody
+needs.
+
+- **Rust:** `tools/run_coverage.sh` (`docs/dev/coverage.md`) over the
+  tests the step touched, with any `rust_binary` those tests launch
+  after `--`. It measures LLVM regions, where each arm of a `match` or
+  `if` is its own region. True branch counts need
+  `-Zcoverage-options=branch`, which has been nightly-only; check the
+  pinned toolchain before relying on it, and use regions if not.
+- **UI:** `pagedWindow.ts`'s pure core, and whatever else a step adds
+  under `ui/src/grid/`, runs under Vitest with `@vitest/coverage-v8`,
+  which reports branches. That is a new dev dependency (MIT), added in
+  step 4.
+
 ## Order of work
 
 Each step is one PR, useful on its own:
 
-1. **Read branch versus read transaction, at full size.** Multi-process
-   tests beside `doltlite_two_process_test`, against a store the size
-   of `stay_alive_1`'s, answering the four questions above. It picks B
-   or A. If both fail, the fallback is a plain-SQLite serving copy that
-   `grid_index` writes at seal (`doltlite_engine=sqlite`).
+1. **Done: the read transaction, at full size.** The held-transaction
+   scenario in `doltlite_two_process_test`, the full-size harness, and
+   the measurements above. The read branch was rejected.
 2. **`grid_rows` columns and indexes, and the applet's snapshot
    connection** in the search path. Default order newest-first. The UI
    is unchanged, so it still asks for everything, but the query stops
