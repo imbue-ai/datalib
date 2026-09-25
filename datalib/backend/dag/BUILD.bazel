@@ -228,3 +228,35 @@ build_test(
         ":manual_e2e_live_sync_golden",
     ],
 )
+
+# A step that does only what it is told over a FIFO, for the harness.
+rust_binary(
+    name = "puppet",
+    testonly = True,
+    srcs = ["tests/puppet/main.rs"],
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# Suite 1: does the loop manage processes correctly? Puppet steps, the
+# loop in-process under the one idle host, a person at the controls.
+rust_test(
+    name = "supervisor_harness_test",
+    size = "small",
+    srcs = glob(["tests/supervisor_harness/*.rs"]),
+    crate_root = "tests/supervisor_harness/main.rs",
+    data = [":puppet"],
+    edition = "2021",
+    env = {"PUPPET": "$(rootpath :puppet)"},
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
