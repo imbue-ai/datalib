@@ -6,6 +6,10 @@
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
 <data_root>/unified_index/qmd_index/              the qmd index (plain SQLite inside)
+<data_root>/unified_index/embedding_map/embedding_map.json
+                                                  every embedded document's place on
+                                                  the map card; replaced whole by
+                                                  each run, deleted by a reset
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document

@@ -5,6 +5,7 @@ members = [
     "table",
     "app_schema",
     "unified_index",
+    "embedding_map",
     "core",
     "runtime",
     "qmd_models",

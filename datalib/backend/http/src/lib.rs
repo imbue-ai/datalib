@@ -1412,6 +1412,13 @@ group = \"unified_index\"
 function = \"qmd_index\"
 inputs = []
 
+# qmd's document embeddings laid out on a plane, for the map card. Each
+# run starts from the last map; resetting the step lays one out afresh.
+[[steps]]
+group = \"unified_index\"
+function = \"embedding_map\"
+inputs = [\"unified_index/qmd_index\"]
+
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any
 # other — a server the gateway spawns and proxies at

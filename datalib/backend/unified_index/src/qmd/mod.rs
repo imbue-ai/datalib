@@ -4,6 +4,7 @@ pub mod daemon;
 pub mod index_state;
 pub mod mapping;
 pub mod runner;
+pub mod vectors;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
