@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
@@ -103,11 +104,6 @@ struct Open {
     scope: Vec<bool>,
 }
 
-/// How often a loop with steps running looks for new rows. A loop with
-/// nothing running is not waiting on anything else, so it looks at the
-/// same pace.
-const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
-
 /// A request for every source, served until it closes: what a test that
 /// is not about requests wants of the loop.
 #[cfg(test)]
@@ -166,8 +162,16 @@ impl Runner {
         });
         record.save(&state).await?;
 
+        // Made before the first look at the mailbox, so a row written
+        // after that look is heard.
+        let mut listener = Listener::new(store, "the loop")
+            .await
+            .backstop(self.backstop);
         let mut current = graph.clone();
         let mut config_seen: Option<String> = None;
+        // The host loaded the config before this period began, and it may
+        // have moved since; after that, only when it is said to have.
+        let mut config_moved = true;
         let mut next_graph: Option<Graph> = None;
         let mut said_waiting_to_swap = false;
         let mut n = graph.steps.len();
@@ -210,7 +214,7 @@ impl Runner {
         let mut set: JoinSet<Done> = JoinSet::new();
 
         loop {
-            if !cancelled {
+            if !cancelled && std::mem::take(&mut config_moved) {
                 if let Some(source) = &self.reload {
                     if let Some(next) = poll_config(&**source, &mut config_seen) {
                         next_graph = Some(next);
@@ -496,9 +500,9 @@ impl Runner {
                 }
                 break;
             }
-            let polling = !cancelled;
+            let listening = !cancelled;
             anyhow::ensure!(
-                !set.is_empty() || polling,
+                !set.is_empty() || listening,
                 "the round is open with nothing running and nothing to start: {:?}",
                 t.states
             );
@@ -518,7 +522,9 @@ impl Runner {
                     cancelled = true;
                     open.clear();
                 }
-                _ = tokio::time::sleep(MAILBOX_POLL), if polling => {}
+                heard = listener.next(store), if listening => {
+                    config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
+                }
                 joined = set.join_next() => {
                     let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
@@ -1525,6 +1531,12 @@ mod tests {
         }
     }
 
+    /// What the server does when its watch sees `config.toml` move.
+    fn announce_config(root: &std::path::Path) {
+        use crate::supervisor::announce::{announce, listeners_dir, CONFIG_CHANGED, FROM_SERVER};
+        announce(&listeners_dir(root), FROM_SERVER, CONFIG_CHANGED);
+    }
+
     #[derive(Default)]
     struct Recorder(std::sync::Mutex<Vec<Event>>);
 
@@ -1603,6 +1615,7 @@ mod tests {
         until("a to start", || t.runs(0) == 1).await;
 
         config.set(vec![t.step(0), t.step(1), t.step(2)]);
+        announce_config(t.root.path());
         let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
         until("c to start while a runs", || t.runs(2) == 1).await;
         assert_eq!(outcome(&other, &first).await, None, "a is still going");
@@ -1629,6 +1642,7 @@ mod tests {
         until("a to start", || t.runs(0) == 1).await;
 
         config.set(vec![t.step(1), t.step(2)]);
+        announce_config(t.root.path());
         let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
         let c = until_recorded(t.root.path(), "c/raw", "waiting", |st| {
             st.state == Some(StateKind::Waiting)
@@ -1705,6 +1719,7 @@ mod tests {
         until("a to start", || runs.load(Ordering::SeqCst) == 1).await;
 
         config.set(vec![step("2")]);
+        announce_config(root.path());
         let edited = config.load().unwrap().1.fingerprints[0].clone();
         assert_ne!(edited, ran_with);
         until("the loop to take the edit on", || {

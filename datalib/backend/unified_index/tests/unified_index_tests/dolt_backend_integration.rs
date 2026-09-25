@@ -440,7 +440,7 @@ async fn every_wire_field_survives_the_round_trip() {
     let wire = serde_json::to_value(&rows[0]).unwrap();
     // Filled by the applet from the config, or only by a free-text
     // search: absent from a repo's own answer by design.
-    let not_the_repos: [&str; 3] = ["provider_ref", "source_ref", "score"];
+    let not_the_repos: [&str; 2] = ["source_ref", "score"];
     for key in not_the_repos {
         assert!(wire.get(key).is_none(), "{key}: {wire}");
     }

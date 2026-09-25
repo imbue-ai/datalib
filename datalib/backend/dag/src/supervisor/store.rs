@@ -2,12 +2,13 @@
 //! writes intent into it — open a request, ask for one to stop, pause or
 //! resume a step — and the one process running the loop reads it and
 //! writes back how each request ended, and what each step did
-//! (`record.rs`). Plain SQLite, several writing processes at once; its
-//! schema only grows, because two builds may share it.
-//! `docs/dev/plans/supervisor.md` §2.7–§2.8.
+//! (`record.rs`). Plain SQLite in rollback-journal mode, several writing
+//! processes at once; its schema only grows, because two builds may share
+//! it. Every commit is announced (`announce.rs`), which is how the loop
+//! and the server hear of it. `docs/dev/plans/supervisor.md` §2.7–§2.8.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -93,7 +94,13 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
+    listeners: PathBuf,
+    /// Who this store is in its announcements: tests in one binary share
+    /// a pid, so the pid alone does not say.
+    me: String,
 }
+
+static NEXT_STORE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Store {
     pub async fn open(data_root: &Path) -> Result<Store> {
@@ -110,7 +117,15 @@ impl Store {
             .connect_with(options(&path))
             .await
             .with_context(|| format!("open {}", path.display()))?;
-        let store = Store { pool };
+        let store = Store {
+            pool,
+            listeners: super::announce::listeners_dir(data_root),
+            me: format!(
+                "store-{}-{}",
+                std::process::id(),
+                NEXT_STORE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ),
+        };
         store.refuse_if_newer(&path).await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
         for stmt in ddl() {
@@ -124,6 +139,7 @@ impl Store {
             SCHEMA_VERSION,
         )
         .await?;
+        store.announce("store opened");
         Ok(store)
     }
 
@@ -168,6 +184,19 @@ impl Store {
         &self.pool
     }
 
+    pub fn listeners(&self) -> &Path {
+        &self.listeners
+    }
+
+    pub(super) fn me(&self) -> &str {
+        &self.me
+    }
+
+    /// After every commit this store makes, and never before one.
+    pub(super) fn announce(&self, what: &str) {
+        super::announce::announce(&self.listeners, &self.me, what);
+    }
+
     pub async fn close(self) {
         self.pool.close().await;
     }
@@ -194,6 +223,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request opened {id}"));
         Ok(id)
     }
 
@@ -210,6 +240,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("stop asked {id}"));
         Ok(())
     }
 
@@ -231,6 +262,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request closed {id}"));
         Ok(())
     }
 
@@ -281,6 +313,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("paused {step}"));
         Ok(())
     }
 
@@ -289,6 +322,7 @@ impl Store {
             .bind(step)
             .execute(&self.pool)
             .await?;
+        self.announce(&format!("resumed {step}"));
         Ok(())
     }
 
@@ -334,7 +368,9 @@ fn options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(format!("file:{escaped}?doltlite_engine=sqlite"))
         .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        // What the plain-SQLite engine really does: asked for WAL it
+        // answers `wal` and stays in rollback-journal mode.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .busy_timeout(BUSY_TIMEOUT)
 }
 

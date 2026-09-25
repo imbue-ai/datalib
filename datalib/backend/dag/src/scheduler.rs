@@ -75,6 +75,9 @@ pub struct Runner {
     /// Where the loop re-reads its graph while it runs. `None` keeps the
     /// graph it was started with for the whole busy period.
     pub reload: Option<Arc<dyn crate::supervisor::reload::GraphSource>>,
+    /// How long the loop hears no announcement before it looks at its
+    /// store anyway (`supervisor::announce`).
+    pub backstop: Duration,
 }
 
 impl Runner {
@@ -88,6 +91,7 @@ impl Runner {
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
             reload: None,
+            backstop: crate::supervisor::announce::BACKSTOP,
         }
     }
 

@@ -6,6 +6,10 @@
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
 <data_root>/unified_index/qmd_index/              the qmd index (plain SQLite inside)
+<data_root>/unified_index/embedding_map/embedding_map.json
+                                                  every embedded document's place on
+                                                  the map card; replaced whole by
+                                                  each run, deleted by a reset
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/usage.doltlite_db              bytes-on-disk over time
 <data_root>/system/remote_media.doltlite_db       what remote media a person let a document
@@ -17,7 +21,7 @@
                                                   server launch, page of the app — a
                                                   row in `processes`
                                                   (plain SQLite; any sqlite3 opens it).
-                                                  Its own directory, so the WAL beside
+                                                  Its own directory, so the journal beside
                                                   it counts with it on the Manage screen
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended) and pauses: the
@@ -28,7 +32,10 @@
                                                   the run in flight, every process it
                                                   started (plain SQLite; anyone writes
                                                   intent, only the loop's holder writes
-                                                  the record)
+                                                  the record; every commit is announced)
+<data_root>/system/supervisor-listeners/          a FIFO per process waiting on the loop's
+                                                  store: how it hears a commit
+                                                  (`dag/README.md` § What wakes the loop)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
 ```
@@ -51,7 +58,7 @@ the index; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, and reads at HEAD — one `dolt_hashof('HEAD')` per request, every
 table through `dolt_at_<table>(hash)` — so a `grid_index` pass in flight
 is never served. `runs.sqlite` is the exception because it is not doltlite: plain
-SQLite in WAL mode, written by whoever runs the loop (its runs) and the
+SQLite in rollback-journal mode, written by whoever runs the loop (its runs) and the
 server (its own log) — one process while the server is up, two while a
 `datalib-dag` runs the loop — which SQLite's own locking makes ordinary —
 `runs_two_process_test` is the measurement, not the argument.

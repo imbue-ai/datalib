@@ -44,10 +44,9 @@ export type SearchRow = {
   source: string;
   // The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
   provider: string;
-  // `source` and `source_id` resolved for the grid's Provider and
-  // Source columns, by the applet from the config: the configured
-  // source's own mark (Gmail, not Mail) and the group's name.
-  provider_ref?: Identity;
+  // `source_id` resolved for the grid's Source column, by the applet
+  // from the config: the group's name, led by the configured source's
+  // own mark (Gmail, not Mail).
   source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
   // directory under the data root (the first segment of its qmd_path).
@@ -288,6 +287,59 @@ export const UNIFIED_INDEX = "/applet/unified_index";
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
+}
+
+// --- The embedding map ------------------------------------------------------
+// `unified_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_index/map.rs). Hand-kept in step with it.
+
+/// The step that writes the map, as `config.toml` composes its id.
+export const EMBEDDING_MAP_STEP = "unified_index/embedding_map";
+
+export type MapPoint = {
+  markdown_uuid: string;
+  x: number;
+  y: number;
+  title: string;
+  /// The provider as the configured source's own mark names it (Gmail).
+  provider: string;
+  /// The source as `config.toml` names it.
+  source: string;
+  source_id: string;
+  kind: string;
+  created_at: string | null;
+  account: string;
+  channel: string;
+};
+
+export type EmbeddingMapResponse = {
+  /// False until the step has written a map.
+  present: boolean;
+  made_at: string | null;
+  seed: { kept: number; near_neighbours: number; fresh: number } | null;
+  /// Documents qmd has not embedded yet, so not on the map.
+  unembedded: number;
+  /// Points whose document the grid no longer has.
+  unplaced: number;
+  points: MapPoint[];
+  errors?: string[];
+};
+
+export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
+  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_INDEX}/embedding_map`, signal);
+  for (const e of r.errors ?? []) pushToast(e);
+  return r;
+}
+
+/// The documents a filter matches, in the grid's search-bar grammar.
+export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
+  const params = new URLSearchParams({ q });
+  const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
+    `${UNIFIED_INDEX}/embedding_map/matches?${params.toString()}`,
+    signal,
+  );
+  for (const e of r.errors ?? []) pushToast(e);
+  return new Set(r.markdown_uuids);
 }
 
 // --- qmd index state -------------------------------------------------------

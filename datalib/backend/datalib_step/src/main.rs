@@ -7,6 +7,7 @@
 //! utilities that are not steps.
 
 mod dispatch;
+mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
@@ -457,6 +458,10 @@ async fn run_function(
             writes_the_index_tree(&env, &qmd_index::out_rel())?;
             qmd_index::run(data_root, &env, models_dir, emitter).await
         }
+        Function::EmbeddingMap => {
+            writes_the_index_tree(&env, &embedding_map::out_rel())?;
+            embedding_map::run(data_root, now, emitter).await
+        }
     }
 }
 
@@ -495,9 +500,9 @@ fn version_through_runtime(mut cmd: std::process::Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The two index steps have one reader each — the `unified_index`
-/// applet — which finds them from the data root alone, so their trees
-/// are fixed. A config that files them under another group would have
+/// The index steps have one reader each — the `unified_index` applet
+/// — which finds them from the data root alone, so their trees are
+/// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
 fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(

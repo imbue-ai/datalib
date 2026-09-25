@@ -501,6 +501,16 @@ crate.annotation(
     gen_build_script = "off",
 )
 
+# The embedding map's nearest-neighbour search is one matrix product
+# after another (datalib/backend/embedding_map), and the product is
+# matrixmultiply's kernel. Optimised in every build, not just `-c opt`:
+# unoptimised it takes 33s where it takes 1.7s on 18.7k documents, and
+# a dev build runs the same step.
+crate.annotation(
+    crate = "matrixmultiply",
+    rustc_flags = ["-Copt-level=3"],
+)
+
 # protoc-gen-prost ships a `protoc-gen-prost` binary that
 # `rust_prost_toolchain` (in //tools/prost_toolchain) consumes via the
 # `protoc-gen-prost__protoc-gen-prost` target — crate_universe only

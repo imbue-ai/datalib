@@ -35,7 +35,7 @@ fn fixture(rel: &str) -> PathBuf {
         })
 }
 
-fn materialize_root(dst: &Path) {
+pub(crate) fn materialize_root(dst: &Path) {
     for tar in ["ingested/qmd.tar", "ingested/qmd-index.tar"] {
         let status = Command::new("tar")
             .arg("-xf")
@@ -49,7 +49,7 @@ fn materialize_root(dst: &Path) {
     }
 }
 
-fn materialize_root_with_grid(dst: &Path) {
+pub(crate) fn materialize_root_with_grid(dst: &Path) {
     materialize_root(dst);
     let grid_dir = datalib_core::layout::grid_index_dir(dst);
     std::fs::create_dir_all(&grid_dir).expect("create grid dir");
