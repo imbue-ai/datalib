@@ -119,10 +119,18 @@ them:
 
 **A wanted step is due** iff it is **stale** — it has never succeeded,
 some input's version differs from the one it consumed at its last
-success, or its own fingerprint (argv, env, declared inputs) differs
-from the one recorded then — or it declares no inputs and has not run
-since this request opened: a source's real input is outside the graph,
-so every request runs it once.
+success, or its own fingerprint (argv, env, declared inputs,
+`code_version`, and for a built-in step the shape of the store it
+writes) differs from the one recorded then — or it declares no inputs
+and has not run since this request opened: a source's real input is
+outside the graph, so every request runs it once.
+
+The store shape is there because a derived store takes a new shape only
+when its writer runs. Without it, a build that adds a `grid_rows` column
+leaves every source with nothing new upstream holding a render store in
+the old shape, and the grid index cannot read it. `BUILTIN_STORE_SHAPES`
+in `src/config.rs` names the shape of each built-in function's store;
+a test in `datalib_step` keeps it equal to the real DDL.
 
 A due step waits, and says why, for one of four things:
 

@@ -1214,6 +1214,29 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
     (Some("perseus"), "render_markdown"),
 ];
 
+/// The shape of the store each built-in function writes: the hash of its
+/// DDL, as `datalib_store_meta::schema_hash` takes it. A build that moves
+/// one re-runs the steps that write that store (`StepSpec::store_shape`).
+/// `datalib_step`'s `builtin_store_shapes_are_the_ddl_the_step_writes`
+/// fails until these match the real DDL, and prints the new hash.
+pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
+    (
+        "render_markdown",
+        "aa9e17f258659ee150edd64d67dd9770aa3e8a73fa04df6829f595a3d34ed8b2",
+    ),
+    (
+        "grid_index",
+        "3c8765bda92c931c46fd682f3abe75db4e66da9a2cbd5a682c1bd62db3cc77be",
+    ),
+];
+
+pub fn builtin_store_shape(function: &str) -> Option<&'static str> {
+    BUILTIN_STORE_SHAPES
+        .iter()
+        .find(|&&(f, _)| f == function)
+        .map(|&(_, shape)| shape)
+}
+
 fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
     UNPINNED_BUILTINS
         .iter()
@@ -1265,6 +1288,13 @@ fn spec_of(
     }
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
+    if e.command.is_none() {
+        spec.store_shape = e
+            .function
+            .as_deref()
+            .and_then(builtin_store_shape)
+            .map(str::to_string);
+    }
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
@@ -1730,6 +1760,71 @@ mod tests {
             "a bumped code_version must change what the step fingerprints to"
         );
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
+    }
+
+    /// A derived store rebuilds to a new shape only when its writer runs,
+    /// and a render step with nothing new upstream never runs: after a
+    /// `grid_rows` change the grid index found six render stores still in
+    /// the old shape and failed. The shape of the store a built-in step
+    /// writes is part of what the step is, so a build that moves it makes
+    /// the step due once.
+    #[test]
+    fn a_builtin_steps_fingerprint_carries_the_shape_of_the_store_it_writes() {
+        let cfg: DagConfig = toml::from_str(
+            r#"
+            [[groups]]
+            id = "mail"
+            type = "email"
+
+            [[groups]]
+            id = "unified_index"
+
+            [[steps]]
+            group = "mail"
+            function = "ingest"
+
+            [[steps]]
+            group = "mail"
+            function = "render_markdown"
+            inputs = ["mail/ingest"]
+
+            [[steps]]
+            group = "unified_index"
+            function = "grid_index"
+            inputs = ["mail/render_markdown"]
+
+            [[steps]]
+            id = "custom/render"
+            command = "render-it"
+            inputs = ["mail/ingest"]
+            "#,
+        )
+        .expect("parse");
+        let specs = to_specs(&cfg).expect("to_specs");
+        let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
+
+        for (id, function) in [
+            ("mail/render_markdown", "render_markdown"),
+            ("unified_index/grid_index", "grid_index"),
+        ] {
+            let loaded = spec(id);
+            let shape = builtin_store_shape(function).expect("a built-in store shape");
+            assert!(
+                loaded.fingerprint_material().contains(shape),
+                "{id}'s fingerprint must carry its store's shape"
+            );
+            let mut older = loaded.clone();
+            older.store_shape = Some("an older shape".to_string());
+            assert_ne!(
+                loaded.fingerprint_material(),
+                older.fingerprint_material(),
+                "{id}: a store written in another shape must make the step due"
+            );
+        }
+        // A step with no store of ours keeps the fingerprint it had, so the
+        // fix re-runs only the steps whose store has a shape.
+        assert_eq!(spec("mail/ingest").store_shape, None);
+        assert_eq!(spec("custom/render").store_shape, None);
     }
 
     /// Editing `params` changes the argv the runner executes, which is

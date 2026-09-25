@@ -1220,6 +1220,29 @@ mod stale_tree_tests {
         assert_eq!(declared_render_versions(&[]), None);
     }
 
+    /// The loop re-runs a built-in step when the shape of the store it
+    /// writes moves, by its table in the dag config. A table that lags the
+    /// DDL is the bug it exists to prevent: the step stays up to date, its
+    /// store keeps the old shape, and the grid index cannot read it.
+    #[test]
+    fn builtin_store_shapes_are_the_ddl_the_step_writes() {
+        use datalib_dag::config::builtin_store_shape;
+        for (function, actual) in [
+            (
+                "render_markdown",
+                datalib_etl_render::indexed_markdown::schema_hash(),
+            ),
+            ("grid_index", datalib_etl_render::grid_index::schema_hash()),
+        ] {
+            assert_eq!(
+                builtin_store_shape(function),
+                Some(actual.as_str()),
+                "the store `{function}` writes changed shape: set its entry in \
+                 datalib_dag::config::BUILTIN_STORE_SHAPES to {actual:?}"
+            );
+        }
+    }
+
     /// The render store's own DDL hash rides in the params under a key
     /// no processor can claim, so a column added to `grid_rows` is a
     /// param change — every source re-renders, and nobody has to bump

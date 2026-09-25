@@ -35,6 +35,11 @@ pub struct StepSpec {
     /// Most steps leave this `None`: `params` is already in the
     /// fingerprint.
     pub code_version: Option<String>,
+    /// The hash of the DDL of the store this step writes, for a built-in
+    /// step that writes one of ours (`config::BUILTIN_STORE_SHAPES`). A
+    /// derived store takes a new shape only when its writer runs, so the
+    /// shape is part of what the step is.
+    pub store_shape: Option<String>,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 of the sink contract in
     /// `docs/dev/plans/completed/streaming_steps_plan.md`.
@@ -87,6 +92,12 @@ impl StepSpec {
         m.push('\u{1}');
         m.push_str(self.code_version.as_deref().unwrap_or(""));
         m.push('\u{1}');
+        // Only where there is one, so a step without a store of ours keeps
+        // the fingerprint it had and is not re-run by this field existing.
+        if let Some(shape) = &self.store_shape {
+            m.push_str(shape);
+            m.push('\u{1}');
+        }
         match &self.run {
             StepRun::InProcess(_) => m.push_str("in-process"),
             StepRun::Subprocess { argv, env, params } => {
@@ -114,6 +125,7 @@ impl StepSpec {
             inputs: Vec::new(),
             run,
             code_version: None,
+            store_shape: None,
             streams_output: false,
             reads_pinned: true,
             group: None,
