@@ -355,7 +355,7 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
                 .source_label("Synth")
                 .conversation_uuid(id)
                 .entire_chat(format!("/chat/{id}"))
-                .text(text)
+                .body(text)
                 .markdown_uuid(Some(id.to_string()))
                 // The synthetic document's first row stands for it.
                 .is_document(*uuid == doc.rows[0].0)
@@ -575,7 +575,7 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
             let mut rows: Vec<(String, String)> = md
                 .rows
                 .iter()
-                .map(|r| (r.uuid.clone(), r.text.clone()))
+                .map(|r| (r.uuid.clone(), r.preview.clone()))
                 .collect();
             rows.sort();
             let mut edges: Vec<(String, String)> = md
@@ -634,7 +634,7 @@ async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
     for md in mds {
         let uuid: String = md.try_get(0).unwrap();
         let mut rows: Vec<(String, String)> =
-            sqlx::query("SELECT uuid, text FROM grid_rows WHERE markdown_uuid = ?")
+            sqlx::query("SELECT uuid, preview FROM grid_rows WHERE markdown_uuid = ?")
                 .bind(&uuid)
                 .fetch_all(pool)
                 .await

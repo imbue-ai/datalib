@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use datalib_id::{composite_key, IdNamespace, Identity};
-use datalib_schema::grid_rows::GridRow;
+use datalib_schema::grid_rows::{content_hash, preview, GridRow};
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
 
@@ -144,6 +144,13 @@ pub fn rows_for_document(
 
     let mut rows = Vec::with_capacity(pages.len() + 1);
 
+    // The document row's body is the title plus its location, not the
+    // whole document: the per-page rows carry the pages.
+    let doc_body = if meta.copy_count > 1 {
+        format!("{title} ({} copies)", meta.copy_count)
+    } else {
+        title.clone()
+    };
     rows.push(GridRow {
         uuid: doc_uuid.clone(),
         provider: PROVIDER.as_str().into(),
@@ -162,15 +169,8 @@ pub fn rows_for_document(
         conversation_uuid: doc_uuid.clone(),
         message_index: None,
         entire_chat: format!("/chat/{doc_uuid}"),
-        // The document row's text is the title plus its location, not
-        // the whole document: the per-page rows carry the body, and
-        // duplicating it here would double the index size and make
-        // every query match the document row too.
-        text: if meta.copy_count > 1 {
-            format!("{title} ({} copies)", meta.copy_count)
-        } else {
-            title.clone()
-        },
+        preview: preview(&doc_body),
+        content_hash: content_hash(&doc_body),
         qmd_path: meta.qmd_path.map(str::to_string),
         source_url: source_url.clone(),
         git_sha: None,
@@ -213,7 +213,8 @@ pub fn rows_for_document(
             conversation_uuid: doc_uuid.clone(),
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
-            text: text.clone(),
+            preview: preview(text),
+            content_hash: content_hash(text),
             qmd_path: meta.qmd_path.map(str::to_string),
             source_url: source_url.clone(),
             git_sha: None,
@@ -459,7 +460,7 @@ mod tests {
         let mut m = meta(Some("Paper"), "a/b.pdf");
         m.copy_count = 3;
         let rows = rows_for_document("pdf", &m, &[]);
-        assert_eq!(rows[0].text, "Paper (3 copies)");
+        assert_eq!(rows[0].preview, "Paper (3 copies)");
     }
 
     #[test]
@@ -467,6 +468,6 @@ mod tests {
         // Otherwise every query matches the doc row as well as the page.
         let pages = vec![(1, "distinctive body text".to_string())];
         let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &pages);
-        assert!(!rows[0].text.contains("distinctive body text"));
+        assert!(!rows[0].preview.contains("distinctive body text"));
     }
 }

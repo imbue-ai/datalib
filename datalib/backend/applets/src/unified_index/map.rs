@@ -119,7 +119,8 @@ pub async fn matches_handler(
 
 /// The documents `q` matches. Free text goes to qmd, as it does on the
 /// grid, with its structured terms applied to the hits; structured
-/// terms alone are a SQL filter over every row.
+/// terms alone are a SQL filter over every row. A qmd failure matches
+/// nothing and says why.
 async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let parsed = parse_query(q);
     let found = if parsed.free_text.is_empty() {
@@ -128,10 +129,8 @@ async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<Strin
         match run_qmd_search(&s.root, &s.repo, &s.qmd, &parsed, FREE_TEXT_HITS).await {
             Ok(rows) => Ok(markdowns(rows)),
             Err(e) => {
-                errors.push(format!(
-                    "semantic search failed, so the filter matched words instead: {e:#}"
-                ));
-                s.repo.search(&parsed, 20_000).await.map(markdowns)
+                errors.push(format!("free-text search failed: {e:#}"));
+                Ok(HashSet::new())
             }
         }
     };

@@ -91,9 +91,7 @@ const error = ref<SearchFailure | null>(null);
 const showingStale = computed(
   () => error.value !== null && rows.value.length > 0 && shownQuery.value !== query.value,
 );
-// qmd-routed search failed at runtime; backend served LIKE-based
-// fallback rows. Surface as a banner so users notice the degradation
-// instead of silently getting worse results.
+// A free-text search failed in qmd, and came back with no rows.
 const qmdError = ref<string | null>(null);
 const accounts = ref<AccountsMap>({});
 
@@ -1284,8 +1282,10 @@ function gridOptions(): GridOption {
 function changedColumns(row: SearchRow | undefined): Set<string> {
   const names = row?.diff_changed_columns;
   if (!names) return new Set();
-  // The one column the grid shows under another name.
-  return new Set(names.split("|").map((c) => (c === "text" ? "snippet" : c)));
+  // The body is shown as Contents: its preview, or its hash when the
+  // change is past the preview.
+  const asShown = (c: string) => (c === "preview" || c === "content_hash" ? "snippet" : c);
+  return new Set(names.split("|").map(asShown));
 }
 
 function installDiffMetadata(dataView: Grid["dataView"]) {
@@ -1486,9 +1486,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <p v-if="qmdError" class="qmd-error" role="alert">
-      qmd search failed — results below are from a degraded SQL-LIKE fallback: {{ qmdError }}
-    </p>
+    <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
 
     <p v-if="error" class="error" role="alert" :title="error.detail">
       {{ error.message }}
@@ -1511,7 +1509,7 @@ onBeforeUnmount(() => {
         <div class="grid-spinner__label">searching…</div>
       </div>
     </div>
-    <p v-if="!loading && rows.length === 0 && !error" class="empty">no matches.</p>
+    <p v-if="!loading && rows.length === 0 && !error && !qmdError" class="empty">no matches.</p>
 
     <FeedbackModal
       :open="feedbackOpen"

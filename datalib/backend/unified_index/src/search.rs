@@ -13,6 +13,8 @@ pub struct SearchRow {
     /// `/api/chat/{markdown_uuid}` when the user clicks the row.
     pub markdown_uuid: Option<String>,
     pub message_index: Option<usize>,
+    /// The Contents cell: the row's `preview`, or for a free-text hit the
+    /// words qmd matched.
     pub snippet: String,
     pub sender: String,
     /// Null when the row has no source-side timestamp (e.g. contacts
@@ -95,8 +97,8 @@ pub struct SearchRow {
     /// For a modified row, the columns that differ, `|`-joined.
     pub diff_changed_columns: Option<String>,
     /// QMD-routed rank score for this row, when the search went through qmd.
-    /// `None` for pure structured queries (no free text) and for the SQL-LIKE
-    /// fallback path. Surfaced to the UI as a sortable "Score" column.
+    /// `None` for a query of structured terms alone. Surfaced to the UI as
+    /// a sortable "Score" column.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
 }
