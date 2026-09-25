@@ -476,24 +476,24 @@ class IngestedTngPipelineTest(unittest.TestCase):
         return {status: int(n) for status, n in (r.split("|") for r in rows)}
 
     def _diff_rows_by_text(self, group: str, needle: str) -> list[tuple[str, str, str]]:
-        """A diff group's rows whose text contains `needle`:
+        """A diff group's rows whose preview contains `needle`:
         (kind, status, changed columns)."""
         rows = self._query(
             self._index_db,
             "SELECT g.kind || '|' || g.diff_status || '|' || coalesce(g.diff_changed_columns, '') "
             "FROM grid_rows g JOIN markdowns m ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%' ORDER BY g.kind;",
+            f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%' ORDER BY g.kind;",
         )
         return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
 
     def _markdown(self, group: str, needle: str) -> str:
-        """A group's one document whose rows' text carries `needle`, off
-        the tree."""
+        """A group's one document whose rows' preview carries `needle`,
+        off the tree."""
         qmd_path = self._scalar(
             self._index_db,
             "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
-            f"WHERE m.source_id = '{group}' AND g.text LIKE '%{needle}%';",
+            f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
         )
         return (self.workspace / qmd_path).read_text()
 
@@ -934,7 +934,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
                 "Data": ("removed", ""),
-                "Jean-Luc Picard": ("modified", "modified_at|text"),
+                "Jean-Luc Picard": ("modified", "content_hash|modified_at|preview"),
                 "Worf": ("added", ""),
             },
             "the contacts diff between the two fixture commits",
@@ -949,7 +949,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "0",
             "diff_status is NULL on every real source's rows",
         )
-        picard = self._markdown(CONTACTS_DIFF_GROUP, "NCC-1701-E")
+        picard = self._markdown(CONTACTS_DIFF_GROUP, "Jean-Luc Picard")
         self.assertIn('<div class="diff-modified">', picard)
         self.assertIn("<del>NCC-1701-D</del><ins>NCC-1701-E</ins>", picard)
         self.assertIn(
@@ -979,8 +979,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "raising shields"),
             [
-                ("Slack Message", "modified", "byte_size|text"),
-                ("Slack Thread", "modified", "byte_size|text"),
+                ("Slack Message", "modified", "byte_size|content_hash|preview"),
+                ("Slack Thread", "modified", "byte_size|content_hash|preview"),
             ],
             "the edited message names its text (and its length), and its thread follows",
         )
@@ -988,7 +988,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_rows_by_text(SLACK_DIFF_GROUP, "Warbird, decloaking"),
             [
                 ("Slack Message", "added", ""),
-                ("Slack Thread", "modified", "byte_size|item_count|modified_at|text"),
+                (
+                    "Slack Thread",
+                    "modified",
+                    "byte_size|content_hash|item_count|modified_at|preview",
+                ),
             ],
             "the reply added to the grown thread, whose own row grew with it",
         )
