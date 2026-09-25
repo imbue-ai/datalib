@@ -666,7 +666,7 @@ impl Runner {
                 // loaded.
                 let first = !std::mem::replace(started, true);
                 *seen = Some(version);
-                let rows = store.open_requests().await?;
+                let (rows, all_paused) = store.mailbox().await?;
                 deferred.retain(|id, _| {
                     rows.iter()
                         .any(|r| &r.id == id && r.stop_requested_by.is_none())
@@ -736,7 +736,7 @@ impl Runner {
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
-                *paused = paused_in(graph, store).await?;
+                *paused = paused_of(graph, &all_paused);
             }
         }
         Ok(())
