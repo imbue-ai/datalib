@@ -1,14 +1,15 @@
 //! Doltlite-backed raw store for the GitLab provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
+use datalib_etl::bulk::bulk_upsert;
 use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl_forge_ingest_common::prune_children;
 
 use super::canonicalize::canonicalize_payload;
 use super::schema_raw::{
@@ -62,52 +63,22 @@ impl RawDb {
     // ── merge_requests ──────────────────────────────────────────────
 
     pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
-        let payload = &canonicalize_payload(payload);
-        let row = MergeRequestRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin merge_request tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit merge_request tx")?;
-        Ok(())
+        let row = MergeRequestRow::from_payload(proj, iid, &canonicalize_payload(payload))?;
+        bulk_upsert(self.pool(), &[row]).await
     }
 
     // ── discussions ─────────────────────────────────────────────────
-
-    pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
-        let payload = &canonicalize_payload(payload);
-        let row = DiscussionRow::from_payload(proj, iid, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool().begin().await.context("begin discussion tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit discussion tx")?;
-        Ok(())
-    }
 
     /// Upsert every discussion of one MR in a single transaction. The
     /// natural commit boundary here is "all discussions for one MR" —
     /// the caller's outer loop is per-MR, and a partial set would just
     /// be re-fetched on the next sync.
     pub async fn upsert_discussions(&self, proj: &str, iid: u32, payloads: &[Value]) -> Result<()> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
         let rows: Vec<DiscussionRow> = payloads
             .iter()
             .map(|p| DiscussionRow::from_payload(proj, iid, &canonicalize_payload(p)))
             .collect::<Result<Vec<_>>>()?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin discussions batch tx")?;
-        bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
-        tx.commit().await.context("commit discussions batch tx")?;
-        Ok(())
+        bulk_upsert(self.pool(), &rows).await
     }
 
     // ── loads ───────────────────────────────────────────────────────
@@ -171,48 +142,26 @@ impl RawDb {
         Ok(out)
     }
 
-    // ── sync_scope_state (delegates) ────────────────────────────────
-
     /// Drop this MR's discussion rows that the fresh listing did not name.
-    /// Scoped to the one MR — the endpoint enumerated its threads and no
-    /// others.
     pub async fn prune_mr_discussions(
         &self,
         proj: &str,
         iid: u32,
         listed: &[Value],
     ) -> Result<usize> {
-        let keep: std::collections::HashSet<String> = listed
+        let keep: HashSet<String> = listed
             .iter()
             .filter_map(|d| d.get("id").and_then(|v| v.as_str()))
             .map(|id| super::schema_raw::discussion_pk_recipe(proj, iid, id))
             .collect();
-        let iid_s = iid.to_string();
-        let gone = datalib_etl::prune::prune_scope(
+        let iid = iid.to_string();
+        prune_children(
             self.pool(),
             "discussions",
-            &[("project_full_path", proj), ("mr_iid", &iid_s)],
+            &[("project_full_path", proj), ("mr_iid", &iid)],
             &keep,
         )
-        .await?;
-        if !gone.is_empty() {
-            tracing::info!(
-                event = "gitlab_discussions_pruned",
-                proj,
-                iid,
-                removed = gone.len(),
-                "GitLab no longer lists these discussions; deleting our copies",
-            );
-        }
-        Ok(gone.len())
-    }
-
-    pub async fn load_scope_state(&self) -> Result<HashMap<String, String>> {
-        dr::load_scope_state(self.pool()).await
-    }
-
-    pub async fn upsert_scope_state(&self, scope: &str, last_seen_at: &str) -> Result<()> {
-        dr::upsert_scope_state(self.pool(), scope, last_seen_at).await
+        .await
     }
 
     pub async fn any_merge_requests(&self) -> Result<bool> {
@@ -317,10 +266,10 @@ mod tests {
         )
         .await
         .unwrap();
-        db.upsert_discussion(
+        db.upsert_discussions(
             "ns/proj",
             12,
-            &json!({"id": "abc", "individual_note": false, "notes": [{"updated_at": "2025-01-01T00:00:00Z"}]}),
+            &[json!({"id": "abc", "individual_note": false, "notes": [{"updated_at": "2025-01-01T00:00:00Z"}]})],
         )
         .await
         .unwrap();

@@ -1,14 +1,14 @@
 //! Doltlite-backed raw store for the GitHub provider.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::Row;
 
-use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl::bulk::bulk_upsert;
+use datalib_etl_forge_ingest_common::prune_children;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -22,16 +22,7 @@ impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
-        let row = SelfIdentityRow::from_payload(payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin self_identity tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit self_identity tx")?;
-        Ok(())
+        bulk_upsert(self.pool(), &[SelfIdentityRow::from_payload(payload)?]).await
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
@@ -53,88 +44,60 @@ impl RawDb {
     // ── pull_requests ───────────────────────────────────────────────
 
     pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let row = PullRequestRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool().begin().await.context("begin pull_request tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit pull_request tx")?;
-        Ok(())
+        bulk_upsert(
+            self.pool(),
+            &[PullRequestRow::from_payload(repo, num, payload)?],
+        )
+        .await
     }
 
     // ── issue_comments / pr_reviews / pr_review_comments ────────────
 
-    pub async fn upsert_issue_comment(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let row = IssueCommentRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin issue_comment tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit issue_comment tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_pr_review(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let row = PrReviewRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool().begin().await.context("begin pr_review tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit pr_review tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_pr_review_comment(
+    /// One PR's whole list from one child `table`, in one transaction.
+    pub async fn upsert_children(
         &self,
+        table: &str,
         repo: &str,
         num: u32,
-        payload: &Value,
+        payloads: &[Value],
     ) -> Result<()> {
-        let row = PrReviewCommentRow::from_payload(repo, num, payload)?;
-        let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin pr_review_comment tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
-        tx.commit().await.context("commit pr_review_comment tx")?;
-        Ok(())
+        fn rows<T>(payloads: &[Value], row: impl Fn(&Value) -> Result<T>) -> Result<Vec<T>> {
+            payloads.iter().map(row).collect()
+        }
+        let pool = self.pool();
+        match table {
+            "issue_comments" => {
+                let rows = rows(payloads, |p| IssueCommentRow::from_payload(repo, num, p))?;
+                bulk_upsert(pool, &rows).await
+            }
+            "pr_reviews" => {
+                let rows = rows(payloads, |p| PrReviewRow::from_payload(repo, num, p))?;
+                bulk_upsert(pool, &rows).await
+            }
+            "pr_review_comments" => {
+                let rows = rows(payloads, |p| PrReviewCommentRow::from_payload(repo, num, p))?;
+                bulk_upsert(pool, &rows).await
+            }
+            other => anyhow::bail!("{other} is not a PR child table"),
+        }
     }
 
-    // ── loads ───────────────────────────────────────────────────────
-
     /// Drop this PR's rows in `table` that the fresh listing did not name.
-    ///
-    /// Scoped to the one PR: the endpoint enumerated that PR's children and
-    /// nothing else, so it says nothing about any other PR's.
     pub async fn prune_pr_children(
         &self,
         table: &'static str,
         repo: &str,
         num: u32,
-        keep: &std::collections::HashSet<String>,
+        keep: &HashSet<String>,
     ) -> Result<usize> {
         let num = num.to_string();
-        let gone = datalib_etl::prune::prune_scope(
+        prune_children(
             self.pool(),
             table,
             &[("repo_full_name", repo), ("pr_number", &num)],
             keep,
         )
-        .await?;
-        if !gone.is_empty() {
-            tracing::info!(
-                event = "github_children_pruned",
-                table,
-                repo,
-                pr = %num,
-                removed = gone.len(),
-                "GitHub no longer lists these; deleting our copies",
-            );
-        }
-        Ok(gone.len())
+        .await
     }
 
     pub async fn load_pull_requests(&self) -> Result<Vec<LoadedPullRequest>> {
@@ -198,14 +161,6 @@ impl RawDb {
     }
 
     // ── sync_scope_state (delegates) ────────────────────────────────
-
-    pub async fn load_scope_state(&self) -> Result<HashMap<String, String>> {
-        dr::load_scope_state(self.pool()).await
-    }
-
-    pub async fn upsert_scope_state(&self, scope: &str, last_seen_at: &str) -> Result<()> {
-        dr::upsert_scope_state(self.pool(), scope, last_seen_at).await
-    }
 
     pub async fn any_pull_requests(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM pull_requests WHERE payload IS NOT NULL LIMIT 1")
@@ -301,10 +256,11 @@ mod tests {
         )
         .await
         .unwrap();
-        db.upsert_issue_comment(
+        db.upsert_children(
+            "issue_comments",
             "octocat/hello",
             7,
-            &json!({"id": 101, "body": "hi", "user": {"login": "alice"}}),
+            &[json!({"id": 101, "body": "hi", "user": {"login": "alice"}})],
         )
         .await
         .unwrap();
@@ -337,10 +293,16 @@ mod tests {
     async fn scope_state_round_trips() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_scope_state("author:@me", "2026-05-21T02:00:00+02:00")
+        datalib_etl::doltlite_raw::upsert_scope_state(
+            db.pool(),
+            "author:@me",
+            "2026-05-21T02:00:00+02:00",
+        )
+        .await
+        .unwrap();
+        let m = datalib_etl::doltlite_raw::load_scope_state(db.pool())
             .await
             .unwrap();
-        let m = db.load_scope_state().await.unwrap();
         // Stored as UTC; `since_for_scope` is what turns it back into an
         // API-shaped value.
         assert_eq!(
