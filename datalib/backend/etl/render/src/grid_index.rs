@@ -249,23 +249,6 @@ pub struct GridIndexSummary {
     pub markdowns_removed: usize,
     /// Problem rows copied in from the render stores this run read.
     pub problems_copied: usize,
-    /// Sources skipped because their render store predates this build's
-    /// `grid_rows`. The step indexes the rest, commits, then fails naming
-    /// these: a build that moves the shape makes every render step due
-    /// first, so reaching here means something else wrote the store.
-    pub predates_shape: Vec<String>,
-}
-
-impl GridIndexSummary {
-    pub fn ensure_every_source_indexed(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.predates_shape.is_empty(),
-            "indexed every source except {}: its render store predates this build's \
-             grid_rows, and its rows come back when that source re-renders",
-            self.predates_shape.join(", ")
-        );
-        Ok(())
-    }
 }
 
 /// Whole-index counts by severity, for the step's report.
@@ -309,17 +292,6 @@ pub(crate) async fn replace_source_problems(
             .with_context(|| format!("insert problem {}", row.problem_uuid))?;
     }
     Ok(())
-}
-
-/// A render store's rows lack a column this build's `GridRow` reads:
-/// the store was written under an older shape.
-fn predates_this_shape(e: &anyhow::Error) -> bool {
-    e.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<sqlx::Error>(),
-            Some(sqlx::Error::ColumnNotFound(_))
-        )
-    })
 }
 
 pub fn schema_hash() -> String {
@@ -618,7 +590,6 @@ pub async fn build_grid_index_for(
     // are `debug` unless a source moved, because a streaming pass runs
     // on every producer checkpoint and most sources moved on none.
     let mut not_yet_rendered = 0usize;
-    let mut predates_shape: Vec<String> = Vec::new();
     let mut read_whole = 0usize;
     let mut sources_changed = 0usize;
     let mut documents_changed = 0usize;
@@ -697,27 +668,9 @@ pub async fn build_grid_index_for(
                     )
                 }
             }
-            let found = match store.documents_matching(out_dir, scan.render.as_ref(), &pin) {
-                Ok(found) => found,
-                // A render store written before this build's `grid_rows`
-                // shape. Its source re-renders on its next sync (the
-                // store's DDL is a render param); until then its rows
-                // would fail the whole pass, and a pass after a schema
-                // rebuild would leave the grid empty. Whatever the index
-                // already holds for it stays, and its cursor stays put.
-                Err(e) if predates_this_shape(&e) => {
-                    predates_shape.push(stanza.clone());
-                    tracing::warn!(
-                        source = %stanza,
-                        error = %format!("{e:#}"),
-                        "this render store predates this build's grid_rows; \
-                         skipping it until its source re-renders"
-                    );
-                    store.close();
-                    continue;
-                }
-                Err(e) => return Err(e.context(format!("read documents from {stanza}"))),
-            };
+            let found = store
+                .documents_matching(out_dir, scan.render.as_ref(), &pin)
+                .with_context(|| format!("read documents from {stanza}"))?;
             problems.push((
                 stanza.clone(),
                 store
@@ -762,7 +715,6 @@ pub async fn build_grid_index_for(
     tracing::info!(
         sources = sources.len(),
         not_yet_rendered,
-        predates_shape = predates_shape.len(),
         read_whole,
         sources_changed,
         documents_changed,
@@ -771,7 +723,6 @@ pub async fn build_grid_index_for(
 
     let mut summary = GridIndexSummary {
         markdowns_total: docs.len(),
-        predates_shape,
         ..Default::default()
     };
 
@@ -1970,70 +1921,6 @@ mod source_cursor_tests {
         std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
         std::fs::write(&md.md_path, "# rendered\n").unwrap();
         md
-    }
-
-    /// Give a rendered source's store the shape an older build wrote: its
-    /// `grid_rows` lacks a column this build's `GridRow` reads. Done on
-    /// the writer branch and published, as a render step would.
-    async fn age_render_store(root: &Path, source: &str) {
-        let db = crate::indexed_markdown::path_for(&rendered_root(root, source));
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(
-                SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display())).unwrap(),
-            )
-            .await
-            .unwrap();
-        for sql in [
-            "SELECT dolt_connect_branch('datalib_writer')",
-            "ALTER TABLE grid_rows RENAME COLUMN touched_at TO touched_at_was",
-            "SELECT dolt_commit('-Am', 'an older shape')",
-            "SELECT dolt_branch('-f', 'main', 'datalib_writer')",
-        ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-        }
-        pool.close().await;
-    }
-
-    /// A render store an older build wrote must cost that source, not the
-    /// grid: after an upgrade's schema rebuild, failing the whole pass on
-    /// the first stale store left the index empty until every source had
-    /// re-rendered. The other sources are indexed, and the one skipped is
-    /// named so the step can fail loudly after committing them.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_render_store_an_older_build_wrote_costs_its_source_not_the_grid() {
-        let td = tempdir().unwrap();
-        let root = td.path();
-        let pool = index_pool(root).await;
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
-        render(root, "aged", &[doc(root, "aged", "md-a", "aged body")]);
-        age_render_store(root, "aged").await;
-
-        let sources = ["aged".to_string(), "fresh".to_string()];
-        let summary = build_grid_index_for(&pool, root, &sources, |_| {}, None)
-            .await
-            .expect("one stale store must not fail the pass");
-        assert_eq!(summary.predates_shape, vec!["aged".to_string()]);
-        let refused = summary.ensure_every_source_indexed().unwrap_err();
-        assert!(refused.to_string().contains("except aged"), "{refused}");
-        assert_eq!(index_row_count(&pool).await, 1, "only `fresh`");
-        assert!(
-            !load_source_cursors(&pool)
-                .await
-                .unwrap()
-                .contains_key("aged"),
-            "a skipped source's cursor must not move, or its rows are never read"
-        );
-    }
-
-    /// A pass that read every source it was given has nothing to refuse.
-    #[test]
-    fn a_pass_that_skipped_nothing_is_not_refused() {
-        crate::grid_index::GridIndexSummary::default()
-            .ensure_every_source_indexed()
-            .unwrap();
     }
 
     /// The step reads the sources the graph names, nothing else: a tree
