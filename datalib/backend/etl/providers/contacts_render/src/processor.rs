@@ -17,13 +17,13 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(ContactsRender {
-        id: format!("carddav/{name}/render"),
+        id: format!("contacts/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// Carddav's render processor — reads the raw store and emits one
+/// Contacts' render processor — reads the raw store and emits one
 /// rendered markdown per contact through the fused-Load callback.
 pub struct ContactsRender {
     id: String,
@@ -46,7 +46,7 @@ impl RenderProcessor for ContactsRender {
 
         let db_path = ingest::db_path_for(&self.raw_path);
         let parsed = parse::parse(&db_path, ctx.raw_range())
-            .with_context(|| format!("carddav parse {}", db_path.display()))?;
+            .with_context(|| format!("contacts parse {}", db_path.display()))?;
         let Some(parsed) = parsed else {
             return Ok("no raw store yet".into());
         };
@@ -60,7 +60,7 @@ impl RenderProcessor for ContactsRender {
             ctx.raw_range(),
             &mut on_doc,
         )
-        .context("carddav render_all")?;
+        .context("contacts render_all")?;
         for bucket in &buckets {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }

@@ -1,6 +1,6 @@
 //! ChatGPT entity ids.
 
-use datalib_id::{IdNamespace, Identity};
+use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Chatgpt;
@@ -9,24 +9,10 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 pub const KIND_CONVERSATION: &str = "conversation";
 pub const KIND_MESSAGE: &str = "message";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn conversation(source_id: &str, conversation_id: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CONVERSATION,
         conversation_id.to_string(),
@@ -37,7 +23,7 @@ pub fn conversation(source_id: &str, conversation_id: &str) -> Identity {
 /// `date_ms` is the item's `date_ms` after the fallback to the previous
 /// item's stamp, so it is what the row stores.
 pub fn message(source_id: &str, message_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_MESSAGE, message_id.to_string(), date_ms)
+    IDS.mint(source_id, KIND_MESSAGE, message_id.to_string(), date_ms)
 }
 
 #[cfg(test)]

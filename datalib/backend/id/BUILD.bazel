@@ -15,6 +15,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:strum",
         "@datalib_crates//:uuid",
     ],
