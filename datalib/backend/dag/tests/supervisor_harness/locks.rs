@@ -80,6 +80,36 @@ async fn a_lock_lets_as_many_run_as_it_has_slots() {
     h.finish().await;
 }
 
+/// A lock resized mid-sync is resized at once: the holder waiting on it
+/// starts beside the one running. The fingerprint leaves locks out, so a
+/// swap that compared only fingerprints ignored the edit until the sync
+/// ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lock_resized_mid_sync_lets_the_waiting_holder_start() {
+    let steps = [
+        source("a").locks(r#"["quota"]"#),
+        source("b").locks(r#"["quota"]"#),
+    ];
+    let one = "[[locks]]\nname = \"quota\"\nslots = 1\n\n";
+    let mut h = Harness::with_locks(&steps, Clocks::default(), one).await;
+    let sync = h.sync(&["a", "b"]).await;
+    let first = first_started(&mut h, &["a", "b"]).await;
+    let second = if first == "a" { "b" } else { "a" };
+    h.until("the second to wait for the lock", |s| {
+        s.detail(second)
+            .is_some_and(|d| d.starts_with("waiting for lock quota"))
+            .then_some(())
+    })
+    .await;
+
+    h.edit_locks(&steps, "[[locks]]\nname = \"quota\"\nslots = 2\n\n");
+    h.started(second).await;
+    h.run(&first, "ok v1").await;
+    h.run(second, "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
 /// Exclusive takes every slot: it waits for a shared holder, then runs
 /// alone, and a shared holder asked for meanwhile waits for it.
 #[tokio::test(flavor = "multi_thread")]

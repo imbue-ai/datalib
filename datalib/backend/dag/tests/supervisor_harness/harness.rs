@@ -315,6 +315,12 @@ impl Harness {
         self.note(format!("person: edit config to {:?}", ids(steps)));
     }
 
+    /// A config edit that rewrites the `[[locks]]` entries too.
+    pub fn edit_locks(&mut self, steps: &[Step], locks: &str) {
+        self.locks = locks.to_string();
+        self.edit_config(steps);
+    }
+
     fn fifo(&mut self, step: &str) -> &mut File {
         let puppets = self.puppets.clone();
         let (_, tx) = self.fifos.entry(step.to_string()).or_insert_with(|| {

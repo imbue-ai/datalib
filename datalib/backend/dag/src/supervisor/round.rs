@@ -24,7 +24,6 @@ use crate::scheduler::{
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
-use crate::supervisor::reload::GraphSource;
 use crate::version::UNKNOWN;
 
 /// How an invocation ended, held until the step runs again (it was a
@@ -59,12 +58,11 @@ impl Ended {
 
 /// What the loop holds for one step through a round. A config swap
 /// carries it to the step's place in the new graph.
+#[derive(Default)]
 struct Slot {
     /// Whether an open request has wanted it this round.
     ever_in_scope: bool,
-    /// Its state the last time a request wanted it: what its row settles
-    /// on once none does.
-    last_state: Row,
+    last_wanted: LastWanted,
     live: Option<Live>,
     ended: Option<Ended>,
     warned_not_streaming: bool,
@@ -74,29 +72,50 @@ struct Slot {
     error: Option<String>,
 }
 
-impl Default for Slot {
-    fn default() -> Self {
-        Slot {
-            ever_in_scope: false,
-            last_state: Row::Idle,
-            live: None,
-            ended: None,
-            warned_not_streaming: false,
-            status: None,
-            attempts: 0,
-            error: None,
-        }
-    }
-}
-
 impl Slot {
     fn remapped(mut self, to_new: &HashMap<usize, usize>) -> Slot {
-        self.last_state = remap_row(self.last_state, to_new);
         self.live = self.live.map(|l| Live {
             consumed: remap_consumed(l.consumed, to_new),
             ..l
         });
         self
+    }
+}
+
+/// A step's state the last time a request wanted it, as far as what its
+/// row settles on once none does. A step it was blocked on is named, so
+/// no index goes stale when the config is swapped.
+#[derive(Default)]
+enum LastWanted {
+    #[default]
+    Unwanted,
+    Paused,
+    Waiting,
+    Blocked(String),
+    Other,
+}
+
+impl LastWanted {
+    fn of(graph: &Graph, state: Row) -> LastWanted {
+        match state {
+            Row::Idle | Row::Stale => LastWanted::Unwanted,
+            Row::Paused => LastWanted::Paused,
+            Row::Waiting(_) => LastWanted::Waiting,
+            Row::Blocked(on) => LastWanted::Blocked(graph.steps[on].id.clone()),
+            _ => LastWanted::Other,
+        }
+    }
+
+    /// A paused step took no part: none.
+    fn settles(&self, cancelled: bool) -> Option<StepStatus> {
+        Some(match self {
+            LastWanted::Paused => return None,
+            LastWanted::Waiting if cancelled => StepStatus::Failed {
+                kind: FailureKind::Cancelled,
+            },
+            LastWanted::Blocked(on) => StepStatus::Blocked { on: on.clone() },
+            _ => StepStatus::SkippedUpToDate,
+        })
     }
 }
 
@@ -217,7 +236,6 @@ impl Runner {
         // after that look is heard.
         let mut listener = Listener::new(store, "the loop").backstop(self.backstop);
         let mut current = graph.clone();
-        let mut config_seen: Option<String> = None;
         // The host loaded the config before this period began, and it may
         // have moved since; after that, only when it is said to have.
         let mut config_moved = true;
@@ -250,10 +268,10 @@ impl Runner {
 
         loop {
             if !cancelled && std::mem::take(&mut config_moved) {
-                if let Some(source) = &self.reload {
-                    if let Some(next) = poll_config(&**source, &mut config_seen) {
-                        next_graph = Some(next);
-                    }
+                // One that does not load is waited out on the graph the
+                // loop has; the Manage screen already says it is broken.
+                if let Some(Ok(next)) = self.reload.as_ref().map(|s| s.load()) {
+                    next_graph = Some(next);
                 }
             }
             if let Some(next) = next_graph.take().filter(|_| !cancelled) {
@@ -388,9 +406,10 @@ impl Runner {
                 paused: paused.keys().copied().collect(),
             };
             let t = tick(&shape, &intent, &facts);
-            for (slot, st) in slots.iter_mut().zip(&t.states) {
-                if !matches!(st, Row::Idle | Row::Stale) {
-                    slot.last_state = *st;
+            for (slot, &st) in slots.iter_mut().zip(&t.states) {
+                match LastWanted::of(graph, st) {
+                    LastWanted::Unwanted => {}
+                    wanted => slot.last_wanted = wanted,
                 }
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
@@ -865,7 +884,7 @@ impl Runner {
         if !s.ever_in_scope || s.status.is_some() {
             return;
         }
-        let Some(st) = settled(graph, s.last_state, cancelled) else {
+        let Some(st) = s.last_wanted.settles(cancelled) else {
             return;
         };
         if st == StepStatus::SkippedUpToDate {
@@ -1125,8 +1144,6 @@ fn record_states(
                 id(p)
             )),
             Row::Waiting(Wait::Upstream(p)) => Some(format!("waiting for {}", id(p))),
-            // Today each step writes the sink its own index names.
-            Row::Waiting(Wait::Sink(s)) => Some(format!("waiting for another writer of {}", id(s))),
             Row::Waiting(Wait::Reader(r)) => Some(format!(
                 "waiting for {}, which reads what this writes",
                 id(r)
@@ -1175,21 +1192,6 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
     }
 }
 
-/// What a step's row settles on once no open request wants it and it has
-/// nothing of its own left to finish. A paused step took no part: none.
-fn settled(graph: &Graph, last_state: Row, cancelled: bool) -> Option<StepStatus> {
-    Some(match last_state {
-        Row::Paused => return None,
-        Row::Waiting(_) if cancelled => StepStatus::Failed {
-            kind: FailureKind::Cancelled,
-        },
-        Row::Blocked(on) => StepStatus::Blocked {
-            on: graph.steps[on].id.clone(),
-        },
-        _ => StepStatus::SkippedUpToDate,
-    })
-}
-
 /// Resolves when a stop has been asked for; never, with no stop wired.
 async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
     let asked = match rx {
@@ -1200,20 +1202,6 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
         std::future::pending::<()>().await;
     }
     Some(())
-}
-
-/// The graph the config describes now, if it has changed since
-/// `seen`. One that does not load is waited out on the graph the loop
-/// has; the Manage screen already says the config is broken.
-fn poll_config(source: &dyn GraphSource, seen: &mut Option<String>) -> Option<Graph> {
-    let version = source.version().ok()?;
-    if seen.as_ref() == Some(&version) {
-        return None;
-    }
-    *seen = Some(version);
-    let (version, graph) = source.load().ok()?;
-    *seen = Some(version);
-    Some(graph)
 }
 
 /// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
@@ -1236,26 +1224,24 @@ fn remap_consumed(c: Consumed, to_new: &HashMap<usize, usize>) -> Consumed {
     }
 }
 
-/// A state naming a step the new graph lacks names nothing to wait on.
-fn remap_row(row: Row, to_new: &HashMap<usize, usize>) -> Row {
-    let to = |j: usize| to_new.get(&j).copied();
-    match row {
-        Row::Blocked(p) => to(p).map_or(Row::Idle, Row::Blocked),
-        Row::Waiting(Wait::Upstream(p)) => {
-            to(p).map_or(Row::Idle, |p| Row::Waiting(Wait::Upstream(p)))
-        }
-        Row::Waiting(Wait::Sink(s)) => to(s).map_or(Row::Idle, |s| Row::Waiting(Wait::Sink(s))),
-        Row::Waiting(Wait::Reader(r)) => to(r).map_or(Row::Idle, |r| Row::Waiting(Wait::Reader(r))),
-        other => other,
-    }
-}
-
-/// The same steps in the same places, each with the same definition:
-/// nothing a swap would move.
+/// The same steps in the same places, each with the same definition and
+/// held apart the same way: nothing a swap would move. When a step may
+/// run is not in its fingerprint, so it is compared here.
 fn same_graph(a: &Graph, b: &Graph) -> bool {
-    a.fingerprints == b.fingerprints
-        && a.steps.len() == b.steps.len()
-        && a.steps.iter().zip(&b.steps).all(|(x, y)| x.id == y.id)
+    let when = |g: &Graph| -> Vec<_> {
+        g.steps
+            .iter()
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    s.streams_output,
+                    s.reads_pinned,
+                    s.locks.clone(),
+                )
+            })
+            .collect()
+    };
+    a.fingerprints == b.fingerprints && a.locks == b.locks && when(a) == when(b)
 }
 
 /// Today's graph as the tick sees it: each step writes the sink its own
@@ -1282,7 +1268,6 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
         .iter()
         .enumerate()
         .map(|(i, spec)| StepShape {
-            writes: i,
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
@@ -1294,7 +1279,6 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
         .collect();
     Shape {
         steps,
-        sink_count: graph.steps.len(),
         topo: graph.topo.clone(),
         locks,
     }
@@ -1373,6 +1357,7 @@ mod tests {
     use super::*;
     use crate::step::{StepRun, StepSpec};
     use crate::supervisor::record::StepRecord;
+    use crate::supervisor::reload::GraphSource;
     use crate::supervisor::tick::StateKind;
     use crate::EventSink;
 
@@ -1571,27 +1556,21 @@ mod tests {
     }
 
     /// A config a test rewrites while the loop runs.
-    struct Swappable(std::sync::Mutex<(u64, Graph)>);
+    struct Swappable(std::sync::Mutex<Graph>);
 
     impl Swappable {
         fn new(graph: &Graph) -> Arc<Self> {
-            Arc::new(Self(std::sync::Mutex::new((0, graph.clone()))))
+            Arc::new(Self(std::sync::Mutex::new(graph.clone())))
         }
 
         fn set(&self, specs: Vec<StepSpec>) {
-            let mut now = self.0.lock().unwrap();
-            *now = (now.0 + 1, Graph::build(specs).unwrap());
+            *self.0.lock().unwrap() = Graph::build(specs).unwrap();
         }
     }
 
     impl GraphSource for Swappable {
-        fn version(&self) -> Result<String> {
-            Ok(self.0.lock().unwrap().0.to_string())
-        }
-
-        fn load(&self) -> Result<(String, Graph)> {
-            let now = self.0.lock().unwrap();
-            Ok((now.0.to_string(), now.1.clone()))
+        fn load(&self) -> Result<Graph> {
+            Ok(self.0.lock().unwrap().clone())
         }
     }
 
@@ -1784,7 +1763,7 @@ mod tests {
 
         config.set(vec![step("2")]);
         announce_config(root.path());
-        let edited = config.load().unwrap().1.fingerprints[0].clone();
+        let edited = config.load().unwrap().fingerprints[0].clone();
         assert_ne!(edited, ran_with);
         until("the loop to take the edit on", || {
             events.logged("a/raw", "changed in the config")

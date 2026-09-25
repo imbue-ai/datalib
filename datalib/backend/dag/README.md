@@ -138,7 +138,7 @@ starts** in a tick, visited in topological order, iff:
    request opened, since a source's real input is outside the graph;
 6. **no producer it reads holds it**: none is running without streaming
    (or with this step reading its files, below), and none is about to
-   run, held only by a lock, its sink or a reader, since that one would
+   run, held only by a lock or a reader, since that one would
    rewrite what this step reads. A producer waiting on its own upstream
    holds nobody back, so a fan-in never waits for its slowest source;
 7. **it has something to read**: a step with inputs none of whose
@@ -146,8 +146,9 @@ starts** in a tick, visited in topological order, iff:
 8. **every lock it would take is free** (below, "What keeps steps apart").
 
 A step that waits says why, in its row's `state_detail`: `waiting for
-a`, `waiting for another writer of x`, `waiting for c, which reads what
-this writes`, `waiting for lock gpu, held by trainer`.
+a`, `waiting for c, which reads what this writes`, `waiting for lock
+gpu, held by trainer`. Each step writes only the tree its id names, so
+no two steps ever wait on each other as writers of one sink.
 
 Until everything a step reads has settled, its row reads Running between
 passes: the step is not finished, it is waiting for the next seal. A
@@ -228,7 +229,8 @@ follows from it:
   sets `network` and `cpu` to N, over the config.
 
 Neither `locks` nor `reads` is in the fingerprint: they change when a
-step may run, not what it makes. The built-in steps that read files are
+step may run, not what it makes. A config edit that changes only them
+is still taken on mid-sync, like any other. The built-in steps that read files are
 marked by the loader (`UNPINNED_BUILTINS` in `config.rs`: the qmd index,
 which globs render trees' `.md` files, and perseus's render, which reads
 its TEI files); any step may say `reads` itself.
