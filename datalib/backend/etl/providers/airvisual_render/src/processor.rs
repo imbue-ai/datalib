@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_airvisual_config::AirvisualRenderConfig;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_timeseries_render::page::skip_if_current;
 use std::path::Path;
 
 /// Always planned: the driver's reverse lookup says whether the page's
@@ -35,19 +36,11 @@ impl SourceRender for AirvisualRender {
         use crate::render::parse::{inputs, parse};
         use crate::render::render::{document_uuid, render_all};
 
-        let range = ctx.raw_range();
         let page = document_uuid(ctx.name);
-        if let (Some(pin), false) = (range.pin, range.is_stale(&page)) {
-            tracing::info!(
-                event = "airvisual_render_skipped",
-                source = %ctx.name,
-                head = %pin,
-                "nothing the page reads changed since the last render",
-            );
-            ctx.consumed(pin);
-            return Ok(format!("up to date at {pin}"));
+        if let Some(done) = skip_if_current(ctx, Self::PROVIDER, &page) {
+            return Ok(done);
         }
-        let parsed = parse(raw_path, range)
+        let parsed = parse(raw_path, ctx.raw_range())
             .with_context(|| format!("airvisual parse {}", raw_path.display()))?;
         ctx.declare_bucket(&page, &inputs())?;
         let mut on_doc = |md| ctx.emit_doc(md);

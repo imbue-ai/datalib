@@ -190,26 +190,3 @@ async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
         })
         .collect()
 }
-
-impl ParsedAirvisual {
-    /// A device's display name, or its id when no device row names it.
-    pub fn device_label<'a>(&'a self, id: &'a str) -> &'a str {
-        self.devices
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.name.as_str())
-            .unwrap_or(id)
-    }
-
-    pub fn series_by_device(&self) -> BTreeMap<&str, Vec<&Series>> {
-        datalib_etl_timeseries_render::series::by_device(&self.series)
-    }
-
-    pub fn latest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::latest_ts_ms(&self.series)
-    }
-
-    pub fn earliest_ts_ms(&self) -> Option<i64> {
-        datalib_etl_timeseries_render::series::earliest_ts_ms(&self.series)
-    }
-}

@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::title::Title;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_timeseries_render::text::{iso, short_ts, yaml_safe};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -72,8 +73,8 @@ pub fn render_all(
         let subtitle = format!(
             "{} weigh-ins · {} — {}",
             parsed.weigh_ins.len(),
-            short(parsed.weigh_ins[0].timestamp_gmt_ms),
-            short(parsed.weigh_ins[parsed.weigh_ins.len() - 1].timestamp_gmt_ms),
+            short_ts(parsed.weigh_ins[0].timestamp_gmt_ms),
+            short_ts(parsed.weigh_ins[parsed.weigh_ins.len() - 1].timestamp_gmt_ms),
         );
         let html = weight_html("Weight", &subtitle, &parsed.weigh_ins)?;
         let path = plots_dir.join("weight.html");
@@ -169,9 +170,9 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
         out,
         "**{:.1} kg** on {} · {} weigh-ins since {}{}.\n",
         latest.weight_kg,
-        short(latest.timestamp_gmt_ms),
+        short_ts(latest.timestamp_gmt_ms),
         parsed.weigh_ins.len(),
-        short(first.timestamp_gmt_ms),
+        short_ts(first.timestamp_gmt_ms),
         match latest.body_fat_pct {
             Some(f) => format!(" · {f:.1} % body fat"),
             None => String::new(),
@@ -201,7 +202,7 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, plot_file: Opt
         let _ = writeln!(
             out,
             "| {} | {:.1} | {} | {} | {} |",
-            short(w.timestamp_gmt_ms),
+            short_ts(w.timestamp_gmt_ms),
             w.weight_kg,
             w.bmi.map(|b| format!("{b:.1}")).unwrap_or_default(),
             w.body_fat_pct
@@ -281,7 +282,7 @@ fn build_grid_rows(
             text,
             "\nlatest {:.1} kg on {}",
             w.weight_kg,
-            short(w.timestamp_gmt_ms)
+            short_ts(w.timestamp_gmt_ms)
         );
     }
     let mut rows: Vec<GridRow> = GridRow::builder()
@@ -348,16 +349,6 @@ fn page_title(parsed: &ParsedGarmin, source_id: &str) -> String {
     }
 }
 
-fn iso(ms: i64) -> Option<String> {
-    datalib_time::IsoOffsetTimestamp::from_unix_millis(ms).map(|t| t.to_rfc3339())
-}
-
-fn short(ms: i64) -> String {
-    datalib_time::IsoOffsetTimestamp::from_unix_millis(ms)
-        .map(|t| t.inner().format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| ms.to_string())
-}
-
 /// Garmin writes device stamps as `2026-09-14T05:12:44.0` with no
 /// offset, and the field name says GMT — the one place assuming UTC is
 /// backed by the source itself.
@@ -365,14 +356,6 @@ fn garmin_stamp_to_iso(s: &str) -> Option<String> {
     datalib_time::parse_with_assumed_utc(s)
         .ok()
         .map(|t| t.to_rfc3339())
-}
-
-fn yaml_safe(s: &str) -> String {
-    if s.chars().any(|c| ":#[]{}&*?,|>'\"%@`\n".contains(c)) {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]
