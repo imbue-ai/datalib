@@ -186,6 +186,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/steps/{id}/pause", post(step_pause))
         .route("/api/steps/{id}/resume", post(step_resume))
         .route("/api/reset", post(reset_steps))
+        .route("/api/purge", post(purge_groups))
         .route("/api/runs", get(runs_list))
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
@@ -1545,6 +1546,14 @@ struct ResetRequest {
     by: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PurgeRequest {
+    /// Group ids the config no longer names.
+    groups: Vec<String>,
+    #[serde(default)]
+    by: Option<String>,
+}
+
 type Refusal = (StatusCode, String);
 
 fn internal(e: anyhow::Error) -> Refusal {
@@ -1686,6 +1695,21 @@ async fn reset_steps(
         .await
         .map_err(|e| (StatusCode::CONFLICT, e))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/purge` — delete the trees of groups gone from the config.
+/// 204 once they are gone; 202 when a sync in progress holds the delete
+/// until it is over; 409, with the reason, for a group still configured.
+async fn purge_groups(
+    State(s): State<AppState>,
+    Json(req): Json<PurgeRequest>,
+) -> Result<StatusCode, Refusal> {
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
+    match s.sync.purge(&req.groups, &by).await {
+        Ok(supervisor::PurgeAnswer::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(supervisor::PurgeAnswer::Queued) => Ok(StatusCode::ACCEPTED),
+        Err(why) => Err((StatusCode::CONFLICT, why)),
+    }
 }
 
 async fn sync_stream(

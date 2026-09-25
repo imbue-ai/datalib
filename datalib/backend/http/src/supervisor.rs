@@ -1,7 +1,8 @@
 //! The server's side of the supervisor loop (`docs/dev/plans/supervisor.md`
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request is open, and between busy periods settles a pause
-//! or a resume into the record and runs a reset.
+//! or a resume into the record, runs a reset and deletes a removed
+//! group's tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -9,10 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datalib_dag::config::ConfigCheck;
+use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::scheduler::ResetTarget;
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::record::Record;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{EventSink, Runner};
@@ -24,6 +26,25 @@ struct Reset {
     by: String,
     done: oneshot::Sender<Result<(), String>>,
 }
+
+/// Groups gone from the config whose trees someone asked to delete,
+/// waiting for the loop to be idle.
+struct Purge {
+    groups: Vec<String>,
+    by: String,
+    done: oneshot::Sender<Result<(), String>>,
+}
+
+/// Whether a purge ran, or waits behind the sync in progress.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PurgeAnswer {
+    Done,
+    Queued,
+}
+
+/// How long a purge's answer waits for the loop before it says "queued":
+/// long enough for an idle loop, far short of a sync.
+const PURGE_WAIT: Duration = Duration::from_secs(5);
 
 /// How the rest of the server reaches the loop: whether a sync is
 /// running, where to write intent, and how to stop it all.
@@ -37,6 +58,7 @@ pub struct SyncControl {
     /// The handlers' own connection, beside the loop's.
     mailbox: Arc<OnceCell<Store>>,
     resets: Arc<Mutex<Vec<Reset>>>,
+    purges: Arc<Mutex<Vec<Purge>>>,
     stop: Arc<watch::Sender<bool>>,
     exited: Arc<watch::Sender<bool>>,
 }
@@ -51,6 +73,7 @@ impl SyncControl {
             nudge: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
             resets: Arc::new(Mutex::new(Vec::new())),
+            purges: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
         }
@@ -101,6 +124,37 @@ impl SyncControl {
         answer
             .await
             .unwrap_or_else(|_| Err("the server stopped before the reset ran".into()))
+    }
+
+    /// Delete the trees of `groups`, which the config no longer names, and
+    /// forget their steps ever ran, so a group re-added under the same id
+    /// starts from nothing. Checked against the config at once; run once
+    /// no step is running, which a sync in progress defers.
+    pub async fn purge(&self, groups: &[String], by: &str) -> Result<PurgeAnswer, String> {
+        if !self.runs_the_loop.load(Ordering::SeqCst) {
+            return Err(
+                "another process is running syncs on this root; delete once it is done".into(),
+            );
+        }
+        let checked = load_config(&self.root)?;
+        if let Some(why) = purge_refusal(&checked.cfg, groups) {
+            return Err(why);
+        }
+        let (done, answer) = oneshot::channel();
+        self.purges
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Purge {
+                groups: groups.to_vec(),
+                by: by.to_string(),
+                done,
+            });
+        self.nudge.notify_one();
+        match tokio::time::timeout(PURGE_WAIT, answer).await {
+            Ok(Ok(result)) => result.map(|()| PurgeAnswer::Done),
+            Ok(Err(_)) => Err("the server stopped before the delete ran".into()),
+            Err(_) => Ok(PurgeAnswer::Queued),
+        }
     }
 
     /// Stop the loop's steps (SIGINT each, and their requests stay open
@@ -192,6 +246,31 @@ impl host::Periods for ServerPeriods<'_> {
         for reset in resets {
             let result = run_reset(self.cfg, store, &reset.targets, &reset.by).await;
             let _ = reset.done.send(result);
+        }
+        let purges = std::mem::take(
+            &mut *self
+                .cfg
+                .control
+                .purges
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        for purge in purges {
+            let result = run_purge(&self.cfg.control.root, store, &purge.groups).await;
+            match &result {
+                Ok(()) => tracing::info!(
+                    groups = ?purge.groups,
+                    by = %purge.by,
+                    "supervisor: deleted the removed groups' trees"
+                ),
+                Err(why) => tracing::error!(
+                    groups = ?purge.groups,
+                    by = %purge.by,
+                    "supervisor: could not delete the removed groups' trees: {why}"
+                ),
+            }
+            // Nobody may be waiting: an answer that timed out said "queued".
+            let _ = purge.done.send(result);
         }
     }
 
@@ -399,6 +478,68 @@ async fn run_reset(
     Ok(())
 }
 
+/// A purge, between busy periods. The config is read again, since it may
+/// have changed since the purge was asked for.
+async fn run_purge(root: &Path, store: &Store, groups: &[String]) -> Result<(), String> {
+    let checked = load_config(root)?;
+    if let Some(why) = purge_refusal(&checked.cfg, groups) {
+        return Err(why);
+    }
+    for group in groups {
+        match tokio::fs::remove_dir_all(root.join(group)).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("delete {group}/: {e}")),
+        }
+    }
+    let saved = store
+        .load_record()
+        .await
+        .map_err(|e| format!("load the record: {e:#}"))?;
+    store
+        .save_record(&saved, &forget_groups(&saved, groups))
+        .await
+        .map_err(|e| format!("forget the groups' steps: {e:#}"))
+}
+
+/// Why the trees of `groups` may not be deleted, or `None`. Each must be
+/// an id a config could name as a group — so `<root>/<id>` is that
+/// group's tree and nothing else — and one `cfg` no longer names.
+fn purge_refusal(cfg: &DagConfig, groups: &[String]) -> Option<String> {
+    if groups.is_empty() {
+        return Some("no groups to delete".into());
+    }
+    if let Some(bad) = groups
+        .iter()
+        .find(|g| !datalib_dag::config::usable_group_id(g))
+    {
+        return Some(format!("{bad:?} is not a group id"));
+    }
+    let named: BTreeSet<&str> = cfg
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .chain(cfg.steps.iter().map(|s| tree_group(&s.id)))
+        .collect();
+    groups
+        .iter()
+        .find(|g| named.contains(g.as_str()))
+        .map(|g| format!("the config still has {g:?}; remove it from the config first"))
+}
+
+/// The record without the steps that write under `groups`.
+fn forget_groups(record: &Record, groups: &[String]) -> Record {
+    let mut next = record.clone();
+    next.steps
+        .retain(|step, _| !groups.iter().any(|g| g == tree_group(step)));
+    next
+}
+
+/// The group directory a step id writes under: its first segment.
+fn tree_group(step_id: &str) -> &str {
+    step_id.split('/').next().unwrap_or(step_id)
+}
+
 /// What a reset syncs next. A step that reads something is rebuilt from
 /// it at once, and what reads it follows; a download is not refilled —
 /// that is its next Sync — so only what reads it runs, and takes the
@@ -495,5 +636,96 @@ mod tests {
         control.busy.store(true, Ordering::SeqCst);
         let err = control.reset(&["a/ingest".into()], "ui").await.unwrap_err();
         assert!(err.contains("a sync is running"), "{err}");
+    }
+
+    /// A root whose config has one group, `keep`, with one step.
+    fn root_keeping_one_group() -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(
+            datalib_dag::config::root_config_path(td.path()),
+            "[[groups]]\nid = \"keep\"\n[[steps]]\ngroup = \"keep\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        td
+    }
+
+    /// A purge deletes a directory under the data root, so it takes only
+    /// a group id — never a path, never `system` — and never a group the
+    /// config still runs.
+    #[test]
+    fn a_purge_takes_only_a_group_the_config_no_longer_names() {
+        let td = root_keeping_one_group();
+        let cfg = load_config(td.path()).unwrap().cfg;
+        let refusal = |groups: &[&str]| {
+            let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
+            purge_refusal(&cfg, &groups)
+        };
+        assert_eq!(refusal(&["gone"]), None);
+        assert!(refusal(&[]).is_some());
+        assert!(refusal(&["gone", "keep"])
+            .unwrap()
+            .contains("still has \"keep\""));
+        for bad in ["", "..", "system", "a/b", "../elsewhere"] {
+            assert!(
+                refusal(&[bad]).unwrap().contains("not a group id"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Guards the trap a bare `rm -r` sets: a group re-added under the same
+    /// id with the same definition read as up to date, and wrote nothing,
+    /// because the record still said its step had succeeded.
+    #[tokio::test]
+    async fn a_purge_deletes_the_tree_and_forgets_its_steps() {
+        use datalib_dag::supervisor::record::StepRecord;
+        let td = root_keeping_one_group();
+        let root = td.path();
+        for tree in ["gone/render_markdown", "keep/raw"] {
+            std::fs::create_dir_all(root.join(tree)).unwrap();
+            std::fs::write(root.join(tree).join("store.db"), "x").unwrap();
+        }
+        let store = Store::open(root).await.unwrap();
+        let succeeded = || StepRecord {
+            version: Some("v1".into()),
+            succeeded: true,
+            fingerprint: "fp".into(),
+            ..Default::default()
+        };
+        let seeded = Record {
+            steps: BTreeMap::from([
+                ("gone/render_markdown".into(), succeeded()),
+                ("keep/raw".into(), succeeded()),
+            ]),
+            current_run: None,
+        };
+        store
+            .save_record(&Record::default(), &seeded)
+            .await
+            .unwrap();
+
+        run_purge(root, &store, &["gone".into()]).await.unwrap();
+
+        assert!(!root.join("gone").exists());
+        assert!(root.join("keep/raw/store.db").exists());
+        let steps: Vec<String> = store
+            .load_record()
+            .await
+            .unwrap()
+            .steps
+            .into_keys()
+            .collect();
+        assert_eq!(steps, ["keep/raw"]);
+        // A tree already gone is not an error: the record still needs forgetting.
+        run_purge(root, &store, &["gone".into()]).await.unwrap();
+        store.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_purge_is_refused_when_another_process_runs_the_loop() {
+        let td = root_keeping_one_group();
+        let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
+        let err = control.purge(&["gone".into()], "ui").await.unwrap_err();
+        assert!(err.contains("another process"), "{err}");
     }
 }

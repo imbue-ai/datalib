@@ -20,6 +20,7 @@ import {
   paramsAreRepresentable,
   entryForStep,
   emptyTableDiagnosis,
+  DIFF_TYPE,
   type ConfiguredGroup,
   type ConfiguredStep,
   type SourceSteps,
@@ -40,6 +41,7 @@ import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
 import CompareDialog from "@/components/CompareDialog.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
 import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -57,6 +59,7 @@ const {
   pauseStep,
   resumeStep,
   resetSteps,
+  purgeGroups,
 } = useApi();
 
 props.ctx.setTitle("Sources");
@@ -1060,6 +1063,59 @@ async function onCompareSubmit(payload: {
   await queueSync([built.renderId], payload.name);
 }
 
+// ── Removing. A comparison's tree is computed from two commits its
+// source keeps, so unlike a download it is worth nothing kept: the
+// question offers to delete it, checked by default. Anything else keeps
+// its data, and gets the platform's plain confirm.
+const asking = ref<{
+  message: string;
+  checkLabel: string;
+  resolve: (answer: { ok: boolean; checked: boolean }) => void;
+} | null>(null);
+
+function comparisonQuestion(name: string): string {
+  return `Remove the comparison "${name}" from the config?`;
+}
+
+/// The groups whose trees go with the removal, or null for Cancel.
+async function confirmRemoval(what: string, leaving: ConfiguredGroup[]): Promise<string[] | null> {
+  const comparisons = leaving.filter((g) => g.type === DIFF_TYPE);
+  if (comparisons.length === 0) return (await confirmAction(what)) ? [] : null;
+  const names = comparisons.map((g) => `"${g.name ?? g.id}"`).join(", ");
+  const answer = await new Promise<{ ok: boolean; checked: boolean }>((resolve) => {
+    asking.value = {
+      message: what,
+      checkLabel:
+        `Also delete the computed changes of ${names} from disk. ` +
+        `Comparing the same two syncs again rebuilds them.`,
+      resolve,
+    };
+  });
+  asking.value = null;
+  if (!answer.ok) return null;
+  return answer.checked ? comparisons.map((g) => g.id) : [];
+}
+
+async function removeAndPurge(next: string, what: string, purge: string[]) {
+  const ok = await writeConfig(next, what);
+  if (!ok || purge.length === 0) return;
+  try {
+    const done = await purgeGroups(purge);
+    banner.value = {
+      ok: true,
+      text:
+        done === "done"
+          ? `${what} The computed changes are deleted.`
+          : `${what} The computed changes are deleted once the sync in progress is over.`,
+    };
+  } catch (e) {
+    banner.value = {
+      ok: false,
+      text: `${what} The computed changes were not deleted: ${(e as Error).message}`,
+    };
+  }
+}
+
 async function deleteSource(id: string) {
   const step = sources.value.find((s) => s.id === id);
   if (!step) return;
@@ -1072,8 +1128,18 @@ async function deleteSource(id: string) {
   const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
   const doomed = sibling ? [step, sibling] : [step];
 
-  const what =
-    step.kind === "applet"
+  // A group with nothing left under it goes too: the loader would only
+  // warn about it, but a `[[groups]]` entry naming a source that is
+  // gone is litter someone has to explain.
+  const goneIds = new Set(doomed.map((d) => d.id));
+  const emptied = configGroups.value.filter(
+    (g) =>
+      step.group === g.id && !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
+  );
+
+  const what = emptied.some((g) => g.type === DIFF_TYPE)
+    ? comparisonQuestion(name)
+    : step.kind === "applet"
       ? `Remove the "${name}" applet from the config?\n\n` +
         `The server stops it. Anything in the app that its components or endpoints ` +
         `serve will stop working until you add it back.`
@@ -1088,16 +1154,9 @@ async function deleteSource(id: string) {
           : `Remove "${name}" from the config?\n\n` +
             `Its data stays on disk — only this step stops running. Re-adding it later ` +
             `resumes from what's already there.`;
-  if (!(await confirmAction(what))) return;
+  const purge = await confirmRemoval(what, emptied);
+  if (!purge) return;
 
-  // A group with nothing left under it goes too: the loader would only
-  // warn about it, but a `[[groups]]` entry naming a source that is
-  // gone is litter someone has to explain.
-  const goneIds = new Set(doomed.map((d) => d.id));
-  const emptied = configGroups.value.filter(
-    (g) =>
-      step.group === g.id && !sources.value.some((s) => s.group === g.id && !goneIds.has(s.id)),
-  );
   // Cut first: the entries' offsets are into the text as parsed, and
   // unwiring a fan-in above the source would shift them. Unwiring is a
   // regex over the result, so it needs no offsets.
@@ -1105,7 +1164,7 @@ async function deleteSource(id: string) {
   for (const d of doomed) {
     if (d.phase === "render") next = unwireFromFanIns(next, d.id);
   }
-  await writeConfig(next, `Removed ${name}.`);
+  await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
 /// Remove a group with everything filed under it. Its render steps
@@ -1123,16 +1182,19 @@ async function deleteGroup(id: string) {
     .filter(Boolean)
     .join(" and ");
   const what =
-    `Remove "${name}" from the config${under ? `, with the ${under} under it` : ""}?\n\n` +
-    `The data stays on disk — these entries just stop running. Adding the source ` +
-    `back later resumes from what's already there.`;
-  if (!(await confirmAction(what))) return;
+    group.type === DIFF_TYPE
+      ? comparisonQuestion(name)
+      : `Remove "${name}" from the config${under ? `, with the ${under} under it` : ""}?\n\n` +
+        `The data stays on disk — these entries just stop running. Adding the source ` +
+        `back later resumes from what's already there.`;
+  const purge = await confirmRemoval(what, [group]);
+  if (!purge) return;
 
   let next = removeSteps(configText.value, [...members, group]);
   for (const m of members) {
     if (m.phase === "render") next = unwireFromFanIns(next, m.id);
   }
-  await writeConfig(next, `Removed ${name}.`);
+  await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
 /// Several rows at once: one question, one write. A single row keeps
@@ -1173,13 +1235,17 @@ async function deleteRows(targets: Row[]) {
     `Remove ${names} from the config, with everything under them?\n\n` +
     `The data stays on disk — these entries just stop running. Adding a source ` +
     `back later resumes from what's already there.`;
-  if (!(await confirmAction(what))) return;
   const entries = [...doomed.values()];
+  const leaving = [...doomed.entries()]
+    .filter(([key]) => key.startsWith("group:"))
+    .map(([, g]) => g as ConfiguredGroup);
+  const purge = await confirmRemoval(what, leaving);
+  if (!purge) return;
   let next = removeSteps(configText.value, entries);
   for (const d of entries) {
     if ("phase" in d && d.phase === "render") next = unwireFromFanIns(next, d.id);
   }
-  await writeConfig(next, `Removed ${targets.length} entries.`);
+  await removeAndPurge(next, `Removed ${targets.length} entries.`, purge);
 }
 
 /// Leave the Manage screen for this row's data: one card, the grid,
@@ -1573,6 +1639,14 @@ onUnmounted(() => {
         :editing="editing"
         @close="closeWizard"
         @submit="onWizardSubmit"
+      />
+      <ConfirmDialog
+        v-if="asking"
+        title="Remove"
+        :message="asking.message"
+        :check-label="asking.checkLabel"
+        confirm-label="Remove"
+        @answer="asking.resolve"
       />
       <CompareDialog
         v-if="compareFor"

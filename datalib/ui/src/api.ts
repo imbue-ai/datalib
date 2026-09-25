@@ -1092,6 +1092,14 @@ export async function resetSteps(targets: string[]): Promise<void> {
   await post("/api/reset", { targets });
 }
 
+/// Delete the trees of groups already gone from the config, and forget
+/// their steps ran. "queued" when a sync in progress holds the delete
+/// until it is over.
+export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
+  const r = await post("/api/purge", { groups });
+  return r.status === 202 ? "queued" : "done";
+}
+
 // --- The run store -----------------------------------------------------------
 
 // The rows of `system/runs/runs.sqlite`, mirroring `app_schema::runs` in

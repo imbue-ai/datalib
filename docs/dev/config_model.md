@@ -74,6 +74,14 @@ source's id and type reach the step as `DATALIB_DAG_SOURCE_GROUP` and
 `DATALIB_DAG_SOURCE_GROUP_TYPE`, set by the loader in the step's `env`. `docs/dev/plans/completed/diff_renderer.md`
 has the design; `configs/dag_example.toml` has one.
 
+Its tree is worth nothing kept: both commits stay in the source's store,
+so comparing them again rebuilds it. Removing a diff group on the Manage
+screen therefore offers, checked by default, to delete the tree too —
+`POST /api/purge` with the group ids, once they are out of the config.
+The server deletes `<root>/<group>/` while no step runs and forgets the
+group's steps in its record; without that, a group re-added under the
+same id and definition would read as up to date and write nothing.
+
 `configs/dag_example.toml` is the commented, complete version;
 `docs/user/config_examples/` has the shapes people start from.
 
