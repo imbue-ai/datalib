@@ -94,12 +94,12 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     // read an unsealed store and assert on zero rows.
     let parsed = parse_api_dir(&out_db, "gitlab", RawRange::cold()).expect("parse_api_dir");
     assert_eq!(
-        parsed.merge_requests.len(),
+        parsed.change_requests.len(),
         1,
         "render found no MR — a zero here means the download's rows were \
          never committed, not that the source is empty"
     );
-    assert_eq!(parsed.merge_requests[0].mr_iid as u64, iid);
+    assert_eq!(parsed.change_requests[0].number as u64, iid);
 
     let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
     let me = raw.self_identity.expect("self identity present");

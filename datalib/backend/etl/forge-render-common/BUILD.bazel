@@ -1,0 +1,30 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# What the forge providers' render crates (github, gitlab) share: one
+# model of a change request and its comments, the one document it
+# renders to and its grid rows. A provider's parse fills the model in
+# from its raw store; this does the rest. Render side: it knows
+# `datalib_schema`. Bazel-only (no Cargo.toml).
+rust_library(
+    name = "datalib_etl_forge_render_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_forge_render_common",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/schema:datalib_schema",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "forge_render_common_unittests",
+    size = "small",
+    crate = ":datalib_etl_forge_render_common",
+    edition = "2021",
+)

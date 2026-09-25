@@ -27,7 +27,7 @@ impl SourceRender for GithubRender {
     const PROVIDER: &'static str = "github";
 
     fn render_version(&self) -> u32 {
-        crate::render::grid_rows::RENDER_VERSION
+        crate::render::RENDER_VERSION
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
