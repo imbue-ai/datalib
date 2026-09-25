@@ -44,10 +44,9 @@ export type SearchRow = {
   source: string;
   // The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
   provider: string;
-  // `source` and `source_id` resolved for the grid's Provider and
-  // Source columns, by the applet from the config: the configured
-  // source's own mark (Gmail, not Mail) and the group's name.
-  provider_ref?: Identity;
+  // `source_id` resolved for the grid's Source column, by the applet
+  // from the config: the group's name, led by the configured source's
+  // own mark (Gmail, not Mail).
   source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
   // directory under the data root (the first segment of its qmd_path).
