@@ -15,8 +15,7 @@ pub enum Field {
     Source,
     /// The configured source's **id** — the group id, which is also
     /// the stanza directory a row's rendered document lives under.
-    /// Matched as a prefix of `qmd_path` rather than as a column of its
-    /// own: `grid_rows` has no column for it.
+    /// `grid_rows.source_id`, derived from `qmd_path` at index time.
     ///
     /// It is the id and never the group's display name. A name is
     /// mutable and two groups may share one, so a filter on it would

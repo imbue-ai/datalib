@@ -1,33 +1,89 @@
 //! End-to-end integration test for the doltlite backend.
 
-use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL};
+use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
+use datalib_schema::problems::{
+    Outcome, Problem, ProblemRow, Reason, Scope, Stage, DDL as PROBLEMS_DDL,
+};
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
-use datalib_unified_index::dolt_repo::DoltRepo;
-use datalib_unified_index::query::parse_query;
+use datalib_unified_index::dolt_repo::{search_sql, DoltRepo};
+use datalib_unified_index::query::{parse_query, Field};
 use datalib_unified_index::repo::IndexRepo;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The `grid_index` step's handle on the root's index, for seeding. The
-/// repo under test opens its own, read-only, once the file exists —
-/// which is exactly how the applet reads what the step wrote.
+/// The `grid_index` step's handle on the root's index, for seeding, and
+/// writing the way the step does: on the writer branch, never on `main`
+/// (`etl/README.md`, "A writer works on its own branch"). The repo under
+/// test opens its own, read-only, once the file exists — which is exactly
+/// how the applet reads what the step wrote.
 async fn writer(root: &Path) -> sqlx::SqlitePool {
-    datalib_core::store::open_pool(&datalib_core::layout::grid_index_db(root))
+    let pool = datalib_core::store::open_pool(&datalib_core::layout::grid_index_db(root))
         .await
-        .expect("open a writer on the grid index")
+        .expect("open a writer on the grid index");
+    sqlx::query("SELECT dolt_checkout('-b', 'datalib_writer')")
+        .execute(&pool)
+        .await
+        .expect("put the writer on its branch");
+    pool
 }
 
-/// What the step does after its DDL, and again after every batch: the
-/// repo reads at HEAD, so a table or a row that was never committed is
-/// not there to read.
+/// What the step does after its DDL, and again after every batch: commit
+/// on its branch, then publish by moving `main` (`commit_run`). The repo
+/// reads `main`, so a table or a row that was never published is not
+/// there to read.
 async fn commit(writer: &sqlx::SqlitePool, what: &str) {
     sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(what)
         .fetch_one(writer)
         .await
         .expect("dolt_commit");
+    sqlx::query("SELECT dolt_branch('-f', 'main', 'datalib_writer')")
+        .execute(writer)
+        .await
+        .expect("publish main");
+}
+
+/// The INSERT the index itself uses, from the derived column list, so the
+/// load-time columns (`touched_at_utc`, `source_id`, …) are computed as
+/// the step computes them and the test cannot drift from the DDL.
+async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
+    let columns = std::iter::once(GridRow::ID_COLUMN)
+        .chain(GridRow::TYPED_COLUMNS.iter().copied())
+        .collect::<Vec<_>>();
+    let placeholders = vec!["?"; columns.len()].join(", ");
+    let sql = format!(
+        "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
+        columns.join(", ")
+    );
+    for row in rows {
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(writer)
+            .await
+            .expect("insert grid row");
+    }
+}
+
+/// A document row: a chat, filed under the path's first segment.
+fn chat_row(uuid: &str, qmd_path: &str) -> GridRow {
+    GridRow::builder()
+        .uuid(uuid)
+        .provider(Provider::Claude)
+        .kind("Chat")
+        .source_label("Claude")
+        .is_document(true)
+        .created_at(Some("2026-04-01T10:00:00+00:00".to_string()))
+        .account(Some("acct-a".to_string()))
+        .conversation_name(Some("Test conv".to_string()))
+        .conversation_uuid(uuid)
+        .entire_chat(format!("/chat/{uuid}"))
+        .body("summary")
+        .qmd_path(Some(qmd_path.to_string()))
+        .source_url(Some(format!("https://claude.ai/chat/{uuid}")))
+        .markdown_uuid(Some(uuid.to_string()))
+        .build()
+        .expect("a valid chat row")
 }
 
 fn unique_db_path() -> PathBuf {
@@ -109,30 +165,23 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     commit(&writer, "schema").await;
     // For Anthropic chats the rendered file is 1:1 with the
     // conversation, so markdown_uuid == conversation_uuid here.
-    sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
-         author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, preview, content_hash, qmd_path, source_url, markdown_uuid, \
-         is_document) \
-         VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
-                 '2026-04-01T10:00:00.000000Z','+00:00', \
-                 NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary', '', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1', 1)",
-    )
-    .execute(&writer)
-    .await
-    .expect("insert chat row");
-    sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, created_offset, \
-         author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, preview, content_hash, markdown_uuid, is_document) \
-         VALUES ('m-1','claude','User Input','Claude','2026-04-01T10:01:00+00:00', \
-                 '2026-04-01T10:01:00.000000Z','+00:00', \
-                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1', 0)",
-    )
-    .execute(&writer)
-    .await
-    .expect("insert message row");
+    let message = GridRow::builder()
+        .uuid("m-1")
+        .provider(Provider::Claude)
+        .kind("User Input")
+        .source_label("Claude")
+        .created_at(Some("2026-04-01T10:01:00+00:00".to_string()))
+        .author(Some("acct-a".to_string()))
+        .account(Some("acct-a".to_string()))
+        .conversation_name(Some("Test conv".to_string()))
+        .conversation_uuid("c-1")
+        .message_index(Some(0))
+        .entire_chat("/chat/c-1")
+        .body("hello there")
+        .markdown_uuid(Some("c-1".to_string()))
+        .build()
+        .unwrap();
+    insert_rows(&writer, &[chat_row("c-1", "chats/c-1.md"), message]).await;
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
          renderer_version) \
@@ -145,9 +194,9 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
-    // Chat tiebreaks before its message.
-    assert_eq!(rows[0].kind, "Chat");
-    assert_eq!(rows[1].kind, "User Input");
+    // Newest first: the message came a minute after the chat began.
+    assert_eq!(rows[0].kind, "User Input");
+    assert_eq!(rows[1].kind, "Chat");
 
     let filtered = repo
         .search(&parse_query("source:Claude"), 100)
@@ -204,16 +253,7 @@ async fn create_grid_tables(writer: &sqlx::SqlitePool) {
 }
 
 async fn insert_chat_row(writer: &sqlx::SqlitePool, uuid: &str) {
-    sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
-         created_offset, conversation_uuid, entire_chat, preview, content_hash, qmd_path, markdown_uuid, is_document) \
-         VALUES (?1,'claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
-                 '2026-04-01T10:00:00.000000Z','+00:00',?1,'/chat/x','summary','','chats/x.md',?1,1)",
-    )
-    .bind(uuid)
-    .execute(writer)
-    .await
-    .expect("insert chat row");
+    insert_rows(writer, &[chat_row(uuid, "chats/x.md")]).await;
 }
 
 /// The repo reads what the step committed, never what it is writing: a
@@ -246,11 +286,10 @@ async fn a_row_the_step_has_not_committed_is_not_served() {
 }
 
 /// The order a fresh root has: the applet is up and answering before the
-/// step's first pass creates the tables and commits them. A read-only
-/// handle opened between the `CREATE TABLE` and that commit has no
-/// `dolt_at_` module for the tables — doltlite registers those at open —
-/// so the repo has to notice and reopen rather than answer "no rows" for
-/// the rest of its life.
+/// step's first pass creates the tables and commits them. The repo's
+/// read-only connection opened before those tables existed, and has to
+/// see them at the next read rather than answer "no rows" for the rest of
+/// its life.
 #[tokio::test]
 async fn a_repo_opened_before_the_first_commit_reads_after_it() {
     let db_path = unique_db_path();
@@ -310,29 +349,30 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     commit(&writer, "schema").await;
     // Both rows sit under `claude-work/render_markdown/`: the chat is
     // that source's data, the measurement is datalib describing it.
-    sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
-         created_offset, conversation_uuid, entire_chat, preview, content_hash, qmd_path, markdown_uuid, \
-         is_document) \
-         VALUES ('c-1','claude','Chat','Claude','2026-04-01T10:00:00+00:00', \
-                 '2026-04-01T10:00:00.000000Z','+00:00','c-1','/chat/c-1','summary','', \
-                 'claude-work/render_markdown/chats/c-1.md','c-1', 1)",
+    let storage = GridRow::builder()
+        .uuid("s-1")
+        .provider(Provider::Datalib)
+        .kind("Store")
+        .source_label("Storage")
+        .created_at(Some("2026-04-01T10:00:00+00:00".to_string()))
+        .account(Some("claude-work".to_string()))
+        .conversation_uuid("s-1")
+        .entire_chat("/chat/s-1")
+        .body("claude-work/ingest/entities.doltlite_db")
+        .qmd_path(Some(
+            "claude-work/render_markdown/_datalib/storage.md".to_string(),
+        ))
+        .markdown_uuid(Some("s-1".to_string()))
+        .build()
+        .unwrap();
+    insert_rows(
+        &writer,
+        &[
+            chat_row("c-1", "claude-work/render_markdown/chats/c-1.md"),
+            storage,
+        ],
     )
-    .execute(&writer)
-    .await
-    .expect("insert chat row");
-    sqlx::query(
-        "INSERT INTO grid_rows (uuid, provider, kind, source_label, created_at, created_at_utc, \
-         created_offset, account, conversation_uuid, entire_chat, preview, content_hash, qmd_path, markdown_uuid, \
-         is_document) \
-         VALUES ('s-1','datalib','Store','Storage','2026-04-01T10:00:00+00:00', \
-                 '2026-04-01T10:00:00.000000Z','+00:00','claude-work','s-1','/chat/s-1', \
-                 'claude-work/ingest/entities.doltlite_db','', \
-                 'claude-work/render_markdown/_datalib/storage.md','s-1', 0)",
-    )
-    .execute(&writer)
-    .await
-    .expect("insert storage row");
+    .await;
     commit(&writer, "rows").await;
 
     let all = repo.search(&parse_query(""), 100).await.unwrap();
@@ -419,20 +459,7 @@ async fn every_wire_field_survives_the_round_trip() {
         diff_changed_columns: Some("text".to_string()),
         ..row
     };
-    // The INSERT the index itself uses, from the derived column list —
-    // so this test cannot drift from the DDL either.
-    let columns = std::iter::once(GridRow::ID_COLUMN)
-        .chain(GridRow::TYPED_COLUMNS.iter().copied())
-        .collect::<Vec<_>>();
-    let placeholders = vec!["?"; columns.len()].join(", ");
-    let sql = format!(
-        "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
-        columns.join(", ")
-    );
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-        .execute(&writer)
-        .await
-        .unwrap();
+    insert_rows(&writer, &[row]).await;
     commit(&writer, "rows").await;
 
     let rows = repo.search(&parse_query(""), 10).await.unwrap();
@@ -455,4 +482,148 @@ async fn every_wire_field_survives_the_round_trip() {
     assert_eq!(wire["is_document"], true);
     assert_eq!(wire["modified_at"], "2026-06-03T09:30:00-07:00");
     drop(repo);
+}
+
+/// The query that exercises a filter key, or `None` for a key no index
+/// can serve in newest-first order. Exhaustive, so a new key does not
+/// compile until it says which it is.
+fn query_for(field: &Field) -> Option<&'static str> {
+    match field {
+        Field::Source => Some("source:Claude"),
+        Field::SourceId => Some("source_id:slack"),
+        Field::Kind => Some("kind:Chat"),
+        Field::Channel => Some("channel:bridge"),
+        Field::Is => Some("is:document"),
+        Field::Convo => Some("convo:00000000-0000-8000-8000-000000000001"),
+        Field::Author => Some("author:picard"),
+        Field::Account => Some("account:acct-1701"),
+        Field::Project => Some("project:proj-1701"),
+        Field::NotionPage => Some("notion_page:00000000-0000-8000-8000-000000000002"),
+        Field::Change => Some("change:added"),
+        // Ranges on `created_at_utc`, which cannot share an index with a
+        // newest-first order: a `before:` far back walks the sort index.
+        Field::Before | Field::After => None,
+        // Not filters: free text goes to qmd, an unknown key matches nothing.
+        Field::Subj | Field::Other(_) => None,
+    }
+}
+
+/// A filter the search bar offers must be served by an index in the
+/// order the grid sorts by. Without one, a filter that matches few rows
+/// walks the whole newest-first index row by row: 38 s for one row among
+/// 74k (`docs/dev/plans/paged_grids.md`). Fails naming the query whose
+/// plan scans the table or sorts it in a temporary B-tree.
+#[tokio::test]
+async fn every_filter_key_is_served_by_an_index() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
+        sqlx::query(*ddl).execute(&writer).await.expect("create");
+    }
+    let every_field = [
+        Field::Before,
+        Field::After,
+        Field::Subj,
+        Field::Source,
+        Field::SourceId,
+        Field::Kind,
+        Field::Channel,
+        Field::Is,
+        Field::Convo,
+        Field::Author,
+        Field::Account,
+        Field::Project,
+        Field::NotionPage,
+        Field::Change,
+        Field::Other(String::new()),
+    ];
+    let queries = every_field
+        .iter()
+        .filter_map(query_for)
+        // The unfiltered grid, its inverse, and what a Browse card asks.
+        .chain(["", "-is:document", "source_id:slack is:document"]);
+    let mut unserved: Vec<String> = Vec::new();
+    for q in queries {
+        let (sql, params) = search_sql(&parse_query(q));
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
+        for p in &params {
+            query = query.bind(p.clone());
+        }
+        let plan: Vec<String> = query
+            .bind(200_i64)
+            .fetch_all(&writer)
+            .await
+            .expect("explain")
+            .iter()
+            .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+            .collect();
+        // A filter must SEARCH an index on its own column. SCANning the
+        // newest-first index in order and testing each row also avoids a
+        // sort, and is exactly the walk this test exists to catch; only
+        // the unfiltered grid may do it.
+        let served = if q.is_empty() {
+            plan.iter().any(|d| {
+                d.starts_with("SCAN grid_rows USING") && d.contains("grid_rows_by_touched")
+            })
+        } else {
+            plan.iter().any(|d| {
+                d.starts_with("SEARCH grid_rows USING") && d.contains("INDEX grid_rows_by_")
+            })
+        };
+        let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
+        if !served || sorts {
+            unserved.push(format!("{q:?}: {plan:?}"));
+        }
+    }
+    assert!(
+        unserved.is_empty(),
+        "no index serves these in newest-first order:\n{}",
+        unserved.join("\n")
+    );
+}
+
+/// The problems banner and table read the index's `problems` through the
+/// same read transaction as the grid: a problem the step committed is
+/// there, by query and by document.
+#[tokio::test]
+async fn a_committed_problem_is_read_back_by_query_and_by_document() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    let row = ProblemRow::new(
+        "slack",
+        Stage::GridRow,
+        Scope::Markdown("md-1"),
+        Some("row-1"),
+        Outcome::Nulled,
+        Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
+        Some(1),
+    );
+    let columns = std::iter::once(ProblemRow::ID_COLUMN)
+        .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+        .collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO problems ({}) VALUES ({})",
+        columns.join(", "),
+        vec!["?"; columns.len()].join(", ")
+    );
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        .execute(&writer)
+        .await
+        .unwrap();
+    commit(&writer, "problems").await;
+
+    let all = repo
+        .problems(&datalib_unified_index::problems::parse(""), 10)
+        .await
+        .unwrap();
+    assert_eq!(all, vec![row.clone()]);
+    assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);
+    assert!(repo.document_problems("md-2").await.unwrap().is_empty());
 }

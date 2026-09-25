@@ -67,10 +67,20 @@ each changed document's row set, and copies the corresponding
 `DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`'s
 structured terms (account/project/before/after/…) plus `is_document = 1`
 or `= 0` when the query said `is:document` or `-is:document`, then
-issues a single SELECT against `grid_rows` ordered by `created_at` ASC
-with a document row tie-breaking ahead of the rows inside it. The row
-mapper translates each row into a `SearchRow` for the HTTP API, with
-`preview` as its Contents cell.
+issues a single SELECT against `grid_rows`, newest first: by
+`touched_at` descending, a document row ahead of the rows inside it at
+the same moment. The row mapper translates each row into a `SearchRow`
+for the HTTP API, with `preview` as its Contents cell.
+
+Every read happens inside one read transaction on a read-only
+connection (`DoltRepo::pinned`), so a request sees one commit and the
+plain table's indexes serve it. `grid_rows` carries one index for the
+newest-first order and one per key the search bar filters on, each
+`(key, touched_at_utc, is_document, uuid)`; a key without one walks
+the whole table in order. They are declared on the struct
+(`#[portable_table(index = …)]`) and created only in the unified
+index, not in the render stores that also hold a `grid_rows`.
+`every_filter_key_is_served_by_an_index` fails when a key has none.
 
 Free text never reaches SQL: the applet sends it to qmd, maps the hits
 to rows by `qmd_path` (below), fetches them with `search_by_uuids`, and
@@ -216,12 +226,20 @@ Several sources have more than one document kind: Claude's `Chat` and
 `Project`, Notion's `Notion Page` and `Notion Comment Thread`,
 LinkedIn's `Contact` and `LinkedIn Chat`.
 
-### `created_at` and `modified_at`
+### `created_at`, `modified_at` and `touched_at`
 
-Both are the record's own stamps, kept as the source wrote them (see
-the timestamp convention in AGENTS.md); each gets a `_utc` twin and an
-offset column at index time, and `created_at_utc` is what the grid
-sorts on and `before:`/`after:` filter on. The rule for a document
+All three are the record's own stamps, kept as the source wrote them
+(see the timestamp convention in AGENTS.md); each gets a `_utc` twin
+and an offset column at index time. `touched_at_utc` is what the grid
+sorts on, newest first; `created_at_utc` is what `before:`/`after:`
+filter on.
+
+`touched_at` is when the record last changed at its source. The
+builder sets it to `modified_at`, else `created_at`, so a provider sets
+it only when the record's last change is neither. Calendar is the one
+that does: an event's `created_at` is when it happens, often years
+ahead, so its `touched_at` is its edit stamp (Google's `updated`, the
+feed's `LAST-MODIFIED`, else `DTSTAMP`), else when it was added. The rule for a document
 row is the same everywhere: `created_at` is the earliest moment in
 the document and `modified_at` the latest. For a row inside a
 document, `created_at` is its own stamp and `modified_at` is the edit
@@ -356,7 +374,12 @@ what each producer passes as the body.
 | email.thread | `thread_id` |
 | perseus | the locator path (`1`, `1.2`, `1.2.3`) |
 
-### `qmd_path`
+### `qmd_path` and `source_id`
+
+`source_id` is derived from `qmd_path` at index time: its first
+segment, except a storage row (provider `datalib`), which sits under the
+source it measures and is filed under `datalib`
+(`GridRow::derived_source_id`). The `source_id:` filter compares it.
 
 `<source_id>/render_markdown/<renderer-specific tail>`, where `<source_id>`
 is the group's id — its directory under the data root, never the

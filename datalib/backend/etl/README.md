@@ -337,7 +337,8 @@ The two-process test measures what a read-only connection may issue
 beside a live writer — `dolt_hashof`, `sqlite_master`,
 `pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_`
 views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
-`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table — and
+`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table,
+`BEGIN`/`COMMIT` around plain reads (the held read transaction) — and
 that list is the allowlist. **`dolt_status` is not on it**: issued from
 a read-only connection while the writer commits, it fails that commit
 and the rows inserted before it are gone (dolthub/doltlite#2832). The
@@ -352,9 +353,11 @@ function answers from the session's last view of the store, so a bare
 `datalib_pin::head` reads `sqlite_master` first, which reloads the root.
 And the `dolt_at_<table>` modules are registered when the connection
 opens, from the commits that exist then: a table another process commits
-later has no module on this connection, and never will. A long-lived
-reader — the search applet — checks `has_unpinnable_tables` and reopens.
-Everything that opens per pass sees neither.
+later has no module on this connection, and never will. Everything that
+opens per pass sees neither. The one long-lived reader, the search
+applet, reads plain tables inside a read transaction instead, because
+it needs the indexes `dolt_at_` cannot use; a table committed after it
+opened is there at its next transaction (`DoltRepo::pinned`).
 
 Open the store once per pass — a stage that needs to load rows, run a
 `dolt_diff` scan and probe for ids does all three on one pool — and

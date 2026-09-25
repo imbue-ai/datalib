@@ -93,6 +93,33 @@ impl GridRow {
     pub fn derived_modified_offset(&self) -> Option<String> {
         split(self.modified_at.as_deref()).map(|(_, offset)| offset)
     }
+
+    pub fn derived_touched_at_utc(&self) -> Option<String> {
+        split(self.touched_at.as_deref()).map(|(utc, _)| utc)
+    }
+
+    pub fn derived_touched_offset(&self) -> Option<String> {
+        split(self.touched_at.as_deref()).map(|(_, offset)| offset)
+    }
+
+    /// The source the row is filed under, which is the source it
+    /// *belongs to* rather than the directory it happens to sit in.
+    ///
+    /// For everything a provider rendered the two are the same: the first
+    /// segment of `qmd_path` (`slack/render_markdown/x/all.md` → `slack`),
+    /// the group's directory under the data root. The storage rows are the
+    /// exception: each source's measurements are written into that
+    /// source's own `render_markdown/`, the one tree its render step may
+    /// write, but a measurement is datalib describing the mirror rather
+    /// than part of it, so they are filed under datalib — what their
+    /// `provider` tag already says.
+    pub fn derived_source_id(&self) -> Option<String> {
+        if self.provider == Provider::Datalib.as_str() {
+            return Some(Provider::Datalib.as_str().to_string());
+        }
+        let (first, _) = self.qmd_path.as_deref()?.split_once('/')?;
+        Some(first.to_string())
+    }
 }
 
 impl GridRow {
@@ -115,6 +142,7 @@ pub struct GridRowBuilder {
     source_label: String,
     created_at: Option<String>,
     modified_at: Option<String>,
+    touched_at: Option<String>,
     is_document: bool,
     author: Option<String>,
     account: Option<String>,
@@ -183,6 +211,9 @@ impl GridRowBuilder {
 
     opt_setter!(created_at);
     opt_setter!(modified_at);
+    // Defaults to `modified_at`, else `created_at`; set it only when the
+    // record's last change is neither (a calendar event's edit stamp).
+    opt_setter!(touched_at);
     opt_setter!(author);
     opt_setter!(account);
     opt_setter!(project);
@@ -246,6 +277,7 @@ impl GridRowBuilder {
         for (field, slot) in [
             ("created_at", &mut self.created_at),
             ("modified_at", &mut self.modified_at),
+            ("touched_at", &mut self.touched_at),
         ] {
             let Some(ts) = slot.take() else { continue };
             if validate_iso_offset(&ts).is_ok() {
@@ -303,6 +335,7 @@ impl GridRowBuilder {
         for (field, stamp) in [
             ("created_at", &self.created_at),
             ("modified_at", &self.modified_at),
+            ("touched_at", &self.touched_at),
         ] {
             if let Some(ts) = stamp {
                 validate_iso_offset(ts).map_err(|e| GridRowError::InvalidStamp {
@@ -312,12 +345,17 @@ impl GridRowBuilder {
                 })?;
             }
         }
+        let touched_at = self
+            .touched_at
+            .or_else(|| self.modified_at.clone())
+            .or_else(|| self.created_at.clone());
         Ok(GridRow {
             uuid: self.uuid,
             provider: self.provider,
             kind: self.kind,
             source_label: self.source_label,
             created_at: self.created_at,
+            touched_at,
             modified_at: self.modified_at,
             is_document: self.is_document,
             author: self.author,
@@ -363,6 +401,89 @@ mod builder_tests {
             .conversation_uuid("c-1")
             .entire_chat("/contact/u-1")
             .body("Jean-Luc Picard")
+    }
+
+    /// Newest-first sorts on `touched_at`, so a row with no stamp of its
+    /// own for it must still get the latest one it has.
+    #[test]
+    fn touched_at_is_modified_at_else_created_at_unless_set() {
+        let created = "2024-01-01T09:00:00+00:00";
+        let modified = "2024-06-01T09:00:00-07:00";
+        let row = |b: GridRowBuilder| b.build().unwrap().touched_at;
+        assert_eq!(row(ok_builder()), None);
+        assert_eq!(
+            row(ok_builder().created_at(created.to_string())),
+            Some(created.into())
+        );
+        assert_eq!(
+            row(ok_builder()
+                .created_at(created.to_string())
+                .modified_at(modified.to_string())),
+            Some(modified.into())
+        );
+        let edited = "2023-12-24T10:00:00+00:00";
+        assert_eq!(
+            row(ok_builder()
+                .created_at("2031-12-31T00:00:00+00:00".to_string())
+                .touched_at(edited.to_string())),
+            Some(edited.into()),
+            "a calendar event edited in 2023 sorts in 2023, not at its 2031 start"
+        );
+    }
+
+    /// A bad `touched_at` is nulled and recorded like the other stamps,
+    /// and the row then falls back to the stamps it does have.
+    #[test]
+    fn a_bad_touched_at_is_nulled_and_the_default_applies() {
+        let mut problems = Vec::new();
+        let row = ok_builder()
+            .created_at("2024-01-01T09:00:00+00:00".to_string())
+            .touched_at("yesterday".to_string())
+            .build_or_record("s", "k", 1, &mut problems)
+            .unwrap();
+        assert_eq!(row.touched_at.as_deref(), Some("2024-01-01T09:00:00+00:00"));
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].field.as_deref(), Some("touched_at"));
+    }
+
+    /// The stanza is the first path segment, matching how `datalib-step`
+    /// names a source from its declared outputs and how `grid_index`
+    /// names one from the directory it walked.
+    #[test]
+    fn source_id_is_the_first_path_segment() {
+        let at = |path: &str| {
+            ok_builder()
+                .qmd_path(path.to_string())
+                .build()
+                .unwrap()
+                .derived_source_id()
+        };
+        assert_eq!(
+            at("slack/render_markdown/abc/all.md").as_deref(),
+            Some("slack")
+        );
+        // Sharded renders nest deeper; the stanza is still segment one.
+        assert_eq!(
+            at("beeper/render_markdown/googlechat/x/2024-03.md").as_deref(),
+            Some("beeper")
+        );
+        // No separator means the renderer wrote outside its own tree:
+        // report nothing rather than claim the filename is a source.
+        assert_eq!(at("all.md"), None);
+        assert_eq!(ok_builder().build().unwrap().derived_source_id(), None);
+    }
+
+    /// A storage row sits under the source it measures and is filed under
+    /// datalib anyway, so the grid never shows a measurement in the same
+    /// bucket as the data it describes.
+    #[test]
+    fn measurements_are_filed_under_datalib_not_the_measured_source() {
+        let row = ok_builder()
+            .provider(Provider::Datalib)
+            .qmd_path("claude-api/render_markdown/_datalib/storage.md".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(row.derived_source_id().as_deref(), Some("datalib"));
     }
 
     /// The column that replaced a stored whole body: it must keep the

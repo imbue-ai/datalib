@@ -107,6 +107,8 @@ pub async fn run(
         .await
         .context("grid_index head")?;
     pool.close().await;
+    // After the commit, so the sources that were read are indexed.
+    summary.ensure_every_source_indexed()?;
 
     // The dolt commit hash is a faithful content version: HEAD only
     // advances when rows actually changed. Without doltlite

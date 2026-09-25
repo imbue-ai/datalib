@@ -15,7 +15,30 @@ use serde::{Deserialize, Serialize};
 /// One row in the grid_rows table. Provider render steps emit one or more
 /// per source entity; the grid backend and UI read them as a single union.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
-#[portable_table(table = "grid_rows", primary_key = "uuid")]
+#[portable_table(
+    table = "grid_rows",
+    primary_key = "uuid",
+    // Newest first (a document ahead of its rows at the same moment), and
+    // the same within each key the search bar filters on. Without its own index a filter that matches few rows
+    // walks the whole sort index row by row: 38 s for one provider's
+    // single row over 74k rows, 0.08 s with this shape
+    // (docs/dev/plans/paged_grids.md). A key added to the search bar
+    // wants an index here; `every_filter_key_is_served_by_an_index`
+    // says which one is missing.
+    index = "grid_rows_by_touched:touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_source_id:source_id,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_provider:provider,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_source_label:source_label,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_author:author,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid"
+)]
 pub struct GridRow {
     /// Stable and globally unique. Must be deterministic from the source
     /// entity, so re-ingest is idempotent.
@@ -67,6 +90,16 @@ pub struct GridRow {
     #[derived(name = "modified_at_utc", sql = "VARCHAR(40)")]
     #[derived(name = "modified_offset", sql = "VARCHAR(8)")]
     pub modified_at: Option<String>,
+    /// When the record last changed at its source, as the source wrote
+    /// it: what the grid's newest-first order sorts on. `modified_at`,
+    /// else `created_at`, unless the provider knows better — a calendar
+    /// event's `created_at` is when it happens, often years ahead, so its
+    /// `touched_at` is its edit stamp. Same form and derived twins as
+    /// `created_at`.
+    #[col(sql = "VARCHAR(40)")]
+    #[derived(name = "touched_at_utc", sql = "VARCHAR(40)")]
+    #[derived(name = "touched_offset", sql = "VARCHAR(8)")]
+    pub touched_at: Option<String>,
     /// True on the one row per rendered markdown document that *is* that
     /// document — the thread, the conversation, the PR, the page, the PDF
     /// — and false on every row inside it. Every row carries a
@@ -143,7 +176,12 @@ pub struct GridRow {
     /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you want the
     /// file itself: same path, one writer, and the column `/api/chat`
     /// resolves through.
+    ///
+    /// `source_id` is derived from it at index time: the source the row is
+    /// filed under, which the `source_id:` filter matches
+    /// (`GridRow::derived_source_id`).
     #[col(sql = "VARCHAR(512)")]
+    #[derived(name = "source_id", sql = "VARCHAR(96)")]
     pub qmd_path: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.

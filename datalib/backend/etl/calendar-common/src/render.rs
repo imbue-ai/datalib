@@ -421,6 +421,10 @@ fn build_grid_row(
         // an event is nearly always last edited before it happens. The
         // edit stamp is on the page; the row carries only when it happens.
         .modified_at(None)
+        // Newest-first means most recently changed, and the start can be
+        // years ahead. Every event has one of these in practice: Google
+        // always sends `updated`, and RFC 5545 requires `DTSTAMP`.
+        .touched_at(event.modified_at.clone().or_else(|| event.created.clone()))
         .author(
             event
                 .organizer
@@ -675,6 +679,11 @@ mod tests {
         assert_eq!(
             row.modified_at, None,
             "an edit before the event would sort after it"
+        );
+        assert_eq!(
+            row.touched_at.as_deref(),
+            Some("2026-09-02T16:00:00+00:00"),
+            "newest-first sorts an event by its last edit, not its start"
         );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));

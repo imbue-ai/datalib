@@ -1629,6 +1629,9 @@ grid_rows
     modified_at
     modified_at_utc
     modified_offset
+    touched_at
+    touched_at_utc
+    touched_offset
     is_document
     author
     account
@@ -1643,6 +1646,7 @@ grid_rows
     preview
     content_hash
     qmd_path
+    source_id
     source_url
     git_sha
     upstream_id

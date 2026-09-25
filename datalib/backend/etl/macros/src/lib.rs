@@ -841,7 +841,11 @@ struct PortableColumn {
 
 fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = input.ident.clone();
-    let (table, primary_key) = parse_portable_table_attr(&input.attrs, &struct_name)?;
+    let PortableTableAttr {
+        table,
+        primary_key,
+        indexes,
+    } = parse_portable_table_attr(&input.attrs, &struct_name)?;
     let fields = collect_named_fields(&input)?;
 
     let mut columns: Vec<PortableColumn> = Vec::new();
@@ -909,12 +913,43 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     }
 
+    // An index naming a column the table does not have would fail at
+    // `CREATE INDEX` on the first open of every store; say so at compile
+    // time instead.
+    let mut index_ddl_lits: Vec<LitStr> = Vec::new();
+    for (lit, ix) in &indexes {
+        if let Some(unknown) = ix
+            .columns
+            .iter()
+            .find(|c| !columns.iter().any(|col| &col.name == *c))
+        {
+            return Err(syn::Error::new_spanned(
+                lit,
+                format!(
+                    "index {} names {unknown:?}, which is not a column of {table}",
+                    ix.name
+                ),
+            ));
+        }
+        index_ddl_lits.push(LitStr::new(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})",
+                name = ix.name,
+                cols = ix.columns.join(", "),
+            ),
+            proc_macro2::Span::call_site(),
+        ));
+    }
+
     let mut decl_lines: Vec<String> = columns.iter().map(|c| c.decl.clone()).collect();
     decl_lines.push(format!("PRIMARY KEY ({primary_key})"));
     let body = decl_lines.join(",\n    ");
     let ddl = format!("CREATE TABLE IF NOT EXISTS {table} (\n    {body}\n)");
 
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
+    // `quote` repeats only iterables, so the table name rides along once
+    // per index.
+    let index_table_lits = vec![table_lit.clone(); index_ddl_lits.len()];
     let struct_name_lit = LitStr::new(&struct_name.to_string(), proc_macro2::Span::call_site());
     let ddl_lit = LitStr::new(&ddl, proc_macro2::Span::call_site());
     let col_lits: Vec<LitStr> = columns
@@ -985,19 +1020,33 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
         /// Column names, in declaration order (struct fields plus any
         /// load-time-derived columns).
         pub const COLUMNS: &[(&str, &[&str])] = &[(#table_lit, &[#(#col_lits),*])];
+
+        /// `(table_name, CREATE INDEX IF NOT EXISTS …)` for each declared
+        /// `index`. Separate from `DDL` so a store creates them only when
+        /// it wants them.
+        pub const INDEXES: &[(&str, &str)] = &[#((#index_table_lits, #index_ddl_lits)),*];
     })
+}
+
+/// `#[portable_table(...)]`, parsed. Each index keeps its literal so an
+/// error can point at it.
+struct PortableTableAttr {
+    table: String,
+    primary_key: String,
+    indexes: Vec<(LitStr, IndexSpec)>,
 }
 
 fn parse_portable_table_attr(
     attrs: &[Attribute],
     struct_name: &Ident,
-) -> syn::Result<(String, String)> {
+) -> syn::Result<PortableTableAttr> {
     for attr in attrs {
         if !attr.path().is_ident("portable_table") {
             continue;
         }
         let mut table: Option<String> = None;
         let mut primary_key: Option<String> = None;
+        let mut indexes: Vec<(LitStr, IndexSpec)> = Vec::new();
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("table") {
                 table = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -1005,9 +1054,15 @@ fn parse_portable_table_attr(
             } else if meta.path.is_ident("primary_key") {
                 primary_key = Some(meta.value()?.parse::<LitStr>()?.value());
                 Ok(())
+            } else if meta.path.is_ident("index") {
+                let lit: LitStr = meta.value()?.parse()?;
+                let spec = parse_index_spec(&lit)?;
+                indexes.push((lit, spec));
+                Ok(())
             } else {
                 Err(meta.error(
-                    "unknown #[portable_table(...)] key; supported keys: `table`, `primary_key`",
+                    "unknown #[portable_table(...)] key; supported keys: `table`, `primary_key`, \
+                     `index`",
                 ))
             }
         })?;
@@ -1017,7 +1072,11 @@ fn parse_portable_table_attr(
         let primary_key = primary_key.ok_or_else(|| {
             syn::Error::new_spanned(attr, "#[portable_table(primary_key = \"...\")] is required")
         })?;
-        return Ok((table, primary_key));
+        return Ok(PortableTableAttr {
+            table,
+            primary_key,
+            indexes,
+        });
     }
     Err(syn::Error::new_spanned(
         struct_name,

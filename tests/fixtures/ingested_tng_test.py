@@ -934,7 +934,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._diff_shape(CONTACTS_DIFF_GROUP),
             {
                 "Data": ("removed", ""),
-                "Jean-Luc Picard": ("modified", "content_hash|modified_at|preview"),
+                "Jean-Luc Picard": (
+                    "modified",
+                    "content_hash|modified_at|preview|touched_at",
+                ),
                 "Worf": ("added", ""),
             },
             "the contacts diff between the two fixture commits",
@@ -991,7 +994,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 (
                     "Slack Thread",
                     "modified",
-                    "byte_size|content_hash|item_count|modified_at|preview",
+                    "byte_size|content_hash|item_count|modified_at|preview|touched_at",
                 ),
             ],
             "the reply added to the grown thread, whose own row grew with it",
