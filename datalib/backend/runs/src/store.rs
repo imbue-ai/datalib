@@ -777,6 +777,10 @@ pub trait LogSink: Send + Sync {
     fn log(&self, row: LogRow);
 }
 
+/// Sent to the writer thread to have it flush now, and answered once
+/// that flush is over.
+type FlushAck = tokio::sync::oneshot::Sender<()>;
+
 /// The thread behind a writer, and the handles that stop it. Dropping
 /// the sender tells the thread to flush once more and exit, which is
 /// what makes the final rows land. It must be dropped *before* joining
@@ -785,7 +789,7 @@ pub trait LogSink: Send + Sync {
 struct Writer {
     process_id: String,
     pending: Shared,
-    stop: Mutex<Option<mpsc::Sender<()>>>,
+    flushes: Mutex<Option<mpsc::Sender<FlushAck>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -805,7 +809,7 @@ impl Writer {
         Some(Self {
             process_id,
             pending,
-            stop: Mutex::new(Some(tx)),
+            flushes: Mutex::new(Some(tx)),
             handle: Mutex::new(Some(handle)),
         })
     }
@@ -813,12 +817,27 @@ impl Writer {
     fn log(&self, row: LogRow) {
         self.pending.lock().expect("run store mutex").logs.push(row);
     }
+
+    async fn flush(&self) {
+        let (ack, flushed) = tokio::sync::oneshot::channel();
+        let sent = self
+            .flushes
+            .lock()
+            .expect("run store flush mutex")
+            .as_ref()
+            .is_some_and(|tx| tx.send(ack).is_ok());
+        // A thread that has gone — it could not open the store — drops
+        // the ack, which ends the wait as surely as an answer.
+        if sent {
+            let _ = flushed.await;
+        }
+    }
 }
 
 impl Drop for Writer {
     fn drop(&mut self) {
         // Sender first — that disconnect is the loop's exit signal.
-        drop(self.stop.lock().expect("run store stop mutex").take());
+        drop(self.flushes.lock().expect("run store flush mutex").take());
         let handle = self.handle.lock().expect("run store handle mutex").take();
         if let Some(h) = handle {
             let _ = h.join();
@@ -910,6 +929,12 @@ impl RunWriter {
             .insert(row.process_id.clone(), row);
     }
 
+    /// Returns once everything published before the call is committed,
+    /// or lost with a warning.
+    pub async fn flush(&self) {
+        self.0.flush().await;
+    }
+
     /// The runner's own process id, for a line it writes about itself.
     pub fn process_id(&self) -> &str {
         &self.0.process_id
@@ -962,6 +987,12 @@ impl ProcessLogWriter {
 
     pub fn log(&self, row: LogRow) {
         self.0.log(row);
+    }
+
+    /// Returns once everything logged before the call is committed, or
+    /// lost with a warning.
+    pub async fn flush(&self) {
+        self.0.flush().await;
     }
 
     /// A process this one records on behalf of — a page of the app,
@@ -1021,7 +1052,7 @@ struct SeriesState {
     current: MetricRow,
 }
 
-fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receiver<()>) {
+fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, flushes: mpsc::Receiver<FlushAck>) {
     let Ok(rt) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1042,12 +1073,13 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
     let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
     let mut last_prune = Instant::now();
     loop {
-        // Wake on the interval, or immediately when the writer is
-        // dropped — whose disconnect is the signal to flush and go.
-        let done = matches!(
-            stop.recv_timeout(FLUSH_EVERY),
-            Err(RecvTimeoutError::Disconnected) | Ok(())
-        );
+        // Wake on the interval, on a flush asked for, or when the writer
+        // is dropped — whose disconnect is the signal to flush and go.
+        let (ack, done) = match flushes.recv_timeout(FLUSH_EVERY) {
+            Ok(ack) => (Some(ack), false),
+            Err(RecvTimeoutError::Timeout) => (None, false),
+            Err(RecvTimeoutError::Disconnected) => (None, true),
+        };
         let batch = {
             let mut p = pending.lock().expect("run store mutex");
             std::mem::take(&mut *p)
@@ -1060,6 +1092,9 @@ fn writer_loop(path: PathBuf, scope: Scope, pending: Shared, stop: mpsc::Receive
             // them, and a silent loss here is what makes anyone
             // distrust the store.
             tracing::warn!(error = %e, lines, "run store: write failed twice; the batch is lost");
+        }
+        if let Some(ack) = ack {
+            let _ = ack.send(());
         }
         if done {
             break;

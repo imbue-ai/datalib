@@ -497,27 +497,27 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
     let state = state_with(tmp.path(), &config_for(&["first"])).await;
-    datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone());
-    datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
+    let ready = datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone());
+    let mut reloaded =
+        datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
     let app = router(state);
+    // A write before the watch reports is a write nobody hears.
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready.wait())
+        .await
+        .expect("the watch never reported ready");
 
     // An atomic write, the way every writer in the tree does it.
+    reloaded.borrow_and_update();
     let tmp_file = tmp.path().join("config.tmp");
     std::fs::write(&tmp_file, config_for(&["first", "second"])).unwrap();
     std::fs::rename(&tmp_file, tmp.path().join("config.toml")).unwrap();
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let (_, view) = get_json(&app, "/api/frontend").await;
-        if view["namespaces"]["second"].is_object() {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the watcher never reached the registry: {view}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(30), reloaded.changed())
+        .await
+        .expect("the watcher never reached the registry")
+        .unwrap();
+    let (_, view) = get_json(&app, "/api/frontend").await;
+    assert!(view["namespaces"]["second"].is_object(), "{view}");
     let (status, _) = get_json(&app, "/applet/second/channels").await;
     assert_eq!(status, StatusCode::OK);
 }
