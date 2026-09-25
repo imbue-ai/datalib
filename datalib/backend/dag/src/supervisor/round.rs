@@ -12,7 +12,7 @@ use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
-    tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
+    tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
 use crate::artifact::ArtifactPath;
@@ -175,7 +175,7 @@ impl Runner {
         let mut next_graph: Option<Graph> = None;
         let mut said_waiting_to_swap = false;
         let mut n = graph.steps.len();
-        let mut shape = shape_of(graph);
+        let mut shape = shape_of(graph, &self.lock_slots);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
         let mut paused: BTreeMap<usize, String> = BTreeMap::new();
@@ -287,7 +287,7 @@ impl Runner {
                         }
                     }
                     n = graph.steps.len();
-                    shape = shape_of(graph);
+                    shape = shape_of(graph, &self.lock_slots);
                     status = carry(&mut status, &from_old);
                     attempts_taken = carry(&mut attempts_taken, &from_old);
                     errors = carry(&mut errors, &from_old);
@@ -369,7 +369,7 @@ impl Runner {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
                 paused: paused.keys().copied().collect(),
             };
-            let t = tick(&shape, &intent, &facts, &self.budgets);
+            let t = tick(&shape, &intent, &facts);
             for (i, st) in t.states.iter().enumerate() {
                 if !matches!(st, Row::Idle | Row::Stale) {
                     last_states[i] = *st;
@@ -437,7 +437,7 @@ impl Runner {
             // reader that sees it closed must find no step still serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
             let held: Vec<bool> = ended.iter().map(Option::is_some).collect();
-            record_states(graph, &mut state, &t, &held, &paused, |i| {
+            record_states(graph, &shape, &mut state, &t, &held, &paused, |i| {
                 let mut serving = open
                     .iter()
                     .enumerate()
@@ -589,8 +589,16 @@ impl Runner {
             requests: Vec::new(),
             paused: paused.keys().copied().collect(),
         };
-        let t = tick(&shape, &at_rest, &facts, &self.budgets);
-        record_states(graph, &mut state, &t, &vec![false; n], &paused, |_| None);
+        let t = tick(&shape, &at_rest, &facts);
+        record_states(
+            graph,
+            &shape,
+            &mut state,
+            &t,
+            &vec![false; n],
+            &paused,
+            |_| None,
+        );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
@@ -758,14 +766,10 @@ impl Runner {
             requests: Vec::new(),
             paused: paused.keys().copied().collect(),
         };
-        let t = tick(
-            &shape_of(graph),
-            &intent,
-            &facts_of(graph, &state),
-            &self.budgets,
-        );
+        let shape = shape_of(graph, &self.lock_slots);
+        let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![false; graph.steps.len()];
-        record_states(graph, &mut state, &t, &held, &paused, |_| None);
+        record_states(graph, &shape, &mut state, &t, &held, &paused, |_| None);
         record.save(&state).await?;
         Ok(all)
     }
@@ -1074,6 +1078,7 @@ fn paused_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, S
 /// run for.
 fn record_states(
     graph: &Graph,
+    shape: &Shape,
     state: &mut Record,
     t: &Tick,
     held: &[bool],
@@ -1101,8 +1106,17 @@ fn record_states(
                 "waiting for {}, which reads what this writes",
                 id(r)
             )),
-            Row::Waiting(Wait::Budget(class)) => {
-                Some(format!("waiting for a free {} slot", class.as_str()))
+            Row::Waiting(Wait::Lock(l)) => {
+                let holders: Vec<&str> = (0..t.states.len())
+                    .filter(|&j| t.states[j] == Row::Running)
+                    .filter(|&j| shape.steps[j].locks.iter().any(|&(h, _)| h == l))
+                    .map(id)
+                    .collect();
+                Some(format!(
+                    "waiting for lock {}, held by {}",
+                    shape.locks[l].name,
+                    holders.join(", ")
+                ))
             }
             _ => None,
         };
@@ -1220,8 +1234,24 @@ fn same_graph(a: &Graph, b: &Graph) -> bool {
 }
 
 /// Today's graph as the tick sees it: each step writes the sink its own
-/// index names, and reads the sinks of the steps it names as inputs.
-fn shape_of(graph: &Graph) -> Shape {
+/// index names, reads the sinks of the steps it names as inputs, and holds
+/// its named locks, sized as the config declares them unless `slots` (the
+/// host's `--parallelism`) says otherwise.
+fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
+    let locks: Vec<LockShape> = graph
+        .locks
+        .iter()
+        .map(|l| LockShape {
+            name: l.name.clone(),
+            slots: slots.get(&l.name).copied().unwrap_or(l.slots),
+        })
+        .collect();
+    let lock_ix = |name: &str| {
+        locks
+            .iter()
+            .position(|l| l.name == name)
+            .unwrap_or_else(|| panic!("the loader declares every lock a step holds: {name}"))
+    };
     let steps = graph
         .steps
         .iter()
@@ -1231,19 +1261,17 @@ fn shape_of(graph: &Graph) -> Shape {
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
-            class: if spec.inputs.is_empty() {
-                Class::Network
-            } else if spec.group_type.is_none() {
-                Class::Index
-            } else {
-                Class::Cpu
-            },
+            locks: super::locks::held_by(spec)
+                .iter()
+                .map(|(name, hold)| (lock_ix(name), *hold))
+                .collect(),
         })
         .collect();
     Shape {
         steps,
         sink_count: graph.steps.len(),
         topo: graph.topo.clone(),
+        locks,
     }
 }
 

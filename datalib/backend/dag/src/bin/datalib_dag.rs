@@ -26,7 +26,6 @@ use datalib_dag::events::FanOutSink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
@@ -365,7 +364,7 @@ async fn main() -> Result<()> {
             .stop_on(stop_rx)
             .reload_from(Arc::new(ConfigFile::new(&config_path)));
         if let Some(p) = parallelism {
-            runner.budgets = Budgets::from_parallelism(p);
+            runner = runner.parallelism(p);
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
