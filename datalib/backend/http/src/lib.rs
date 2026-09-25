@@ -1585,14 +1585,20 @@ async fn request_open(
     }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     let store = mailbox(&s).await?;
+    let mut listener =
+        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests").await;
     let id = store.open_request(&roots, &by).await.map_err(internal)?;
-    s.sync.wake();
     // Answered once the loop has taken it on, so rows read after this
-    // show its steps as wanted. A loop mid-sync looks every quarter
-    // second; one whose config lacks a root leaves it for the next sync.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !store.taken_on(&id).await.map_err(internal)? && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // show its steps as wanted. A loop whose config lacks a root leaves
+    // it for the next sync, so the wait is bounded.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !store.taken_on(&id).await.map_err(internal)? {
+        if tokio::time::timeout_at(deadline, listener.next(store))
+            .await
+            .is_err()
+        {
+            break;
+        }
     }
     Ok(Json(RequestView {
         id,
@@ -1617,7 +1623,6 @@ async fn request_stop(
     }
     let by = by_of(&body)?;
     store.request_stop(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1637,7 +1642,6 @@ async fn step_pause(
     }
     let by = by_of(&body)?;
     mailbox(&s).await?.pause(&id, &by).await.map_err(internal)?;
-    s.sync.wake();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1647,7 +1651,6 @@ async fn step_resume(
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
     mailbox(&s).await?.resume(&id).await.map_err(internal)?;
-    s.sync.wake();
     Ok(StatusCode::NO_CONTENT)
 }
 

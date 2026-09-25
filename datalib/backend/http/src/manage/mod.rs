@@ -584,7 +584,7 @@ impl Snapshot<'_> {
                 detail: Some(match log_disk {
                     None => "Nothing on disk yet \u{2014} no run has been recorded.".to_string(),
                     Some(t) => format!(
-                        "{} in {log}/ \u{2014} the store and the WAL beside it.",
+                        "{} in {log}/ \u{2014} the store and the journal beside it.",
                         human_bytes(t.bytes)
                     ),
                 }),

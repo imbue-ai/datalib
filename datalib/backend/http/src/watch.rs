@@ -18,22 +18,37 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-/// How long to hold a burst of filesystem events before publishing.
-const DEBOUNCE: Duration = Duration::from_millis(300);
-
-/// How often the loop's record is looked at for a commit, as the loop
-/// itself looks for new requests.
-const RECORD_POLL: Duration = Duration::from_millis(250);
-
-/// The least time between two `manage.rows` frames. While a step runs
-/// the runner records its progress several times a second, and every
-/// frame is a refetch by every Manage card open; a row redrawn once a
-/// second is live enough.
-const MANAGE_ROWS_EVERY: Duration = Duration::from_secs(1);
-
 /// How often to publish a [`RootEvent::Heartbeat`] on an otherwise
 /// silent stream.
 pub const HEARTBEAT: Duration = Duration::from_secs(10);
+
+/// The watch's clocks, which a test sets to zero.
+#[derive(Debug, Clone, Copy)]
+pub struct Timing {
+    /// How long to hold a burst of filesystem events before publishing.
+    pub debounce: Duration,
+    /// The least time between two `manage.rows` frames. While a step runs
+    /// the runner records its progress several times a second, and every
+    /// frame is a refetch by every Manage card open; a row redrawn once a
+    /// second is live enough.
+    pub manage_rows_every: Duration,
+    pub heartbeat: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            debounce: Duration::from_millis(300),
+            manage_rows_every: Duration::from_secs(1),
+            heartbeat: HEARTBEAT,
+        }
+    }
+}
+
+/// The name, under `system/`, of the file the watch writes to hear its
+/// own watcher deliver: an FSEvents stream starts asynchronously, so a
+/// watch that has been set up is not yet one that reports.
+const READY_MARKER: &str = ".watch-ready";
 
 /// A dataset the UI fetches, named by what serves it. A card subscribes
 /// to the ones it reads and refetches those; a change to anything else
@@ -139,11 +154,13 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 enum Moved {
     Config,
     /// The loop's record and its mailbox, `system/supervisor.sqlite`:
-    /// seen by [`watch_record`], not by the filesystem.
+    /// heard by [`watch_record`], not seen by the filesystem.
     Supervisor,
     RunStore,
     Frontend,
     GridIndex,
+    /// The watch's own marker: it delivers.
+    Ready,
 }
 
 fn classify(root: &Path, path: &Path) -> Option<Moved> {
@@ -157,6 +174,9 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
         return Some(Moved::Config);
     }
     let system = root.join("system");
+    if path.parent() == Some(system.as_path()) && name.starts_with(READY_MARKER) {
+        return Some(Moved::Ready);
+    }
     let frontend = system.join("frontend");
     // A component lives under the directory; the directory itself
     // appearing is not one. `spawn` creates it just before arming the
@@ -221,7 +241,7 @@ impl Seen {
     async fn now(root: &Path) -> Seen {
         Seen {
             runs: datalib_runs::versions(root).await,
-            index_head: index_head(root).await,
+            index_head: index_head(root).await.unwrap_or(None),
             log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
@@ -267,11 +287,11 @@ fn frames(
 }
 
 /// The least time between two frames of this event, when it has one.
-fn min_interval(event: RootEvent) -> Option<Duration> {
+fn min_interval(event: RootEvent, timing: &Timing) -> Option<Duration> {
     match event {
         RootEvent::TableChanged {
             table: Table::ManageRows,
-        } => Some(MANAGE_ROWS_EVERY),
+        } => Some(timing.manage_rows_every),
         _ => None,
     }
 }
@@ -282,6 +302,7 @@ fn min_interval(event: RootEvent) -> Option<Duration> {
 /// once per interval, the last one included, so nothing is lost.
 #[derive(Default)]
 struct Throttle {
+    timing: Timing,
     last_sent: HashMap<RootEvent, Instant>,
     /// Held frames' events, with the chain they would carry.
     held: HashMap<RootEvent, Option<u32>>,
@@ -290,7 +311,7 @@ struct Throttle {
 impl Throttle {
     /// `Some` to send now; `None` when held.
     fn offer(&mut self, frame: RootFrame, now: Instant) -> Option<RootFrame> {
-        let Some(every) = min_interval(frame.event) else {
+        let Some(every) = min_interval(frame.event, &self.timing) else {
             return Some(frame);
         };
         let chain = match self.held.remove(&frame.event) {
@@ -337,7 +358,7 @@ impl Throttle {
     }
 
     fn release_at(&self, event: RootEvent) -> Option<Instant> {
-        Some(*self.last_sent.get(&event)? + min_interval(event)?)
+        Some(*self.last_sent.get(&event)? + min_interval(event, &self.timing)?)
     }
 }
 
@@ -348,16 +369,20 @@ fn merge_chain(a: Option<u32>, b: Option<u32>) -> Option<u32> {
 }
 
 /// The grid index's HEAD, or `None` when there is no store or nothing
-/// committed in it. Opened read-only for the look and closed again: a
-/// handle held across a rebuild would point at a file that is gone. A
-/// read-only open beside the live `grid_index` writer is measured safe
-/// by `doltlite_two_process_test`.
-async fn index_head(root: &Path) -> Option<String> {
+/// committed in it; `Err` when there is a store and its head could not be
+/// read, which says nothing about whether it moved. Opened read-only for
+/// the look and closed again: a handle held across a rebuild would point
+/// at a file that is gone. A read-only open beside the live `grid_index`
+/// writer is measured safe by `doltlite_two_process_test`.
+async fn index_head(root: &Path) -> anyhow::Result<Option<String>> {
     let path = datalib_core::layout::grid_index_db(root);
-    let pool = datalib_pin::open_reader(&path).await.ok()?;
-    let head = datalib_pin::head(&pool).await.ok().flatten();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let pool = datalib_pin::open_reader(&path).await?;
+    let head = datalib_pin::head(&pool).await;
     pool.close().await;
-    head.map(|pin| pin.commit().to_string())
+    Ok(head?.map(|pin| pin.commit().to_string()))
 }
 
 /// The frames one debounced burst of file moves becomes.
@@ -389,13 +414,15 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
             Moved::Frontend => {
                 out.insert(RootEvent::FrontendChanged);
             }
-            Moved::GridIndex => {
-                let head = index_head(root).await;
-                if head != seen.index_head {
+            Moved::GridIndex => match index_head(root).await {
+                Ok(head) if head != seen.index_head => {
                     seen.index_head = head;
                     out.insert(RootEvent::IndexChanged);
                 }
-            }
+                Ok(_) => {}
+                Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
+            },
+            Moved::Ready => {}
         }
     }
     let chain = if server_log.is_empty() {
@@ -406,10 +433,28 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
     frames(out, server_log, chain)
 }
 
-pub fn spawn(root: PathBuf, tx: RootTx) {
+/// Resolves once the watch reports: its watcher has delivered its own
+/// marker and the loop's record is being listened to. Never, if the
+/// watcher could not be made (which it logs).
+pub struct Ready(tokio::sync::oneshot::Receiver<()>);
+
+impl Ready {
+    pub async fn wait(self) {
+        if self.0.await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+pub fn spawn(root: PathBuf, tx: RootTx) -> Ready {
+    spawn_with(root, tx, Timing::default())
+}
+
+pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
+    let (ready_tx, ready) = tokio::sync::oneshot::channel();
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(HEARTBEAT);
+        let mut tick = tokio::time::interval(timing.heartbeat);
         // The first tick fires immediately; a subscriber that just
         // connected does not need to be told the stream is alive.
         tick.tick().await;
@@ -444,32 +489,23 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     // notify calls back on its own thread, so hand off through an
     // unbounded channel rather than doing any work there.
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
-    tokio::spawn(watch_record(root.clone(), raw_tx.clone()));
-    let watch_root = root.clone();
-    let mut watcher =
-        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let Ok(ev) = res else { return };
-            // Reading something is not changing it, and on Linux this is
-            // not a nicety — it is the difference between a push channel
-            // and a feedback loop.
-            if matches!(ev.kind, EventKind::Access(_)) {
-                return;
-            }
-            for path in &ev.paths {
-                if let Some(moved) = classify(&watch_root, path) {
-                    let _ = raw_tx.send(moved);
-                }
-            }
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::warn!(
-                    "watch: could not create a filesystem watcher ({e}); \
+    let (listening_tx, listening) = tokio::sync::oneshot::channel();
+    tokio::spawn(watch_record(root.clone(), raw_tx.clone(), listening_tx));
+    let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
+    let make_watcher = {
+        let (root, raw_tx) = (root.clone(), raw_tx.clone());
+        move || watcher_for(root.clone(), listeners.clone(), raw_tx.clone())
+    };
+    let mut watcher = match make_watcher() {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!(
+                "watch: could not create a filesystem watcher ({e}); \
                  the UI will not see external changes to this root"
-                );
-                return;
-            }
-        };
+            );
+            return Ready(ready);
+        }
+    };
 
     // Three watches rather than one recursive watch on the root: the
     // root *is* the data mirror, so a recursive watch would follow
@@ -485,9 +521,8 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             tracing::warn!("watch: {} ({e})", dir.display());
         }
     }
-    let mut index_watched = watcher
-        .watch(&grid_index, RecursiveMode::NonRecursive)
-        .is_ok();
+    let mut index_watcher = watch_index(&grid_index, &make_watcher);
+    let marker = system.join(format!("{READY_MARKER}-{}", std::process::id()));
 
     tokio::spawn(async move {
         // The debounce task owns the watcher, because dropping a
@@ -496,11 +531,19 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
         // the only sender lives in the watcher's callback, which this
         // task now holds — so the watch lasts as long as the process,
         // which is exactly its intended lifetime.
-        let mut watcher = watcher;
+        let _watcher = watcher;
         // Started from the stores so the first burst reports only what
         // moved in them, not everything they already held.
         let mut seen = Seen::now(&root).await;
-        let mut throttle = Throttle::default();
+        let mut throttle = Throttle {
+            timing,
+            ..Default::default()
+        };
+        // Written once the stores are read, so whatever moves after the
+        // marker is heard is a move from what `seen` holds.
+        let mut ready_tx = Some(ready_tx);
+        let mut listening = Some(listening);
+        let _ = std::fs::write(&marker, "");
         loop {
             // Wait for a file to move, or for a held frame to come due.
             let first = match throttle.next_due() {
@@ -522,21 +565,27 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             // everything that lands inside it. One burst → one message
             // per kind.
             let mut pending = HashSet::from([first]);
-            let deadline = tokio::time::Instant::now() + DEBOUNCE;
+            let deadline = tokio::time::Instant::now() + timing.debounce;
             // Ends on the window closing (`Err`) or the sender going
             // away (`Ok(None)`) — both mean "publish what you have".
             while let Ok(Some(moved)) = tokio::time::timeout_at(deadline, raw_rx.recv()).await {
                 pending.insert(moved);
             }
-            // The grid index's directory may not exist at boot, and a
-            // watch on a path that did not exist was never registered.
-            // Try again on every burst until it takes: a `watch` call on
-            // an absent path is cheap, and the alternative is a first
-            // pass nobody hears about.
-            if !index_watched {
-                index_watched = watcher
-                    .watch(&grid_index, RecursiveMode::NonRecursive)
-                    .is_ok();
+            // The grid index's directory may not exist at boot. Looked for
+            // on every burst, and watched by a watcher of its own once it
+            // does: on macOS every `watch` call restarts the watcher's
+            // stream, and a restarted stream loses what lands meanwhile.
+            if index_watcher.is_none() {
+                index_watcher = watch_index(&grid_index, &make_watcher);
+            }
+            if pending.remove(&Moved::Ready) {
+                if let Some(ready_tx) = ready_tx.take() {
+                    let _ = std::fs::remove_file(&marker);
+                    if let Some(listening) = listening.take() {
+                        let _ = listening.await;
+                    }
+                    let _ = ready_tx.send(());
+                }
             }
             let now = Instant::now();
             let fresh = expand(&root, &pending, &mut seen).await;
@@ -550,14 +599,62 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             }
         }
     });
+    Ready(ready)
 }
 
-/// The loop's record is not a file whose writes the filesystem reports:
-/// the loop holds its connection open, so a commit is an append to a WAL
-/// already open, which macOS never announces. `PRAGMA data_version` on a
-/// connection of our own moves on every other connection's commit,
-/// whichever process made it.
-async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<Moved>) {
+/// A watcher reporting what [`classify`] names under `root`. A config
+/// change is also announced to the loop, which re-reads its config when
+/// told to.
+fn watcher_for(
+    root: PathBuf,
+    listeners: PathBuf,
+    raw_tx: tokio::sync::mpsc::UnboundedSender<Moved>,
+) -> notify::Result<notify::RecommendedWatcher> {
+    notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let Ok(ev) = res else { return };
+        // Reading something is not changing it, and on Linux this is not a
+        // nicety — it is the difference between a push channel and a
+        // feedback loop.
+        if matches!(ev.kind, EventKind::Access(_)) {
+            return;
+        }
+        for path in &ev.paths {
+            if let Some(moved) = classify(&root, path) {
+                if moved == Moved::Config {
+                    use datalib_dag::supervisor::announce::{
+                        announce, CONFIG_CHANGED, FROM_SERVER,
+                    };
+                    announce(&listeners, FROM_SERVER, CONFIG_CHANGED);
+                }
+                let _ = raw_tx.send(moved);
+            }
+        }
+    })
+}
+
+/// A watcher on the grid index's directory, once there is one.
+fn watch_index(
+    dir: &Path,
+    make: &impl Fn() -> notify::Result<notify::RecommendedWatcher>,
+) -> Option<notify::RecommendedWatcher> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut watcher = make().ok()?;
+    watcher.watch(dir, RecursiveMode::NonRecursive).ok()?;
+    Some(watcher)
+}
+
+/// The loop's record moves on a commit, and every commit to it is
+/// announced; the filesystem would report writes, and none at all to a
+/// file already held open. The lock and the config have announcements of
+/// their own that are not the record moving.
+async fn watch_record(
+    root: PathBuf,
+    moved: tokio::sync::mpsc::UnboundedSender<Moved>,
+    listening: tokio::sync::oneshot::Sender<()>,
+) {
+    use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED, RUNNER_LOCK_RELEASED};
     let store = match datalib_dag::supervisor::store::Store::open(&root).await {
         Ok(store) => store,
         Err(e) => {
@@ -567,18 +664,16 @@ async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<M
             return;
         }
     };
-    let mut seen = None;
+    let mut listener = Listener::new(&store, "the UI's watch").await;
+    let _ = listening.send(());
     loop {
-        match store.data_version().await {
-            Ok(version) => {
-                if seen.is_some_and(|s| s != version) && moved.send(Moved::Supervisor).is_err() {
-                    return;
-                }
-                seen = Some(version);
-            }
-            Err(e) => tracing::warn!("watch: could not read the record's version: {e:#}"),
+        let heard = listener.next(&store).await;
+        let record = heard
+            .iter()
+            .any(|line| line != RUNNER_LOCK_RELEASED && line != CONFIG_CHANGED);
+        if record && moved.send(Moved::Supervisor).is_err() {
+            return;
         }
-        tokio::time::sleep(RECORD_POLL).await;
     }
 }
 
@@ -691,7 +786,8 @@ mod tests {
             table: Table::ManageRows,
         };
         let t0 = Instant::now();
-        let later = t0 + MANAGE_ROWS_EVERY;
+        let every = Timing::default().manage_rows_every;
+        let later = t0 + every;
         let mut throttle = Throttle::default();
         throttle.offer(rows.into(), t0);
         let chained = |c| RootFrame {
@@ -702,13 +798,10 @@ mod tests {
         throttle.offer(chained(4), t0);
         assert_eq!(throttle.due(later), [chained(4)]);
 
-        let t1 = later + MANAGE_ROWS_EVERY / 2;
+        let t1 = later + every / 2;
         throttle.offer(chained(3), t1);
         throttle.offer(rows.into(), t1);
-        assert_eq!(
-            throttle.due(later + MANAGE_ROWS_EVERY),
-            [RootFrame::from(rows)]
-        );
+        assert_eq!(throttle.due(later + every), [RootFrame::from(rows)]);
     }
 
     /// `ui/src/live.ts` reads `chain` beside `kind`, and a frame with
@@ -803,43 +896,86 @@ mod tests {
         assert_eq!(classify(root, &root.join("config.tmp")), None);
     }
 
-    async fn heard(
-        rx: &mut broadcast::Receiver<RootFrame>,
-        want: RootEvent,
-        mut stimulus: impl FnMut(),
-    ) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        loop {
-            stimulus();
-            match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
-                Ok(Ok(got)) if got.event == want => return,
-                // Some other kind, or a lagged receiver: keep listening.
-                Ok(_) => continue,
-                Err(_) if tokio::time::Instant::now() < deadline => continue,
-                Err(_) => panic!("no {want:?} within 20s"),
-            }
+    /// A watch's clocks at zero, so a test waits on nothing but what it
+    /// asserts.
+    fn at_once() -> Timing {
+        Timing {
+            debounce: Duration::ZERO,
+            manage_rows_every: Duration::ZERO,
+            heartbeat: Duration::from_secs(3600),
         }
+    }
+
+    async fn within<T>(what: &str, f: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(10), f)
+            .await
+            .unwrap_or_else(|_| panic!("no {what} within 10s"))
+    }
+
+    /// A watch on `root` that has said it reports.
+    async fn watching(root: &Path) -> broadcast::Receiver<RootFrame> {
+        let (tx, rx) = broadcast::channel(1024);
+        let ready = spawn_with(root.to_path_buf(), tx, at_once());
+        within("readiness", ready.wait()).await;
+        rx
+    }
+
+    /// The events reported up to and including the first `want`.
+    async fn until(rx: &mut broadcast::Receiver<RootFrame>, want: RootEvent) -> Vec<RootEvent> {
+        within(&format!("{want:?}"), async {
+            let mut got = Vec::new();
+            loop {
+                let event = rx
+                    .recv()
+                    .await
+                    .expect("the channel neither lags nor closes")
+                    .event;
+                got.push(event);
+                if event == want {
+                    return got;
+                }
+            }
+        })
+        .await
+    }
+
+    /// What the watch reported before a write of the test's own under
+    /// `system/frontend/`. The watch takes events in the order they
+    /// happened, so whatever an earlier write would have reported has
+    /// been by the time the barrier's `FrontendChanged` arrives; a burst
+    /// is sent whole, so what came with it is read too. Once per test: the
+    /// barrier's write may be reported more than once.
+    async fn barrier(root: &Path, rx: &mut broadcast::Receiver<RootFrame>) -> Vec<RootEvent> {
+        std::fs::write(root.join("system/frontend/barrier.js"), "").unwrap();
+        let mut got = until(rx, RootEvent::FrontendChanged).await;
+        while let Ok(frame) = rx.try_recv() {
+            got.push(frame.event);
+        }
+        got.retain(|e| *e != RootEvent::FrontendChanged);
+        got
     }
 
     /// The end-to-end claim this module exists to make: a write to
     /// `config.toml` by *someone else* — an agent, an editor, a
     /// `datalib-migrate-config` — reaches a subscriber without anyone
-    /// having asked.
+    /// having asked, and reaches the loop, which re-reads its config when
+    /// it hears so.
     #[tokio::test]
-    async fn an_external_config_write_reaches_a_subscriber() {
+    async fn an_external_config_write_reaches_a_subscriber_and_the_loop() {
+        use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED};
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
+        let store = datalib_dag::supervisor::store::Store::open(td.path())
+            .await
+            .unwrap();
+        let mut the_loop = Listener::new(&store, "test").await;
+        let mut rx = watching(td.path()).await;
 
-        let root = td.path().to_path_buf();
-        let mut n = 0;
-        heard(&mut rx, RootEvent::ConfigChanged, move || {
-            n += 1;
-            let tmp = root.join("config.tmp");
-            std::fs::write(&tmp, format!("# rewrite {n}\n")).unwrap();
-            std::fs::rename(&tmp, root.join("config.toml")).unwrap();
-        })
-        .await;
+        let tmp = td.path().join("config.tmp");
+        std::fs::write(&tmp, "# rewritten\n").unwrap();
+        std::fs::rename(&tmp, td.path().join("config.toml")).unwrap();
+        until(&mut rx, RootEvent::ConfigChanged).await;
+        let heard = within("the announcement", the_loop.next(&store)).await;
+        assert!(heard.iter().any(|l| l == CONFIG_CHANGED), "{heard:?}");
     }
 
     /// The same for the loop's record, whoever runs the loop. The store is
@@ -852,23 +988,9 @@ mod tests {
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await
             .unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
-        let writer = tokio::spawn(async move {
-            loop {
-                store.pause("a/raw", "loop").await.unwrap();
-                store.resume("a/raw").await.unwrap();
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        });
-        heard(
-            &mut rx,
-            RootEvent::TableChanged { table: Table::Dag },
-            || {},
-        )
-        .await;
-        writer.abort();
+        let mut rx = watching(td.path()).await;
+        store.pause("a/raw", "loop").await.unwrap();
+        until(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
     }
 
     /// A data root reached through a symlink still reports.
@@ -880,46 +1002,34 @@ mod tests {
         std::fs::create_dir(&real).unwrap();
         let link = td.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        let (tx, mut rx) = broadcast::channel(64);
         // Watched through the link...
-        spawn(link, tx);
-
-        // ...and written through the real path, the way another
-        // process that resolved it would.
-        let mut n = 0;
-        heard(&mut rx, RootEvent::ConfigChanged, move || {
-            n += 1;
-            let tmp = real.join("config.tmp");
-            std::fs::write(&tmp, format!("# rewrite {n}\n")).unwrap();
-            std::fs::rename(&tmp, real.join("config.toml")).unwrap();
-        })
-        .await;
+        let mut rx = watching(&link).await;
+        // ...and written through the real path, the way another process
+        // that resolved it would.
+        let tmp = real.join("config.tmp");
+        std::fs::write(&tmp, "# rewritten\n").unwrap();
+        std::fs::rename(&tmp, real.join("config.toml")).unwrap();
+        until(&mut rx, RootEvent::ConfigChanged).await;
     }
 
-    /// Reading the component store is not a change to it.
+    /// Reading the component store is not a change to it: on Linux a read
+    /// reported as a change is a feedback loop, not just a spurious
+    /// refetch.
     #[tokio::test]
     async fn reading_the_component_store_is_not_a_change_to_it() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
+        std::fs::write(td.path().join("system/frontend/c.js"), "x").ok();
+        let mut rx = watching(td.path()).await;
         let frontend = td.path().join("system/frontend");
         for _ in 0..20 {
-            // What `FrontendStore::scan` does: walk it and open what
-            // it finds.
-            let entries: Vec<_> = std::fs::read_dir(&frontend).unwrap().collect();
-            for e in entries.into_iter().flatten() {
+            // What `FrontendStore::scan` does: walk it and open what it
+            // finds.
+            for e in std::fs::read_dir(&frontend).unwrap().flatten() {
                 let _ = std::fs::read(e.path());
             }
             let _ = std::fs::read(td.path().join("config.toml"));
         }
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        assert!(
-            rx.try_recv().is_err(),
-            "reading the data root was reported as changing it — on Linux \
-             that is a feedback loop, not just a spurious refetch"
-        );
+        assert_eq!(barrier(td.path(), &mut rx).await, []);
     }
 
     /// The server's own log line, written through the real writer,
@@ -929,12 +1039,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_log_line_reaches_the_log_and_nothing_else() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-        // Let the spawn read the store's counters before the first line
-        // lands, so the line is what moves and not the file appearing.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
+        let mut rx = watching(td.path()).await;
         let server = datalib_runs::ProcessLogWriter::start(
             td.path(),
             datalib_runs::Process::Http,
@@ -942,127 +1047,91 @@ mod tests {
             datalib_runs::Retention::default(),
         )
         .unwrap();
-        let mut n = 0;
-        heard(
-            &mut rx,
-            RootEvent::TableChanged { table: Table::Log },
-            || {
-                n += 1;
-                server.log(datalib_runs::LogRow {
-                    level: "debug".into(),
-                    msg: format!("line {n}"),
-                    ..Default::default()
-                });
-            },
-        )
-        .await;
+        server.log(datalib_runs::LogRow {
+            level: "debug".into(),
+            msg: "a line".into(),
+            ..Default::default()
+        });
+        let log = RootEvent::TableChanged { table: Table::Log };
+        let mut got = until(&mut rx, log).await;
+        // Everything the writer will ever write is on disk once it is gone.
         drop(server);
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
-        while let Ok(got) = rx.try_recv() {
-            assert!(
-                !matches!(
-                    got.event,
-                    RootEvent::TableChanged {
-                        table: Table::ManageRows
-                    }
-                ),
-                "a server log line was reported as a change to the Manage rows"
-            );
+        got.extend(barrier(td.path(), &mut rx).await);
+        let rows = RootEvent::TableChanged {
+            table: Table::ManageRows,
+        };
+        assert!(
+            !got.contains(&rows),
+            "a server log line was reported as a change to the Manage rows: {got:?}"
+        );
+    }
+
+    /// A commit to the grid index, the way the `grid_index` step makes
+    /// one: its own process, opening and closing the store around it.
+    async fn write_index(db: &Path, id: i64, commit: bool) {
+        let writer = datalib_core::store::open_pool(db).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
+            .execute(&writer)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t VALUES (?)")
+            .bind(id)
+            .execute(&writer)
+            .await
+            .unwrap();
+        if commit {
+            let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', 'rows')")
+                .fetch_one(&writer)
+                .await
+                .unwrap();
+            hash.expect("doltlite linked");
         }
+        writer.close().await;
     }
 
     /// The grid index reports when its HEAD moves and not when its file
-    /// does. The step writes the file throughout a pass — the working
-    /// set lives in it — and commits once at the end; a grid told to
-    /// refetch on the writes would fetch the same HEAD again each time,
-    /// and be told nothing when the rows it can read actually changed.
-    ///
-    /// The store is opened and closed around every write, as the step
-    /// does: it is its own process and lets go of the store each pass.
+    /// does. The step writes the file throughout a pass — the working set
+    /// lives in it — and commits once at the end; a grid told to refetch
+    /// on the writes would fetch the same HEAD again each time, and be
+    /// told nothing when the rows it can read actually changed.
     #[tokio::test]
     async fn the_grid_index_reports_its_commits_and_not_its_writes() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().to_path_buf();
         // The applet creates the directory at boot, before the first
         // pass; the watch is armed on it from the start here too.
-        let db = datalib_core::layout::grid_index_db(&root);
+        let db = datalib_core::layout::grid_index_db(td.path());
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(root.clone(), tx);
+        let mut rx = watching(td.path()).await;
 
-        async fn write(db: &Path, id: i64, commit: bool) {
-            let writer = datalib_core::store::open_pool(db).await.unwrap();
-            sqlx::query("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
-                .execute(&writer)
-                .await
-                .unwrap();
-            sqlx::query("INSERT INTO t VALUES (?)")
-                .bind(id)
-                .execute(&writer)
-                .await
-                .unwrap();
-            if commit {
-                let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', 'rows')")
-                    .fetch_one(&writer)
-                    .await
-                    .unwrap();
-                hash.expect("doltlite linked");
-            }
-            writer.close().await;
-        }
-        async fn index_changed(rx: &mut broadcast::Receiver<RootFrame>) -> bool {
-            matches!(
-                tokio::time::timeout(Duration::from_millis(500), rx.recv()).await,
-                Ok(Ok(RootFrame {
-                    event: RootEvent::IndexChanged,
-                    ..
-                }))
-            )
-        }
-
-        // Committing until heard, because the watch may start delivering
-        // a little after `spawn` returns — the same shape as `heard`.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        let mut n = 0;
-        loop {
-            n += 1;
-            write(&db, n, true).await;
-            if index_changed(&mut rx).await {
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "no IndexChanged within 20s"
-            );
-        }
-        // Every commit the loop made gets reported; let the reports land
-        // before listening for one that must not come.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        while rx.try_recv().is_ok() {}
-
-        // The watch is live. Now writes with no commit behind them: the
-        // file moves, HEAD does not.
+        write_index(&db, 1, true).await;
+        until(&mut rx, RootEvent::IndexChanged).await;
         for i in 100..110 {
-            write(&db, i, false).await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            write_index(&db, i, false).await;
         }
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        while let Ok(got) = rx.try_recv() {
-            assert_ne!(
-                got.event,
-                RootEvent::IndexChanged,
-                "a write the step has not committed was reported as an index change"
-            );
-        }
+        let got = barrier(td.path(), &mut rx).await;
+        assert!(
+            !got.contains(&RootEvent::IndexChanged),
+            "a write the step has not committed was reported as an index change: {got:?}"
+        );
+        write_index(&db, 200, true).await;
+        until(&mut rx, RootEvent::IndexChanged).await;
+    }
 
-        write(&db, 200, true).await;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        while !index_changed(&mut rx).await {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the commit was not reported within 20s"
-            );
-        }
+    /// A head that cannot be read says nothing about whether it moved.
+    /// Taken for "no head", it read as a move, and again as one when it
+    /// could be read, and the grid refetched twice for nothing.
+    #[tokio::test]
+    async fn an_unreadable_index_head_is_not_a_move() {
+        let td = tempfile::tempdir().unwrap();
+        let db = datalib_core::layout::grid_index_db(td.path());
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let mut rx = watching(td.path()).await;
+        write_index(&db, 1, true).await;
+        until(&mut rx, RootEvent::IndexChanged).await;
+
+        std::fs::write(&db, "not a store").unwrap();
+        let got = barrier(td.path(), &mut rx).await;
+        assert!(!got.contains(&RootEvent::IndexChanged), "{got:?}");
     }
 
     /// The control for the filter, and the reason `classify` is not
@@ -1070,22 +1139,23 @@ mod tests {
     #[tokio::test]
     async fn writes_to_the_usage_store_are_not_reported() {
         let td = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = broadcast::channel(64);
-        spawn(td.path().to_path_buf(), tx);
-
+        let mut rx = watching(td.path()).await;
         let usage = td.path().join("system/usage.doltlite_db");
         for n in 0..20 {
             std::fs::write(&usage, format!("row {n}")).unwrap();
         }
-        // A real sleep, and the one place in this change that earns
-        // one: proving a *negative* means waiting, because there is no
-        // event for "nothing happened". 1.5 s is five debounce windows,
-        // so a report would have been published long before this.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
-        let got = rx.try_recv();
-        assert!(
-            got.is_err(),
-            "a write to the usage store was reported as a data-root change: {got:?}"
+        assert_eq!(barrier(td.path(), &mut rx).await, []);
+    }
+
+    /// The watch's own marker is how it knows it reports, and is never
+    /// reported itself.
+    #[test]
+    fn the_readiness_marker_is_the_watchs_own() {
+        let root = Path::new("/data");
+        assert_eq!(
+            classify(root, &root.join("system/.watch-ready-42")),
+            Some(Moved::Ready)
         );
+        assert_eq!(classify(root, &root.join(".watch-ready-42")), None);
     }
 }
