@@ -164,9 +164,7 @@ impl Runner {
 
         // Made before the first look at the mailbox, so a row written
         // after that look is heard.
-        let mut listener = Listener::new(store, "the loop")
-            .await
-            .backstop(self.backstop);
+        let mut listener = Listener::new(store, "the loop").backstop(self.backstop);
         let mut current = graph.clone();
         let mut config_seen: Option<String> = None;
         // The host loaded the config before this period began, and it may
@@ -527,7 +525,7 @@ impl Runner {
                     cancelled = true;
                     open.clear();
                 }
-                heard = listener.next(store), if listening => {
+                heard = listener.next(), if listening => {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 joined = set.join_next() => {
