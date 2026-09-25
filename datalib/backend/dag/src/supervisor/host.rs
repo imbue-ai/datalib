@@ -438,4 +438,19 @@ mod tests {
             TakenOver::default()
         );
     }
+
+    /// A config's `[checkpoint_cadence]` reaches every step, in the form a
+    /// step decodes; a config without one leaves the step its default.
+    #[test]
+    fn the_configs_checkpoint_cadence_reaches_every_step() {
+        let with =
+            crate::config::parse("[checkpoint_cadence]\nat_most_every_secs = 2.5\n").unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        let cadence = crate::config::CheckpointCadence::decode(&env.vars[ENV_CHECKPOINT_CADENCE]);
+        assert_eq!(cadence.map(|c| c.at_most_every_secs), Some(2.5));
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
+    }
 }

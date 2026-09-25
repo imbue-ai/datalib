@@ -244,6 +244,58 @@ async fn a_source_added_mid_sync_starts_beside_the_running_one() {
     h.finish().await;
 }
 
+/// A step that failed for a request still open is not run again for it
+/// after a config edit: the swap carries what the loop knew of its last
+/// attempt, not only what was in flight.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_step_is_not_retried_for_its_request_after_a_config_edit() {
+    let mut h = Harness::new(&[source("a"), source("b")]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "fail data").await;
+    h.ended("a", 1).await;
+
+    h.edit_config(&[source("a"), source("b"), source("c")]);
+    let other = h.sync(&["c"]).await;
+    h.started("c").await;
+    h.run("c", "ok v1").await;
+    h.run("b", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Failed);
+    assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("a"), 1);
+    h.finish().await;
+}
+
+/// A step the config drops between passes, while what it reads is still
+/// being written, is finished there and then under the graph it ran in:
+/// its run log closes, and the edit waits for nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_dropped_between_passes_finishes_when_the_config_drops_it() {
+    let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "streams").await;
+    h.run("a", "seal s1").await;
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    h.ended("c", 1).await;
+
+    h.edit_config(&[source("a"), source("b")]);
+    let other = h.sync(&["b"]).await;
+    h.started("b").await;
+    h.wait("c's run to be finished", |s| match s {
+        Seen::Event(Event::StepFinish { step, .. }) if step == "c" => Some(()),
+        _ => None,
+    })
+    .await;
+    h.run("b", "ok v1").await;
+    h.run("a", "ok s2").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
 /// How each process ended is what the record says: an exit code, an
 /// abort, a SIGKILL. None of them wrote an outcome, so none is retried.
 #[tokio::test(flavor = "multi_thread")]

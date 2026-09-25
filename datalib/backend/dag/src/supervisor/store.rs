@@ -408,6 +408,46 @@ fn options(path: &Path) -> SqliteConnectOptions {
 mod tests {
     use super::*;
 
+    async fn columns(store: &Store, table: &str) -> Vec<String> {
+        // Safe: `table` is a literal from `ADDED_COLUMNS`.
+        let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+        sqlx::query(pragma)
+            .fetch_all(store.pool())
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get("name"))
+            .collect()
+    }
+
+    /// A store written before a column was added gains it when opened,
+    /// and its record reads as before.
+    #[tokio::test]
+    async fn a_store_missing_an_added_column_gains_it_on_open() {
+        use crate::supervisor::record::ADDED_COLUMNS;
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store.pause("a/ingest", "test").await.unwrap();
+        for (table, column, _) in ADDED_COLUMNS {
+            // Safe: every name here is a literal from `ADDED_COLUMNS`.
+            let drop = sqlx::AssertSqlSafe(format!("ALTER TABLE {table} DROP COLUMN {column}"));
+            sqlx::query(drop).execute(store.pool()).await.unwrap();
+            assert!(!columns(&store, table).await.iter().any(|c| c == column));
+        }
+        store.close().await;
+
+        let store = Store::open(root.path()).await.unwrap();
+        for (table, column, _) in ADDED_COLUMNS {
+            assert!(
+                columns(&store, table).await.iter().any(|c| c == column),
+                "{table}.{column}"
+            );
+        }
+        store.load_record().await.unwrap();
+        assert_eq!(store.paused().await.unwrap().len(), 1);
+        store.close().await;
+    }
+
     #[tokio::test]
     async fn a_request_opens_and_closes_once() {
         let root = tempfile::tempdir().unwrap();
