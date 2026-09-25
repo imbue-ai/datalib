@@ -42,7 +42,7 @@ import SourceWizard from "@/components/SourceWizard.vue";
 import CompareDialog from "@/components/CompareDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
-import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 
 const {
   fetchConfig,
@@ -1038,8 +1038,9 @@ async function onWizardSubmit(payload: {
 
 // ── "Compare two syncs…": a diff group written from a source and two
 // commits of its raw store (docs/dev/plans/completed/diff_renderer.md), wired into
-// the fan-ins like any render step, then the source synced so the diff
-// renders — its step is downstream of the source's ingest.
+// the fan-ins like any render step, then its render step synced. Not the
+// source: both commits are already in the store, so a download adds
+// nothing to the diff.
 const compareFor = ref<{ id: string; name: string } | null>(null);
 
 async function onCompareSubmit(payload: {
@@ -1056,8 +1057,7 @@ async function onCompareSubmit(payload: {
   const ok = await writeConfig(next, `Added ${payload.name}.`);
   if (!ok) return;
   compareFor.value = null;
-  const source = rows.value.find((r) => r.kind === "group" && r.id === payload.source);
-  if (source) await runRows([source]);
+  await queueSync([built.renderId], payload.name);
 }
 
 async function deleteSource(id: string) {
@@ -1088,7 +1088,7 @@ async function deleteSource(id: string) {
           : `Remove "${name}" from the config?\n\n` +
             `Its data stays on disk — only this step stops running. Re-adding it later ` +
             `resumes from what's already there.`;
-  if (!window.confirm(what)) return;
+  if (!(await confirmAction(what))) return;
 
   // A group with nothing left under it goes too: the loader would only
   // warn about it, but a `[[groups]]` entry naming a source that is
@@ -1126,7 +1126,7 @@ async function deleteGroup(id: string) {
     `Remove "${name}" from the config${under ? `, with the ${under} under it` : ""}?\n\n` +
     `The data stays on disk — these entries just stop running. Adding the source ` +
     `back later resumes from what's already there.`;
-  if (!window.confirm(what)) return;
+  if (!(await confirmAction(what))) return;
 
   let next = removeSteps(configText.value, [...members, group]);
   for (const m of members) {
@@ -1173,7 +1173,7 @@ async function deleteRows(targets: Row[]) {
     `Remove ${names} from the config, with everything under them?\n\n` +
     `The data stays on disk — these entries just stop running. Adding a source ` +
     `back later resumes from what's already there.`;
-  if (!window.confirm(what)) return;
+  if (!(await confirmAction(what))) return;
   const entries = [...doomed.values()];
   let next = removeSteps(configText.value, entries);
   for (const d of entries) {
@@ -1226,6 +1226,10 @@ async function runRows(targets: Row[]) {
       return row.kind === "group" ? row.name.label : (step?.name ?? row.id);
     })
     .join(", ");
+  await queueSync(seeds, shown);
+}
+
+async function queueSync(seeds: string[], shown: string) {
   busy.value = true;
   clearBanner();
   try {
@@ -1282,7 +1286,7 @@ async function resetRows(targets: Row[], blobs: boolean) {
           ? `Attachments already downloaded are deleted and fetched again.`
           : `Attachments already downloaded are kept.`)
       : `Its documents are rendered again from what it has downloaded, now.`);
-  if (!window.confirm(what)) return;
+  if (!(await confirmAction(what))) return;
   busy.value = true;
   clearBanner();
   try {

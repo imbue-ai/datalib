@@ -8,7 +8,7 @@ pub mod vectors;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
-pub use mapping::{CollectionScope, GridIndex, GridRowRef, QmdHit, QueryMode};
+pub use mapping::{display_snippet, CollectionScope, GridIndex, GridRowRef, QmdHit, QueryMode};
 pub use runner::{QmdRunner, QmdRunnerConfig};
 
 /// The qmd version pin and the `Command` builder that spawns it moved

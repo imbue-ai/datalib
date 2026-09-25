@@ -35,7 +35,7 @@ pub(crate) fn rows_for(
             .conversation_name(Some(cr.title.clone()))
             .conversation_uuid(cr.uuid.clone())
             .entire_chat(entire_chat.clone())
-            .text(if cr.body.is_empty() {
+            .body(if cr.body.is_empty() {
                 cr.title.clone()
             } else {
                 format!("{}\n\n{}", cr.title, cr.body)
@@ -70,7 +70,7 @@ pub(crate) fn rows_for(
                 .conversation_uuid(cr.uuid.clone())
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
-                .text(c.body.clone())
+                .body(c.body.clone())
                 .qmd_path(Some(qmd.to_string()))
                 .source_url(c.url.clone())
                 .git_sha(c.commit_sha.clone())

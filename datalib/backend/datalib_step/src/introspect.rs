@@ -24,7 +24,7 @@
 //! growing but *not reproducible*: rebuilding the TNG fixture from
 //! byte-identical inputs moves six of its sixteen sources by 1-22
 //! bytes, in a different direction each time — so bytes stay out of
-//! the comparison (`counts_unchanged`) and out of `grid_rows.text`.
+//! the comparison (`counts_unchanged`) and out of `grid_rows.preview`.
 //! Otherwise every run rewrites a report nothing asked for and
 //! `grid_index` never gets to skip a source.
 
@@ -82,11 +82,11 @@ impl Subject {
         )
     }
 
-    /// The one-line human summary that becomes `grid_rows.text` and the
+    /// The one-line human summary that becomes `grid_rows.preview` and the
     /// report's body line.
-    /// `grid_rows.text`. **Carries no byte figure**, on purpose.
+    /// `grid_rows.preview`. **Carries no byte figure**, on purpose.
     ///
-    /// `text` is a stored row, and a doltlite store's size is not
+    /// `preview` is a stored row, and a doltlite store's size is not
     /// reproducible. It drifts
     /// 1-22 bytes between rebuilds on one machine, and differs outright
     /// between machines: CI's Linux runner and a developer's Mac
@@ -407,7 +407,7 @@ pub fn plan(
                 .conversation_name(Some(format!("{source_id} storage")))
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
-                .text(s.summary())
+                .body(s.summary())
                 .qmd_path(Some(qmd_rel.clone()))
                 .markdown_uuid(Some(markdown_uuid.clone()))
                 // The machine-parsable half: `upstream_id` is the
@@ -1015,7 +1015,7 @@ mod tests {
     }
 
     /// The size must reach the row and the report, but never
-    /// `grid_rows.text`. A doltlite store's size differs between
+    /// `grid_rows.preview`. A doltlite store's size differs between
     /// machines, so a byte
     /// figure in that string made the fixture golden unable to pass on
     /// CI and a developer's machine at once.

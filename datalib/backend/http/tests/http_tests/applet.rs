@@ -38,7 +38,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             .message_index(index)
             .conversation_uuid(md)
             .entire_chat(format!("/chat/{md}"))
-            .text(text)
+            .body(text)
             .markdown_uuid(Some(md.to_string()))
             .build()
             .unwrap()

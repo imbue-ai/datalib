@@ -195,9 +195,9 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         .find(|r| r.upstream_id.as_deref() == Some("A1B2C3D4-0003-4000-8000-000000000003"))
         .expect("the attachment message");
     assert!(
-        !picture.text.contains('\u{fffc}'),
+        !picture.preview.contains('\u{fffc}'),
         "U+FFFC is not text: {:?}",
-        picture.text
+        picture.preview
     );
     Ok(())
 }

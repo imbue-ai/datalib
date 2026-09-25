@@ -272,6 +272,75 @@ async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Waits until the loop's record and requests satisfy `ready`, looking
+/// again each time a commit is announced, never on a timer.
+async fn when(
+    store: &datalib_dag::supervisor::store::Store,
+    heard: &mut datalib_dag::supervisor::announce::Listener,
+    what: &str,
+    ready: impl Fn(
+        &datalib_dag::supervisor::record::Record,
+        &[datalib_dag::supervisor::store::RequestRow],
+    ) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let record = store.load_record().await.unwrap();
+        let requests = store.recent_requests(100).await.unwrap();
+        if ready(&record, &requests) {
+            return;
+        }
+        tokio::time::timeout_at(deadline, heard.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {what} within 30s"));
+    }
+}
+
+fn running(record: &datalib_dag::supervisor::record::Record, step: &str) -> bool {
+    record
+        .steps
+        .get(step)
+        .and_then(|s| s.state)
+        .is_some_and(|k| k.as_str() == "running")
+}
+
+/// A source added to `config.toml` on disk mid-sync, by the app's editor,
+/// an agent or a person, starts beside the sync already running: the
+/// server's watch sees the file move and tells the loop, which takes the
+/// new config on. The whole chain, the platform's file events included.
+#[tokio::test]
+async fn a_source_added_on_disk_mid_sync_starts_beside_the_running_one() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
+    let state = server(root).await;
+    let store = datalib_dag::supervisor::store::Store::open(root)
+        .await
+        .unwrap();
+    let mut heard = datalib_dag::supervisor::announce::Listener::new(&store, "test");
+
+    let a = sync(&state, "a/out").await;
+    when(&store, &mut heard, "a to run", |r, _| running(r, "a/out")).await;
+    // As an editor or an agent writes it: a temp file renamed into place.
+    let tmp = root.join("config.tmp");
+    std::fs::write(&tmp, source(root, "a", HELD) + &source(root, "b", HELD)).unwrap();
+    std::fs::rename(&tmp, root.join("config.toml")).unwrap();
+    let b = sync(&state, "b/out").await;
+    when(&store, &mut heard, "b to run beside a", |r, _| {
+        running(r, "b/out") && running(r, "a/out")
+    })
+    .await;
+
+    std::fs::write(root.join("release"), "").unwrap();
+    when(&store, &mut heard, "both syncs to finish", |_, requests| {
+        [&a, &b]
+            .iter()
+            .all(|id| requests.iter().any(|r| &&r.id == id && r.closed.is_some()))
+    })
+    .await;
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Whether a pid still names a live process. Signal 0 checks without
 /// sending anything.
 fn alive(pid: i32) -> bool {

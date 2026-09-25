@@ -5,6 +5,7 @@
 
 pub mod announce;
 pub mod host;
+pub mod locks;
 pub mod record;
 pub mod reload;
 pub mod round;

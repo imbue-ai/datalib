@@ -433,7 +433,7 @@ fn build_grid_row(
         .conversation_name(Some(title))
         .conversation_uuid(event.event_uuid.clone())
         .entire_chat(format!("/chat/{}", event.event_uuid))
-        .text(text.join("\n"))
+        .body(text.join("\n"))
         .qmd_path(Some(md_rel.to_string()))
         .source_url(event.source_url.clone())
         .upstream_id(Some(event.upstream_id.clone()))
@@ -678,8 +678,8 @@ mod tests {
         );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));
-        assert!(row.text.contains("Weekly on Monday and Thursday"));
-        assert!(row.text.contains("troi@enterprise.test"));
+        assert!(row.preview.contains("Weekly on Monday and Thursday"));
+        assert!(row.preview.contains("troi@enterprise.test"));
     }
 
     #[test]
