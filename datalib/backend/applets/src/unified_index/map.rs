@@ -175,7 +175,13 @@ pub fn join(
             x: p.x,
             y: p.y,
             title: doc.title,
-            provider: row.provider_ref.map(|i| i.label).unwrap_or(doc.provider),
+            // The configured type's label (Gmail, not Mail), as the Source
+            // column's hover shows it.
+            provider: row
+                .source_ref
+                .as_ref()
+                .and_then(|i| i.detail.clone())
+                .unwrap_or(doc.provider),
             source: row
                 .source_ref
                 .map(|i| i.label)
