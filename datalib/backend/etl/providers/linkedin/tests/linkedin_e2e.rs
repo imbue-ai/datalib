@@ -419,7 +419,10 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             row.source_url.as_deref(),
             Some("https://www.linkedin.com/in/jlp")
         );
-        assert!(row.preview.contains("Captain"), "field values in search text");
+        assert!(
+            row.preview.contains("Captain"),
+            "field values in search text"
+        );
 
         // ── photo fetch (hermetic via the synthesizer + playback) ──
         // Synthesize profile-page + image fixtures, point the curl

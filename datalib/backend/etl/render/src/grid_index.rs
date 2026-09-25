@@ -1768,9 +1768,9 @@ mod schema_reconcile_tests {
 
         sqlx::query(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
-             entire_chat, text, upstream_id, upstream_entity_kind, upstream_account, markdown_uuid, \
-             is_document) \
-             VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', \
+             entire_chat, preview, content_hash, upstream_id, upstream_entity_kind, \
+             upstream_account, markdown_uuid, is_document) \
+             VALUES ('row-2', 'claude', 'Chat', 'Claude', 'conv-1', '/chat/md-1', 'hi', '', \
              'upstream-1', 'conversation', '', 'md-1', 1)",
         )
         .execute(&pool)

@@ -1486,9 +1486,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <p v-if="qmdError" class="qmd-error" role="alert">
-      Free-text search failed: {{ qmdError }}
-    </p>
+    <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
 
     <p v-if="error" class="error" role="alert" :title="error.detail">
       {{ error.message }}
