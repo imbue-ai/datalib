@@ -48,6 +48,18 @@ pub trait IndexRepo: Send + Sync {
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
 
+    /// Every row that is a whole document, with just what the embedding
+    /// map shows of it. Empty for a root with no index yet.
+    async fn document_rows(&self) -> Result<Vec<MapDocRow>, RepoError>;
+
+    /// The documents a query's structured terms match: the distinct
+    /// `markdown_uuid` behind every matching row, a message's as much as
+    /// a document's. Free text is left out — qmd answers that.
+    async fn matching_documents(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError>;
+
     /// Same shape as [`search`](Self::search), but with a caller-supplied
     /// ranked uuid list (output of `GridIndex::rows_for_hits`). The free-text
     /// portion of `q` is ignored — qmd has already done that work. Structured
@@ -124,6 +136,24 @@ pub struct DocRow {
     pub kind: String,
     pub provider: String,
     pub created_at: Option<String>,
+}
+
+/// One document row as the embedding map draws it: the point's
+/// identity, its label, and what it can be coloured by.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MapDocRow {
+    pub markdown_uuid: String,
+    /// Data-root-relative; what the map's points are keyed by.
+    pub qmd_path: String,
+    pub title: String,
+    pub provider: String,
+    /// The provider's human label ("Slack"), as the grid's `source`.
+    pub source_label: String,
+    pub source_id: String,
+    pub kind: String,
+    pub created_at: Option<String>,
+    pub account: String,
+    pub channel: String,
 }
 
 /// Convenience alias for the dyn-dispatched index handle used by HTTP

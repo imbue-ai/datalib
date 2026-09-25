@@ -85,12 +85,12 @@ has the design; `configs/dag_example.toml` has one.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
-  `render_markdown`, `grid_index`, `qmd_index`
+  `render_markdown`, `grid_index`, `qmd_index`, `embedding_map`
   (`datalib_step/src/function.rs`, tested against the layout constants
-  the render and index crates use). The two index steps write
-  `unified_index/grid_index` and `unified_index/qmd_index` and nothing
-  else, because the applet that reads them finds them from the data
-  root alone.
+  the render and index crates use). The index steps write
+  `unified_index/grid_index`, `unified_index/qmd_index` and
+  `unified_index/embedding_map` and nothing else, because the applet
+  that reads them finds them from the data root alone.
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
   CardDAV or from `.vcf` files — and the product a person recognizes,
@@ -201,7 +201,8 @@ fingerprint, so changing it re-runs the group.
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
-- `grid_index` or `qmd_index` under any group but `unified_index`.
+- `grid_index`, `qmd_index` or `embedding_map` under any group but
+  `unified_index`.
 
 A render reads its raw store from its first input; one that declares
 none reads its own group's `ingest` tree and logs a warning. A store

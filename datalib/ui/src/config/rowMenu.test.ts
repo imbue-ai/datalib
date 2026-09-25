@@ -79,6 +79,28 @@ describe("rowMenu", () => {
     );
   });
 
+  it("offers Reset on the embedding map, the one index step a person resets", () => {
+    const map = target({
+      id: "unified_index/embedding_map",
+      kind: "step",
+      type: null,
+      func: "embedding_map",
+    });
+    expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
+    expect(entry(rowMenu([map], opts), "reset_blobs").disabled).toBe(
+      "Only the download step keeps attachments",
+    );
+    const qmd = target({
+      id: "unified_index/qmd_index",
+      kind: "step",
+      type: null,
+      func: "qmd_index",
+    });
+    expect(entry(rowMenu([qmd], opts), "reset").disabled).toBe(
+      "Reset a source; the index follows it",
+    );
+  });
+
   it("offers the system row its log and its path, and nothing that edits the config", () => {
     const menu = rowMenu(
       [target({ id: "system", name: "System", kind: "system", type: null, statusFrom: null })],

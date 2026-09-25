@@ -1204,11 +1204,15 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
 /// Built-in steps that read their inputs off disk rather than at a pinned
-/// commit: the qmd index globs each render tree's `.md` files, and
-/// perseus renders straight from its ingest's TEI files. `(group type,
-/// function)`, `None` matching any type.
-const UNPINNED_BUILTINS: &[(Option<&str>, &str)] =
-    &[(None, "qmd_index"), (Some("perseus"), "render_markdown")];
+/// commit: the qmd index globs each render tree's `.md` files, the
+/// embedding map reads qmd's own SQLite file, and perseus renders
+/// straight from its ingest's TEI files. `(group type, function)`,
+/// `None` matching any type.
+const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
+    (None, "qmd_index"),
+    (None, "embedding_map"),
+    (Some("perseus"), "render_markdown"),
+];
 
 fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
     UNPINNED_BUILTINS
@@ -1942,6 +1946,11 @@ mod tests {
             inputs = ["iliad/render_markdown", "mail/render_markdown"]
 
             [[steps]]
+            group = "unified_index"
+            function = "embedding_map"
+            inputs = ["unified_index/qmd_index"]
+
+            [[steps]]
             id = "custom/qmd"
             command = "my-indexer"
             inputs = ["mail/render_markdown"]
@@ -1956,7 +1965,11 @@ mod tests {
             .collect();
         assert_eq!(
             unpinned,
-            ["iliad/render_markdown", "unified_index/qmd_index"]
+            [
+                "iliad/render_markdown",
+                "unified_index/qmd_index",
+                "unified_index/embedding_map"
+            ]
         );
     }
 
