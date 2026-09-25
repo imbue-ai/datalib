@@ -5,7 +5,7 @@
 //! the rollouts measured here carries one, so it fails the
 //! present-or-never rule (`docs/dev/entity_ids.md`).
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Codex;
@@ -21,26 +21,12 @@ pub const KIND_TOOL_RESULT: &str = "tool_result";
 /// `date_ms` is the item's own `date_ms`, so the stamp in the id is the
 /// row's; a thread's id carries none, its row's stamp being derived
 /// from its items.
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 /// A thread's document, keyed by the thread id — the raw store's
 /// transcript id.
 pub fn thread(source_id: &str, thread_id: &str) -> Identity {
-    identity(source_id, KIND_THREAD, thread_id.to_string(), None)
+    IDS.mint(source_id, KIND_THREAD, thread_id.to_string(), None)
 }
 
 /// One line of a rollout, by its number within the thread.
@@ -50,7 +36,7 @@ pub fn thread(source_id: &str, thread_id: &str) -> Identity {
 /// store's own spelling of this key is its business, and
 /// `the_natural_key_is_the_raw_stores_spelling` holds the two together.
 pub fn record(source_id: &str, thread_id: &str, line_no: i64, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_RECORD,
         composite_key(&[thread_id, &line_no.to_string()]),
@@ -59,7 +45,7 @@ pub fn record(source_id: &str, thread_id: &str, line_no: i64, date_ms: Option<i6
 }
 
 pub fn tool_use(source_id: &str, thread_id: &str, call_id: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_USE,
         composite_key(&[thread_id, call_id]),
@@ -73,7 +59,7 @@ pub fn tool_result(
     call_id: &str,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_RESULT,
         composite_key(&[thread_id, call_id]),

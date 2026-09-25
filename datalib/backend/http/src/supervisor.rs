@@ -198,8 +198,8 @@ async fn host(cfg: &HostConfig) {
             return;
         }
     };
-    let mut listener = Listener::new(&store, "the server's loop").await;
-    let Some(_lock) = take_the_lock(cfg, &store, &mut listener, &mut stop).await else {
+    let mut listener = Listener::new(&store, "the server's loop");
+    let Some(_lock) = take_the_lock(cfg, &mut listener, &mut stop).await else {
         store.close().await;
         return;
     };
@@ -283,7 +283,6 @@ impl host::Periods for ServerPeriods<'_> {
 /// runs the loop, and serves the UI's requests too.
 async fn take_the_lock(
     cfg: &HostConfig,
-    store: &Store,
     listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
 ) -> Option<datalib_dag::lock::RunnerLock> {
@@ -309,7 +308,7 @@ async fn take_the_lock(
             }
         }
         tokio::select! {
-            _ = listener.next(store) => {}
+            _ = listener.next() => {}
             _ = stop.changed() => return None,
         }
     }

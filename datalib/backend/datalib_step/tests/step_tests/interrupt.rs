@@ -10,36 +10,29 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_slack::synthesize::{write_recorded_call, SlackSynth};
 use serde_json::{json, Value};
 
 const TS_SINCE: &str = "1704067200.000000";
 const STEP: &str = "work-slack/ingest";
 
-fn write_envelope(path: &Path, line: &Value) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = serde_json::to_string(line).unwrap();
-    s.push('\n');
-    fs::write(path, s).unwrap();
-}
-
 fn write_fixture(api: &Path, channels: &[&str]) {
-    write_envelope(
-        &api.join("raw_api/auth.test/run-1.jsonl"),
-        &json!({
-            "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
-        }),
+    let call = |method: &str, file: &str, params: Value, response: Value| {
+        write_recorded_call(api, method, file, params, response).unwrap();
+    };
+    call(
+        "auth.test",
+        "run-1",
+        json!({}),
+        json!({"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"}),
     );
-    write_envelope(
-        &api.join("raw_api/users.list/run-1.jsonl"),
-        &json!({
-            "method": "users.list",
-            "params": {"limit": "200"},
-            "response": {"ok": true, "members": [
-                {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
-            ]},
-        }),
+    call(
+        "users.list",
+        "run-1",
+        json!({"limit": "200"}),
+        json!({"ok": true, "members": [
+            {"id": "U1", "name": "picard", "real_name": "Jean-Luc Picard"},
+        ]}),
     );
     let listed: Vec<Value> = channels
         .iter()
@@ -47,35 +40,31 @@ fn write_fixture(api: &Path, channels: &[&str]) {
             |c| json!({"id": c, "name": c.to_lowercase(), "is_member": true, "is_archived": false}),
         )
         .collect();
-    write_envelope(
-        &api.join("raw_api/conversations.list/run-1.jsonl"),
-        &json!({
-            "method": "conversations.list",
-            "params": {
-                "exclude_archived": "true",
-                "limit": "200",
-                "types": "public_channel,private_channel",
-            },
-            "response": {"ok": true, "channels": listed, "has_more": false},
+    call(
+        "conversations.list",
+        "run-1",
+        json!({
+            "exclude_archived": "true",
+            "limit": "200",
+            "types": "public_channel,private_channel",
         }),
+        json!({"ok": true, "channels": listed, "has_more": false}),
     );
     for (i, c) in channels.iter().enumerate() {
-        write_envelope(
-            &api.join(format!("raw_api/conversations.history/{c}.jsonl")),
-            &json!({
-                "method": "conversations.history",
-                "params": {
-                    "channel": c,
-                    "include_all_metadata": "true",
-                    "inclusive": "true",
-                    "limit": "200",
-                    "oldest": TS_SINCE,
-                },
-                "response": {
-                    "ok": true,
-                    "messages": [{"ts": format!("1735689600.0001{i:02}"), "user": "U1", "text": format!("in {c}")}],
-                    "has_more": false,
-                },
+        call(
+            "conversations.history",
+            c,
+            json!({
+                "channel": c,
+                "include_all_metadata": "true",
+                "inclusive": "true",
+                "limit": "200",
+                "oldest": TS_SINCE,
+            }),
+            json!({
+                "ok": true,
+                "messages": [{"ts": format!("1735689600.0001{i:02}"), "user": "U1", "text": format!("in {c}")}],
+                "has_more": false,
             }),
         );
     }

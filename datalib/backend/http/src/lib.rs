@@ -1611,14 +1611,14 @@ async fn request_open(
     }
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     let mut listener =
-        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests").await;
+        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
     let id = store.open_request(&roots, &by).await.map_err(internal)?;
     // Answered once the loop has taken it on, so rows read after this
     // show its steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     while !store.taken_on(&id).await.map_err(internal)? {
-        if tokio::time::timeout_at(deadline, listener.next(store))
+        if tokio::time::timeout_at(deadline, listener.next())
             .await
             .is_err()
         {

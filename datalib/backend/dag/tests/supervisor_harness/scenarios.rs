@@ -244,6 +244,58 @@ async fn a_source_added_mid_sync_starts_beside_the_running_one() {
     h.finish().await;
 }
 
+/// A step that failed for a request still open is not run again for it
+/// after a config edit: the swap carries what the loop knew of its last
+/// attempt, not only what was in flight.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_step_is_not_retried_for_its_request_after_a_config_edit() {
+    let mut h = Harness::new(&[source("a"), source("b")]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "fail data").await;
+    h.ended("a", 1).await;
+
+    h.edit_config(&[source("a"), source("b"), source("c")]);
+    let other = h.sync(&["c"]).await;
+    h.started("c").await;
+    h.run("c", "ok v1").await;
+    h.run("b", "ok v1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Failed);
+    assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("a"), 1);
+    h.finish().await;
+}
+
+/// A step the config drops between passes, while what it reads is still
+/// being written, is finished there and then under the graph it ran in:
+/// its run log closes, and the edit waits for nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_dropped_between_passes_finishes_when_the_config_drops_it() {
+    let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "streams").await;
+    h.run("a", "seal s1").await;
+    h.started("c").await;
+    h.run("c", "ok c1").await;
+    h.ended("c", 1).await;
+
+    h.edit_config(&[source("a"), source("b")]);
+    let other = h.sync(&["b"]).await;
+    h.started("b").await;
+    h.wait("c's run to be finished", |s| match s {
+        Seen::Event(Event::StepFinish { step, .. }) if step == "c" => Some(()),
+        _ => None,
+    })
+    .await;
+    h.run("b", "ok v1").await;
+    h.run("a", "ok s2").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
 /// How each process ended is what the record says: an exit code, an
 /// abort, a SIGKILL. None of them wrote an outcome, so none is retried.
 #[tokio::test(flavor = "multi_thread")]
@@ -545,5 +597,175 @@ async fn a_streaming_chain_runs_every_hop_at_once() {
     h.run("c", "ok c1").await;
     h.run("a", "ok a1").await;
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
+// A fan-in under pressure: wake-ups in bursts, mixed with stops and pauses.
+
+/// The versions `step` was handed, input → version, from its `reads` ack.
+async fn handed(h: &mut Harness, step: &str) -> std::collections::BTreeMap<String, String> {
+    h.tell(step, "reads");
+    let json = h
+        .wait("the versions it was handed", |s| match s {
+            Seen::Ack { step: st, what, .. } if st == step && what.starts_with("reads ") => {
+                Some(what["reads ".len()..].to_string())
+            }
+            _ => None,
+        })
+        .await;
+    serde_json::from_str(&json).unwrap()
+}
+
+fn fan_in(sources: &[&str]) -> Vec<Step> {
+    let mut steps: Vec<Step> = sources.iter().map(|s| source(s)).collect();
+    steps.push(reads("d", sources));
+    steps
+}
+
+/// Seals from three sources arriving while the fan-in runs, in a burst,
+/// cost it exactly one more pass, which reads the newest of each.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_pass_on_the_newest() {
+    let mut h = Harness::new(&fan_in(&["a", "b", "c"])).await;
+    let sync = h.sync(&["a", "b", "c"]).await;
+    for s in ["a", "b", "c"] {
+        h.started(s).await;
+        h.run(s, "streams").await;
+    }
+    h.run("a", "seal a1").await;
+    h.started("d").await;
+    for (s, v) in [("b", "b1"), ("c", "c1"), ("a", "a2"), ("b", "b2")] {
+        h.run(s, &format!("seal {v}")).await;
+    }
+    h.run("d", "ok d1").await;
+    h.started("d").await;
+    let read = handed(&mut h, "d").await;
+    for (input, v) in [("a", ":a2"), ("b", ":b2"), ("c", ":c1")] {
+        assert!(read[input].ends_with(v), "{input}: {read:?}");
+    }
+    h.run("d", "ok d2").await;
+    // Each source ends on the version it last sealed: nothing moves.
+    for (s, v) in [("a", "a2"), ("b", "b2"), ("c", "c1")] {
+        h.run(s, &format!("ok {v}")).await;
+    }
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("d"), 2);
+    h.finish().await;
+}
+
+/// A fan-in serving two syncs outlives the stop of one: the other still
+/// wants it, and it runs again when that one's source seals.
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_one_of_two_syncs_a_fan_in_serves_leaves_it_to_the_other() {
+    let mut h = Harness::new(&fan_in(&["a", "b"])).await;
+    let sync_a = h.sync(&["a"]).await;
+    let sync_b = h.sync(&["b"]).await;
+    for s in ["a", "b"] {
+        h.started(s).await;
+        h.run(s, "streams").await;
+    }
+    h.run("a", "seal a1").await;
+    h.started("d").await;
+    h.stop(&sync_a).await;
+    h.ack("a", "sigint").await;
+    assert_eq!(h.closed(&sync_a).await, RequestOutcome::Stopped);
+    // Not stopped: it takes an instruction and ends on its own.
+    h.run("d", "ok d1").await;
+    assert_eq!(h.ended("d", 1).await.outcome, "succeeded");
+    h.run("b", "seal b1").await;
+    h.started("d").await;
+    h.run("d", "ok d2").await;
+    h.run("b", "ok b1").await;
+    assert_eq!(h.closed(&sync_b).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_every_sync_a_fan_in_serves_stops_it() {
+    let mut h = Harness::new(&fan_in(&["a", "b"])).await;
+    let syncs = [h.sync(&["a"]).await, h.sync(&["b"]).await];
+    for s in ["a", "b"] {
+        h.started(s).await;
+        h.run(s, "streams").await;
+    }
+    h.run("a", "seal a1").await;
+    h.started("d").await;
+    h.run("d", "stall").await;
+    for id in &syncs {
+        h.stop(id).await;
+    }
+    h.ack("d", "sigint").await;
+    assert_eq!(h.ended("d", 1).await.outcome, "stopped");
+    for id in &syncs {
+        assert_eq!(h.closed(id).await, RequestOutcome::Stopped);
+    }
+    h.finish().await;
+}
+
+/// A paused fan-in waits out a burst of seals and runs once on resume,
+/// on the newest of each input.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
+    let mut h = Harness::new(&fan_in(&["a", "b"])).await;
+    h.pause("d").await;
+    let sync = h.sync(&["a", "b"]).await;
+    for s in ["a", "b"] {
+        h.started(s).await;
+        h.run(s, "streams").await;
+    }
+    for (s, v) in [("a", "a1"), ("b", "b1"), ("a", "a2"), ("b", "b2")] {
+        h.run(s, &format!("seal {v}")).await;
+    }
+    h.until("d to read paused after the burst", |s| {
+        let sealed = s.version("a").is_some_and(|v| v.ends_with(":a2"))
+            && s.version("b").is_some_and(|v| v.ends_with(":b2"));
+        (sealed && s.detail("d") == Some("paused by person")).then_some(())
+    })
+    .await;
+    assert_eq!(h.state().await.started("d"), 0);
+    h.resume("d").await;
+    h.started("d").await;
+    let read = handed(&mut h, "d").await;
+    assert!(
+        read["a"].ends_with(":a2") && read["b"].ends_with(":b2"),
+        "{read:?}"
+    );
+    h.run("d", "ok d1").await;
+    h.run("a", "ok a2").await;
+    h.run("b", "ok b2").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("d"), 1);
+    h.finish().await;
+}
+
+/// A step that says it failed is not a stopped run, though the loop had
+/// just asked it to stop: its failure stands, and a resume does not run it
+/// again for the request it failed. (One that exits with no word after a
+/// stop was asked is taken to have stopped: that is all a plain command
+/// can tell us.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_that_fails_after_being_asked_to_stop_is_a_failure_not_a_stop() {
+    // `b` holds the request open across the pause and the resume.
+    let mut h = Harness::new(&[source("a"), source("b")]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "on_stop ignore").await;
+    h.pause("a").await;
+    h.ack("a", "sigint").await;
+    h.run("a", "fail data").await;
+    assert_eq!(h.ended("a", 1).await.outcome, "failed");
+    h.resume("a").await;
+    h.run("b", "ok v1").await;
+    h.until("the request to close, or a to run again", |s| {
+        (s.outcome(&sync).is_some() || s.started("a") > 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        h.state().await.started("a"),
+        1,
+        "a failure is not run again"
+    );
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Failed);
     h.finish().await;
 }

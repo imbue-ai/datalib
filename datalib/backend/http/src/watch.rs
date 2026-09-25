@@ -664,10 +664,10 @@ async fn watch_record(
             return;
         }
     };
-    let mut listener = Listener::new(&store, "the UI's watch").await;
+    let mut listener = Listener::new(&store, "the UI's watch");
     let _ = listening.send(());
     loop {
-        let heard = listener.next(&store).await;
+        let heard = listener.next().await;
         let record = heard
             .iter()
             .any(|line| line != RUNNER_LOCK_RELEASED && line != CONFIG_CHANGED);
@@ -973,14 +973,14 @@ mod tests {
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await
             .unwrap();
-        let mut the_loop = Listener::new(&store, "test").await;
+        let mut the_loop = Listener::new(&store, "test");
         let mut rx = watching(td.path()).await;
 
         let tmp = td.path().join("config.tmp");
         std::fs::write(&tmp, "# rewritten\n").unwrap();
         std::fs::rename(&tmp, td.path().join("config.toml")).unwrap();
         until(&mut rx, RootEvent::ConfigChanged).await;
-        let heard = within("the announcement", the_loop.next(&store)).await;
+        let heard = within("the announcement", the_loop.next()).await;
         assert!(heard.iter().any(|l| l == CONFIG_CHANGED), "{heard:?}");
     }
 

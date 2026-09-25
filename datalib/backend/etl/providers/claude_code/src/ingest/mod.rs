@@ -1,77 +1,29 @@
-//! Claude Code's session store → doltlite. Walk the transcripts root
-//! for `.jsonl` files, re-read every one whose content changed since
-//! the last run, and upsert its records. A session file only grows
-//! while the session is open, so the cost of a sync is the open
-//! sessions; everything else is a `stat`. A transcript that vanishes
-//! from disk keeps its rows: Claude Code deletes old sessions on its
-//! own schedule, and outliving that is half the point of a mirror.
+//! Claude Code's session store → doltlite: one transcript per `.jsonl`
+//! file under the transcripts root, read the way every agent-session
+//! source reads its files (`datalib_etl_agent_sessions`).
 
 pub mod parse;
 pub mod schema_raw;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
-use sqlx::sqlite::SqlitePool;
-use tracing::warn;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::file_checkpoint;
+use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
+use datalib_etl_agent_sessions::{read_changed, SessionCounts, SessionTree};
+
+pub use datalib_etl_agent_sessions::FetchSummary;
 
 use self::parse::{agent_id_from_path, parse_transcript, ParsedTranscript};
 use self::schema_raw::{full_ddl, RecordRow, TranscriptRow, CURSOR_SCOPE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit a reader is pinned at; `None` for the writer.
-    pin: Option<datalib_etl::pin::Pin>,
-}
-
-impl RawDb {
-    /// Open this store to *read* it, for the render pass: no DDL, no
-    /// commits. See `datalib_etl::doltlite_raw::open_reader`.
-    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
-    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            pool: reader.pool().clone(),
-            pin: Some(reader.pin().clone()),
-        }))
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// The commit this reader reads at. `None` on the writer's handle.
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -88,80 +40,37 @@ pub struct FetchOptions {
     pub control: DownloadControl,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct FetchSummary {
-    /// Transcript files the scan saw.
-    pub files: usize,
-    /// Of those, the ones read this run (new or changed).
-    pub files_read: usize,
-    pub transcripts: usize,
-    pub subagents: usize,
-    pub records: usize,
-    pub malformed_lines: usize,
-    /// Files that parsed as nothing: no line named a session.
-    pub not_transcripts: usize,
-    pub unreadable: usize,
-}
-
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
-
-    let scan = fsscan::scan(
-        &opts.cache,
-        &opts.input_path,
-        &fsscan::ScanOptions::default(),
-        |p| p.extension().is_some_and(|e| e == "jsonl"),
-    )
-    .await?;
-    let prev = file_checkpoint::load_cursor(db.pool(), CURSOR_SCOPE).await?;
-    let changes = scan.changes_since(&prev);
-
-    let mut summary = FetchSummary {
-        files: scan.files.len(),
-        ..Default::default()
-    };
+    let trees = [SessionTree {
+        root: opts.input_path.clone(),
+        scope: CURSOR_SCOPE.to_string(),
+        rel_prefix: String::new(),
+    }];
     let mut transcript_rows: Vec<TranscriptRow> = Vec::new();
     let mut record_rows: Vec<RecordRow> = Vec::new();
-    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
-
-    for f in changes.needs_reading() {
-        let text = match std::fs::read_to_string(&f.path) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(event = "claude_code_file_unreadable", path = %f.path.display(), error = %e, "a transcript file could not be read");
-                summary.unreadable += 1;
-                continue;
-            }
-        };
-        summary.files_read += 1;
-        let Some(parsed) = parse_transcript(&text, &f.rel, agent_id_from_path(&f.rel)) else {
-            summary.not_transcripts += 1;
-            // Stamped as read anyway: a file that names no session will
-            // not start naming one, and re-reading it every run tells
-            // nobody anything.
-            done.push(f);
-            continue;
-        };
-        summary.malformed_lines += parsed.stats.malformed;
-        summary.records += parsed.records.len();
-        summary.transcripts += 1;
-        if parsed.agent_id.is_some() {
-            summary.subagents += 1;
-        }
-        push_rows(&parsed, &mut transcript_rows, &mut record_rows);
-        done.push(f);
-        opts.progress.set_message(&format!(
-            "claude_code: {} transcripts / {} records ({} of {} files read)",
-            summary.transcripts, summary.records, summary.files_read, summary.files,
-        ));
-    }
+    let (summary, read) = read_changed(
+        db.pool(),
+        &opts.cache,
+        &trees,
+        &opts.progress,
+        "claude_code",
+        |rel_path, text| {
+            let parsed = parse_transcript(text, rel_path, agent_id_from_path(rel_path))?;
+            push_rows(&parsed, &mut transcript_rows, &mut record_rows);
+            Some(SessionCounts {
+                records: parsed.records.len(),
+                malformed_lines: parsed.stats.malformed,
+                is_subagent: parsed.agent_id.is_some(),
+            })
+        },
+    )
+    .await?;
 
     let mut tx = db.pool().begin().await.context("begin claude_code tx")?;
     bulk_upsert_entity_in_tx(&mut tx, &transcript_rows).await?;
     bulk_upsert_entity_in_tx(&mut tx, &record_rows).await?;
-    for f in &done {
-        file_checkpoint::record_file(&mut tx, CURSOR_SCOPE, f).await?;
-    }
+    read.stamp(&mut tx).await?;
     tx.commit().await.context("commit claude_code tx")?;
     Ok(summary)
 }

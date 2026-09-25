@@ -294,6 +294,10 @@ pub(crate) async fn replace_source_problems(
     Ok(())
 }
 
+pub fn schema_hash() -> String {
+    datalib_store_meta::schema_hash(index_ddl())
+}
+
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
 /// the DDL pass and the schema check can't drift into covering different
 /// sets of tables.
@@ -351,14 +355,9 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("open the grid index at {}", db_path.display()))?;
     init_schema(&pool).await?;
-    datalib_store_meta::write(
-        &pool,
-        StoreKind::GridIndex,
-        &datalib_store_meta::schema_hash(index_ddl()),
-        0,
-    )
-    .await
-    .context("write _datalib_meta for the grid index")?;
+    datalib_store_meta::write(&pool, StoreKind::GridIndex, &schema_hash(), 0)
+        .await
+        .context("write _datalib_meta for the grid index")?;
     datalib_etl::doltlite_raw::commit_run(&pool, "schema: grid index")
         .await
         .context("commit the grid index schema")?;

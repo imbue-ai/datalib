@@ -39,6 +39,23 @@ fn parse_params(rec: &Value) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Write one recorded call in the layout [`SlackSynth`] reads —
+/// `raw_api/<method>/<file>.jsonl` under `api_dir` — for a test that
+/// builds its own workspace.
+pub fn write_recorded_call(
+    api_dir: &Path,
+    method: &str,
+    file: &str,
+    params: Value,
+    response: Value,
+) -> Result<()> {
+    let path = api_dir.join(format!("raw_api/{method}/{file}.jsonl"));
+    fs::create_dir_all(path.parent().expect("a file under raw_api"))
+        .with_context(|| format!("mkdir -p {}", path.display()))?;
+    let line = serde_json::json!({"method": method, "params": params, "response": response});
+    fs::write(&path, format!("{line}\n")).with_context(|| format!("write {}", path.display()))
+}
+
 impl Synthesizer for SlackSynth {
     fn name(&self) -> &'static str {
         "slack"

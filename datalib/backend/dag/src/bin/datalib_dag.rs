@@ -26,7 +26,6 @@ use datalib_dag::events::FanOutSink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{config, subprocess, EventSink, NdjsonSink, Runner};
 use strum::{EnumString, IntoStaticStr};
 use tracing_subscriber::layer::SubscriberExt;
@@ -365,7 +364,7 @@ async fn main() -> Result<()> {
             .stop_on(stop_rx)
             .reload_from(Arc::new(ConfigFile::new(&config_path)));
         if let Some(p) = parallelism {
-            runner.budgets = Budgets::from_parallelism(p);
+            runner = runner.parallelism(p);
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
@@ -436,7 +435,7 @@ enum Taken {
 /// was running may end between our look and our request landing, and then
 /// nobody is left to serve it but us. Its release is announced.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag").await;
+    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag");
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -464,7 +463,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     }
                     return Ok(Taken::Closed(closed));
                 }
-                listener.next(store).await;
+                listener.next().await;
             }
             Err(e) => return Err(e.into()),
         }

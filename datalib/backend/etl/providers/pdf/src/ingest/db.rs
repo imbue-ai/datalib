@@ -1,16 +1,12 @@
 //! Doltlite-backed raw store for the `pdf` provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::doltlite_raw as dr;
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
@@ -32,86 +28,9 @@ pub struct PrevCache {
     pub known_docs: HashSet<String>,
 }
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
-    pin: Option<datalib_etl::pin::Pin>,
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 impl RawDb {
-    /// Open this store to *read* it, for the render pass.
-    ///
-    /// The download step owns this store; render only reads it. An ordinary
-    /// [`Self::open`] would discard a dirty working set, reconcile the schema
-    /// and commit on the way in — three writes to a file this caller does not
-    /// own, and with producers committing incrementally, a way to throw away
-    /// the downloader's batch in flight. See
-    /// `datalib_etl::doltlite_raw::open_reader`.
-    ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
-    /// **`None` means the store cannot be read**, not that the corpus is
-    /// empty — no commit to pin, or a build without the dolt extensions.
-    /// The distinction is load-bearing here: a bucket the diff named
-    /// that `load_targets` comes back empty for is declared with nothing
-    /// and loses its document. See the plan's "The sink contract".
-    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
-        Self::open_reader_at(db_path, None).await
-    }
-
-    /// A reader pinned at `commit` — the one the render driver diffed
-    /// against — or at HEAD when there is none.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        // Pinned at open, views installed: a reader cannot read the
-        // working set by forgetting to.
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        let pin = reader.pin().clone();
-        let pool = reader.pool().clone();
-        Ok(Some(Self {
-            pool,
-            pin: Some(pin),
-        }))
-    }
-
-    /// How this handle reads content. Every content query goes through it,
-    /// so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// Wait for the connection to actually go away, so the store can be
-    /// reopened. Dropping the handle only schedules that.
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
     /// What this source already ingested. Must run **before**
     /// [`Self::reset`].
     ///
@@ -123,7 +42,7 @@ impl RawDb {
         let mut cache = PrevCache::default();
 
         let rows = sqlx::query("SELECT id, blake3 FROM pdf_paths")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load pdf_paths")?;
         for r in rows {
@@ -133,7 +52,7 @@ impl RawDb {
         }
 
         let docs = sqlx::query("SELECT blake3 FROM pdf_documents")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load pdf_documents ids")?;
         for r in docs {
@@ -145,7 +64,7 @@ impl RawDb {
     /// Truncate the **path** table so deletions fall out naturally: a
     /// path present last scan and absent now is simply not re-inserted.
     pub async fn reset_paths(&self) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin truncate tx")?;
+        let mut tx = self.pool().begin().await.context("begin truncate tx")?;
         // A path's bookkeeping goes with the path.
         let sidecars: Vec<String> = DATA_TABLES
             .iter()
@@ -174,7 +93,7 @@ impl RawDb {
         row: &PdfScanMetaRow,
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
+        let mut tx = self.pool().begin().await.context("begin scan_meta tx")?;
         bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now)
             .await
             .context("upsert pdf_scan_meta")?;
@@ -192,7 +111,7 @@ impl RawDb {
             "SELECT id, abs_root FROM {} ORDER BY id LIMIT 1",
             self.reads().table("pdf_scan_meta")
         )))
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("read pdf_scan_meta")?;
         Ok(row.map(|r| {
@@ -209,7 +128,7 @@ impl RawDb {
         paths: &[PdfPathRow],
         now: &IsoOffsetTimestamp,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin write tx")?;
+        let mut tx = self.pool().begin().await.context("begin write tx")?;
         bulk_upsert_in_tx(&mut tx, docs, now)
             .await
             .context("upsert pdf_documents")?;
@@ -245,7 +164,7 @@ impl RawDb {
             self.reads().table("pdf_documents"),
             self.reads().table("pdf_paths")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select convertible documents")?;
 

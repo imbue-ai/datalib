@@ -151,6 +151,26 @@ to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
 # a diff a person expected to be small and is not. Default 1000.
 max_documents = 200
 
+# ── locks ──────────────────────────────────────────────────────────
+# What keeps steps apart beyond the trees they write and read. Every
+# config has three, `network` (4 slots), `cpu` (4) and `index` (2), and a
+# step that names none holds one of them by its shape: a download
+# `network`, a render `cpu`, an index `index`. Declare one to resize it,
+# or add your own and name it on the steps that hold it:
+#
+#   [[locks]]
+#   name = "slack-api"   # two sources on one workspace's rate limit
+#   slots = 1            # at most this many hold it at once; 1 is a mutex
+#
+#   locks = ["slack-api"]                 # on a step: one slot
+#   locks = { slack-api = "exclusive" }   # or every slot, alone
+#
+# A step that reads its inputs' files off disk rather than at a pinned
+# commit says `reads = "files"`, and no writer of them runs beside it.
+# Neither changes a step's fingerprint: they say when it may run, not
+# what it makes. See datalib/backend/dag/README.md, "What keeps steps
+# apart".
+
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source
 # above means adding its render step's id here too — the wizard does

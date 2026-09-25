@@ -91,6 +91,12 @@ fn tell(fifo: &Path, line: &[u8]) {
 /// One process's ear on the store. Make it before reading the state it
 /// guards: a line announced between the read and the wait is held in the
 /// FIFO until [`Listener::next`] takes it.
+///
+/// It never uses a connection to the store, and that is load-bearing: it
+/// is waited on in `select!` and under `timeout`, and a query dropped
+/// mid-flight can leave a single-connection pool unable to serve the
+/// caller's next one. Its backstop reads the database file's own change
+/// counter instead.
 pub struct Listener {
     fifo: Option<Fifo>,
     who: &'static str,
@@ -98,12 +104,14 @@ pub struct Listener {
     wake_at: Instant,
     /// Heard, and not yet returned: kept across a cancelled `next`.
     pending: Vec<String>,
-    /// The store whose connection the backstop reads. What it announced
-    /// itself wakes nobody: the loop would otherwise tick again after
-    /// every save of its own record.
+    /// The store this listener was made from. What it announced itself
+    /// wakes nobody: the loop would otherwise tick again after every save
+    /// of its own record.
     own: String,
-    /// The store's `data_version` as of the last announcement heard.
-    checked: Option<i64>,
+    /// The database file, whose change counter the backstop reads.
+    db: PathBuf,
+    /// The change counter as of the last announcement heard.
+    checked: Option<u32>,
     /// The backstop saw the store move with nothing announced; if nothing
     /// is announced by its next look either, that commit was missed.
     suspect: bool,
@@ -111,7 +119,7 @@ pub struct Listener {
 
 impl Listener {
     /// `who` names the listener in the ERROR line a missed commit costs.
-    pub async fn new(store: &Store, who: &'static str) -> Listener {
+    pub fn new(store: &Store, who: &'static str) -> Listener {
         let fifo = match Fifo::make(store.listeners()) {
             Ok(fifo) => Some(fifo),
             Err(e) => {
@@ -126,7 +134,8 @@ impl Listener {
             wake_at: Instant::now() + BACKSTOP,
             pending: Vec::new(),
             own: store.me().to_string(),
-            checked: store.data_version().await.ok(),
+            checked: change_counter(store.path()),
+            db: store.path().to_path_buf(),
             suspect: false,
         }
     }
@@ -137,16 +146,14 @@ impl Listener {
         self
     }
 
-    /// What was announced since the last call, by anyone but `store`,
-    /// waiting if nothing was; `[UNANNOUNCED]` when the backstop found the
-    /// store moved. Never empty. Safe to drop mid-wait.
-    pub async fn next(&mut self, store: &Store) -> Vec<String> {
+    /// What was announced since the last call, by anyone but the store it
+    /// was made from, waiting if nothing was; `[UNANNOUNCED]` when the
+    /// backstop found the store moved. Never empty. Safe to drop at any
+    /// point: it waits only on its FIFO and a timer.
+    pub async fn next(&mut self) -> Vec<String> {
         loop {
             self.drain();
             if !self.pending.is_empty() {
-                self.checked = store.data_version().await.ok();
-                self.suspect = false;
-                self.wake_at = Instant::now() + self.backstop;
                 return std::mem::take(&mut self.pending);
             }
             tokio::select! {
@@ -154,11 +161,10 @@ impl Listener {
                 () = readable(&self.fifo) => {}
                 () = tokio::time::sleep_until(self.wake_at) => {
                     // What arrived as the timer fired is heard, not missed.
-                    self.drain();
-                    if !self.pending.is_empty() {
+                    if self.drain() {
                         continue;
                     }
-                    if let Some(found) = self.look(store).await {
+                    if let Some(found) = self.look() {
                         return found;
                     }
                 }
@@ -166,21 +172,31 @@ impl Listener {
         }
     }
 
-    fn drain(&mut self) {
+    /// Whether anything was announced, its own lines included: each is a
+    /// commit accounted for, so the backstop starts over from here.
+    fn drain(&mut self) -> bool {
         let Some(fifo) = self.fifo.as_mut() else {
-            return;
+            return false;
         };
-        for line in fifo.drain() {
+        let lines = fifo.drain();
+        if lines.is_empty() {
+            return false;
+        }
+        for line in lines {
             let (from, what) = line.split_once(' ').unwrap_or(("", &line));
             if from != self.own {
                 self.pending.push(what.to_string());
             }
         }
+        self.checked = change_counter(&self.db);
+        self.suspect = false;
+        self.wake_at = Instant::now() + self.backstop;
+        true
     }
 
-    async fn look(&mut self, store: &Store) -> Option<Vec<String>> {
+    fn look(&mut self) -> Option<Vec<String>> {
         self.wake_at = Instant::now() + self.backstop;
-        let now = store.data_version().await.ok()?;
+        let now = change_counter(&self.db)?;
         if self.checked.is_none_or(|c| c == now) {
             self.checked = Some(now);
             self.suspect = false;
@@ -199,6 +215,16 @@ impl Listener {
         }
         Some(vec![UNANNOUNCED.to_string()])
     }
+}
+
+/// SQLite's file change counter (header bytes 24–27), which every commit
+/// moves in rollback-journal mode, whichever connection made it.
+fn change_counter(db: &Path) -> Option<u32> {
+    let mut header = [0u8; 28];
+    File::open(db).ok()?.read_exact(&mut header).ok()?;
+    Some(u32::from_be_bytes([
+        header[24], header[25], header[26], header[27],
+    ]))
 }
 
 /// Resolves when the FIFO may have something to read, forgetting that it
@@ -304,11 +330,33 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let store = Store::open(td.path()).await.unwrap();
         let other = Store::open(td.path()).await.unwrap();
-        let mut a = Listener::new(&store, "a").await;
-        let mut b = Listener::new(&store, "b").await;
+        let mut a = Listener::new(&store, "a");
+        let mut b = Listener::new(&store, "b");
         other.pause("x/y", "test").await.unwrap();
-        assert_eq!(a.next(&store).await, ["paused x/y"]);
-        assert_eq!(b.next(&store).await, ["paused x/y"]);
+        assert_eq!(a.next().await, ["paused x/y"]);
+        assert_eq!(b.next().await, ["paused x/y"]);
+    }
+
+    /// A listener is waited on under `select!` and `timeout`, and dropped
+    /// wherever it is. When it read the store's `data_version` after
+    /// hearing a line, a drop in that query could leave the store's one
+    /// connection unable to answer the caller's next query: the loop hung
+    /// on its next save (harness walk seed 237), and so could every
+    /// handler sharing the server's mailbox connection.
+    #[tokio::test]
+    async fn a_listener_dropped_mid_wait_leaves_the_store_usable() {
+        let td = tempfile::tempdir().unwrap();
+        let store = Store::open(td.path()).await.unwrap();
+        let other = Store::open(td.path()).await.unwrap();
+        let mut listener = Listener::new(&store, "test").backstop(Duration::ZERO);
+        for i in 0..50 {
+            other.pause(&format!("s{i}"), "test").await.unwrap();
+            let _ = tokio::time::timeout(Duration::ZERO, listener.next()).await;
+            tokio::time::timeout(Duration::from_secs(5), store.paused())
+                .await
+                .expect("the store answers after a dropped wait")
+                .unwrap();
+        }
     }
 
     /// A dead process's FIFO would otherwise cost every announcement an
@@ -333,17 +381,17 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let store = Store::open(td.path()).await.unwrap();
         let other = Store::open(td.path()).await.unwrap();
-        let mut listener = Listener::new(&store, "test").await;
+        let mut listener = Listener::new(&store, "test");
         store.pause("mine", "test").await.unwrap();
         other.pause("theirs", "test").await.unwrap();
-        assert_eq!(listener.next(&store).await, ["paused theirs"]);
+        assert_eq!(listener.next().await, ["paused theirs"]);
     }
 
     #[tokio::test]
     async fn a_dropped_listener_takes_its_fifo_with_it() {
         let td = tempfile::tempdir().unwrap();
         let store = Store::open(td.path()).await.unwrap();
-        let listener = Listener::new(&store, "test").await;
+        let listener = Listener::new(&store, "test");
         let count = || std::fs::read_dir(listeners_dir(td.path())).unwrap().count();
         assert_eq!(count(), 1);
         drop(listener);
@@ -356,9 +404,9 @@ mod tests {
     async fn a_long_announcement_arrives_as_one_line() {
         let td = tempfile::tempdir().unwrap();
         let store = Store::open(td.path()).await.unwrap();
-        let mut listener = Listener::new(&store, "test").await;
+        let mut listener = Listener::new(&store, "test");
         announce(store.listeners(), FROM_SERVER, &"é".repeat(400));
-        let heard = listener.next(&store).await;
+        let heard = listener.next().await;
         assert_eq!(heard.len(), 1);
         assert!(heard[0].len() < MAX_LINE);
     }
@@ -371,11 +419,9 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let store = Store::open(td.path()).await.unwrap();
         let other = Store::open(td.path()).await.unwrap();
-        let mut listener = Listener::new(&store, "test")
-            .await
-            .backstop(Duration::from_millis(1));
+        let mut listener = Listener::new(&store, "test").backstop(Duration::from_millis(1));
         other.pause("x/y", "test").await.unwrap();
-        assert_eq!(listener.next(&store).await, ["paused x/y"]);
+        assert_eq!(listener.next().await, ["paused x/y"]);
 
         // Past `Store`, as a `sqlite3` shell would write.
         let before = missed_announcements();
@@ -383,9 +429,23 @@ mod tests {
             .execute(other.pool())
             .await
             .unwrap();
-        assert_eq!(listener.next(&store).await, [UNANNOUNCED]);
-        assert_eq!(listener.next(&store).await, [UNANNOUNCED]);
+        assert_eq!(listener.next().await, [UNANNOUNCED]);
+        assert_eq!(listener.next().await, [UNANNOUNCED]);
         // Other tests share the count, and none of them misses one.
         assert!(missed_announcements() > before);
+    }
+
+    /// A listener that cannot make its FIFO still wakes, on the backstop
+    /// alone: it hears no announcement, so every commit reads as missed.
+    #[tokio::test]
+    async fn a_listener_that_cannot_listen_wakes_on_the_backstop() {
+        let td = tempfile::tempdir().unwrap();
+        let store = Store::open(td.path()).await.unwrap();
+        let other = Store::open(td.path()).await.unwrap();
+        let _ = std::fs::remove_dir_all(store.listeners());
+        std::fs::write(store.listeners(), "not a directory").unwrap();
+        let mut listener = Listener::new(&store, "test").backstop(Duration::from_millis(1));
+        other.pause("x/y", "test").await.unwrap();
+        assert_eq!(listener.next().await, [UNANNOUNCED]);
     }
 }

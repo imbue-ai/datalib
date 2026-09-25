@@ -8,32 +8,30 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl_email::ingest;
 use datalib_etl_email_config::EmailOutlink;
 use datalib_etl_email_config::EmailRenderConfig;
-use datalib_etl_render::processor::{ReadScope, RenderCtx, RenderProcessor};
-use std::path::PathBuf;
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
+use std::path::Path;
 
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: EmailRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
     let outlink = config.outlink_format.map(outlink_format);
-    Ok(vec![Box::new(EmailRender {
-        id: format!("email/{name}/render"),
-        raw_path,
-        name,
-        outlink,
-        only_render_labels: config.only_render_labels.clone(),
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        EmailRender {
+            outlink,
+            only_render_labels: config.only_render_labels.clone(),
+        },
+    ))
 }
 
 /// Email's render processor — reads the raw store and emits one rendered
 /// markdown per thread through the fused-Load callback.
 pub struct EmailRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
     outlink: Option<OutlinkFormat>,
     /// Render only threads with at least one email under one of these mailbox
     /// label paths (empty = render everything extracted).
@@ -41,13 +39,11 @@ pub struct EmailRender {
 }
 
 #[async_trait]
-impl RenderProcessor for EmailRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for EmailRender {
+    const PROVIDER: &'static str = "email";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::render::RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        crate::render::render::RENDER_VERSION
     }
 
     // Both knobs change the rendered output for documents the diff
@@ -59,14 +55,14 @@ impl RenderProcessor for EmailRender {
         ))
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::parse::parse;
         use crate::render::render::render_all;
 
-        let db = ingest::db_path_for(&self.raw_path);
+        let db = ingest::db_path_for(raw_path);
         if !db.exists() {
             tracing::info!(
-                source = %self.name,
+                source = %ctx.name,
                 db = %db.display(),
                 "email render: no raw db — skipping",
             );
@@ -83,13 +79,13 @@ impl RenderProcessor for EmailRender {
         ctx.report_unparsed(
             &ReadScope::Whole(vec!["accounts", "mailboxes", "threads"]),
             &parsed.unparsed,
-            self.render_version(),
+            Some(self.render_version()),
         )?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
             ctx.root,
-            &self.name,
+            ctx.name,
             self.outlink,
             &self.only_render_labels,
             ctx.progress,
@@ -105,15 +101,8 @@ impl RenderProcessor for EmailRender {
                 &[],
             )?;
         }
-        for bucket in &parsed.scan.gone {
-            ctx.declare_bucket(bucket, &[])?;
-        }
-        for bucket in &buckets {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
-        }
-        if let Some(head) = parsed.scan.new_head.as_deref() {
-            ctx.consumed(head);
-        }
+        ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
+        ctx.finish(&buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

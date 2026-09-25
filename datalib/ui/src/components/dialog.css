@@ -1,0 +1,56 @@
+/* The frame every modal dialog here shares (CompareDialog,
+   SourceWizard): the dimmed backdrop, the panel, its header with the
+   title and ×, its scrolling body and its footer of buttons. A dialog
+   includes this as a scoped style, adds its own class beside these,
+   and sets its own width. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 16px;
+  z-index: 50;
+}
+.dialog {
+  background: var(--datalib-bg);
+  color: var(--datalib-fg);
+  border: 1px solid var(--datalib-border);
+  border-radius: 8px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+.dialog-head,
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.dialog-head {
+  border-bottom: 1px solid var(--datalib-border);
+}
+.dialog-foot {
+  border-top: 1px solid var(--datalib-border);
+  justify-content: flex-end;
+}
+.dialog-head h2 {
+  margin: 0;
+  font-size: 17px;
+  flex: 1;
+}
+.dialog-x {
+  background: none;
+  border: none;
+  color: var(--datalib-muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dialog-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}

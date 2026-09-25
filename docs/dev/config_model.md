@@ -217,6 +217,16 @@ none reads its own group's `ingest` tree and logs a warning. A store
 kept on another disk is a symlink at `<group>/ingest` — no params key
 can point elsewhere.
 
+## What keeps steps apart: `[[locks]]`, `locks`, `reads`
+
+A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
+the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
+them), and one that names none holds `network`, `cpu` or `index`, the
+three every config has. `reads = "files"` says a step reads its inputs
+off disk, so no writer of them runs beside it. None of these is in the
+fingerprint. The rules are the dag README's "What keeps steps apart";
+`configs/dag_example.toml` shows the syntax.
+
 ## The fan-ins read exactly their `inputs`
 
 `grid_index` and `qmd_index` take the render stores they index from

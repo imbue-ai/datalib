@@ -10,18 +10,19 @@
 //! every downloader.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
+use datalib_etl::processor::PlanContext;
 use datalib_etl::progress::Progress;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 use crate::grid_index::RenderedMarkdown;
 pub use crate::indexed_markdown::Input;
-use crate::inputs::RawRange;
+use crate::inputs::{Bucket, RawRange};
 
 /// One source's render wave, as a unit the step driver can run.
 #[async_trait]
@@ -44,6 +45,65 @@ pub trait RenderProcessor: Send + Sync {
     /// empty object, which never differs from itself.
     fn render_params(&self) -> serde_json::Value {
         serde_json::json!({})
+    }
+}
+
+/// What a provider writes to render a source whose render wave is one
+/// processor over its raw store — every source but one. The processor
+/// around it, [`plan_source_render`], carries the step id and the raw
+/// path; this carries the knobs and the work.
+#[async_trait]
+pub trait SourceRender: Send + Sync + 'static {
+    /// The provider's name: the first segment of the processor id,
+    /// `<provider>/<source>/render`, which keys the render params the
+    /// driver stores beside the cursor.
+    const PROVIDER: &'static str;
+
+    fn render_version(&self) -> u32;
+
+    /// See [`RenderProcessor::render_params`].
+    fn render_params(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String>;
+}
+
+/// The render wave for a source rendered by one [`SourceRender`].
+pub fn plan_source_render<R: SourceRender>(
+    ctx: PlanContext,
+    raw_path: &Path,
+    render: R,
+) -> Vec<Box<dyn RenderProcessor>> {
+    vec![Box::new(SourceRenderProcessor {
+        id: format!("{}/{}/render", R::PROVIDER, ctx.name),
+        raw_path: raw_path.to_path_buf(),
+        render,
+    })]
+}
+
+struct SourceRenderProcessor<R> {
+    id: String,
+    raw_path: PathBuf,
+    render: R,
+}
+
+#[async_trait]
+impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+        self.render.run(&self.raw_path, ctx).await
+    }
+
+    fn render_version(&self) -> Option<u32> {
+        Some(self.render.render_version())
+    }
+
+    fn render_params(&self) -> serde_json::Value {
+        self.render.render_params()
     }
 }
 
@@ -226,6 +286,24 @@ impl<'a> RenderCtx<'a> {
         (cb)(bucket_key, inputs)
     }
 
+    /// Every bucket a render pass produced, each with the rows it read.
+    pub fn declare_buckets(&self, buckets: &[Bucket]) -> Result<()> {
+        for bucket in buckets {
+            self.declare_bucket(&bucket.key, &bucket.inputs)?;
+        }
+        Ok(())
+    }
+
+    /// Buckets this run looked at and produced nothing for: each is
+    /// declared with no inputs, so its documents go. A pass that renders
+    /// some of them declares those again, after, and they stay.
+    pub fn declare_empty<'k>(&self, keys: impl IntoIterator<Item = &'k str>) -> Result<()> {
+        for key in keys {
+            self.declare_bucket(key, &[])?;
+        }
+        Ok(())
+    }
+
     pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
         let mut cb = self.emit.cb.lock().unwrap();
         (cb)(md)
@@ -297,6 +375,17 @@ impl<'a> RenderCtx<'a> {
     /// committed — says nothing, and the cursor stays where it was.
     pub fn consumed(&self, raw_commit: &str) {
         *self.consumed.lock().unwrap() = Some(raw_commit.to_string());
+    }
+
+    /// The end of most runs: declare what the pass rendered, then the
+    /// commit it read, when it read one — a store with no commit yet
+    /// leaves the cursor where it was.
+    pub fn finish(&self, buckets: &[Bucket], head: Option<&str>) -> Result<()> {
+        self.declare_buckets(buckets)?;
+        if let Some(head) = head {
+            self.consumed(head);
+        }
+        Ok(())
     }
 
     pub fn consumed_commit(&self) -> Option<String> {

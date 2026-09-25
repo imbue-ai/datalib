@@ -50,8 +50,8 @@ async fn github_live_single_pr_snapshot() {
     sealed.expect("seal the raw store");
 
     let parsed = parse_api_dir(&tmp, "github", RawRange::cold()).expect("parse_api_dir");
-    assert_eq!(parsed.pull_requests.len(), 1, "expected exactly one PR");
-    let pr = &parsed.pull_requests[0];
+    assert_eq!(parsed.change_requests.len(), 1, "expected exactly one PR");
+    let pr = &parsed.change_requests[0];
 
     let render_root = tmp.clone();
     let stanza = "github_live";
@@ -69,11 +69,8 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_rel = datalib_etl_github_render::render::render::pr_qmd_path_rel(
-        stanza,
-        &pr.repo_full_name,
-        pr.pr_number,
-    );
+    let qmd_rel =
+        datalib_etl_github_render::render::PROFILE.qmd_path_rel(stanza, &pr.container, pr.number);
     let qmd_abs = render_root.join(&qmd_rel);
     assert!(
         qmd_abs.exists(),
@@ -88,34 +85,26 @@ async fn github_live_single_pr_snapshot() {
     );
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use datalib_etl_github_render::render::parse::CommentSection;
-    if parsed
-        .comments
-        .iter()
-        .any(|c| c.section == CommentSection::Review)
-    {
+    use datalib_etl_github_render::render::Section;
+    if parsed.comments.iter().any(|c| c.section == Section::Review) {
         sections.push("Review");
     }
     if parsed
         .comments
         .iter()
-        .any(|c| c.section == CommentSection::General)
+        .any(|c| c.section == Section::General)
     {
         sections.push("General");
     }
-    if parsed
-        .comments
-        .iter()
-        .any(|c| c.section == CommentSection::Inline)
-    {
+    if parsed.comments.iter().any(|c| c.section == Section::Inline) {
         sections.push("Inline");
     }
 
     let view = json!({
-        "repo": pr.repo_full_name,
-        "pr_number": pr.pr_number,
+        "repo": pr.container,
+        "pr_number": pr.number,
         "has_title": !pr.title.is_empty(),
-        "has_html_url": pr.html_url.is_some(),
+        "has_html_url": pr.url.is_some(),
         "state_known": pr.state.is_some(),
         "comment_count": parsed.comments.len(),
         "sections_present": sections,

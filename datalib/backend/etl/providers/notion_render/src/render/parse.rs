@@ -65,7 +65,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedNotion> {
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader_at(&db_path, range.pin).await? else {
+            let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
                 return Ok(ParsedNotion::default());
             };
             let parsed = load(&db, range).await;
@@ -76,7 +76,7 @@ pub fn parse_api_dir(path: &Path, range: RawRange<'_>) -> Result<ParsedNotion> {
 }
 
 async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
-    let pin = db.pin().expect("open_reader_at returns a pinned handle");
+    let pin = db.pin().expect("open_reader returns a pinned handle");
     let changed = changed_rows(db.pool(), range, pin, &TABLES).await?;
 
     let user_names = db.load_user_names().await?;

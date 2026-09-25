@@ -2236,8 +2236,13 @@ name = "datalib-etl-timeseries-render"
 version = "0.37.0"
 dependencies = [
  "anyhow",
+ "datalib-etl",
+ "datalib-etl-render",
+ "datalib-id",
+ "datalib-schema",
  "datalib-time",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -2393,6 +2398,7 @@ dependencies = [
 name = "datalib-id"
 version = "0.37.0"
 dependencies = [
+ "datalib-time",
  "strum",
  "uuid",
 ]

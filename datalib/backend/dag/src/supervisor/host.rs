@@ -84,7 +84,7 @@ pub async fn run_idle(
             Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
         }
         tokio::select! {
-            _ = listener.next(store) => {}
+            _ = listener.next() => {}
             () = periods.nudged() => {}
             _ = stop.changed() => {}
         }
@@ -197,12 +197,29 @@ mod tests {
     use crate::supervisor::record::InvocationRow;
     use crate::supervisor::record::{CurrentRun, Record};
 
+    /// The next call to be `want`, past any settle that is not it: a
+    /// settle repeated is harmless, and how many a burst of wakes makes is
+    /// not the host's to promise. A busy period or idle work out of turn
+    /// fails.
+    async fn expect(calls: &mut tokio::sync::mpsc::UnboundedReceiver<String>, want: &str) {
+        loop {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no {want} within 10s"))
+                .unwrap_or_else(|| panic!("the host ended waiting for {want}"));
+            if got == want {
+                return;
+            }
+            assert!(got.starts_with("settle"), "{got} where {want} was due");
+        }
+    }
+
     /// Each call `run_idle` makes, in order, bar the idle turns: those
     /// come once per wake, and how many wakes a burst of announcements
     /// makes is not the host's to promise. A busy period holds until
     /// released, then closes what it was asked to serve.
     struct Fake {
-        calls: tokio::sync::mpsc::UnboundedSender<&'static str>,
+        calls: tokio::sync::mpsc::UnboundedSender<String>,
         release: std::sync::Arc<tokio::sync::Notify>,
         nudge: std::sync::Arc<tokio::sync::Notify>,
         /// Set by the test beside a nudge: the in-memory work a nudge is for.
@@ -214,7 +231,7 @@ mod tests {
 
     impl Periods for Fake {
         async fn busy_period(&mut self, store: &Store) {
-            let _ = self.calls.send("busy");
+            let _ = self.calls.send("busy".into());
             self.release.notified().await;
             for r in store.open_requests().await.unwrap() {
                 if r.stop_requested_by.is_none() {
@@ -230,12 +247,13 @@ mod tests {
                 store.pause(step, "ui").await.unwrap();
             }
             let paused = store.paused().await.ok();
-            let _ = self.calls.send("settle");
+            let steps: Vec<&String> = paused.iter().flat_map(|p| p.keys()).collect();
+            let _ = self.calls.send(format!("settle {steps:?}"));
             paused
         }
         async fn idle_work(&mut self, _: &Store) {
             if self.queued.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                let _ = self.calls.send("work");
+                let _ = self.calls.send("work".into());
             }
         }
         async fn nudged(&self) {
@@ -269,19 +287,13 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };
-        let mut next = async |want: &str| {
-            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
-                .await
-                .unwrap_or_else(|_| panic!("no {want} within 10s"));
-            assert_eq!(got, Some(want));
-        };
-        next("settle").await;
+        let mut next = async |want: &str| expect(&mut calls, want).await;
+        next("settle []").await;
 
         let served = other.open_request(&["a/x".into()], "ui").await.unwrap();
         next("busy").await;
@@ -291,7 +303,7 @@ mod tests {
 
         // A busy period for the stopped request would come before this.
         other.pause("a/x", "ui").await.unwrap();
-        next("settle").await;
+        next(r#"settle ["a/x"]"#).await;
         let closed = async |id: &str| other.request(id).await.unwrap().unwrap().closed;
         assert_eq!(closed(&served).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(closed(&stopped).await, Some(Some(RequestOutcome::Stopped)));
@@ -328,28 +340,22 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };
-        let mut next = async |want: &str| {
-            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
-                .await
-                .unwrap_or_else(|_| panic!("no {want} within 10s"));
-            assert_eq!(got, Some(want));
-        };
-        next("settle").await;
+        let mut next = async |want: &str| expect(&mut calls, want).await;
+        next("settle []").await;
         other.pause("a/x", "ui").await.unwrap();
-        next("settle").await;
+        next(r#"settle ["a/x"]"#).await;
 
         other.open_request(&["a/x".into()], "ui").await.unwrap();
         next("busy").await;
         other.resume("a/x").await.unwrap();
         other.pause("a/x", "ui").await.unwrap();
         release.notify_one();
-        next("settle").await;
+        next(r#"settle ["a/x"]"#).await;
 
         stop_tx.send(true).unwrap();
         host.await.unwrap();
@@ -378,22 +384,16 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };
-        let mut next = async |want: &str| {
-            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
-                .await
-                .unwrap_or_else(|_| panic!("no {want} within 10s"));
-            assert_eq!(got, Some(want));
-        };
+        let mut next = async |want: &str| expect(&mut calls, want).await;
         // The first settle looked at no pauses and recorded `a/x` paused.
-        next("settle").await;
+        next(r#"settle ["a/x"]"#).await;
         other.resume("a/x").await.unwrap();
-        next("settle").await;
+        next("settle []").await;
 
         stop_tx.send(true).unwrap();
         host.await.unwrap();
@@ -437,5 +437,20 @@ mod tests {
             take_over(&store, root.path()).await.unwrap(),
             TakenOver::default()
         );
+    }
+
+    /// A config's `[checkpoint_cadence]` reaches every step, in the form a
+    /// step decodes; a config without one leaves the step its default.
+    #[test]
+    fn the_configs_checkpoint_cadence_reaches_every_step() {
+        let with =
+            crate::config::parse("[checkpoint_cadence]\nat_most_every_secs = 2.5\n").unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        let cadence = crate::config::CheckpointCadence::decode(&env.vars[ENV_CHECKPOINT_CADENCE]);
+        assert_eq!(cadence.map(|c| c.at_most_every_secs), Some(2.5));
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
     }
 }

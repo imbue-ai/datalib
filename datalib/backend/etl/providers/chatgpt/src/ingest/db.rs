@@ -1,56 +1,26 @@
 //! Doltlite-backed raw store for the ChatGPT provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     // ── `me` ────────────────────────────────────────────────────────
 
     pub async fn load_me(&self) -> Result<Option<Value>> {
         let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select me")?;
         let Some(row) = row else { return Ok(None) };
@@ -83,7 +53,7 @@ impl RawDb {
             q = q.bind(*id);
         }
         let rows = q
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("existing_update_times")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -104,7 +74,7 @@ impl RawDb {
     /// doltlite history either way.
     pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
         let held: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("list conversation ids for prune")?;
         let gone: Vec<String> = held
@@ -115,7 +85,7 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        let mut tx = self.pool().begin().await.context("begin prune tx")?;
         for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -144,7 +114,7 @@ impl RawDb {
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin record_conversation_error tx")?;
@@ -156,7 +126,7 @@ impl RawDb {
     }
 
     pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
-        dr::failed_ids(&self.pool, "conversations").await
+        dr::failed_ids(self.pool(), "conversations").await
     }
 
     /// Snapshot `(file_id → blake3)` for every attachment whose bytes
@@ -164,7 +134,8 @@ impl RawDb {
     /// fetch run; updated in-place as new downloads land. Replaces
     /// the per-file SQL `attachment_has_bytes` lookup.
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
-        datalib_etl::blob_cas::load_blake3_index(&self.pool, "chatgpt_attachments", "file_id").await
+        datalib_etl::blob_cas::load_blake3_index(self.pool(), "chatgpt_attachments", "file_id")
+            .await
     }
 
     // ── loads ───────────────────────────────────────────────────────
@@ -177,7 +148,7 @@ impl RawDb {
              WHERE c.payload IS NOT NULL
              ORDER BY c.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select conversations")?;
         let mut out = Vec::with_capacity(rows.len());
