@@ -96,6 +96,7 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   render_markdown: "render",
   grid_index: "index",
   qmd_index: "index",
+  embedding_map: "index",
 };
 
 /// A step's phase, from its function. A step outside any group has no
@@ -110,6 +111,7 @@ function phaseOfFunction(fn: string | null): StepPhase {
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
   "unified_index/qmd_index": "Unified Index (QMD)",
+  "unified_index/embedding_map": "Unified Index (map)",
   unified_index: "Unified Index (Applet)",
 };
 

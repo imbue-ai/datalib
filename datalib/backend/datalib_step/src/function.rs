@@ -30,6 +30,8 @@ pub enum Function {
     GridIndex,
     /// Build the qmd search index over every rendered tree.
     QmdIndex,
+    /// Lay the qmd index's document embeddings out on a plane.
+    EmbeddingMap,
 }
 
 impl Function {
@@ -75,5 +77,9 @@ mod tests {
         );
         assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
         assert_eq!(Function::QmdIndex.as_str(), datalib_core::layout::QMD_DIR);
+        assert_eq!(
+            Function::EmbeddingMap.as_str(),
+            datalib_unified_index::embedding_map::DIR
+        );
     }
 }

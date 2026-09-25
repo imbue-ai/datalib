@@ -1,5 +1,5 @@
-//! `datalib-applet unified_index` — the grid index and the qmd index,
-//! served over HTTP.
+//! `datalib-applet unified_index` — the grid index, the qmd index and
+//! the embedding map, served over HTTP.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -16,6 +16,7 @@ use axum::{
     Router,
 };
 mod columns;
+mod map;
 mod problems;
 
 use datalib_columns::Identity;
@@ -85,6 +86,8 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             .route("/search", get(search_handler))
             .route("/qmd_state", post(qmd_state))
             .route("/docs", get(list_docs))
+            .route("/embedding_map", get(map::handler))
+            .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/asset/{markdown_uuid}/{*rel}", get(asset))

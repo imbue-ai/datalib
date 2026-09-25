@@ -34,6 +34,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, part: &str) -> Result<Vec<Outp
                 }
             }
         }
+        (Function::EmbeddingMap, "store") => crate::embedding_map::reset(data_root)?,
         (function, part) => anyhow::bail!("`{function}` has no {part:?} to reset"),
     }
     tracing::info!(step = %env.step, part, "reset: emptied what the step wrote");
