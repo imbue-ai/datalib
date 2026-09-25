@@ -84,8 +84,8 @@ pressed on, or every source step for `datalib-dag` with no `--sync` —
 and who opened it (`by`). Its **scope** is the roots and everything
 downstream of them. Anyone may open one, or ask one to stop, or pause a
 step: that is a row too. Only the process holding `runner-lock` runs the
-loop, and it reads new rows by watching the store's `PRAGMA
-data_version`. A **run** is one busy period of the loop — from taking a
+loop, and it hears of new rows because whoever writes one announces it
+(below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
 request on while idle to having none left — and every request served in
 it shares that run's id.
 
@@ -177,7 +177,8 @@ made while the loop is idle reaches the record through
 no config the loop has taken on has waits, with its roots recorded as
 waiting on it, for one that has it.
 
-**The loop re-reads the config while it runs.** A source added mid-sync
+**The loop re-reads the config while it runs**, when told it changed
+(below, "What wakes the loop"). A source added mid-sync
 starts beside the sync already going, and a step edited mid-sync runs
 under its new definition from its next start. A running step keeps the
 definition it started with and records that one, so the edit leaves it
@@ -300,9 +301,9 @@ naming no step) looks exactly like one it did.
   (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
   it. A `datalib-dag` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
-  while whoever holds the lock runs it, trying the lock again every half
-  second in case that loop ends first (`supervisor/store.rs`,
-  `docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
+  while whoever holds the lock runs it, trying the lock again whenever
+  anything is announced, its release included, in case that loop ends
+  first (`docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
   stores, needs the root to itself and is refused while a loop runs —
   always, with the app up; the app runs its own resets between syncs.
 - **One server per data root**, which `datalib-http` takes for its own
@@ -342,8 +343,8 @@ taking, so the probe holds the lock for an instant, and a server that has
 not got the lock yet probes on every change under the root — most often
 just as a run starts. A
 `--reset` that finds the lock held therefore keeps trying for two seconds
-before it refuses; a sync that meets a probe follows for half a second and
-takes the lock on its next try.
+before it refuses; and a probe that found the lock free announces that it
+let go, so a sync that met the probe takes the lock at once.
 
 ## Progress: the store takes positions, never deltas
 
@@ -378,11 +379,58 @@ has learned it will do. Announcing no total at all is fine and means
 "size unknown"; the sink then publishes no `queued`, which is not the
 same as publishing zero, because zero means finished.
 
+## What wakes the loop
+
+Nothing on a timer. **Whoever commits to `system/supervisor.sqlite`
+announces it**, the way a step announces a seal. `Store` does, after
+every commit it makes (`request opened <id>`, `paused <step>`, `record
+saved`, …), and so do the two writers that are not the store: the
+server, when its watch sees `config.toml` move (`config changed`, which
+is what makes the loop re-read its config), and whoever lets go of
+`runner-lock`. `supervisor/announce.rs` is all of it.
+
+A listener is a FIFO in `system/supervisor-listeners/`, named
+`<pid>-<n>.fifo`. An announcement is one line, shorter than a pipe
+writes at once, written to every FIFO there. A FIFO nobody holds open
+belongs to a process that is gone, and the next announcement removes it.
+A listener is made before the state it guards is read, so a line
+announced in between waits in the pipe. The loop, the idle host, the CLI
+following its request, `POST /api/requests` waiting for the loop to take
+its request on, and the UI's change stream each hold one.
+
+**Why not watch the database file.** A file watch fires on writes, not
+commits: in rollback-journal mode SQLite writes the database file during
+a commit, and a large transaction can spill pages before it commits.
+FSEvents says nothing about writes to a file a process holds open, which
+the loop always does. And it needs code per OS. Why FIFOs and not Unix
+sockets: a socket's path is limited to about 104 bytes, and a Bazel
+test's temporary directory is longer than that.
+
+**The backstop.** A listener that has heard nothing for 30 seconds reads
+the store's `PRAGMA data_version`. If the store moved and nothing is
+announced for it by the next look, a writer bypassed `Store` (a `sqlite3`
+shell, an older build): that is logged at ERROR and counted
+(`announce::missed_announcements`), and tests assert the count is zero.
+It is the only timer, and it exists to catch that bug.
+
+A `datalib-dag` running the loop with no server up has nobody watching
+the config, so it takes an edit on at its next busy period, not mid-sync.
+
+The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
+period whenever a request is open, requests asked to stop before any
+period took them closed as `stopped`, the record settled when the pauses
+move, then a wait for an announcement, a nudge (in-memory work such as a
+reset) or the host's stop. The server's host and the tests both run it.
+
 ## The record
 
 The loop's memory is its **record**, in `system/supervisor.sqlite` beside
-the requests and pauses (`supervisor/record.rs`). It is plain SQLite, so
-any `sqlite3` reads it, and only the holder of `runner-lock` writes it:
+the requests and pauses (`supervisor/record.rs`). It is plain SQLite in
+rollback-journal mode, so any `sqlite3` reads it, and only the holder of
+`runner-lock` writes it. `supervisor_contention_test` runs seven
+processes on one store (people opening requests, the loop saving, the
+server reading) and checks that every write lands and that the file's
+header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|

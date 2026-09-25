@@ -2,12 +2,28 @@
 //! `flock(2)` the kernel releases when the holder dies (`datalib_flock`).
 //!
 //! The runner and the server take separate locks on separate files; the
-//! crate README says why they cannot share one.
+//! crate README says why they cannot share one. Letting go of the runner's
+//! is announced, so a host waiting for it takes it at once.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use datalib_flock::{FileLock, LockError};
+
+use crate::supervisor::announce::{announce, listeners_dir, FROM_LOCK, RUNNER_LOCK_RELEASED};
+
+/// `runner-lock`, held. Dropping it lets go and says so.
+pub struct RunnerLock {
+    lock: Option<FileLock>,
+    listeners: PathBuf,
+}
+
+impl Drop for RunnerLock {
+    fn drop(&mut self) {
+        drop(self.lock.take());
+        announce(&self.listeners, FROM_LOCK, RUNNER_LOCK_RELEASED);
+    }
+}
 
 /// The runner's claim, relative to the data root. A sibling of
 /// `system/supervisor.sqlite`, whose record is the thing it guards.
@@ -21,30 +37,41 @@ pub const RUNNER_LOCK_REL_PATH: &str = "system/runner-lock";
 const PROBE_GRACE: Duration = Duration::from_secs(2);
 const PROBE_POLL: Duration = Duration::from_millis(10);
 
-pub fn acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
+pub fn acquire_runner(data_root: &Path) -> Result<RunnerLock, LockError> {
     acquire_runner_within(data_root, PROBE_GRACE)
 }
 
 /// One attempt, no grace: for a client that retries on its own schedule.
-pub fn try_acquire_runner(data_root: &Path) -> Result<FileLock, LockError> {
+pub fn try_acquire_runner(data_root: &Path) -> Result<RunnerLock, LockError> {
     acquire_runner_within(data_root, Duration::ZERO)
 }
 
-fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<FileLock, LockError> {
+fn acquire_runner_within(data_root: &Path, grace: Duration) -> Result<RunnerLock, LockError> {
     let path = data_root.join(RUNNER_LOCK_REL_PATH);
     let deadline = Instant::now() + grace;
     loop {
         match FileLock::acquire(&path) {
             Err(e) if e.is_held() && Instant::now() < deadline => std::thread::sleep(PROBE_POLL),
-            claimed => return claimed,
+            claimed => {
+                return claimed.map(|lock| RunnerLock {
+                    lock: Some(lock),
+                    listeners: listeners_dir(data_root),
+                })
+            }
         }
     }
 }
 
 /// Is a runner holding this root right now? Read-only and racy, as
-/// [`FileLock::is_held`] says; a probe that cannot answer says "held".
+/// [`FileLock::is_held`] says; a probe that cannot answer says "held". A
+/// probe that found it free held it for an instant, and a host that tried
+/// in that instant is told it is free again.
 pub fn runner_is_held(data_root: &Path) -> bool {
-    FileLock::is_held(&data_root.join(RUNNER_LOCK_REL_PATH))
+    let held = FileLock::is_held(&data_root.join(RUNNER_LOCK_REL_PATH));
+    if !held {
+        announce(&listeners_dir(data_root), FROM_LOCK, RUNNER_LOCK_RELEASED);
+    }
+    held
 }
 
 #[cfg(test)]
@@ -88,8 +115,24 @@ mod tests {
     fn a_held_root_is_still_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let _first = acquire_runner(tmp.path()).expect("first claim");
-        let err = acquire_runner_within(tmp.path(), Duration::from_millis(50))
-            .expect_err("a second runner must be refused");
+        let Err(err) = acquire_runner_within(tmp.path(), Duration::from_millis(50)) else {
+            panic!("a second runner must be refused");
+        };
         assert!(err.is_held(), "{err}");
+    }
+
+    /// A host waiting for the lock takes it when it hears this, not on a
+    /// timer.
+    #[tokio::test]
+    async fn letting_go_of_the_lock_is_announced() {
+        use crate::supervisor::announce::Listener;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = crate::supervisor::store::Store::open(tmp.path())
+            .await
+            .unwrap();
+        let mut listener = Listener::new(&store, "test").await;
+        drop(acquire_runner(tmp.path()).unwrap());
+        assert_eq!(listener.next(&store).await, [RUNNER_LOCK_RELEASED]);
+        try_acquire_runner(tmp.path()).expect("free once it was said to be");
     }
 }

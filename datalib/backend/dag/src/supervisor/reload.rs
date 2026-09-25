@@ -12,7 +12,8 @@ use crate::graph::Graph;
 
 pub trait GraphSource: Send + Sync {
     /// Moves whenever what [`GraphSource::load`] would build might have.
-    /// Asked on every mailbox poll, so it must be cheap.
+    /// Asked when a busy period starts and whenever the config is
+    /// announced as changed.
     fn version(&self) -> Result<String>;
 
     /// The graph as the source describes it now, and the version it was

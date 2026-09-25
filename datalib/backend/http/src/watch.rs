@@ -21,10 +21,6 @@ use tokio::time::Instant;
 /// How long to hold a burst of filesystem events before publishing.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// How often the loop's record is looked at for a commit, as the loop
-/// itself looks for new requests.
-const RECORD_POLL: Duration = Duration::from_millis(250);
-
 /// The least time between two `manage.rows` frames. While a step runs
 /// the runner records its progress several times a second, and every
 /// frame is a refetch by every Manage card open; a row redrawn once a
@@ -139,7 +135,7 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 enum Moved {
     Config,
     /// The loop's record and its mailbox, `system/supervisor.sqlite`:
-    /// seen by [`watch_record`], not by the filesystem.
+    /// heard by [`watch_record`], not seen by the filesystem.
     Supervisor,
     RunStore,
     Frontend,
@@ -446,6 +442,7 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
     tokio::spawn(watch_record(root.clone(), raw_tx.clone()));
     let watch_root = root.clone();
+    let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(ev) = res else { return };
@@ -457,6 +454,14 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
             }
             for path in &ev.paths {
                 if let Some(moved) = classify(&watch_root, path) {
+                    // The loop takes a new config on mid-sync when told to.
+                    if moved == Moved::Config {
+                        datalib_dag::supervisor::announce::announce(
+                            &listeners,
+                            datalib_dag::supervisor::announce::FROM_SERVER,
+                            datalib_dag::supervisor::announce::CONFIG_CHANGED,
+                        );
+                    }
                     let _ = raw_tx.send(moved);
                 }
             }
@@ -552,12 +557,12 @@ pub fn spawn(root: PathBuf, tx: RootTx) {
     });
 }
 
-/// The loop's record is not a file whose writes the filesystem reports:
-/// the loop holds its connection open, so a commit is an append to a WAL
-/// already open, which macOS never announces. `PRAGMA data_version` on a
-/// connection of our own moves on every other connection's commit,
-/// whichever process made it.
+/// The loop's record moves on a commit, and every commit to it is
+/// announced; the filesystem would report writes, and none at all to a
+/// file already held open. The lock and the config have announcements of
+/// their own that are not the record moving.
 async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<Moved>) {
+    use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED, RUNNER_LOCK_RELEASED};
     let store = match datalib_dag::supervisor::store::Store::open(&root).await {
         Ok(store) => store,
         Err(e) => {
@@ -567,18 +572,15 @@ async fn watch_record(root: PathBuf, moved: tokio::sync::mpsc::UnboundedSender<M
             return;
         }
     };
-    let mut seen = None;
+    let mut listener = Listener::new(&store, "the UI's watch").await;
     loop {
-        match store.data_version().await {
-            Ok(version) => {
-                if seen.is_some_and(|s| s != version) && moved.send(Moved::Supervisor).is_err() {
-                    return;
-                }
-                seen = Some(version);
-            }
-            Err(e) => tracing::warn!("watch: could not read the record's version: {e:#}"),
+        let heard = listener.next(&store).await;
+        let record = heard
+            .iter()
+            .any(|line| line != RUNNER_LOCK_RELEASED && line != CONFIG_CHANGED);
+        if record && moved.send(Moved::Supervisor).is_err() {
+            return;
         }
-        tokio::time::sleep(RECORD_POLL).await;
     }
 }
 

@@ -45,6 +45,7 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
         "@datalib_crates//:walkdir",
     ],
@@ -121,6 +122,35 @@ rust_test(
     ],
 )
 
+
+# One process reading or writing `system/supervisor.sqlite` as one of its
+# real users does; seven of them at once are `supervisor_contention_test`.
+rust_binary(
+    name = "supervisor_store_worker",
+    testonly = True,
+    srcs = ["tests/supervisor_store_worker/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "supervisor_contention_test",
+    srcs = ["tests/supervisor_contention.rs"],
+    crate_root = "tests/supervisor_contention.rs",
+    data = [":supervisor_store_worker"],
+    edition = "2021",
+    env = {"STORE_WORKER": "$(rootpath :supervisor_store_worker)"},
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
 
 # Live end-to-end golden: drives the real pipeline (this runner +
 # //datalib/backend/datalib_step) against real provider APIs, and snapshots the

@@ -79,10 +79,10 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(connect_string(path))
         .create_if_missing(create)
-        // WAL so a reader never blocks behind the writer. On a plain
-        // file this is real, unlike on a doltlite one where it is a
-        // documented no-op.
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        // What the plain-SQLite engine really does: asked for WAL it
+        // answers `wal` and stays in rollback-journal mode, so a reader
+        // waits out a writer's commit (`BUSY_TIMEOUT`).
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         // Nothing here is load-bearing, so nothing is worth an fsync. A
         // file torn by a power cut is deleted and remade on the next
         // open (see `open_or_recreate`).
