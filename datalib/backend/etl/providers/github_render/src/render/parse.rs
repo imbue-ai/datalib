@@ -135,7 +135,7 @@ pub fn parse_api_dir(path: &Path, source_id: &str, range: RawRange<'_>) -> Resul
     let (raw, head, changed) = tokio::task::block_in_place(|| {
         let path = db_path.clone();
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader_at(&path, range.pin).await? else {
+            let Some(db) = RawDb::open_reader(&path, range.pin).await? else {
                 return Ok((LoadedRaw::default(), None, None));
             };
             let out = read_everything(&db, range).await;
@@ -185,7 +185,7 @@ async fn read_everything(
     Option<String>,
     Option<HashMap<String, HashSet<String>>>,
 )> {
-    let pin = db.pin().expect("open_reader_at returns a pinned handle");
+    let pin = db.pin().expect("open_reader returns a pinned handle");
     let raw = LoadedRaw {
         self_identity: db.load_self_identity().await?,
         pull_requests: db.load_pull_requests().await?,

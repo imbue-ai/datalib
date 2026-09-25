@@ -75,13 +75,6 @@ pub const CONVERSATIONS_ORG_INDEX_DDL: &str =
 pub const CONVERSATIONS_UPDATED_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at)";
 
-/// Idempotent migration adding `conversations.org_name`. The
-/// `CREATE TABLE IF NOT EXISTS` already declares this column, so on
-/// fresh DBs the `ALTER` is a no-op. Kept around for older databases
-/// created before `org_name` existed.
-pub const MIGRATION_CONVERSATIONS_ADD_ORG_NAME: &str =
-    "ALTER TABLE conversations ADD COLUMN org_name TEXT";
-
 /// `claude_attachments` — N:M edge between one conversation's
 /// attachment slot and a `cas_objects` blob. Replaces this provider's
 /// use of the shared `blob_refs` table. Universal CAS-edge shape;

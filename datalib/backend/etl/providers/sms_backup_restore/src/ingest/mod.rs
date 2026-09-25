@@ -4,22 +4,19 @@ pub mod parse;
 pub mod schema_raw;
 
 use datalib_etl::fingerprint_cache::FingerprintCache;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use datalib_etl::blob_cas::{self, BlobCas, CasEdgeAccumulator, CasEdgeRow as _};
+use datalib_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
-use serde_json::{json, Value};
-use sqlx::sqlite::SqlitePool;
+use serde_json::json;
 use tracing::warn;
 
 use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
@@ -29,78 +26,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 const SCOPE: &str = "sms_backup_restore/xml";
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-    /// The commit a reader is pinned at; `None` for the writer.
-    pin: Option<datalib_etl::pin::Pin>,
-}
-
-impl RawDb {
-    /// Open this store to *read* it, for the render pass.
-    ///
-    /// The download step owns this store; render only reads it. An ordinary
-    /// [`Self::open`] would discard a dirty working set, reconcile the schema
-    /// and commit on the way in — three writes to a file this caller does not
-    /// own, and with producers committing incrementally, a way to throw away
-    /// the downloader's batch in flight. See
-    /// `datalib_etl::doltlite_raw::open_reader`.
-    ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
-    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
-    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            pool: reader.pool().clone(),
-            cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,
-            pin: Some(reader.pin().clone()),
-        }))
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self {
-            pool,
-            cas,
-            pin: None,
-        })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// The commit this reader reads at. `None` on the writer's handle.
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub async fn load_payloads(
-        &self,
-        reads: datalib_etl::pin::Reads<'_>,
-        table: &str,
-    ) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, reads, table).await
-    }
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {

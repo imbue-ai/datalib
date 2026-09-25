@@ -1,13 +1,10 @@
 //! Doltlite-backed raw store for the GitLab provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
@@ -20,73 +17,9 @@ use super::schema_raw::{
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
-    pin: Option<datalib_etl::pin::Pin>,
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    /// Read-only open, for render, pinned to the store's current HEAD.
-    /// See github's twin and #312.
-    ///
-    /// **`None` means the store cannot be read**, not that it is empty —
-    /// no commit to pin, or a build without the dolt extensions. See the
-    /// plan's "The sink contract".
-    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
-        Self::open_reader_at(db_path, None).await
-    }
-
-    /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
-    /// when nothing is committed.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        // Pinned at open, views installed: a reader cannot read the
-        // working set by forgetting to.
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        let pin = reader.pin().clone();
-        let pool = reader.pool().clone();
-        Ok(Some(Self {
-            pool,
-            pin: Some(pin),
-        }))
-    }
-
-    /// How this handle reads content. Every content query goes through
-    /// it, so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
@@ -101,7 +34,7 @@ impl RawDb {
         // No event tape on this store; the split is what this call is
         // for.
         dr::bulk_upsert_with_tape_split(
-            &self.pool,
+            self.pool(),
             None,
             &[row],
             &[(id.as_str(), payload)],
@@ -118,7 +51,7 @@ impl RawDb {
              WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
             self.reads().table("self_identity")
         )))
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("select self_identity")?;
         let Some(row) = row else { return Ok(None) };
@@ -132,7 +65,11 @@ impl RawDb {
         let payload = &canonicalize_payload(payload);
         let row = MergeRequestRow::from_payload(proj, iid, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin merge_request tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit merge_request tx")?;
         Ok(())
@@ -144,7 +81,7 @@ impl RawDb {
         let payload = &canonicalize_payload(payload);
         let row = DiscussionRow::from_payload(proj, iid, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin discussion tx")?;
+        let mut tx = self.pool().begin().await.context("begin discussion tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit discussion tx")?;
         Ok(())
@@ -164,7 +101,7 @@ impl RawDb {
             .collect::<Result<Vec<_>>>()?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin discussions batch tx")?;
@@ -182,7 +119,7 @@ impl RawDb {
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
             self.reads().table("merge_requests")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select merge_requests")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -211,7 +148,7 @@ impl RawDb {
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
             self.reads().table("discussions")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select discussions")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -252,7 +189,7 @@ impl RawDb {
             .collect();
         let iid_s = iid.to_string();
         let gone = datalib_etl::prune::prune_scope(
-            &self.pool,
+            self.pool(),
             "discussions",
             &[("project_full_path", proj), ("mr_iid", &iid_s)],
             &keep,
@@ -271,16 +208,16 @@ impl RawDb {
     }
 
     pub async fn load_scope_state(&self) -> Result<HashMap<String, String>> {
-        dr::load_scope_state(&self.pool).await
+        dr::load_scope_state(self.pool()).await
     }
 
     pub async fn upsert_scope_state(&self, scope: &str, last_seen_at: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, scope, last_seen_at).await
+        dr::upsert_scope_state(self.pool(), scope, last_seen_at).await
     }
 
     pub async fn any_merge_requests(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM merge_requests WHERE payload IS NOT NULL LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("any_merge_requests")?;
         Ok(row.is_some())
@@ -292,7 +229,7 @@ impl RawDb {
              FROM merge_requests
              WHERE payload IS NOT NULL AND updated_at IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("merge_request_updated_ats")?;
         let mut out: HashMap<(String, u32), String> = HashMap::with_capacity(rows.len());

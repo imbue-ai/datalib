@@ -1,13 +1,10 @@
 //! Doltlite-backed raw store for the GitHub provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
@@ -19,84 +16,19 @@ use super::schema_raw::{
     full_ddl, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
 };
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
-    pin: Option<datalib_etl::pin::Pin>,
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    /// Read-only open, for render, pinned to the store's current HEAD.
-    ///
-    /// The write path's `open` discards a dirty working set, reconciles
-    /// the schema and commits with `-Am` — three writes to a store the
-    /// render step does not own. See #312.
-    ///
-    /// **`None` means the store cannot be read**, not that it is empty —
-    /// no commit to pin, or a build without the dolt extensions. The
-    /// caller must skip rather than treat it as a source with no rows: an
-    /// empty read is what makes render sweep every document the source
-    /// has. See the plan's "The sink contract".
-    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
-        Self::open_reader_at(db_path, None).await
-    }
-
-    /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
-    /// when nothing is committed.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        // Pinned at open, views installed: a reader cannot read the
-        // working set by forgetting to.
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        let pin = reader.pin().clone();
-        let pool = reader.pool().clone();
-        Ok(Some(Self {
-            pool,
-            pin: Some(pin),
-        }))
-    }
-
-    /// How this handle reads content. Every content query goes through
-    /// it, so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
         let row = SelfIdentityRow::from_payload(payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin self_identity tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit self_identity tx")?;
         Ok(())
@@ -110,7 +42,7 @@ impl RawDb {
              WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
             self.reads().table("self_identity")
         )))
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("select self_identity")?;
         let Some(row) = row else { return Ok(None) };
@@ -123,7 +55,7 @@ impl RawDb {
     pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PullRequestRow::from_payload(repo, num, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin pull_request tx")?;
+        let mut tx = self.pool().begin().await.context("begin pull_request tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pull_request tx")?;
         Ok(())
@@ -134,7 +66,11 @@ impl RawDb {
     pub async fn upsert_issue_comment(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = IssueCommentRow::from_payload(repo, num, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin issue_comment tx")?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin issue_comment tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit issue_comment tx")?;
         Ok(())
@@ -143,7 +79,7 @@ impl RawDb {
     pub async fn upsert_pr_review(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
         let row = PrReviewRow::from_payload(repo, num, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin pr_review tx")?;
+        let mut tx = self.pool().begin().await.context("begin pr_review tx")?;
         bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pr_review tx")?;
         Ok(())
@@ -158,7 +94,7 @@ impl RawDb {
         let row = PrReviewCommentRow::from_payload(repo, num, payload)?;
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin pr_review_comment tx")?;
@@ -182,7 +118,7 @@ impl RawDb {
     ) -> Result<usize> {
         let num = num.to_string();
         let gone = datalib_etl::prune::prune_scope(
-            &self.pool,
+            self.pool(),
             table,
             &[("repo_full_name", repo), ("pr_number", &num)],
             keep,
@@ -208,7 +144,7 @@ impl RawDb {
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
             self.reads().table("pull_requests")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select pull_requests")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -239,7 +175,7 @@ impl RawDb {
             self.reads().table(table)
         );
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .with_context(|| format!("select {table}"))?;
         let mut out = Vec::with_capacity(rows.len());
@@ -264,16 +200,16 @@ impl RawDb {
     // ── sync_scope_state (delegates) ────────────────────────────────
 
     pub async fn load_scope_state(&self) -> Result<HashMap<String, String>> {
-        dr::load_scope_state(&self.pool).await
+        dr::load_scope_state(self.pool()).await
     }
 
     pub async fn upsert_scope_state(&self, scope: &str, last_seen_at: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, scope, last_seen_at).await
+        dr::upsert_scope_state(self.pool(), scope, last_seen_at).await
     }
 
     pub async fn any_pull_requests(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM pull_requests WHERE payload IS NOT NULL LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("any_pull_requests")?;
         Ok(row.is_some())

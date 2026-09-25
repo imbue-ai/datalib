@@ -9,69 +9,26 @@
 pub mod parse;
 pub mod schema_raw;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 
 use self::parse::{agent_id_from_path, parse_transcript, ParsedTranscript};
 use self::schema_raw::{full_ddl, RecordRow, TranscriptRow, CURSOR_SCOPE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit a reader is pinned at; `None` for the writer.
-    pin: Option<datalib_etl::pin::Pin>,
-}
-
-impl RawDb {
-    /// Open this store to *read* it, for the render pass: no DDL, no
-    /// commits. See `datalib_etl::doltlite_raw::open_reader`.
-    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
-    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            pool: reader.pool().clone(),
-            pin: Some(reader.pin().clone()),
-        }))
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// The commit this reader reads at. `None` on the writer's handle.
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {

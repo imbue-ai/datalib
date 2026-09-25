@@ -67,13 +67,10 @@ impl RawDb {
     /// extensions. The caller sweeps every document this pass did not
     /// name, so handing back an empty read here would delete every
     /// contact the source has. See the plan's "The sink contract".
-    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
-        Self::open_reader_at(db_path, None).await
-    }
-
-    /// A reader pinned at `commit` — the one the render driver diffed
-    /// against — or at HEAD when there is none.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
+    ///
+    /// Pinned at `commit` — the one the render driver diffed against —
+    /// or at HEAD when there is none.
+    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         // Pinned at open, views installed: a reader cannot read the
         // working set by forgetting to.
         let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {

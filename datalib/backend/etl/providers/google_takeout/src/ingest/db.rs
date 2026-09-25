@@ -1,16 +1,5 @@
-//! Thin `RawDb` wrapper around the shared bulk/CAS/file-checkpoint
-//! helpers.
-
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::path::Path;
-
-use anyhow::Result;
-use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
-
-use datalib_etl::blob_cas::{self, BlobCas};
-use datalib_etl::doltlite_raw::{self as dr};
+//! This provider's raw store: the shared entity store and blob CAS,
+//! with no queries of its own.
 
 use super::schema_raw::full_ddl;
 
@@ -19,87 +8,4 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 /// Every cursor scope this provider owns. Reset wipes them in one go.
 pub const CURSOR_SCOPE_PREFIX: &str = "google_takeout/";
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-    /// The commit a reader is pinned at; `None` for the writer.
-    pin: Option<datalib_etl::pin::Pin>,
-}
-
-impl RawDb {
-    /// Open this store to *read* it, for the render pass.
-    ///
-    /// The download step owns this store; render only reads it. An ordinary
-    /// [`Self::open`] would discard the downloader's in-flight rows,
-    /// reconcile the schema and commit on the way in — three writes to a
-    /// file this caller does not own. See
-    /// `datalib_etl::doltlite_raw::open_reader`.
-    ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
-    /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
-    pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            pool: reader.pool().clone(),
-            cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,
-            pin: Some(reader.pin().clone()),
-        }))
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self {
-            pool,
-            cas,
-            pin: None,
-        })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// The commit this reader reads at. `None` on the writer's handle.
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    // ── loads (consumed by render / tests) ───────────────────────
-
-    pub async fn load_payloads(
-        &self,
-        reads: datalib_etl::pin::Reads<'_>,
-        table: &str,
-    ) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, reads, table).await
-    }
-
-    /// Like [`Self::load_payloads`], but yields `(id, payload)` so the
-    /// caller can join a row against a sibling table. Used by the chat
-    /// renderer to map a `chat_groups` directory name to its members.
-    pub async fn load_payloads_with_id(
-        &self,
-        reads: datalib_etl::pin::Reads<'_>,
-        table: &str,
-    ) -> Result<Vec<(String, Value)>> {
-        dr::load_payloads_with_id(&self.pool, reads, table).await
-    }
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());

@@ -33,7 +33,7 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<Parsed>> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let Some(db) = RawDb::open_reader_at(&path, range.pin).await? else {
+            let Some(db) = RawDb::open_reader(&path, range.pin).await? else {
                 return Ok(None);
             };
             let loaded = async {

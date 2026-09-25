@@ -1,50 +1,19 @@
 //! Doltlite-backed raw store for the `garmin` provider.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 
 use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     /// `(id → payload text)` for every id listed, from one table. Ids
     /// absent from the table are absent from the map.
     pub async fn payloads_of(&self, table: &str, ids: &[&str]) -> Result<HashMap<String, String>> {
@@ -63,7 +32,7 @@ impl RawDb {
                 q = q.bind(*id);
             }
             for r in q
-                .fetch_all(&self.pool)
+                .fetch_all(self.pool())
                 .await
                 .with_context(|| format!("payloads_of {table}"))?
             {
@@ -92,7 +61,7 @@ impl RawDb {
             q = q.bind(*b);
         }
         let rows = q
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .with_context(|| format!("scan {table} for pruning"))?;
         Ok(rows
@@ -106,7 +75,7 @@ impl RawDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool().begin().await?;
         for chunk in ids.chunks(500) {
             let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
@@ -196,7 +165,7 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT activity_id, blake3 FROM garmin_activity_files WHERE blake3 IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select garmin_activity_files")?;
         Ok(rows
@@ -214,7 +183,7 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT calendar_date, blake3 FROM garmin_wellness_files WHERE blake3 IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select garmin_wellness_files")?;
         Ok(rows
@@ -237,7 +206,7 @@ impl RawDb {
              LEFT JOIN garmin_activity_details d ON d.id = a.id \
              WHERE d.payload IS NULL ORDER BY a.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select garmin_activities without a detail")
     }
@@ -249,7 +218,7 @@ impl RawDb {
         sqlx::query_scalar(
             "SELECT id FROM garmin_daily_bookkeeping WHERE last_error IS NOT NULL ORDER BY id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select failed garmin_daily ids")
     }
@@ -257,13 +226,13 @@ impl RawDb {
     pub async fn cursor(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .with_context(|| format!("select cursor {scope}"))?;
         Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
     }
 
     pub async fn set_cursor(&self, scope: &str, value: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, scope, value).await
+        dr::upsert_scope_state(self.pool(), scope, value).await
     }
 }
