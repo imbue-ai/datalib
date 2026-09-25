@@ -939,14 +939,20 @@ mod tests {
         .await
     }
 
-    /// What the watch reported before a write of the test's own under
+    /// What the watch reported before a file of the test's own lands under
     /// `system/frontend/`. The watch takes events in the order they
     /// happened, so whatever an earlier write would have reported has
     /// been by the time the barrier's `FrontendChanged` arrives; a burst
-    /// is sent whole, so what came with it is read too. Once per test: the
-    /// barrier's write may be reported more than once.
+    /// is sent whole, so what came with it is read too. The file is
+    /// written where the watch ignores it and renamed into place: one
+    /// event, so one frame, and a second barrier is not ended by the
+    /// first one's leftovers.
     async fn barrier(root: &Path, rx: &mut broadcast::Receiver<RootFrame>) -> Vec<RootEvent> {
-        std::fs::write(root.join("system/frontend/barrier.js"), "").unwrap();
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = root.join(format!("barrier-{n}.tmp"));
+        std::fs::write(&tmp, "").unwrap();
+        std::fs::rename(&tmp, root.join(format!("system/frontend/barrier-{n}.js"))).unwrap();
         let mut got = until(rx, RootEvent::FrontendChanged).await;
         while let Ok(frame) = rx.try_recv() {
             got.push(frame.event);
@@ -1103,8 +1109,11 @@ mod tests {
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let mut rx = watching(td.path()).await;
 
+        // A store is born with a commit, so a first write moves the head
+        // twice; the barrier takes whatever it reported.
         write_index(&db, 1, true).await;
         until(&mut rx, RootEvent::IndexChanged).await;
+        barrier(td.path(), &mut rx).await;
         for i in 100..110 {
             write_index(&db, i, false).await;
         }
@@ -1128,6 +1137,7 @@ mod tests {
         let mut rx = watching(td.path()).await;
         write_index(&db, 1, true).await;
         until(&mut rx, RootEvent::IndexChanged).await;
+        barrier(td.path(), &mut rx).await;
 
         std::fs::write(&db, "not a store").unwrap();
         let got = barrier(td.path(), &mut rx).await;
