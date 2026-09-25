@@ -117,37 +117,37 @@ them:
 | `failed` | its retries ran out and nothing it reads has moved since |
 | `idle`, `stale` | no open request wants it; up to date, or not |
 
-**A wanted step is due** iff it is **stale** — it has never succeeded,
-some input's version differs from the one it consumed at its last
-success, or its own fingerprint (argv, env, declared inputs) differs
-from the one recorded then — or it declares no inputs and has not run
-since this request opened: a source's real input is outside the graph,
-so every request runs it once.
+The tick is level-triggered: every wake-up, whatever caused it,
+recomputes every step from the state as it is, so a burst of wake-ups is
+one look and a lost one costs latency, never a wrong start. **A step
+starts** in a tick, visited in topological order, iff:
 
-A due step waits, and says why, for one of four things:
+1. **it is not running**: one instance of a step at a time;
+2. **it is not paused**;
+3. **an open request wants it**: some request's scope (its roots and
+   everything downstream) holds it;
+4. **it has not failed for every request that wants it**: its last run
+   failed, after that request opened, on the inputs and definition it has
+   now. A run the loop asked to stop, and that stopped, is neither a
+   failure nor a run: resumed while a request wants it, the step runs
+   again. One that says it failed has failed, whatever it was asked;
+5. **it is due**: it is **stale** (it has never succeeded, an input's
+   version differs from the one it read at its last success, or its
+   fingerprint, meaning argv, env and declared inputs, differs from the
+   one recorded then), or it declares no inputs and has not run since the
+   request opened, since a source's real input is outside the graph;
+6. **no producer it reads holds it**: none is running without streaming
+   (or with this step reading its files, below), and none is about to
+   run, held only by a lock, its sink or a reader, since that one would
+   rewrite what this step reads. A producer waiting on its own upstream
+   holds nobody back, so a fan-in never waits for its slowest source;
+7. **it has something to read**: a step with inputs none of whose
+   producers ever published is `blocked`, or waits if one is about to run;
+8. **every lock it would take is free** (below, "What keeps steps apart").
 
-- **its upstream**: a producer it reads is running and does not declare
-  `streams_output`, so what it writes may be half-done, or is about to
-  run, held only by a budget, its sink or a reader. A running producer
-  that streams lets its consumers start on each seal as it lands, and
-  staleness keeps them from running when nothing new has. A producer
-  waiting on its own upstream holds nobody back, so a fan-in never waits
-  for its slowest source.
-- **its sink**: another writer of the same tree is running.
-- **a reader**: a step that reads its tree off disk, not at a pinned
-  commit, is running.
-- **a budget**: each step counts against one of three — `network` for a
-  source, `cpu` for a grouped step with inputs, `index` for one with no
-  group type — so a download waiting out a rate limit never keeps a
-  render from starting. `--parallelism N` is N downloads and N renders;
-  the two index steps may always run beside each other.
-
-**A step that reads its inputs off disk never overlaps a writer of
-them.** The loader marks the built-in ones (`UNPINNED_BUILTINS` in
-`config.rs`: the qmd index, which globs render trees' `.md` files, and
-perseus's render, which reads its TEI files): such a step waits for a
-running producer even if it streams, and a writer of what it reads waits
-for it to finish.
+A step that waits says why, in its row's `state_detail`: `waiting for
+a`, `waiting for another writer of x`, `waiting for c, which reads what
+this writes`, `waiting for lock gpu, held by trainer`.
 
 Until everything a step reads has settled, its row reads Running between
 passes: the step is not finished, it is waiting for the next seal. A
@@ -202,6 +202,36 @@ not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The design, and what
 is still to come (two steps writing one tree), is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## What keeps steps apart: locks
+
+What keeps steps apart is locks, and every one is in the config or
+follows from it:
+
+- **A sink is a read/write lock.** Its writer holds `write`. A step that
+  reads it off disk (`reads = "files"`) holds `read`: no writer of what
+  it reads runs beside it, in either order. A step that reads at a pinned
+  commit (the default) holds nothing: it reads a snapshot, and the writer
+  may go on writing. Whether a consumer may *start* on a producer that is
+  still running is not a lock but rule 6: only on a producer that
+  declares `streams_output`, so a seal it reads is a whole one.
+- **A named lock** is a `[[locks]]` entry: a `name` and `slots` (default
+  1, a mutex). A step names what it holds: `locks = ["quota"]` takes one
+  slot, `locks = { gpu = "exclusive" }` takes them all. For what the
+  graph does not show: two sources on one account's rate limit, a GPU.
+- **The budgets are three default locks**, `network` (4 slots), `cpu` (4)
+  and `index` (2), which every config has. A step that names no locks
+  holds one of them: `network` for a source, `cpu` for a grouped step
+  with inputs, `index` for any other step with inputs; so a download
+  waiting out a rate limit never keeps a render from starting. A
+  `[[locks]]` entry of the same name resizes one, and `--parallelism N`
+  sets `network` and `cpu` to N, over the config.
+
+Neither `locks` nor `reads` is in the fingerprint: they change when a
+step may run, not what it makes. The built-in steps that read files are
+marked by the loader (`UNPINNED_BUILTINS` in `config.rs`: the qmd index,
+which globs render trees' `.md` files, and perseus's render, which reads
+its TEI files); any step may say `reads` itself.
 
 ## How the loop is proven
 

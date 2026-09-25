@@ -3449,3 +3449,119 @@ command = "datalib-applet unified_index"
         assert!(check.is_clean(), "{:?}", check.diagnostics);
     }
 }
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    use crate::supervisor::locks::Hold;
+
+    fn step<'a>(check: &'a ConfigCheck, id: &str) -> &'a StepSpec {
+        &check.graph.steps[check.graph.by_id[id]]
+    }
+
+    fn slots(check: &ConfigCheck, name: &str) -> Option<usize> {
+        check
+            .graph
+            .locks
+            .iter()
+            .find(|l| l.name == name)
+            .map(|l| l.slots)
+    }
+
+    /// Both ways to write `locks`, and `reads`: a list holds each once
+    /// and shared, a table says how.
+    #[test]
+    fn a_step_holds_the_locks_it_names_as_it_names_them() {
+        let check = check_text(
+            r#"
+[[locks]]
+name = "quota"
+
+[[locks]]
+name = "gpu"
+slots = 2
+
+[[steps]]
+id = "a"
+command = "x"
+locks = ["quota", "quota"]
+
+[[steps]]
+id = "b"
+command = "x"
+locks = { gpu = "exclusive" }
+reads = "files"
+inputs = ["a"]
+"#,
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert_eq!(slots(&check, "quota"), Some(1));
+        assert_eq!(slots(&check, "gpu"), Some(2));
+        assert_eq!(
+            step(&check, "a").locks,
+            Some(vec![("quota".to_string(), Hold::Shared)])
+        );
+        let b = step(&check, "b");
+        assert_eq!(b.locks, Some(vec![("gpu".to_string(), Hold::Exclusive)]));
+        assert!(!b.reads_pinned);
+        assert!(step(&check, "a").reads_pinned);
+    }
+
+    #[test]
+    fn a_step_holding_a_lock_no_one_declared_is_rejected() {
+        let check = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"nope\"]\n");
+        assert!(check.graph.steps.is_empty());
+        let d = &check.diagnostics[0];
+        assert_eq!(d.severity, Severity::Rejected);
+        assert!(d.message.contains("nope"), "{}", d.message);
+    }
+
+    #[test]
+    fn a_lock_declared_twice_or_with_no_slots_is_rejected() {
+        let check = check_text(
+            "[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"z\"\nslots = 0\n",
+        );
+        let rejected: Vec<&str> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Rejected)
+            .filter_map(|d| d.id())
+            .collect();
+        assert_eq!(rejected, ["q", "z"], "{:?}", check.diagnostics);
+        assert_eq!(slots(&check, "q"), Some(1), "the first stands");
+        assert_eq!(slots(&check, "z"), None);
+    }
+
+    /// The budgets are locks every config has; declaring one resizes it.
+    #[test]
+    fn declaring_a_default_lock_resizes_it() {
+        let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["network", "cpu", "index"]);
+        assert_eq!(slots(&check, "network"), Some(1));
+        assert_eq!(slots(&check, "cpu"), Some(4));
+    }
+
+    /// When a step may run is not what it makes: neither re-runs anything.
+    #[test]
+    fn locks_and_reads_are_not_in_the_fingerprint() {
+        let plain = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\n");
+        let held = check_text(
+            "[[locks]]\nname = \"q\"\n\n[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"q\"]\nreads = \"files\"\n",
+        );
+        assert_eq!(plain.graph.fingerprints, held.graph.fingerprints);
+    }
+
+    /// strum and serde spell these independently: the config is read with
+    /// serde, and anything that names a mode back uses strum.
+    #[test]
+    fn reads_as_str_matches_the_serde_spelling() {
+        use strum::VariantArray;
+        for &v in Reads::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+            assert_eq!(Reads::parse(v.as_str()), Some(v));
+        }
+    }
+}
