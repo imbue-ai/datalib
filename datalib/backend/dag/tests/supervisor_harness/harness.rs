@@ -182,11 +182,11 @@ impl Harness {
 
         let person = Store::open(root.path()).await.unwrap();
         let ear = Store::open(root.path()).await.unwrap();
-        let mut listener = Listener::new(&ear, "the harness").await;
+        let mut listener = Listener::new(&ear, "the harness");
         let heard_tx = tx.clone();
         tokio::spawn(async move {
             loop {
-                for line in listener.next(&ear).await {
+                for line in listener.next().await {
                     if heard_tx.send(Seen::Heard(line)).is_err() {
                         return;
                     }
@@ -223,9 +223,7 @@ impl Harness {
         let root = self.root.path().to_path_buf();
         let mut stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
-        let mut listener = Listener::new(&store, "the loop's host")
-            .await
-            .backstop(clocks.backstop);
+        let mut listener = Listener::new(&store, "the loop's host").backstop(clocks.backstop);
         let mut periods = Periods {
             root,
             report: tx.clone(),

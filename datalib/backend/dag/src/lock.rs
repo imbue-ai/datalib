@@ -130,9 +130,9 @@ mod tests {
         let store = crate::supervisor::store::Store::open(tmp.path())
             .await
             .unwrap();
-        let mut listener = Listener::new(&store, "test").await;
+        let mut listener = Listener::new(&store, "test");
         drop(acquire_runner(tmp.path()).unwrap());
-        assert_eq!(listener.next(&store).await, [RUNNER_LOCK_RELEASED]);
+        assert_eq!(listener.next().await, [RUNNER_LOCK_RELEASED]);
         try_acquire_runner(tmp.path()).expect("free once it was said to be");
     }
 }
