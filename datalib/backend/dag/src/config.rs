@@ -531,6 +531,12 @@ fn valid_id_segment(seg: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
+/// Whether `id` is a group id a config may name: one id segment, never
+/// the reserved `system`. What makes `<root>/<id>` that group's tree.
+pub fn usable_group_id(id: &str) -> bool {
+    valid_id_segment(id) && id != SYSTEM_DIR
+}
+
 const SEGMENT_RULE: &str = "letters, digits, `.`, `_`, `-`, not starting with `-`, and \
                             never `.` or `..`";
 
@@ -3384,6 +3390,7 @@ command = "datalib-applet unified_index"
             let check = check_text(&format!("[[groups]]\nid = \"{bad}\"\n"));
             assert_eq!(check.cfg.groups.len(), 0, "{bad:?} should be rejected");
             assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
+            assert!(!usable_group_id(bad), "{bad:?}");
         }
         for good in ["a", "work-slack", "a.b_c", "unified_index"] {
             let check = check_text(&format!(
@@ -3391,6 +3398,7 @@ command = "datalib-applet unified_index"
                  function = \"raw\"\ncommand = \"x\"\n"
             ));
             assert!(check.is_clean(), "{good:?}: {:?}", check.diagnostics);
+            assert!(usable_group_id(good), "{good:?}");
         }
     }
 

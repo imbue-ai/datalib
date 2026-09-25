@@ -1,5 +1,5 @@
 /* The frame every modal dialog here shares (CompareDialog,
-   SourceWizard): the dimmed backdrop, the panel, its header with the
+   ConfirmDialog, SourceWizard): the dimmed backdrop, the panel, its header with the
    title and ×, its scrolling body and its footer of buttons. A dialog
    includes this as a scoped style, adds its own class beside these,
    and sets its own width. */
