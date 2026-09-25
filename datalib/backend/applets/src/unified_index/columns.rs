@@ -1,10 +1,9 @@
-//! What the search grid's columns are, and the two identities the
-//! applet resolves before a row goes out: the provider as the
-//! configured source's own mark (Gmail rather than Mail, when the
-//! config says which) and the source as the group's name rather than
-//! its id. Both read `config.toml` — the names live there and nowhere
-//! in the index, which is what keeps renaming a source free of a
-//! re-index.
+//! What the search grid's columns are, and the source identity the
+//! applet resolves before a row goes out: the group's name rather than
+//! its id, led by the configured source's own mark (Gmail rather than
+//! Mail, when the config says which) — the Manage screen's Name cell.
+//! It reads `config.toml`: the names live there and nowhere in the
+//! index, which is what keeps renaming a source free of a re-index.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,14 +17,11 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("score", "Score", ColumnType::Number).describe(
             "How well the row matched a free-text search. Not comparable across searches.",
         ),
-        ColumnSpec::new("provider_ref", "Provider", ColumnType::Identity).describe(
-            "Which service this came from. A property of the source's type — two Slack \
-             workspaces share it; the Source column is what separates them.",
-        ),
         ColumnSpec::new("source_ref", "Source", ColumnType::Identity).describe(
-            "The configured source this row came from — its id is its directory under the \
-             data root; the cell shows the name config.toml gives it. Datalib's own rows, \
-             like a source's storage report, say Datalib rather than the source they describe.",
+            "The configured source this row came from, led by the mark of the service it \
+             mirrors — its id is its directory under the data root; the cell shows the name \
+             config.toml gives it. Datalib's own rows, like a source's storage report, say \
+             Datalib rather than the source they describe.",
         ),
         ColumnSpec::new("kind", "Type", ColumnType::Text),
         ColumnSpec::new("conversation_name", "Conversation", ColumnType::Text).hidden(),
@@ -138,51 +134,43 @@ impl Sources {
     }
 
     pub fn resolve(&self, row: &mut SearchRow) {
-        let group = self.groups.get(&row.source_id);
-        // The configured source's own mark first — Gmail and Fastmail are
-        // both provider "Mail", and only the config knows which this is.
-        // Failing that, the provider tag names its own mark.
-        let catalog = group
-            .and_then(|g| g.r#type.as_deref().map(|t| (t, &g.ingest_params)))
-            .map(|(t, params)| source_catalog::source_type(t, params));
-        row.provider_ref = Some(Identity {
-            id: row.provider.clone(),
-            label: catalog
-                .as_ref()
-                .map(|c| c.label.clone())
-                .unwrap_or_else(|| row.source.clone()),
-            icon: catalog
-                .as_ref()
-                .and_then(|c| c.icon.clone())
-                .or_else(|| Some(row.provider.clone()).filter(|p| !p.is_empty())),
-            detail: None,
-        });
-        row.source_ref = Some(self.identity(&row.source_id));
+        let mut source = self.identity(&row.source_id);
+        // A source the config no longer names still has its provider
+        // tag, and the tag names its own mark.
+        if source.icon.is_none() && !row.provider.is_empty() {
+            source.icon = Some(row.provider.clone());
+            source.detail = Some(row.source.clone());
+        }
+        row.source_ref = Some(source);
     }
 
     /// The source as the grid shows it: the name the config gives the
-    /// group, or its id when the config does not name it. Datalib's own
-    /// rows — each source's storage report — are filed under datalib
-    /// rather than under the source they measure.
+    /// group, or its id when the config does not name it, led by its
+    /// type's mark with the type's label on hover. Datalib's own rows —
+    /// each source's storage report — are filed under datalib rather
+    /// than under the source they measure.
     pub fn identity(&self, source_id: &str) -> Identity {
-        let datalib = source_id == datalib_source_id();
-        let label = if datalib {
-            "Datalib".to_string()
-        } else {
-            self.groups
-                .get(source_id)
-                .and_then(|g| g.name.clone())
-                .unwrap_or_else(|| source_id.to_string())
-        };
+        if source_id == datalib_source_id() {
+            return Identity {
+                id: source_id.to_string(),
+                label: "Datalib".to_string(),
+                icon: Some("system".to_string()),
+                detail: Some("Datalib's own row, not a source's data".to_string()),
+            };
+        }
+        let group = self.groups.get(source_id);
+        let r#type = group.and_then(|g| {
+            g.r#type
+                .as_deref()
+                .map(|t| source_catalog::source_type(t, &g.ingest_params))
+        });
         Identity {
             id: source_id.to_string(),
-            label,
-            icon: None,
-            detail: Some(if datalib {
-                "Datalib's own row, not a source's data".to_string()
-            } else {
-                format!("Stored in {source_id}/")
-            }),
+            label: group
+                .and_then(|g| g.name.clone())
+                .unwrap_or_else(|| source_id.to_string()),
+            icon: r#type.as_ref().and_then(|t| t.icon.clone()),
+            detail: r#type.map(|t| t.label),
         }
     }
 }
@@ -226,7 +214,6 @@ mod tests {
             entire_chat: "/chat/c".into(),
             source: "Slack".into(),
             provider: "slack".into(),
-            provider_ref: None,
             source_ref: None,
             source_id: "slack".into(),
             kind: "k".into(),
@@ -305,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn the_configured_source_narrows_the_provider_and_names_the_source() {
+    fn the_configured_source_names_the_source_and_leads_with_its_mark() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -326,31 +313,34 @@ account = "x"
         let sources = Sources::read(tmp.path());
         let mut r = row("email", "Mail", "work-mail");
         sources.resolve(&mut r);
-        let p = r.provider_ref.unwrap();
-        assert_eq!(
-            (p.label.as_str(), p.icon.as_deref()),
-            ("Gmail", Some("gmail"))
-        );
         let s = r.source_ref.unwrap();
         assert_eq!(
-            (s.id.as_str(), s.label.as_str()),
-            ("work-mail", "Work mail")
+            (
+                s.id.as_str(),
+                s.label.as_str(),
+                s.icon.as_deref(),
+                s.detail.as_deref()
+            ),
+            ("work-mail", "Work mail", Some("gmail"), Some("Gmail"))
         );
     }
 
     #[test]
-    fn an_unconfigured_source_falls_back_to_the_provider_and_the_id() {
+    fn an_unconfigured_source_falls_back_to_the_id_and_the_provider_mark() {
         let sources = Sources::read(Path::new("/nonexistent"));
         let mut r = row("slack", "Slack", "old-slack");
         sources.resolve(&mut r);
-        let p = r.provider_ref.unwrap();
+        let s = r.source_ref.unwrap();
         assert_eq!(
-            (p.label.as_str(), p.icon.as_deref()),
-            ("Slack", Some("slack"))
+            (s.label.as_str(), s.icon.as_deref(), s.detail.as_deref()),
+            ("old-slack", Some("slack"), Some("Slack"))
         );
-        assert_eq!(r.source_ref.unwrap().label, "old-slack");
         let mut d = row("datalib", "Datalib", "datalib");
         sources.resolve(&mut d);
-        assert_eq!(d.source_ref.unwrap().label, "Datalib");
+        let d = d.source_ref.unwrap();
+        assert_eq!(
+            (d.label.as_str(), d.icon.as_deref()),
+            ("Datalib", Some("system"))
+        );
     }
 }

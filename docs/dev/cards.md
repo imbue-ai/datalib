@@ -472,9 +472,10 @@ viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
-the two producers. The applet resolves the search grid's Provider and
-Source identities itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
-— the configured source's own mark and the group's name — which is
+the two producers. The applet resolves the search grid's Source
+identity itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+— the group's name, led by the configured source's own mark, as the
+Manage screen's Name cell is — which is
 what keeps renaming a source free of a re-index. The cell styles live
 in `cards/tableGrid.css` rather than a component's `<style>`: a
 `.ce.vue`'s styles attach to the component for the card adapter to

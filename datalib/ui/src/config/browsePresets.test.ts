@@ -40,7 +40,7 @@ describe("browseColumns", () => {
   });
 
   /// The unified projection keeps the grid's own defaults: there the
-  /// Provider and Source columns are the whole point, and a preset
+  /// Source column is the whole point, and a preset
   /// tuned for one source would hide them.
   it("has no preset for the index group", () => {
     expect(browseColumns(null)).toBeNull();

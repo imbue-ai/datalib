@@ -87,7 +87,6 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         entire_chat: r.try_get("entire_chat").unwrap_or_default(),
         source: r.try_get("source_label").unwrap_or_default(),
         provider: provider.clone().unwrap_or_default(),
-        provider_ref: None,
         source_ref: None,
         source_id: source_id_for(provider.as_deref(), &qmd_path),
         kind,

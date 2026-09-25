@@ -418,7 +418,6 @@ const FILTER_COLUMNS: Record<
   string,
   { key: string; header: string; uuidCol?: keyof SearchRow; field?: keyof SearchRow }
 > = {
-  provider_ref: { key: "source", header: "Provider", field: "source" },
   source_ref: { key: "source_id", header: "Source", field: "source_id" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
@@ -641,12 +640,9 @@ function applyDefaultSort() {
 // "every optional column": a column named here appears in the default
 // grid whenever its values vary, which is exactly what `hidden` on a
 // definition is there to prevent. It stays the set it has always been.
-/// Column id → the row field it reads. The Provider column is the
-/// resolved `provider_ref`, but "is it the same on every row" is a
-/// question about the `source` string behind it.
+/// Column id → the row field it reads.
 const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   score: "score",
-  provider_ref: "source",
   kind: "kind",
   channel: "channel",
   created_at: "created_at",
@@ -829,8 +825,7 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   // Default sort is applied programmatically on row updates (see
   // applyDefaultSort) — not baked into the definition so a user re-sort
   // sticks across query changes.
-  provider_ref: { width: 110 },
-  source_ref: { width: 130 },
+  source_ref: { width: 150 },
   kind: { width: 110 },
   conversation_name: { width: 200 },
   channel: { width: 130 },
