@@ -15,6 +15,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/etl/agent_sessions_render:datalib_etl_agent_sessions_render",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/providers/codex:datalib_etl_codex",
         "//datalib/backend/etl/providers/codex_config:datalib_etl_codex_config",
