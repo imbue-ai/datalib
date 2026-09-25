@@ -10,15 +10,16 @@
 //! Driven through the HTTP playback layer: no credential, no network.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
-use datalib_etl::http::{HttpRequest, HttpService, PLAYBACK_ENV};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
-use datalib_etl_email::ingest::{db_path_for, RawDb};
-use serde_json::{json, Value};
+use serde_json::json;
 
-const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";
+use crate::support::{
+    gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
+    put_gmail_account, Mirror,
+};
+
 /// Under `datalib`, the label the mirror started with.
 const UNDER_LIB: &str = "18c9f2a1b2c3d601";
 /// Under `travel`, admitted by the second config.
@@ -91,149 +92,70 @@ fn ids(v: &[&str]) -> BTreeSet<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
-struct Harness {
-    _dir: tempfile::TempDir,
-    playback: std::path::PathBuf,
-    root: std::path::PathBuf,
-}
+struct Harness(Mirror);
 
 impl Harness {
     fn new() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let playback = dir.path().join("playback");
-        let root = dir.path().join("store");
-        std::fs::create_dir_all(&root).expect("create store dir");
-        write_fixtures(&playback);
-        Self {
-            _dir: dir,
-            playback,
-            root,
-        }
+        let m = Mirror::new();
+        write_fixtures(&m.playback);
+        Self(m)
     }
 
     async fn run(&self, labels: &[&str]) -> FetchSummary {
-        std::env::set_var(PLAYBACK_ENV, &self.playback);
-        let db = RawDb::open(&db_path_for(&self.root))
+        self.0
+            .run(|db| {
+                let mut opts = FetchOptions::new(db);
+                opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
+                gmail_api::fetch(opts)
+            })
             .await
-            .expect("open raw db");
-        let mut opts = FetchOptions::new(db.clone());
-        opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
-        let summary = gmail_api::fetch(opts).await;
-        db.commit_all("test").await.unwrap();
-        db.close().await;
-        std::env::remove_var(PLAYBACK_ENV);
-        summary.expect("gmail fetch under playback")
+            .expect("gmail fetch under playback")
     }
 
     async fn mirrored(&self) -> BTreeSet<String> {
-        let db = RawDb::open(&db_path_for(&self.root))
-            .await
-            .expect("reopen raw db");
-        let ids: Vec<String> = sqlx::query_scalar("SELECT gmail_id FROM gmail_messages")
-            .fetch_all(db.pool())
-            .await
-            .expect("read gmail_messages");
-        db.commit_all("test").await.unwrap();
-        db.close().await;
-        ids.into_iter().collect()
+        self.0.gmail_ids().await
     }
 }
 
-fn write_fixtures(out: &std::path::Path) {
-    let get = |url: &str| HttpRequest::get(HttpService::Gmail, url);
-    let put = |url: &str, body: &Value| {
-        write_fixture(out, &get(url), &json_response(body)).expect("write fixture")
-    };
-
-    put(
-        &format!("{BASE}/me/profile"),
-        &json!({ "emailAddress": "t@example.test", "historyId": "1000" }),
-    );
-    put(
-        &format!("{BASE}/me/labels"),
-        &json!({ "labels": [
-            { "id": "INBOX", "name": "INBOX", "type": "system" },
+fn write_fixtures(playback: &Path) {
+    put_gmail_account(
+        playback,
+        "1000",
+        json!([
+            inbox_label(),
             { "id": "Label_7", "name": "datalib", "type": "user" },
             { "id": "Label_9", "name": "travel", "type": "user" },
-        ]}),
+        ]),
     );
     // Nothing changed since the first run's cursor: the case where an
     // incremental run has nothing to say about mail it never mirrored.
-    put(
-        &format!("{BASE}/me/history?startHistoryId=1000"),
+    put_gmail(
+        playback,
+        &gmail_history_url("1000"),
         &json!({ "historyId": "1000" }),
     );
-    put(
-        &list_url(Some("Label_7")),
+    put_gmail(
+        playback,
+        &gmail_list_url(&["Label_7"]),
         &json!({ "messages": [{ "id": UNDER_LIB }] }),
     );
-    put(
-        &list_url(Some("Label_9")),
+    put_gmail(
+        playback,
+        &gmail_list_url(&["Label_9"]),
         &json!({ "messages": [{ "id": UNDER_TRAVEL }] }),
     );
-    put(
-        &list_url(None),
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
         &json!({ "messages": [
             { "id": UNDER_LIB }, { "id": UNDER_TRAVEL }, { "id": INBOX_ONLY },
         ]}),
     );
-    put(
-        &get_url(UNDER_LIB),
-        &message(UNDER_LIB, &["INBOX", "Label_7"]),
-    );
-    put(
-        &get_url(UNDER_TRAVEL),
-        &message(UNDER_TRAVEL, &["INBOX", "Label_9"]),
-    );
-    put(&get_url(INBOX_ONLY), &message(INBOX_ONLY, &["INBOX"]));
-}
-
-fn list_url(label_id: Option<&str>) -> String {
-    let mut url = format!("{BASE}/me/messages?maxResults=500&includeSpamTrash=true");
-    if let Some(id) = label_id {
-        url.push_str("&labelIds=");
-        url.push_str(id);
+    for (id, labels) in [
+        (UNDER_LIB, &["INBOX", "Label_7"][..]),
+        (UNDER_TRAVEL, &["INBOX", "Label_9"][..]),
+        (INBOX_ONLY, &["INBOX"][..]),
+    ] {
+        put_gmail(playback, &gmail_get_url(id), &gmail_message(id, labels, id));
     }
-    url
-}
-
-fn get_url(id: &str) -> String {
-    format!("{BASE}/me/messages/{id}?format=RAW")
-}
-
-fn message(id: &str, label_ids: &[&str]) -> Value {
-    let eml = format!(
-        "Message-ID: <{id}@example.test>\r\n\
-         Date: Tue, 1 Sep 2026 10:00:00 +0200\r\n\
-         From: sender@example.test\r\n\
-         To: t@example.test\r\n\
-         Subject: {id}\r\n\
-         \r\n\
-         body\r\n",
-    );
-    json!({
-        "id": id,
-        "threadId": id,
-        "labelIds": label_ids,
-        "internalDate": "1788000000000",
-        "raw": base64url(eml.as_bytes()),
-    })
-}
-
-/// Gmail's `raw` alphabet: RFC 4648 §5, unpadded.
-fn base64url(bytes: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..=chunk.len() {
-            out.push(A[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
-        }
-    }
-    out
 }

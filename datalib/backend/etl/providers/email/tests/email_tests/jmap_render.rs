@@ -36,11 +36,66 @@ fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
     bundle.add(ref_id, body.to_vec(), Some("message/rfc822".into()), None);
 }
 
-fn make_loaded() -> ParsedEmail {
-    let account = json!({"name": "thad@example.com", "isPersonal": true});
-    let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
-    let thread = json!({"id": "T1", "emailIds": ["E1", "E2"]});
+/// Account `A1` (thad@example.com) with one Inbox, holding one thread.
+fn one_thread(
+    thread_id: &str,
+    emails: Vec<LoadedEmail>,
+    joins: EmailJoins,
+    blobs: BlobBundle,
+) -> ParsedEmail {
+    let email_ids: Vec<&str> = emails.iter().map(|e| e.id.as_str()).collect();
+    ParsedEmail {
+        accounts: vec![(
+            "A1".into(),
+            json!({"name": "thad@example.com", "isPersonal": true}),
+        )],
+        mailboxes: vec![json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"})],
+        threads: vec![json!({"id": thread_id, "emailIds": email_ids})],
+        docs: vec![EmailThreadBucket {
+            account_id: "A1".into(),
+            thread_id: thread_id.into(),
+            emails,
+            joins,
+            blobs,
+            inputs: Default::default(),
+        }],
+        docs_skipped: 0,
+        scan: ScanResult {
+            render: None,
+            gone: Vec::new(),
+            new_head: None,
+            scan_elapsed: None,
+        },
+        unparsed: Vec::new(),
+    }
+}
 
+/// Renders `parsed` as source `source` into a fresh tree, which is
+/// returned with every document it completed.
+fn render(
+    parsed: &ParsedEmail,
+    source: &str,
+    outlink: OutlinkFormat,
+) -> (tempfile::TempDir, Vec<RenderedMarkdown>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut docs = Vec::new();
+    render_all(
+        parsed,
+        tmp.path(),
+        source,
+        Some(outlink),
+        &[],
+        &Progress::noop(),
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
+    )
+    .expect("render_all");
+    (tmp, docs)
+}
+
+fn make_loaded() -> ParsedEmail {
     let emails = vec![
         LoadedEmail {
             id: "E1".into(),
@@ -108,49 +163,13 @@ fn make_loaded() -> ParsedEmail {
         Some("hello.pdf".into()),
     );
 
-    ParsedEmail {
-        accounts: vec![("A1".into(), account)],
-        mailboxes: vec![mailbox],
-        threads: vec![thread],
-        docs: vec![EmailThreadBucket {
-            account_id: "A1".into(),
-            thread_id: "T1".into(),
-            emails,
-            joins,
-            blobs: bundle,
-            inputs: Default::default(),
-        }],
-        docs_skipped: 0,
-        scan: ScanResult {
-            render: None,
-            gone: Vec::new(),
-            new_head: None,
-            scan_elapsed: None,
-        },
-        unparsed: Vec::new(),
-    }
+    one_thread("T1", emails, joins, bundle)
 }
 
 #[test]
 fn render_smoke_produces_thread_dir_with_md_and_rows() {
     let parsed = make_loaded();
-    let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut completed: Vec<RenderedMarkdown> = Vec::new();
-    let mut on_done = |md: RenderedMarkdown| -> anyhow::Result<()> {
-        completed.push(md);
-        Ok(())
-    };
-    render_all(
-        &parsed,
-        tmp.path(),
-        "fastmail",
-        Some(OutlinkFormat::Fastmail),
-        &[],
-        &progress,
-        &mut on_done,
-    )
-    .expect("render_all");
+    let (tmp, completed) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 
     // chat-common owns the page-dir layout
@@ -298,10 +317,6 @@ fn make_invite() -> ParsedEmail {
 }
 
 fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> ParsedEmail {
-    let account = json!({"name": "thad@example.com", "isPersonal": true});
-    let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
-    let thread = json!({"id": "T9", "emailIds": ["E9"]});
-
     let emails = vec![LoadedEmail {
         id: "E9".into(),
         account_id: "A1".into(),
@@ -346,27 +361,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
         Some(att_name.into()),
     );
 
-    ParsedEmail {
-        accounts: vec![("A1".into(), account)],
-        mailboxes: vec![mailbox],
-        threads: vec![thread],
-        docs: vec![EmailThreadBucket {
-            account_id: "A1".into(),
-            thread_id: "T9".into(),
-            emails,
-            joins,
-            blobs: bundle,
-            inputs: Default::default(),
-        }],
-        docs_skipped: 0,
-        scan: ScanResult {
-            render: None,
-            gone: Vec::new(),
-            new_head: None,
-            scan_elapsed: None,
-        },
-        unparsed: Vec::new(),
-    }
+    one_thread("T9", emails, joins, bundle)
 }
 
 /// A calendar invite carries one iCalendar payload that arrives twice —
@@ -379,19 +374,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
 #[test]
 fn calendar_invite_materializes_one_blob_linked_once() {
     let parsed = make_invite();
-    let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut on_done = |_: RenderedMarkdown| -> anyhow::Result<()> { Ok(()) };
-    render_all(
-        &parsed,
-        tmp.path(),
-        "gmail",
-        Some(OutlinkFormat::Gmail),
-        &[],
-        &progress,
-        &mut on_done,
-    )
-    .expect("render_all");
+    let (tmp, _) = render(&parsed, "gmail", OutlinkFormat::Gmail);
 
     let md_path = find_one(tmp.path(), ".md");
     let blobs_dir = md_path.parent().unwrap().join("blobs");
@@ -442,19 +425,7 @@ fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
         "shot.png",
         PNG,
     );
-    let tmp = tempfile::tempdir().unwrap();
-    let progress = Progress::noop();
-    let mut on_done = |_: RenderedMarkdown| -> anyhow::Result<()> { Ok(()) };
-    render_all(
-        &parsed,
-        tmp.path(),
-        "fastmail",
-        Some(OutlinkFormat::Fastmail),
-        &[],
-        &progress,
-        &mut on_done,
-    )
-    .expect("render_all");
+    let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
 
     let md_path = find_one(tmp.path(), ".md");
     let blobs_dir = md_path.parent().unwrap().join("blobs");
@@ -485,17 +456,7 @@ fn an_email_without_seen_renders_unread() {
         .joins
         .keywords
         .insert("E2".into(), vec!["$flagged".into()]);
-    let tmp = tempfile::tempdir().unwrap();
-    render_all(
-        &parsed,
-        tmp.path(),
-        "fastmail",
-        Some(OutlinkFormat::Fastmail),
-        &[],
-        &Progress::noop(),
-        &mut |_| Ok(()),
-    )
-    .expect("render_all");
+    let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
     let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
     let wrappers: Vec<&str> = md
         .lines()

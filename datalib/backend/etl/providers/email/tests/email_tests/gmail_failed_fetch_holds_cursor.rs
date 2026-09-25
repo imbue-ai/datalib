@@ -13,17 +13,19 @@
 //! Driven through the HTTP playback layer: no credential, no network.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
-use datalib_etl::http::{HttpRequest, HttpResponse, HttpService, PLAYBACK_ENV};
+use datalib_etl::http::HttpResponse;
 use datalib_etl::retry::{self, RetryGuard};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::{json_response, write_fixture};
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary};
-use datalib_etl_email::ingest::{db_path_for, RawDb};
-use serde_json::{json, Value};
+use serde_json::json;
 
-const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";
+use crate::support::{
+    gmail_get_url, gmail_list_url, gmail_message, inbox_label, put_gmail, put_gmail_account,
+    put_gmail_response, Mirror,
+};
+
 const GOOD: &str = "18c9f2a1b2c3d501";
 const BAD: &str = "18c9f2a1b2c3d502";
 
@@ -104,101 +106,44 @@ async fn a_transient_failure_that_outlasts_the_retries_ends_the_run() {
 /// Mirrors one good message and one that answers `bad_status`. Returns
 /// the fetch's result and the stored `historyId` cursor, if any.
 async fn run_with_bad_status(bad_status: u16) -> (anyhow::Result<FetchSummary>, Option<String>) {
-    let d = tempfile::tempdir().expect("tempdir");
-    let playback = d.path().join("playback");
-    let root = d.path().join("store");
-    std::fs::create_dir_all(&root).expect("create store dir");
-    write_fixtures(&playback, bad_status);
+    let m = Mirror::new();
+    write_fixtures(&m.playback, bad_status);
 
-    std::env::set_var(PLAYBACK_ENV, &playback);
-    let db = RawDb::open(&db_path_for(&root)).await.expect("open raw db");
-    let summary = gmail_api::fetch(FetchOptions::new(db.clone())).await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
-    std::env::remove_var(PLAYBACK_ENV);
-
-    // Closed above, reopened here: a second live pool on one store makes
-    // each other's `dolt_commit` fail.
-    let db = RawDb::open(&db_path_for(&root))
-        .await
-        .expect("reopen raw db");
-    let cursor: Option<String> =
-        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
+    let summary = m.run(|db| gmail_api::fetch(FetchOptions::new(db))).await;
+    let cursor = m
+        .read(|db| async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?",
+            )
             .bind("gmail:t@example.test:historyId")
             .fetch_optional(db.pool())
             .await
-            .expect("read the cursor");
-    db.commit_all("test").await.unwrap();
-    db.close().await;
+            .expect("read the cursor")
+        })
+        .await;
     (summary, cursor)
 }
 
-fn write_fixtures(out: &std::path::Path, bad_status: u16) {
-    let get = |url: &str| HttpRequest::get(HttpService::Gmail, url);
-    let put = |url: &str, body: &Value| {
-        write_fixture(out, &get(url), &json_response(body)).expect("write fixture")
-    };
-
-    put(
-        &format!("{BASE}/me/profile"),
-        &json!({ "emailAddress": "t@example.test", "historyId": "9001" }),
-    );
-    put(
-        &format!("{BASE}/me/labels"),
-        &json!({ "labels": [{ "id": "INBOX", "name": "INBOX", "type": "system" }] }),
-    );
-    put(
-        &format!("{BASE}/me/messages?maxResults=500&includeSpamTrash=true"),
+fn write_fixtures(playback: &Path, bad_status: u16) {
+    put_gmail_account(playback, "9001", json!([inbox_label()]));
+    put_gmail(
+        playback,
+        &gmail_list_url(&[]),
         &json!({ "messages": [{ "id": GOOD }, { "id": BAD }] }),
     );
-    put(&get_url(GOOD), &message(GOOD));
-
-    let refused = HttpResponse {
-        status: bad_status,
-        headers: BTreeMap::new(),
-        body: b"{\"error\":{\"message\":\"nope\"}}".to_vec(),
-        duration_ms: 0,
-    };
-    write_fixture(out, &get(&get_url(BAD)), &refused).expect("write fixture");
-}
-
-fn get_url(id: &str) -> String {
-    format!("{BASE}/me/messages/{id}?format=RAW")
-}
-
-fn message(id: &str) -> Value {
-    let eml = format!(
-        "Message-ID: <{id}@example.test>\r\n\
-         Date: Tue, 1 Sep 2026 10:00:00 +0200\r\n\
-         From: sender@example.test\r\n\
-         To: t@example.test\r\n\
-         Subject: kept\r\n\
-         \r\n\
-         body\r\n",
+    put_gmail(
+        playback,
+        &gmail_get_url(GOOD),
+        &gmail_message(GOOD, &["INBOX"], "kept"),
     );
-    json!({
-        "id": id,
-        "threadId": id,
-        "labelIds": ["INBOX"],
-        "internalDate": "1788000000000",
-        "raw": base64url(eml.as_bytes()),
-    })
-}
-
-/// Gmail's `raw` alphabet: RFC 4648 §5, unpadded.
-fn base64url(bytes: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..=chunk.len() {
-            out.push(A[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
-        }
-    }
-    out
+    put_gmail_response(
+        playback,
+        &gmail_get_url(BAD),
+        &HttpResponse {
+            status: bad_status,
+            headers: BTreeMap::new(),
+            body: b"{\"error\":{\"message\":\"nope\"}}".to_vec(),
+            duration_ms: 0,
+        },
+    );
 }
