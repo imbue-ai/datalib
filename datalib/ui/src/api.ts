@@ -86,8 +86,8 @@ export type SearchRow = {
   diff_status: DiffStatus | null;
   // For a modified row, the columns whose value differs, `|`-joined.
   diff_changed_columns: string | null;
-  // QMD rank score. Present when the row came from a qmd-routed search;
-  // omitted (undefined) for pure structured queries and the LIKE fallback.
+  // QMD rank score. Present when the row came from a free-text (qmd)
+  // search; omitted for a query of structured terms alone.
   score?: number;
 };
 
@@ -95,9 +95,8 @@ export type SearchRow = {
 // keys (free_text, filters, resolved_type, …) that we ignore; typing
 // only what we consume keeps the contract narrow.
 export type QueryEcho = {
-  // Set when the qmd-routed search failed and the backend fell back to
-  // the SQL LIKE path. The UI surfaces this as a banner so users see
-  // degraded search rather than silently get worse results.
+  // Set when a free-text search failed in qmd; the response then has no
+  // rows, and the grid says why in a banner.
   qmd_error?: string | null;
   [key: string]: unknown;
 };

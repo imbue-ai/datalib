@@ -64,12 +64,18 @@ each changed document's row set, and copies the corresponding
 
 ## Consumer side: `datalib/backend/unified_index/src/dolt_repo.rs`
 
-`DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`
-(account/project/before/after/free-text) plus `is_document = 1` or
-`= 0` when the query said `is:document` or `-is:document`, then issues
-a single SELECT against `grid_rows` ordered by `created_at` ASC with a
-document row tie-breaking ahead of the rows inside it. The row mapper
-translates each row into a `SearchRow` for the HTTP API.
+`DoltRepo::search` builds a `WHERE` clause from `ParsedQuery`'s
+structured terms (account/project/before/after/…) plus `is_document = 1`
+or `= 0` when the query said `is:document` or `-is:document`, then
+issues a single SELECT against `grid_rows` ordered by `created_at` ASC
+with a document row tie-breaking ahead of the rows inside it. The row
+mapper translates each row into a `SearchRow` for the HTTP API, with
+`preview` as its Contents cell.
+
+Free text never reaches SQL: the applet sends it to qmd, maps the hits
+to rows by `qmd_path` (below), fetches them with `search_by_uuids`, and
+shows each hit's own matched lines as its Contents cell. With no qmd
+index, a free-text search answers with an error, not a weaker search.
 
 ## Adding a column
 
@@ -295,13 +301,21 @@ GitLab and Notion all mirror a self-identity row and could fill
 `account` from it; their render diff deliberately does not fan out on
 that table, so that is a small design change rather than a one-liner.
 
-### `conversation_name`, `conversation_uuid`, `text`
+### `conversation_name`, `conversation_uuid`, `preview`, `content_hash`
 
 `conversation_uuid` is the row's own `uuid` for thread-level rows
 (claude.chat, chatgpt.chat, slack.thread, github.pr, gitlab.mr, notion.page,
 notion.thread) and the parent's for everything below them.
 
-| provider.kind | conversation_name | text |
+A producer hands the builder the row's whole text (`.body(…)`), and the
+builder keeps two things from it: `preview`, the first 240 characters on
+one line, which is the grid's Contents cell; and `content_hash`, blake3
+of the whole body, so a change past the preview still changes the row.
+The body itself is not stored — the rendered markdown holds it, and
+qmd's index of that markdown is how free text finds it. The table says
+what each producer passes as the body.
+
+| provider.kind | conversation_name | body |
 |---|---|---|
 | claude.chat | `conversations.name` | `summary`, else `name` |
 | claude.message | (parent's) | `messages.text` |
@@ -384,7 +398,7 @@ Two nullable measurements. What each one measures is decided per
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
 is not "now". On a chat-common row it is the message body — the same
-string that lands in `text` — and nothing else: not the attachments,
+string it passes as the body — and nothing else: not the attachments,
 whose sizes only some providers know, and not the raw payload, which
 the renderer never sees. So a conversation's `byte_size` is exactly the
 sum of its message rows', and its `item_count` is exactly how many of

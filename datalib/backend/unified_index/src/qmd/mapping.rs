@@ -112,6 +112,29 @@ pub fn snippet_match_line(snippet: &str) -> Option<usize> {
     Some(n + before)
 }
 
+/// A hit's snippet as the grid's Contents cell shows it: the matched
+/// lines of the rendered markdown without qmd's `@@ … @@` header, the
+/// section wrappers' tags or heading marks, on one line and no longer than
+/// a row's own preview.
+pub fn display_snippet(snippet: &str) -> String {
+    let mut words = String::new();
+    let mut in_tag = false;
+    let body = snippet.strip_prefix("@@ ").map_or(snippet, |rest| {
+        rest.split_once('\n').map_or("", |(_, after)| after)
+    });
+    for c in body.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            '#' => words.push(' '),
+            _ => words.push(c),
+        }
+    }
+    let one_line = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    datalib_schema::grid_rows::preview(&one_line)
+}
+
 fn take_leading_usize(s: &str) -> Option<usize> {
     s.chars()
         .take_while(|c| c.is_ascii_digit())
@@ -257,14 +280,14 @@ impl GridIndex {
     /// lower-ranked hits from the same document are dropped to keep the result
     /// list concise. Returns `(row, score)` in rank order, each row carrying
     /// the score of the hit that produced it.
-    pub fn ranked_rows_one_per_doc(
+    pub fn ranked_rows_one_per_doc<'h>(
         &self,
-        hits: &[QmdHit],
+        hits: &'h [QmdHit],
         documents_only: bool,
         mut on_orphan: impl FnMut(&QmdHit),
-    ) -> Vec<(GridRowRef, f64)> {
+    ) -> Vec<(GridRowRef, &'h QmdHit)> {
         let mut seen_docs: HashSet<String> = HashSet::new();
-        let mut out: Vec<(GridRowRef, f64)> = Vec::new();
+        let mut out: Vec<(GridRowRef, &'h QmdHit)> = Vec::new();
         for h in hits {
             let rows = if documents_only {
                 self.document_for_hit(h)
@@ -281,7 +304,7 @@ impl GridIndex {
             // output holds at most one row per document.
             for row in rows {
                 if seen_docs.insert(row.qmd_path.clone()) {
-                    out.push((row, h.score));
+                    out.push((row, h));
                 }
             }
         }
@@ -365,6 +388,16 @@ mod tests {
         );
         // No "before" annotation → fall back to the hunk start.
         assert_eq!(snippet_match_line("@@ -7,4 @@\nx"), Some(7));
+    }
+
+    /// qmd's snippet is what the grid shows for a hit, so it has to read
+    /// as text: no `@@` header, no section-wrapper tags, no heading marks.
+    #[test]
+    fn a_hit_snippet_reads_as_one_line_of_text() {
+        let raw = "@@ -9,4 @@ (2 before, 5 after)\n<div id=\"m-1\" data-section-uuid=\"1\" \
+                   class=\"msg\">\n\n## Riker\nThe warp core is <b>stable</b>.\n</div>";
+        assert_eq!(display_snippet(raw), "Riker The warp core is stable.");
+        assert_eq!(display_snippet(&"w ".repeat(300)).chars().count(), 241);
         // No diff header at all → unknown.
         assert_eq!(snippet_match_line("just a snippet"), None);
     }
@@ -718,7 +751,10 @@ mod tests {
         let ranked = idx.ranked_rows_one_per_doc(&hits, false, |_| orphans += 1);
 
         assert_eq!(orphans, 1, "the unknown-path hit is an orphan");
-        let got: Vec<(&str, f64)> = ranked.iter().map(|(r, s)| (r.uuid.as_str(), *s)).collect();
+        let got: Vec<(&str, f64)> = ranked
+            .iter()
+            .map(|(r, h)| (r.uuid.as_str(), h.score))
+            .collect();
         assert_eq!(
             got,
             vec![
