@@ -365,6 +365,14 @@ programs against:
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
+- `umapView(opts?: { q?: string; by?: string })` — the embedding map
+  (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
+  document qmd embedded, placed by the `embedding_map` step. The search
+  bar takes the grid's grammar and greys out what it does not match
+  (`/embedding_map/matches`); a legend colours by one field and
+  isolates on hover; hovering a point previews it, clicking opens
+  `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
+  half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
 - `galleryView()` — the new-card gallery (see "Titles and dev mode"
   above); replaces itself with whatever the user picks.
 - `agentSeedView(name)` — the in-card hand-off instructions a freshly
@@ -472,9 +480,10 @@ viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
 `GET /api/manage/rows` and the `unified_index` applet's `/search` are
-the two producers. The applet resolves the search grid's Provider and
-Source identities itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
-— the configured source's own mark and the group's name — which is
+the two producers. The applet resolves the search grid's Source
+identity itself, from `config.toml` (`applets/src/unified_index/columns.rs`)
+— the group's name, led by the configured source's own mark, as the
+Manage screen's Name cell is — which is
 what keeps renaming a source free of a re-index. The cell styles live
 in `cards/tableGrid.css` rather than a component's `<style>`: a
 `.ce.vue`'s styles attach to the component for the card adapter to

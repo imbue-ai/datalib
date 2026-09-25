@@ -39,8 +39,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
 
-/// The `grid_rows.source_label` — the grid's Provider column, and what
-/// `source:` filters on. One label for every source's measurements, so
+/// The `grid_rows.source_label` — what `source:` filters on. One label for every source's measurements, so
 /// `source:Storage` is "show me what everything weighs".
 ///
 /// The grid's *Source* column is not this. These rows live under the

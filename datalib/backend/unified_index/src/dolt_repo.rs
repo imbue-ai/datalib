@@ -12,7 +12,7 @@ use sqlx::Row;
 use crate::db::{build_where, datalib_source_id, snippet, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, IndexRepo};
+use crate::repo::{DocRow, EdgeRowOut, IndexRepo, MapDocRow};
 use crate::search::SearchRow;
 use datalib_core::repo::RepoError;
 use datalib_pin::{has_unpinnable_tables, head, is_missing_table, open_reader, Pin};
@@ -87,7 +87,6 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
         entire_chat: r.try_get("entire_chat").unwrap_or_default(),
         source: r.try_get("source_label").unwrap_or_default(),
         provider: provider.clone().unwrap_or_default(),
-        provider_ref: None,
         source_ref: None,
         source_id: source_id_for(provider.as_deref(), &qmd_path),
         kind,
@@ -408,6 +407,79 @@ impl IndexRepo for DoltRepo {
                 provider: r.try_get("provider").unwrap_or_default(),
                 created_at: r.try_get("created_at").ok().flatten(),
             })
+            .collect())
+    }
+
+    async fn document_rows(&self) -> Result<Vec<MapDocRow>, RepoError> {
+        let Some(at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        // Audited: `at.grid_rows` is a `Pin::table` expression; no values.
+        let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT markdown_uuid, qmd_path, conversation_name, provider, source_label, kind, \
+                    created_at, account, channel \
+               FROM {} \
+              WHERE is_document = 1 AND markdown_uuid IS NOT NULL AND qmd_path IS NOT NULL",
+            at.grid_rows
+        )))
+        .fetch_all(&at.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let provider: Option<String> = r.try_get("provider").ok().flatten();
+                let qmd_path: String = r.try_get("qmd_path").unwrap_or_default();
+                MapDocRow {
+                    markdown_uuid: r.try_get("markdown_uuid").unwrap_or_default(),
+                    source_id: source_id_for(provider.as_deref(), &qmd_path),
+                    qmd_path,
+                    title: r.try_get("conversation_name").unwrap_or_default(),
+                    provider: provider.unwrap_or_default(),
+                    source_label: r.try_get("source_label").unwrap_or_default(),
+                    kind: r.try_get("kind").unwrap_or_default(),
+                    created_at: r.try_get("created_at").ok().flatten(),
+                    account: r.try_get("account").unwrap_or_default(),
+                    channel: r.try_get("channel").unwrap_or_default(),
+                }
+            })
+            .collect())
+    }
+
+    async fn matching_documents(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<std::collections::HashSet<String>, RepoError> {
+        let (where_sql, params) = build_where(q, "");
+        let Some(at) = self.pinned().await? else {
+            return Ok(Default::default());
+        };
+        let clause = if where_sql.is_empty() {
+            " WHERE markdown_uuid IS NOT NULL".to_string()
+        } else {
+            format!("{where_sql} AND markdown_uuid IS NOT NULL")
+        };
+        // Audited: as `search` — a `Pin::table` expression and
+        // `build_where`'s static column names; every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT markdown_uuid FROM {}{clause}",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        let rows = match query.fetch_all(&at.pool).await {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Default::default()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get("markdown_uuid").ok())
             .collect())
     }
 
