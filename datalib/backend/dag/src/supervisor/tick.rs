@@ -144,6 +144,10 @@ pub struct Consumed {
 pub struct Attempt {
     pub started: Seq,
     pub failed: bool,
+    /// It was stopped — a pause, a stop, the host going — rather than
+    /// ending on its own. That is neither a failure nor a run: the work is
+    /// not done, and it runs again for a request that still wants it.
+    pub stopped: bool,
     pub consumed: Consumed,
 }
 
@@ -290,7 +294,10 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
 
         for &r in &wanting[i] {
             failed_for[i][r] = f.last_attempt.as_ref().is_some_and(|a| {
-                a.failed && a.started >= intent.requests[r].opened && a.consumed == now
+                a.failed
+                    && !a.stopped
+                    && a.started >= intent.requests[r].opened
+                    && a.consumed == now
             });
         }
         let live: Vec<usize> = wanting[i]
@@ -408,9 +415,14 @@ fn stale_by_inputs(f: &StepFacts, now: &Consumed) -> bool {
     f.last_success.as_ref() != Some(now)
 }
 
+/// Running, or ran to an end of its own, since `opened`. A stopped run
+/// did not.
 fn started_since(f: &StepFacts, opened: Seq) -> bool {
     let running = f.running.as_ref().is_some_and(|r| r.started >= opened);
-    let attempted = f.last_attempt.as_ref().is_some_and(|a| a.started >= opened);
+    let attempted = f
+        .last_attempt
+        .as_ref()
+        .is_some_and(|a| !a.stopped && a.started >= opened);
     running || attempted
 }
 
@@ -514,6 +526,7 @@ mod tests {
                     last_attempt: Some(Attempt {
                         started: Seq(at),
                         failed: false,
+                        stopped: false,
                         consumed,
                     }),
                     running: None,
@@ -553,6 +566,7 @@ mod tests {
         facts.steps[step].last_attempt = Some(Attempt {
             started: r.started,
             failed: outcome.is_err(),
+            stopped: false,
             consumed,
         });
     }
@@ -923,6 +937,24 @@ mod tests {
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[0], StepState::Paused);
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
+    }
+
+    /// A source stopped by a pause, and resumed while its request is
+    /// still open, runs again: a stopped run is neither a failure nor a
+    /// run. Before, it counted as both, and the request closed failed.
+    #[test]
+    fn a_step_stopped_by_a_pause_runs_again_on_resume() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        let intent = request(&[0], 5);
+        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        run(&mut facts, 0, 6);
+        finish(&mut facts, 0, c0, Err(()));
+        facts.steps[0].last_attempt.as_mut().unwrap().stopped = true;
+
+        let t = tick(&s, &intent, &facts, &BUDGETS);
+        assert_eq!(started(&t), vec![0], "{t:?}");
+        assert!(t.closed.is_empty());
     }
 
     #[test]

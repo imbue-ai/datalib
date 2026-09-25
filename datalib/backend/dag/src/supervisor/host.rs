@@ -21,8 +21,12 @@ use crate::supervisor::store::{RequestOutcome, Store};
 pub trait Periods {
     /// Serve the open requests until none is left.
     fn busy_period(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
-    /// The pauses moved while nothing ran: bring the record to them.
-    fn settle(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
+    /// The pauses moved while nothing ran: bring the record to them. The
+    /// pauses it recorded, or `None` if it could not.
+    fn settle(
+        &mut self,
+        store: &Store,
+    ) -> impl Future<Output = Option<BTreeMap<String, String>>> + Send;
     /// What only an idle loop may do, such as a reset.
     fn idle_work(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
     /// Resolves when something in this process wants a look that no
@@ -42,8 +46,11 @@ pub async fn run_idle(
     periods: &mut impl Periods,
     stop: &mut watch::Receiver<bool>,
 ) {
-    // The pauses the record was last settled against; `None` until the
-    // first settle, which also clears what a dead loop left running.
+    // The pauses the record was last settled against, as the settle read
+    // them: a pause landing between this loop's look and the settle's is
+    // in the record, and a comparison with the look would miss the next
+    // change. `None` until the first settle, which also clears what a
+    // dead loop left running.
     let mut settled: Option<BTreeMap<String, String>> = None;
     while !*stop.borrow() {
         periods.idle_work(store).await;
@@ -56,6 +63,9 @@ pub async fn run_idle(
         };
         if open.iter().any(|r| r.stop_requested_by.is_none()) {
             periods.busy_period(store).await;
+            // Its last save holds the pauses as it last read them, which
+            // may not be the pauses now.
+            settled = None;
             continue;
         }
         for request in open {
@@ -68,8 +78,7 @@ pub async fn run_idle(
         }
         match store.paused().await {
             Ok(paused) if settled.as_ref() != Some(&paused) => {
-                periods.settle(store).await;
-                settled = Some(paused);
+                settled = periods.settle(store).await;
             }
             Ok(_) => {}
             Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
@@ -198,6 +207,9 @@ mod tests {
         nudge: std::sync::Arc<tokio::sync::Notify>,
         /// Set by the test beside a nudge: the in-memory work a nudge is for.
         queued: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// A step the first settle pauses before it reads the pauses: one
+        /// landing between the host's look and the settle's.
+        pause_in_settle: Option<&'static str>,
     }
 
     impl Periods for Fake {
@@ -213,8 +225,13 @@ mod tests {
                 }
             }
         }
-        async fn settle(&mut self, _: &Store) {
+        async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
+            if let Some(step) = self.pause_in_settle.take() {
+                store.pause(step, "ui").await.unwrap();
+            }
+            let paused = store.paused().await.ok();
             let _ = self.calls.send("settle");
+            paused
         }
         async fn idle_work(&mut self, _: &Store) {
             if self.queued.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -247,6 +264,7 @@ mod tests {
             release: release.clone(),
             nudge: nudge.clone(),
             queued: queued.clone(),
+            pause_in_settle: None,
         };
         let host = {
             let store = store.clone();
@@ -284,6 +302,101 @@ mod tests {
         stop_tx.send(true).unwrap();
         host.await.unwrap();
         assert_eq!(calls.recv().await, None, "nothing more after the stop");
+    }
+
+    /// A busy period's last save holds the pauses as it last read them.
+    /// A pause and a resume and a pause again under it leave the pauses
+    /// where they were before it, and the record where the busy period
+    /// left it; so it is settled again after every one. Found by the
+    /// harness's walk (seed 27).
+    #[tokio::test]
+    async fn a_busy_period_is_followed_by_a_settle() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let other = Store::open(root.path()).await.unwrap();
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (stop_tx, mut stop) = watch::channel(false);
+        let mut fake = Fake {
+            calls: tx,
+            release: release.clone(),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            pause_in_settle: None,
+        };
+        let host = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                let mut listener = Listener::new(&store, "test")
+                    .await
+                    .backstop(std::time::Duration::from_secs(3600));
+                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
+            })
+        };
+        let mut next = async |want: &str| {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no {want} within 10s"));
+            assert_eq!(got, Some(want));
+        };
+        next("settle").await;
+        other.pause("a/x", "ui").await.unwrap();
+        next("settle").await;
+
+        other.open_request(&["a/x".into()], "ui").await.unwrap();
+        next("busy").await;
+        other.resume("a/x").await.unwrap();
+        other.pause("a/x", "ui").await.unwrap();
+        release.notify_one();
+        next("settle").await;
+
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
+    }
+
+    /// A pause landing between the host's look at the pauses and the
+    /// settle's own read is in the record; the host must compare what it
+    /// sees next with what the settle recorded, or a resume that puts the
+    /// pauses back where its look found them is never settled. Found by
+    /// the harness's walk (seeds 11, 15, 22, 25).
+    #[tokio::test]
+    async fn a_pause_landing_during_a_settle_is_not_lost() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let other = Store::open(root.path()).await.unwrap();
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, mut stop) = watch::channel(false);
+        let mut fake = Fake {
+            calls: tx,
+            release: Arc::new(tokio::sync::Notify::new()),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            pause_in_settle: Some("a/x"),
+        };
+        let host = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                let mut listener = Listener::new(&store, "test")
+                    .await
+                    .backstop(std::time::Duration::from_secs(3600));
+                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
+            })
+        };
+        let mut next = async |want: &str| {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), calls.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no {want} within 10s"));
+            assert_eq!(got, Some(want));
+        };
+        // The first settle looked at no pauses and recorded `a/x` paused.
+        next("settle").await;
+        other.resume("a/x").await.unwrap();
+        next("settle").await;
+
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
     }
 
     #[tokio::test]

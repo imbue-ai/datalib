@@ -57,22 +57,24 @@ test("the filter row narrows the rows to the typed value", async ({ page }) => {
 
   // Key by key: the filter listens for keyup, as a person's typing
   // produces it, and `fill` would set the value without one.
-  const providerFilter = page.locator(".grid-box input.filter-provider_ref");
-  await providerFilter.click();
-  await providerFilter.pressSequentially("slack");
+  const sourceFilter = page.locator(".grid-box input.filter-source_ref");
+  await sourceFilter.click();
+  await sourceFilter.pressSequentially("slack");
   await expect.poll(rowCount, { timeout: 5_000 }).toBeLessThan(all);
   await expect.poll(rowCount).toBeGreaterThan(0);
 
-  // Every row left is the provider asked for — read off the grid's
-  // filtered rows, not the few painted.
-  const providers = await page.evaluate(() => [
+  // Every row left names the typed value in its Source cell — read off
+  // the grid's filtered rows, not the few painted. The filter is a
+  // substring match, so the fixture's `slack-diff` group stays too.
+  const sources = await page.evaluate(() => [
     ...new Set(
       (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
         .filteredRows()
-        .map((r) => r.source as string),
+        .map((r) => (r.source_ref as { label: string }).label),
     ),
   ]);
-  expect(providers).toEqual(["Slack"]);
+  expect(sources).toContain("slack");
+  expect(sources.filter((s) => !s.includes("slack"))).toEqual([]);
 });
 
 test("clicking a group header folds the group and opens nothing", async ({ page }) => {

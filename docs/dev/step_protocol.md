@@ -178,6 +178,20 @@ that seal added:
 {"event":"checkpoint","step":"me","version":"a1b2c3","rows":340}
 ```
 
+A checkpoint alone does not let a consumer start early. A consumer may
+read your output while you are still writing it only if you say your
+output can be read that way: once, before your first checkpoint, print
+
+```json
+{"event":"capabilities","step":"me","streams_output":true}
+```
+
+Say it only if a reader of your output sees each seal whole and never
+half a write, as a reader pinned to a doltlite commit does. Without it, each checkpoint still records
+your version, so a kill keeps what you sealed, but every consumer waits
+for you to finish. A consumer that reads your files off disk rather than
+at a pinned commit waits for you to finish either way.
+
 `rows` is what the runner keeps each **consumer's** queue depth from —
 the `queued{from=<you>}` metric on every step that reads your output,
 counting up as you seal and down as they read — with no store opened

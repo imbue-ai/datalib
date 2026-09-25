@@ -475,6 +475,40 @@ impl Store {
         Ok(closed)
     }
 
+    /// Every invocation the loop recorded, oldest first, each with how it
+    /// ended once it has.
+    pub async fn invocations(&self) -> Result<Vec<(InvocationRow, Option<InvocationEnd>)>> {
+        let rows = sqlx::query(
+            "SELECT id, step, run_id, started_at_utc, outcome, failure_kind, error, attempts, \
+             exit_code, signal FROM invocations ORDER BY rowid",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let row = InvocationRow {
+                    id: r.try_get("id")?,
+                    step: r.try_get("step")?,
+                    run_id: r.try_get("run_id")?,
+                    started_at_utc: r.try_get("started_at_utc")?,
+                };
+                let outcome: Option<String> = r.try_get("outcome")?;
+                let end = match outcome {
+                    None => None,
+                    Some(outcome) => Some(InvocationEnd {
+                        outcome,
+                        failure_kind: r.try_get("failure_kind")?,
+                        error: r.try_get("error")?,
+                        attempts: r.try_get::<Option<i64>, _>("attempts")?.unwrap_or(0) as u32,
+                        exit_code: r.try_get("exit_code")?,
+                        signal: r.try_get("signal")?,
+                    }),
+                };
+                Ok((row, end))
+            })
+            .collect()
+    }
+
     /// The processes the loop started and has not seen end.
     pub async fn running_invocations(&self) -> Result<Vec<InvocationRow>> {
         sqlx::query(

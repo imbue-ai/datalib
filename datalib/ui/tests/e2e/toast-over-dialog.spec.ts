@@ -1,6 +1,6 @@
 // A toast is drawn over everything, so it must take the pointer nowhere
 // but its own ×. The case that found this: a sticky error toast from a
-// failed grid search landed on the wizard's "Add source" button, and
+// failed request landed on the wizard's "Add source" button, and
 // every click on the button went to the toast instead (the onboarding
 // spec retried it for 120s). Nothing here writes the config: the
 // primary button is checked with a trial click, and the real click goes
@@ -24,21 +24,19 @@ async function overlaps(a: Locator, b: Locator): Promise<boolean> {
 }
 
 test("an error toast over the wizard does not eat clicks on its buttons", async ({ page }) => {
-  // The failure that produced the toast: the applet gateway answering
-  // the grid's first search with a 502. A grid card sits beside the
-  // sources card so there is a search to fail; the sources card alone
-  // searches nothing.
-  await page.route("**/applet/unified_index/search**", (route) =>
+  // A request that fails with a toast: the grid card's accounts lookup.
+  // (A failed search is shown in the grid card itself, not toasted.)
+  await page.route("**/api/accounts", (route) =>
     route.fulfill({
       status: 502,
       contentType: "application/json",
-      body: JSON.stringify({ error: 'applet "unified_index": it is not running' }),
+      body: JSON.stringify({ error: "accounts are unavailable" }),
     }),
   );
   await page.goto("/sourcesView():1.6/gridView()");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  const toast = page.locator(".datalib-toast--error", { hasText: "unified_index/search" });
-  await expect(toast).toContainText("→ 502");
+  const toast = page.locator(".datalib-toast--error", { hasText: "/api/accounts" });
+  await expect(toast).toContainText("→ 502: accounts are unavailable");
 
   await page.getByRole("button", { name: "+ Data Source" }).click();
   await page.getByRole("searchbox").fill("whatsapp");
@@ -66,7 +64,7 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
   // selection the pass-through gives up.
   const readClipboard = await stubClipboard(page);
   await toast.getByRole("button", { name: "Copy" }).click({ timeout: 5_000 });
-  await expect.poll(readClipboard).toContain("unified_index/search");
+  await expect.poll(readClipboard).toContain("/api/accounts");
   await expect(toast.getByRole("button", { name: "Copied" })).toBeVisible();
   await toast.getByRole("button", { name: "Dismiss" }).click({ timeout: 5_000 });
   await expect(toast).toHaveCount(0);

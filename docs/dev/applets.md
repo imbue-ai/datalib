@@ -341,6 +341,10 @@ same reason.
 A request to an applet that is configured but not running answers
 `502` with a JSON `error` naming it — a different message from one
 that is not configured at all, since the two want different fixes.
+One that is running but sends nothing for 30 seconds answers `504`,
+`applet "<id>" did not answer within 30s`. The `unified_index` applet
+builds a search's whole answer before sending any of it, so a big
+search on a machine short of memory is the usual cause there.
 
 The gateway forwards an applet's stderr line by line as it arrives and
 keeps the tail, rather than reading the pipe to EOF when the applet

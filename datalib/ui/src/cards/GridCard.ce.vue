@@ -45,6 +45,7 @@ import { newlyPicked } from "@/grid/selection";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
+import { searchFailure, type SearchFailure } from "./searchFailure";
 import type { CardCtx } from "./types";
 
 const { fetchAccounts, fetchQmdState, fetchSearch } = useApi();
@@ -84,7 +85,12 @@ const columns = ref<ColumnSpec[]>([]);
 const shownQuery = ref<string | null>(null);
 const total = ref(0);
 const loading = ref(false);
-const error = ref<string | null>(null);
+const error = ref<SearchFailure | null>(null);
+// A failed search leaves the previous query's rows painted; say so, or
+// the count above them reads as the answer to what is typed.
+const showingStale = computed(
+  () => error.value !== null && rows.value.length > 0 && shownQuery.value !== query.value,
+);
 // qmd-routed search failed at runtime; backend served LIKE-based
 // fallback rows. Surface as a banner so users notice the degradation
 // instead of silently getting worse results.
@@ -418,7 +424,6 @@ const FILTER_COLUMNS: Record<
   string,
   { key: string; header: string; uuidCol?: keyof SearchRow; field?: keyof SearchRow }
 > = {
-  provider_ref: { key: "source", header: "Provider", field: "source" },
   source_ref: { key: "source_id", header: "Source", field: "source_id" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
@@ -561,7 +566,8 @@ async function runSearch(q: string) {
   error.value = null;
   qmdError.value = null;
   try {
-    const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal);
+    // The card shows a failure itself, beside the rows it concerns.
+    const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal, { toast: false });
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
@@ -573,7 +579,7 @@ async function runSearch(q: string) {
     shownQuery.value = q;
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
-    error.value = (e as Error).message;
+    error.value = searchFailure(e);
   } finally {
     loading.value = false;
   }
@@ -641,12 +647,9 @@ function applyDefaultSort() {
 // "every optional column": a column named here appears in the default
 // grid whenever its values vary, which is exactly what `hidden` on a
 // definition is there to prevent. It stays the set it has always been.
-/// Column id → the row field it reads. The Provider column is the
-/// resolved `provider_ref`, but "is it the same on every row" is a
-/// question about the `source` string behind it.
+/// Column id → the row field it reads.
 const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   score: "score",
-  provider_ref: "source",
   kind: "kind",
   channel: "channel",
   created_at: "created_at",
@@ -829,8 +832,7 @@ const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
   // Default sort is applied programmatically on row updates (see
   // applyDefaultSort) — not baked into the definition so a user re-sort
   // sticks across query changes.
-  provider_ref: { width: 110 },
-  source_ref: { width: 130 },
+  source_ref: { width: 150 },
   kind: { width: 110 },
   conversation_name: { width: 200 },
   channel: { width: 130 },
@@ -1488,7 +1490,11 @@ onBeforeUnmount(() => {
       qmd search failed — results below are from a degraded SQL-LIKE fallback: {{ qmdError }}
     </p>
 
-    <p v-if="error" class="error">error: {{ error }}</p>
+    <p v-if="error" class="error" role="alert" :title="error.detail">
+      {{ error.message }}
+      <template v-if="showingStale">The rows below are from the previous search.</template>
+      <button type="button" class="error-retry" @click="runSearch(query)">Retry</button>
+    </p>
 
     <div class="grid-wrap" :data-shown-query="shownQuery">
       <!-- The grid is built into this box by `createGrid`, once the
@@ -1497,7 +1503,7 @@ onBeforeUnmount(() => {
            is built in (its theme's dark mode among them), and a Vue
            class binding on that same element would wipe them on every
            change. -->
-      <div class="grid" :class="{ 'grid--loading': loading }">
+      <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
         <div ref="boxEl" class="grid-box" />
       </div>
       <div v-if="loading" class="grid-spinner" aria-label="searching">
@@ -1578,6 +1584,20 @@ onBeforeUnmount(() => {
 .error {
   color: #e35d6a;
 }
+.error-retry {
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--datalib-fg);
+  background: transparent;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.error-retry:hover {
+  background: var(--datalib-border);
+}
 .qmd-error {
   padding: 0.4rem 0.6rem;
   border: 1px solid #d18a3a;
@@ -1619,6 +1639,9 @@ onBeforeUnmount(() => {
 .grid--loading {
   filter: blur(2px);
   pointer-events: none;
+}
+.grid--stale {
+  opacity: 0.5;
 }
 .grid-spinner {
   position: absolute;
