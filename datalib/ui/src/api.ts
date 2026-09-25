@@ -1,6 +1,7 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
 import type { FeedbackContext } from "./feedback/context";
+import { ApiError, errorDetail } from "./apiError";
 import { pushToast } from "./toasts";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
@@ -420,28 +421,35 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
   return getJson<AccountsMap>("/api/accounts", signal);
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+// `toast: false` is for a caller that shows the failure where it happened.
+type GetOptions = { toast?: boolean };
+
+async function getJson<T>(
+  url: string,
+  signal?: AbortSignal,
+  { toast = true }: GetOptions = {},
+): Promise<T> {
   let r: Response;
   try {
     r = await fetch(url, { signal });
   } catch (e) {
     // Network error / aborted before headers. Don't toast on abort
     // (caller-initiated cancellation, e.g. debounced search supersession).
-    if ((e as { name?: string }).name !== "AbortError") {
+    if (toast && (e as { name?: string }).name !== "AbortError") {
       pushToast(`${url}: ${(e as Error).message}`);
     }
     throw e;
   }
   if (!r.ok) {
-    let detail = "";
+    let body = "";
     try {
-      detail = (await r.text()).trim();
+      body = await r.text();
     } catch {
       // ignore
     }
-    const msg = detail ? `${url} → ${r.status}: ${detail}` : `${url} → ${r.status}`;
-    pushToast(msg);
-    throw new Error(msg);
+    const err = new ApiError(url, r.status, errorDetail(body));
+    if (toast) pushToast(err.message);
+    throw err;
   }
   return (await r.json()) as T;
 }
@@ -456,9 +464,14 @@ export async function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
+  options: GetOptions = {},
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await getJson<SearchResponse>(`${UNIFIED_INDEX}/search?${params.toString()}`, signal);
+  const r = await getJson<SearchResponse>(
+    `${UNIFIED_INDEX}/search?${params.toString()}`,
+    signal,
+    options,
+  );
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
