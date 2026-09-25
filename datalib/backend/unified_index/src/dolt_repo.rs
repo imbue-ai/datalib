@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use crate::db::{build_where, datalib_source_id, snippet, ChatMeta};
+use crate::db::{build_where, datalib_source_id, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, MapDocRow};
@@ -49,13 +49,12 @@ struct At {
 const SEARCH_ROW_COLUMNS: &str =
     "uuid, provider, kind, source_label, created_at, modified_at, is_document, author, account, \
      project, org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-     message_index, entire_chat, text, source_url, notion_page_uuid, upstream_id, \
+     message_index, entire_chat, preview, source_url, notion_page_uuid, upstream_id, \
      upstream_entity_kind, qmd_path, byte_size, item_count, diff_status, diff_changed_columns";
 
-fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
+fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
     let kind: String = r.try_get("kind").unwrap_or_default();
     let author: String = r.try_get("author").unwrap_or_default();
-    let text: String = r.try_get("text").unwrap_or_default();
     let qmd_path: String = r.try_get("qmd_path").unwrap_or_default();
     let provider: Option<String> = r.try_get("provider").ok().flatten();
     SearchRow {
@@ -70,11 +69,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow, needle: &str) -> SearchRow {
             .ok()
             .flatten()
             .map(|n| n as usize),
-        snippet: if kind == "Chat" {
-            text.clone()
-        } else {
-            snippet(&text, needle)
-        },
+        snippet: r.try_get("preview").unwrap_or_default(),
         sender: author.clone(),
         created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
         modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
@@ -247,8 +242,7 @@ impl At {
 #[async_trait]
 impl IndexRepo for DoltRepo {
     async fn search(&self, q: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
-        let needle = q.free_text.to_lowercase();
-        let (where_sql, params) = build_where(q, &needle);
+        let (where_sql, params) = build_where(q);
         let Some(at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
@@ -282,7 +276,7 @@ impl IndexRepo for DoltRepo {
 
         let mut out: Vec<SearchRow> = Vec::with_capacity(rows.len());
         for r in rows {
-            out.push(search_row_from(&r, &needle));
+            out.push(search_row_from(&r));
         }
         Ok(out)
     }
@@ -454,7 +448,7 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let (where_sql, params) = build_where(q, "");
+        let (where_sql, params) = build_where(q);
         let Some(at) = self.pinned().await? else {
             return Ok(Default::default());
         };
@@ -522,7 +516,7 @@ impl IndexRepo for DoltRepo {
         if uuids.is_empty() {
             return Ok(Vec::new());
         }
-        let (mut where_sql, mut params) = build_where(q, "");
+        let (mut where_sql, mut params) = build_where(q);
         let take = uuids.len().min(limit);
         let placeholders = std::iter::repeat_n("?", take).collect::<Vec<_>>().join(",");
         if where_sql.is_empty() {
@@ -552,7 +546,7 @@ impl IndexRepo for DoltRepo {
         let mut by_uuid: std::collections::HashMap<String, SearchRow> =
             std::collections::HashMap::new();
         for r in rows {
-            let row = search_row_from(&r, "");
+            let row = search_row_from(&r);
             by_uuid.insert(row.uuid.clone(), row);
         }
         let mut out: Vec<SearchRow> = Vec::with_capacity(by_uuid.len());

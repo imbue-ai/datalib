@@ -148,6 +148,23 @@ async function untilRunning(page: Page, id: string, timeout = 45_000) {
     .toBe("Running");
 }
 
+/// Wait until a download not held by the tape has started: Running, or
+/// already finished a run newer than `before`. A local folder is read in
+/// well under a second on a fast runner, between two samples.
+async function untilStarted(page: Page, id: string, before: string | null, timeout = 45_000) {
+  await expect
+    .poll(
+      async () => {
+        const status = await statusOf(page, id);
+        if (status === "Running") return "started";
+        const finished = status === "Succeeded" && (await stampOf(page, id)) !== before;
+        return finished ? "started" : status;
+      },
+      { timeout, intervals: [200], message: `${id} never started` },
+    )
+    .toBe("started");
+}
+
 /// Wait until a request has closed in one of the given states.
 async function untilClosed(
   request: APIRequestContext,
@@ -329,7 +346,7 @@ test.describe("sources run independently", () => {
     await untilRunning(page, ingestOf(CHATGPT), 10_000);
     const pdfsWas = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS)]);
     await start(page, PDFS);
-    await untilRunning(page, ingestOf(PDFS), 10_000);
+    await untilStarted(page, ingestOf(PDFS), pdfsWas[ingestOf(PDFS)], 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
 

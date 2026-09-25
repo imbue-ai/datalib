@@ -1,12 +1,9 @@
 //! Pure helpers used by `IndexRepo` implementations: dialect-agnostic
-//! WHERE-builder, snippet generator, and the [`ChatMeta`] row shape the
-//! impl returns. All SQL goes through `sqlx` against
+//! WHERE-builder and the [`ChatMeta`] row shape the impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
 
 use crate::query::{extract_uuid_suffix, Field, ParsedQuery};
 use datalib_schema::providers::Provider;
-
-const SNIPPET_LEN: usize = 240;
 
 /// The source id datalib's own rows are filed under — the storage
 /// reports, which describe a source's mirror rather than belonging to
@@ -35,55 +32,6 @@ pub struct ChatMeta {
     pub source_url: Option<String>,
 }
 
-/// Build the snippet shown in the grid's "Contents" column. When the
-/// query has a needle, center a 240-char window around the first match;
-/// otherwise return the first 240 chars. Newlines become spaces so the
-/// grid stays single-line.
-pub fn snippet(text: &str, needle: &str) -> String {
-    let trimmed = if needle.is_empty() {
-        first_chars(text, SNIPPET_LEN)
-    } else {
-        let lower = text.to_lowercase();
-        match lower.find(needle) {
-            Some(pos) => {
-                let radius = SNIPPET_LEN / 2;
-                let start = text[..pos]
-                    .char_indices()
-                    .rev()
-                    .nth(radius)
-                    .map(|(i, _)| i)
-                    .unwrap_or(0);
-                let end_byte = pos + needle.len();
-                let end = text[end_byte..]
-                    .char_indices()
-                    .nth(radius)
-                    .map(|(i, _)| end_byte + i)
-                    .unwrap_or(text.len());
-                let mut out = String::new();
-                if start > 0 {
-                    out.push('…');
-                }
-                out.push_str(&text[start..end]);
-                if end < text.len() {
-                    out.push('…');
-                }
-                out
-            }
-            None => first_chars(text, SNIPPET_LEN),
-        }
-    };
-    trimmed.replace('\n', " ")
-}
-
-fn first_chars(s: &str, n: usize) -> String {
-    let end = s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len());
-    let mut out = s[..end].to_string();
-    if end < s.len() {
-        out.push('…');
-    }
-    out
-}
-
 /// Map a query [`Field`] to the underlying `grid_rows` column it
 /// constrains, or `None` for fields that aren't single-column equality
 /// filters (Before/After are range, Is sets `documents`, Subj/Other have
@@ -106,10 +54,9 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
 }
 
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
-/// parameter list for a parsed query. The output is portable between
-/// MySQL (Dolt) and SQLite — `?` placeholders and `LOWER(text) LIKE ?`
-/// both work on either dialect.
-pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
+/// parameter list for a parsed query's structured terms. Free text is not
+/// here: it goes to qmd.
+pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
@@ -201,10 +148,6 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         clauses.push("created_at_utc > ?".into());
         params.push(v);
     }
-    if !needle.is_empty() {
-        clauses.push("LOWER(text) LIKE ?".into());
-        params.push(format!("%{}%", needle));
-    }
 
     let where_sql = if clauses.is_empty() {
         String::new()
@@ -221,23 +164,23 @@ mod tests {
 
     #[test]
     fn empty_query_produces_no_where() {
-        let (sql, params) = build_where(&parse_query(""), "");
+        let (sql, params) = build_where(&parse_query(""));
         assert!(sql.is_empty());
         assert!(params.is_empty());
     }
 
     #[test]
     fn is_document_is_a_column_test_not_a_kind_list() {
-        let (sql, params) = build_where(&parse_query("is:document"), "");
+        let (sql, params) = build_where(&parse_query("is:document"));
         assert_eq!(sql, " WHERE is_document = 1");
         assert!(params.is_empty());
-        let (sql, _) = build_where(&parse_query("-is:document"), "");
+        let (sql, _) = build_where(&parse_query("-is:document"));
         assert_eq!(sql, " WHERE is_document = 0");
     }
 
     #[test]
     fn source_filter_emits_equality_clause() {
-        let (sql, params) = build_where(&parse_query("source:Claude"), "");
+        let (sql, params) = build_where(&parse_query("source:Claude"));
         assert_eq!(sql, " WHERE source_label = ?");
         assert_eq!(params, vec!["Claude"]);
     }
@@ -247,14 +190,14 @@ mod tests {
     /// workspaces are one `source` and two `source_id`s.
     #[test]
     fn source_id_filter_matches_the_qmd_path_prefix() {
-        let (sql, params) = build_where(&parse_query("source_id:slack"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack"));
         assert_eq!(
             sql,
             " WHERE INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
         );
         assert_eq!(params, vec!["slack/", "datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:slack"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:slack"));
         assert_eq!(
             sql,
             " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
@@ -269,16 +212,16 @@ mod tests {
     /// real source's id has to exclude them despite the path.
     #[test]
     fn source_id_filter_files_measurements_under_datalib() {
-        let (sql, params) = build_where(&parse_query("source_id:datalib"), "");
+        let (sql, params) = build_where(&parse_query("source_id:datalib"));
         assert_eq!(sql, " WHERE provider = ?");
         assert_eq!(params, vec!["datalib"]);
 
-        let (sql, params) = build_where(&parse_query("-source_id:datalib"), "");
+        let (sql, params) = build_where(&parse_query("-source_id:datalib"));
         assert_eq!(sql, " WHERE (provider IS NULL OR provider != ?)");
         assert_eq!(params, vec!["datalib"]);
 
         // The other direction: `slack`'s own rows, not what slack weighs.
-        let (sql, _) = build_where(&parse_query("source_id:slack"), "");
+        let (sql, _) = build_where(&parse_query("source_id:slack"));
         assert!(sql.contains("provider != ?"), "{sql}");
     }
 
@@ -288,7 +231,7 @@ mod tests {
     /// `slackXwork` stanza. INSTR takes its needle verbatim.
     #[test]
     fn source_id_filter_does_not_go_through_like() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work"), "");
+        let (sql, params) = build_where(&parse_query("source_id:slack_work"));
         assert!(!sql.contains("LIKE"), "{sql}");
         assert_eq!(params, vec!["slack_work/", "datalib"]);
     }
@@ -298,7 +241,7 @@ mod tests {
     /// separate `slack-personal` stanza.
     #[test]
     fn source_id_filter_matches_whole_segments_only() {
-        let (_, params) = build_where(&parse_query("source_id:slack"), "");
+        let (_, params) = build_where(&parse_query("source_id:slack"));
         assert_eq!(params, vec!["slack/", "datalib"]);
         assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
@@ -309,14 +252,14 @@ mod tests {
     #[test]
     fn the_old_source_name_spelling_builds_the_same_clause() {
         assert_eq!(
-            build_where(&parse_query("source_name:slack"), ""),
-            build_where(&parse_query("source_id:slack"), ""),
+            build_where(&parse_query("source_name:slack")),
+            build_where(&parse_query("source_id:slack")),
         );
     }
 
     #[test]
     fn negated_filter_keeps_nulls() {
-        let (sql, _) = build_where(&parse_query("-channel:announce"), "");
+        let (sql, _) = build_where(&parse_query("-channel:announce"));
         assert!(sql.contains("(channel IS NULL OR channel != ?)"));
     }
 
@@ -324,30 +267,13 @@ mod tests {
     /// `-change:unchanged` is a diff's moved rows and every real row.
     #[test]
     fn change_filter_is_the_diff_status_column() {
-        let (sql, params) = build_where(&parse_query("change:added"), "");
+        let (sql, params) = build_where(&parse_query("change:added"));
         assert!(sql.contains("diff_status = ?"), "{sql}");
         assert_eq!(params, vec!["added".to_string()]);
-        let (sql, _) = build_where(&parse_query("-change:unchanged"), "");
+        let (sql, _) = build_where(&parse_query("-change:unchanged"));
         assert!(
             sql.contains("(diff_status IS NULL OR diff_status != ?)"),
             "{sql}"
         );
-    }
-
-    #[test]
-    fn free_text_becomes_lower_like() {
-        let (sql, params) = build_where(&parse_query("hello"), "hello");
-        // `hello` is not a field:value, so it resolves to message type.
-        assert!(sql.contains("LOWER(text) LIKE ?"));
-        assert!(params.iter().any(|p| p == "%hello%"));
-    }
-
-    #[test]
-    fn snippet_centers_window_around_needle() {
-        let text = "a".repeat(200) + "needle" + &"b".repeat(200);
-        let out = snippet(&text, "needle");
-        assert!(out.contains("needle"));
-        assert!(out.starts_with('…'));
-        assert!(out.ends_with('…'));
     }
 }

@@ -110,7 +110,7 @@ pub fn rows_for_pr(
             .conversation_name(Some(pr.title.clone()))
             .conversation_uuid(pr.uuid.clone())
             .entire_chat(entire_chat.clone())
-            .text(if pr.body.is_empty() {
+            .body(if pr.body.is_empty() {
                 pr.title.clone()
             } else {
                 format!("{}\n\n{}", pr.title, pr.body)
@@ -144,7 +144,7 @@ pub fn rows_for_pr(
                 .conversation_uuid(pr.uuid.clone())
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
-                .text(c.body.clone())
+                .body(c.body.clone())
                 .qmd_path(Some(qmd.clone()))
                 .source_url(c.html_url.clone())
                 .git_sha(c.commit_id.clone())

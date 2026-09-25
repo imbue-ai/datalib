@@ -10,6 +10,27 @@ use datalib_time::validate_iso_offset;
 use crate::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use crate::providers::Provider;
 
+/// How many characters of a body the `preview` column keeps.
+pub const PREVIEW_CHARS: usize = 240;
+
+/// The first [`PREVIEW_CHARS`] characters of `body`, newlines as spaces so
+/// the grid stays one line per row, and `…` when there was more.
+pub fn preview(body: &str) -> String {
+    let end = body
+        .char_indices()
+        .nth(PREVIEW_CHARS)
+        .map_or(body.len(), |(i, _)| i);
+    let mut out = body[..end].replace('\n', " ");
+    if end < body.len() {
+        out.push('…');
+    }
+    out
+}
+
+pub fn content_hash(body: &str) -> String {
+    blake3::hash(body.as_bytes()).to_hex().to_string()
+}
+
 /// Why a [`GridRowBuilder::build`] call was rejected.
 #[derive(Debug)]
 pub enum GridRowError {
@@ -105,7 +126,7 @@ pub struct GridRowBuilder {
     conversation_uuid: String,
     message_index: Option<i64>,
     entire_chat: String,
-    text: String,
+    body: String,
     qmd_path: Option<String>,
     source_url: Option<String>,
     git_sha: Option<String>,
@@ -149,7 +170,8 @@ impl GridRowBuilder {
     req_setter!(source_label);
     req_setter!(conversation_uuid);
     req_setter!(entire_chat);
-    req_setter!(text);
+    // The row's whole text. Not stored: `build` keeps its preview and hash.
+    req_setter!(body);
 
     /// Set the required `provider` column. Typed, unlike its
     /// neighbours: the tag is a closed set, and it is on disk in the
@@ -308,7 +330,8 @@ impl GridRowBuilder {
             conversation_uuid: self.conversation_uuid,
             message_index: self.message_index,
             entire_chat: self.entire_chat,
-            text: self.text,
+            preview: preview(&self.body),
+            content_hash: content_hash(&self.body),
             qmd_path: self.qmd_path,
             source_url: self.source_url,
             git_sha: self.git_sha,
@@ -339,7 +362,34 @@ mod builder_tests {
             .source_label("LinkedIn")
             .conversation_uuid("c-1")
             .entire_chat("/contact/u-1")
-            .text("Jean-Luc Picard")
+            .body("Jean-Luc Picard")
+    }
+
+    /// The column that replaced a stored whole body: it must keep the
+    /// start, say when it cut, stay one line, and count characters, not
+    /// bytes, so a multi-byte body is never split inside a character.
+    #[test]
+    fn the_preview_is_the_start_of_the_body_on_one_line() {
+        assert_eq!(preview("Tea.\nEarl Grey."), "Tea. Earl Grey.");
+        assert_eq!(
+            preview(&"é".repeat(PREVIEW_CHARS)),
+            "é".repeat(PREVIEW_CHARS)
+        );
+        assert_eq!(
+            preview(&"é".repeat(PREVIEW_CHARS + 1)),
+            "é".repeat(PREVIEW_CHARS) + "…"
+        );
+    }
+
+    /// A body that differs only past the preview must still change the
+    /// row, or a diff calls an edited email unchanged.
+    #[test]
+    fn a_change_past_the_preview_changes_the_hash() {
+        let head = "a".repeat(PREVIEW_CHARS);
+        let a = ok_builder().body(format!("{head} one")).build().unwrap();
+        let b = ok_builder().body(format!("{head} two")).build().unwrap();
+        assert_eq!(a.preview, b.preview);
+        assert_ne!(a.content_hash, b.content_hash);
     }
 
     #[test]
