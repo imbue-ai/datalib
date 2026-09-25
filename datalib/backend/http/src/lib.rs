@@ -404,7 +404,8 @@ async fn proxy_impl(
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
         // lines becoming its error message.
-        Ok(Err(e)) => applet_error(StatusCode::BAD_GATEWAY, &e),
+        Ok(Err(applets::ProxyError::TimedOut(e))) => applet_error(StatusCode::GATEWAY_TIMEOUT, &e),
+        Ok(Err(applets::ProxyError::Failed(e))) => applet_error(StatusCode::BAD_GATEWAY, &e),
         Err(e) => applet_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("proxy task: {e}"),
@@ -1583,17 +1584,32 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let store = mailbox(&s).await?;
+    // A sync of these steps that is already open is this sync: a second
+    // click is not a second run. (A second request from anywhere else
+    // still is: the loop runs its steps once more when the first ends.)
+    let wanted: std::collections::BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+    let open = store.open_requests().await.map_err(internal)?;
+    if let Some(same) = open.into_iter().find(|r| {
+        r.stop_requested_by.is_none()
+            && r.roots
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                == wanted
+    }) {
+        return Ok(Json(RequestView::from(same)));
+    }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let mut listener =
-        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests").await;
+        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
     let id = store.open_request(&roots, &by).await.map_err(internal)?;
     // Answered once the loop has taken it on, so rows read after this
     // show its steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     while !store.taken_on(&id).await.map_err(internal)? {
-        if tokio::time::timeout_at(deadline, listener.next(store))
+        if tokio::time::timeout_at(deadline, listener.next())
             .await
             .is_err()
         {

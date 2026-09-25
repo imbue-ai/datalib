@@ -301,6 +301,133 @@ fn a_history_reader_never_makes_the_writers_commit_fail() {
 /// commits later. The first writer goes on committing as if nothing
 /// happened. The kernel releases the lock when the holder dies, so a
 /// SIGKILLed writer (the `hang` scenarios below) leaves no stale claim.
+/// The search applet's snapshot (`docs/dev/plans/paged_grids.md`): a
+/// read-only connection on `main` holding a transaction reads one commit
+/// for as long as the transaction lives, with the writer sealing as fast
+/// as it can underneath, and the writer is never refused. A later
+/// transaction moves on to a later seal.
+#[test]
+fn a_held_read_transaction_is_a_snapshot_while_the_writer_seals() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--max-commits",
+        "500",
+        "--interval-ms",
+        "0",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    let seed = t.await_file("pin", &mut writer);
+
+    let mut reader = t.spawn(&[
+        "txn-read",
+        "--db",
+        &t.db(),
+        "--until",
+        &t.path("writer.json"),
+        "--hold-ms",
+        "200",
+        "--ready-out",
+        &t.path("reader-ready"),
+        "--out",
+        &t.path("txn.json"),
+    ]);
+    t.wait("writer", &mut writer);
+    t.wait("reader", &mut reader);
+
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reader = t.report("txn.json");
+    assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
+    assert_reads_only_sealed_commits(&writer, &seed, samples(&reader));
+
+    let by_txn = assert_each_transaction_read_one_commit(&reader);
+    let heads: std::collections::BTreeSet<String> =
+        by_txn.values().map(|seen| seen[0].0.to_string()).collect();
+    assert!(
+        heads.len() >= 2,
+        "every transaction read the same commit, so none of them was ever \
+         tested against a seal landing under it: {heads:?}"
+    );
+    assert_committed_throughout(&writer, &reader);
+}
+
+/// The full-size harness (`hack/read_transaction_at_scale/`) measures
+/// with `seal-existing`, a writer that opens a store it did not create on
+/// a plain pool and seals through `commit_run`. Its numbers are only
+/// `commit_run`'s if it seals here too, beside the same reader.
+#[test]
+fn the_harness_writer_seals_an_existing_store_beside_a_read_transaction() {
+    let t = Scratch::new();
+    let mut seeder = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--out",
+        &t.path("seed.json"),
+    ]);
+    t.wait("seeder", &mut seeder);
+    if t.report("seed.json")["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let seed = std::fs::read_to_string(t.dir.path().join("pin")).unwrap();
+
+    let mut reader = t.spawn(&[
+        "txn-read",
+        "--db",
+        &t.db(),
+        "--until",
+        &t.path("writer.json"),
+        "--hold-ms",
+        "20",
+        "--ready-out",
+        &t.path("reader-ready"),
+        "--out",
+        &t.path("txn.json"),
+    ]);
+    t.await_file("reader-ready", &mut reader);
+    let mut writer = t.spawn(&[
+        "seal-existing",
+        "--db",
+        &t.db(),
+        "--table",
+        "entities",
+        "--column",
+        "body",
+        "--rows",
+        "2",
+        "--seals",
+        "20",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    t.wait("writer", &mut writer);
+    t.wait("reader", &mut reader);
+
+    let writer = t.report("writer.json");
+    let reader = t.report("txn.json");
+    let sealed = writer["commits"].as_array().expect("commits");
+    assert_eq!(sealed.len(), 20, "every seal commits: {writer}");
+    assert!(
+        sealed.iter().all(|c| c["hash"].is_string()),
+        "a seal that changed rows committed nothing: {writer}"
+    );
+    assert!(writer["size_after"].is_u64(), "{writer}");
+    assert_reads_only_sealed_commits(&writer, &seed, samples(&reader));
+    assert_each_transaction_read_one_commit(&reader);
+}
+
 #[test]
 fn a_second_writer_in_another_process_is_refused_and_told_who_holds_the_store() {
     let t = Scratch::new();
@@ -714,6 +841,56 @@ fn assert_committed_throughout(writer: &Value, reader: &Value) {
          the two never really overlapped",
         during.len()
     );
+}
+
+/// Every sample read a commit the writer sealed (or the seed), and the
+/// row count never went down: a reader that saw a half-written batch, or
+/// went back to an older commit, fails here.
+fn assert_reads_only_sealed_commits(writer: &Value, seed: &str, samples: &[Value]) {
+    let sealed: std::collections::HashSet<&str> = writer["commits"]
+        .as_array()
+        .expect("commits")
+        .iter()
+        .filter_map(|c| c["hash"].as_str())
+        .chain([seed])
+        .collect();
+    assert!(!samples.is_empty(), "the reader took no samples");
+    for s in samples {
+        let head = s["head"].as_str().expect("head");
+        assert!(
+            sealed.contains(head),
+            "read at {head}, which the writer never sealed: {s}"
+        );
+    }
+    let counts: Vec<i64> = samples
+        .iter()
+        .map(|s| s["count"].as_i64().expect("count"))
+        .collect();
+    assert!(
+        counts.windows(2).all(|w| w[0] <= w[1]),
+        "the row count went backwards: {counts:?}"
+    );
+}
+
+/// Group a `txn-read` report's samples by transaction and check each
+/// transaction saw one commit and one row count throughout.
+fn assert_each_transaction_read_one_commit(
+    reader: &Value,
+) -> std::collections::BTreeMap<u64, Vec<(Value, Value)>> {
+    let mut by_txn: std::collections::BTreeMap<u64, Vec<(Value, Value)>> = Default::default();
+    for s in samples(reader) {
+        by_txn
+            .entry(s["txn"].as_u64().expect("txn"))
+            .or_default()
+            .push((s["head"].clone(), s["count"].clone()));
+    }
+    for (txn, seen) in &by_txn {
+        assert!(
+            seen.windows(2).all(|w| w[0] == w[1]),
+            "transaction {txn} read more than one commit: {seen:?}"
+        );
+    }
+    by_txn
 }
 
 fn samples(report: &Value) -> &Vec<Value> {

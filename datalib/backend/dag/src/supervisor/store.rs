@@ -94,6 +94,7 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
+    path: PathBuf,
     listeners: PathBuf,
     /// Who this store is in its announcements: tests in one binary share
     /// a pid, so the pid alone does not say.
@@ -119,6 +120,7 @@ impl Store {
             .with_context(|| format!("open {}", path.display()))?;
         let store = Store {
             pool,
+            path: path.clone(),
             listeners: super::announce::listeners_dir(data_root),
             me: format!(
                 "store-{}-{}",
@@ -182,6 +184,10 @@ impl Store {
 
     pub(super) fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn listeners(&self) -> &Path {

@@ -23,9 +23,7 @@ async fn seven_processes_share_the_store_and_every_write_lands() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     let store = Store::open(root).await.unwrap();
-    let mut listener = Listener::new(&store, "the test")
-        .await
-        .backstop(Duration::from_millis(20));
+    let mut listener = Listener::new(&store, "the test").backstop(Duration::from_millis(20));
 
     let roles = [
         ("mailbox", "m1"),
@@ -57,7 +55,7 @@ async fn seven_processes_share_the_store_and_every_write_lands() {
         let out = loop {
             tokio::select! {
                 out = &mut done => break out.unwrap(),
-                _ = listener.next(&store) => {}
+                _ = listener.next() => {}
             }
         };
         outputs.push(out);

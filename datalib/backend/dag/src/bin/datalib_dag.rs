@@ -435,7 +435,7 @@ enum Taken {
 /// was running may end between our look and our request landing, and then
 /// nobody is left to serve it but us. Its release is announced.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag").await;
+    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag");
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -463,7 +463,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     }
                     return Ok(Taken::Closed(closed));
                 }
-                listener.next(store).await;
+                listener.next().await;
             }
             Err(e) => return Err(e.into()),
         }

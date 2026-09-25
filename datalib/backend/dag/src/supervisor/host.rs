@@ -84,7 +84,7 @@ pub async fn run_idle(
             Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
         }
         tokio::select! {
-            _ = listener.next(store) => {}
+            _ = listener.next() => {}
             () = periods.nudged() => {}
             _ = stop.changed() => {}
         }
@@ -269,9 +269,8 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };
@@ -328,9 +327,8 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };
@@ -378,9 +376,8 @@ mod tests {
         let host = {
             let store = store.clone();
             tokio::spawn(async move {
-                let mut listener = Listener::new(&store, "test")
-                    .await
-                    .backstop(std::time::Duration::from_secs(3600));
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
                 run_idle(&store, &mut listener, &mut fake, &mut stop).await;
             })
         };

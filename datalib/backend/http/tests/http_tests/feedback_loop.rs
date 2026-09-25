@@ -12,6 +12,7 @@ use datalib_http::applets::AppletRegistry;
 use datalib_http::loop_guard::{CAUSE_HEADER, LOOP_AT, TARGET};
 use datalib_http::watch::{RootEvent, RootFrame, Table};
 use datalib_http::{router, ApiToken, AppState};
+use datalib_runs::ProcessLogWriter;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,19 +56,21 @@ async fn get(state: &AppState, uri: &str, cause: Option<u32>) -> Vec<u8> {
         .to_vec()
 }
 
-/// The next `log` frame, or `None` when none comes within a few
-/// debounce windows.
-async fn next_log_frame(rx: &mut broadcast::Receiver<RootFrame>) -> Option<RootFrame> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Ok(f)) if f.event == (RootEvent::TableChanged { table: Table::Log }) => {
-                return Some(f)
+async fn next_log_frame(rx: &mut broadcast::Receiver<RootFrame>) -> RootFrame {
+    let frame = async {
+        loop {
+            let f = rx
+                .recv()
+                .await
+                .expect("the channel neither lags nor closes");
+            if f.event == (RootEvent::TableChanged { table: Table::Log }) {
+                return f;
             }
-            Ok(_) => continue,
-            Err(_) => return None,
         }
-    }
+    };
+    tokio::time::timeout(Duration::from_secs(10), frame)
+        .await
+        .expect("the request's own line should come back as a log frame")
 }
 
 /// Plays a page that refetches on every `log` frame, for `hops` frames,
@@ -82,9 +85,7 @@ async fn refetch_on_log_frames(
     get(state, "/api/health", None).await;
     let mut seen = Vec::new();
     for _ in 0..hops {
-        let frame = next_log_frame(rx)
-            .await
-            .expect("the request's own line should come back as a log frame");
+        let frame = next_log_frame(rx).await;
         seen.push(frame.chain);
         get(state, "/api/health", frame.chain.filter(|_| echo)).await;
     }
@@ -100,9 +101,27 @@ async fn loop_warnings(state: &AppState) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Let every frame the last hop caused land, and drop them.
-async fn settle(rx: &mut broadcast::Receiver<RootFrame>) {
-    while next_log_frame(rx).await.is_some() {}
+/// Commit every line logged so far, then drop every frame the commits
+/// caused. The watch takes filesystem events in the order they happened,
+/// so once a write of the test's own under `system/frontend/` comes back,
+/// whatever an earlier commit would report has been reported; a burst is
+/// sent whole, so what came with it is already queued.
+async fn settle(root: &Path, log: &ProcessLogWriter, rx: &mut broadcast::Receiver<RootFrame>) {
+    log.flush().await;
+    std::fs::write(root.join("system/frontend/barrier.js"), "").unwrap();
+    let barrier = async {
+        while rx
+            .recv()
+            .await
+            .expect("the channel neither lags nor closes")
+            .event
+            != RootEvent::FrontendChanged
+        {}
+    };
+    tokio::time::timeout(Duration::from_secs(10), barrier)
+        .await
+        .expect("the barrier's own write never came back");
+    while rx.try_recv().is_ok() {}
 }
 
 #[tokio::test]
@@ -112,25 +131,31 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     let log = datalib_http::logging::init(root).expect("the store opens in a temp dir");
     let (tx, mut rx) = broadcast::channel(256);
     let state = state(root, tx.clone()).await;
-    datalib_http::watch::spawn(root.to_path_buf(), tx);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        datalib_http::watch::spawn(root.to_path_buf(), tx).wait(),
+    )
+    .await
+    .expect("the watch never reported ready");
     // The boot lines `init` just wrote are not a page's doing; let them
     // land before the page starts.
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
-    settle(&mut rx).await;
+    settle(root, &log, &mut rx).await;
 
     // A page that does not echo: every frame is one hop from a fetch
     // nothing caused, so the chain never grows.
     let hops = LOOP_AT as usize + 3;
     let seen = refetch_on_log_frames(&state, &mut rx, hops, false).await;
     assert!(seen.iter().all(|c| *c == Some(1)), "{seen:?}");
-    settle(&mut rx).await;
+    log.flush().await;
     assert!(loop_warnings(&state).await.is_empty());
+    // After the read: its own request is a line too.
+    settle(root, &log, &mut rx).await;
 
     // The same page echoing: each hop is one longer than the last.
     let seen = refetch_on_log_frames(&state, &mut rx, hops, true).await;
     let expected: Vec<Option<u32>> = (1..=hops as u32).map(Some).collect();
     assert_eq!(seen, expected);
-    settle(&mut rx).await;
+    log.flush().await;
 
     let warned = loop_warnings(&state).await;
     assert_eq!(warned.len(), 1, "{warned:#?}");

@@ -1,8 +1,10 @@
 //! One side of a two-process doltlite concurrency test: a writer that
 //! commits, a reader that pins, a reader that keeps re-opening and pinning
-//! the way `grid_index` does, or a probe that reports a store's committed
-//! state. Driven by `tests/doltlite_two_process.rs`, which is where the
-//! scenarios and the assertions live.
+//! the way `grid_index` does, a reader that holds a transaction as its
+//! snapshot, or a probe that reports a store's committed state. Driven by
+//! `tests/doltlite_two_process.rs`, which is where the scenarios and the
+//! assertions live; `seal-existing` also drives a full-size measurement
+//! (`hack/read_transaction_at_scale/`).
 //!
 //! It is a separate binary because the question under test is what happens
 //! *between processes* — doltlite's working set and its chunk-store lock are
@@ -17,12 +19,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
 use datalib_etl::pin::Pin;
 use serde_json::{json, Value};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 const TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, body TEXT NULL)";
 
@@ -55,6 +59,8 @@ async fn main() -> Result<()> {
         "reopen" => reopen(&args).await,
         "hold" => hold(&args).await,
         "watch" => watch(&args).await,
+        "txn-read" => txn_read(&args).await,
+        "seal-existing" => seal_existing(&args).await,
         other => bail!("unknown role {other:?}"),
     }?;
     write_atomic(&out, &serde_json::to_vec_pretty(&report)?)
@@ -103,8 +109,13 @@ async fn write(args: &Args) -> Result<Value> {
         if until.as_deref().is_some_and(Path::exists) {
             break;
         }
+        let started = Instant::now();
         match commit_a_chunk(&pool, i).await {
-            Ok(hash) => commits.push(json!({ "hash": hash, "at_ms": now_ms() })),
+            Ok(hash) => commits.push(json!({
+                "hash": hash,
+                "at_ms": now_ms(),
+                "ms": started.elapsed().as_millis() as u64,
+            })),
             Err(e) => errors.push(format!("{e:#}")),
         }
         tokio::time::sleep(interval).await;
@@ -560,6 +571,156 @@ async fn watch(args: &Args) -> Result<Value> {
     }
     pool.close().await;
     Ok(json!({ "role": "watch", "samples": samples }))
+}
+
+/// The search applet's snapshot (`docs/dev/plans/paged_grids.md`): a
+/// read-only connection on `main` holding a transaction for `--hold-ms`,
+/// then `COMMIT; BEGIN` onto whatever `main` is by then. Every sample is
+/// tagged with its transaction, so the test can check each one read a
+/// single commit.
+async fn txn_read(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let table = identifier(args.str("table").unwrap_or("entities"))?;
+    let until = args.path("until")?;
+    let hold = Duration::from_millis(args.num("hold-ms", 200));
+    let interval = Duration::from_millis(args.num("interval-ms", 5));
+    let pool = datalib_pin::open_reader(&db)
+        .await
+        .context("open read-only")?;
+    let mut conn = pool.acquire().await.context("acquire")?;
+    write_atomic(&args.path("ready-out")?, b"ready")?;
+
+    let mut samples: Vec<Value> = Vec::new();
+    let mut txn = 0u64;
+    while !until.exists() {
+        sqlx::query("BEGIN")
+            .execute(&mut *conn)
+            .await
+            .context("BEGIN")?;
+        let opened = Instant::now();
+        while opened.elapsed() < hold && !until.exists() {
+            let mut s = sample_on(&mut conn, table)
+                .await
+                .with_context(|| format!("sample in transaction {txn}"))?;
+            s["txn"] = json!(txn);
+            samples.push(s);
+            tokio::time::sleep(interval).await;
+        }
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .context("COMMIT")?;
+        txn += 1;
+    }
+    drop(conn);
+    pool.close().await;
+    Ok(json!({ "role": "txn-read", "samples": samples }))
+}
+
+/// The writer's side of the full-size measurement: seal an existing store
+/// `--seals` times, each seal changing `--rows` rows of `--table` (a
+/// column toggled between NULL and a value), through `commit_run`, the
+/// same seal every step uses. Opens a plain pool on the writer branch
+/// rather than through `open`, so it runs against a copy of any store
+/// without reconciling that store's schema. A refused seal ends the run:
+/// the measurement is of a writer that is never refused.
+async fn seal_existing(args: &Args) -> Result<Value> {
+    let db = args.path("db")?;
+    let table = identifier(args.str("table")?)?;
+    let column = identifier(args.str("column")?)?;
+    let rows = args.num("rows", 1000) as i64;
+    let pool = writer_pool(&db).await.context("open the writer branch")?;
+    let total: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(&pool)
+            .await?;
+    // Audited: `table` and `column` passed `identifier`, so they are bare
+    // lowercase names; every value is bound.
+    let update = format!(
+        "UPDATE {table} SET {column} = CASE WHEN {column} IS NULL THEN 'x' ELSE NULL END \
+          WHERE rowid IN (SELECT rowid FROM {table} ORDER BY rowid LIMIT ? OFFSET ?)"
+    );
+    let mut commits: Vec<Value> = Vec::new();
+    for i in 0..args.num("seals", 20) as i64 {
+        let started = Instant::now();
+        sqlx::query(sqlx::AssertSqlSafe(update.clone()))
+            .bind(rows)
+            .bind((i * rows) % total.max(1))
+            .execute(&pool)
+            .await
+            .with_context(|| format!("seal {i}: update"))?;
+        let hash = doltlite_raw::commit_run(&pool, &format!("seal {i}"))
+            .await
+            .with_context(|| format!("seal {i}: commit"))?;
+        commits.push(json!({
+            "hash": hash,
+            "at_ms": now_ms(),
+            "ms": started.elapsed().as_millis() as u64,
+        }));
+    }
+    pool.close().await;
+    Ok(json!({ "role": "seal-existing", "commits": commits, "size_after": file_size(&db) }))
+}
+
+/// A one-connection pool that never recycles, on the store's writer
+/// branch. `dolt_connect_branch` rather than `dolt_checkout`, for the
+/// reason `doltlite_raw` gives: it writes nothing.
+async fn writer_pool(db: &Path) -> Result<SqlitePool> {
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))?
+        .create_if_missing(false);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SELECT dolt_connect_branch(?)")
+                    .bind(doltlite_raw::WRITER_BRANCH)
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(opts)
+        .await?;
+    let active: String = sqlx::query_scalar("SELECT active_branch()")
+        .fetch_one(&pool)
+        .await?;
+    if active != doltlite_raw::WRITER_BRANCH {
+        bail!(
+            "connected to {active:?}, not {:?}",
+            doltlite_raw::WRITER_BRANCH
+        );
+    }
+    Ok(pool)
+}
+
+/// What a reader sees now: the row count, then the commit it read at. The
+/// count goes first because a table read is what reloads the root from
+/// the file (`datalib_pin::head`).
+async fn sample_on(conn: &mut sqlx::SqliteConnection, table: &str) -> Result<Value> {
+    // Audited: `table` passed `identifier`.
+    let count: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(&mut *conn)
+            .await?;
+    let head: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(json!({ "at_ms": now_ms(), "count": count, "head": head }))
+}
+
+/// A table or column name from the command line, held to the one shape
+/// that is safe to splice into SQL.
+fn identifier(name: &str) -> Result<&str> {
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+        bail!("not a plain lowercase identifier: {name:?}");
+    }
+    Ok(name)
+}
+
+fn file_size(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
 }
 
 /// Wait for a go-file the test writes, giving up rather than hanging the

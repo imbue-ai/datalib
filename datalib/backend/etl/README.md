@@ -253,6 +253,17 @@ worse still: a fresh connection lands on the default branch, a failed
 them to. Branches separate working sets; they do not separate the
 file.
 
+A process that only *moves a ref* is still a second writer. A reader
+kept its own branch and fast-forwarded it with `dolt_merge('main')`
+while the writer sealed through `commit_run`. Merging every 100 ms, it
+got 1–2 of 300 seals refused (`commit conflict` from `dolt_commit`,
+`database is locked` from moving `main`). Merging every 20 ms, one run
+blocked the writer in doltlite's file lock for good. A reader that
+needs a stable, indexed view holds a read transaction on a read-only
+connection instead, which cost the writer nothing at full size
+(`docs/dev/plans/paged_grids.md`, "Pinned and indexed";
+`doltlite_two_process_test`).
+
 A crash between the commit and the publication leaves the branch ahead
 of `main`; that commit is a seal the last run meant to make, so the
 next `open` finishes it.
