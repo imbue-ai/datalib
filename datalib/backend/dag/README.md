@@ -124,8 +124,15 @@ starts** in a tick, visited in topological order, iff:
 
 1. **it is not running**: one instance of a step at a time;
 2. **it is not paused**;
-3. **an open request wants it**: some request's scope (its roots and
-   everything downstream) holds it;
+3. **an open request wants it**: some request's scope holds it. The
+   scope is the request's roots and everything downstream, plus any step
+   with inputs that something in the scope reads and whose definition
+   changed since its last success, with everything downstream of that.
+   What such a step last wrote came from a definition that no longer
+   exists: after a build that moved the render store's shape, a Slack-only
+   sync must still re-render the other sources before the grid index
+   reads them. A download is never pulled in this way, since that would
+   fetch a source nobody asked to sync;
 4. **it has not failed for every request that wants it**: its last run
    failed, after that request opened, on the inputs and definition it has
    now. A run the loop asked to stop, and that stopped, is neither a

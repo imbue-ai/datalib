@@ -190,7 +190,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     let scopes: Vec<Vec<bool>> = intent
         .requests
         .iter()
-        .map(|r| closure(shape, &readers, &r.roots))
+        .map(|r| scope(shape, &readers, facts, &r.roots))
         .collect();
     let wanting: Vec<Vec<usize>> = (0..n)
         .map(|i| (0..scopes.len()).filter(|&r| scopes[r][i]).collect())
@@ -353,6 +353,37 @@ impl Held {
             Hold::Exclusive => self.exclusive = true,
         }
     }
+}
+
+/// What a request wants: its roots and everything downstream of them,
+/// and any derived step something in there reads whose definition changed
+/// since its last success. What that step last wrote was written by a
+/// definition that no longer exists, so a reader must not take it as
+/// current, whatever the request named. A download is never pulled in:
+/// that would fetch a source nobody asked to sync.
+fn scope(shape: &Shape, readers: &[Vec<StepIx>], facts: &Facts, roots: &[StepIx]) -> Vec<bool> {
+    let mut wanted = closure(shape, readers, roots);
+    loop {
+        let changed: Vec<StepIx> = (0..wanted.len())
+            .filter(|&i| wanted[i])
+            .flat_map(|i| shape.steps[i].reads.iter().copied())
+            .filter(|&p| !wanted[p] && definition_changed(&shape.steps[p], &facts.steps[p]))
+            .collect();
+        if changed.is_empty() {
+            return wanted;
+        }
+        for (w, more) in wanted.iter_mut().zip(closure(shape, readers, &changed)) {
+            *w |= more;
+        }
+    }
+}
+
+fn definition_changed(step: &StepShape, facts: &StepFacts) -> bool {
+    !step.reads.is_empty()
+        && facts
+            .last_success
+            .as_ref()
+            .is_some_and(|c| c.fingerprint != step.fingerprint)
 }
 
 /// The roots and everything that reads, transitively, what they write.
@@ -1054,6 +1085,37 @@ mod tests {
         s.steps[1].fingerprint = "fp1-edited".into();
         let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(started(&t), vec![1]);
+    }
+
+    /// A new build moved the shape of every render store. A Slack-only
+    /// sync then ran the grid index, which reads every render, while the
+    /// other sources' renders sat outside the request with stores still in
+    /// the old shape, and the index could not read them. A derived step
+    /// whose definition changed is out of date whatever its inputs say, so
+    /// a request that wants a reader of it runs it first. A download whose
+    /// definition changed is not pulled in: that would fetch a source
+    /// nobody asked to sync.
+    #[test]
+    fn a_request_rebuilds_a_changed_derived_producer_before_its_reader() {
+        //  slack 0 → render 1 ┐
+        //                      ├→ index 4
+        //  mail  2 → render 3 ┘
+        let mut s = shape(&[&[], &[0], &[], &[2], &[1, 3]]);
+        s.steps[4].locks = vec![(INDEX, Hold::Shared)];
+        let mut facts = all_fresh(&s, 1);
+        // Slack's render has just published, so the index is due.
+        facts.sinks[1] = Some("v1-new".into());
+        s.steps[3].fingerprint = "fp3-new-store-shape".into();
+        s.steps[2].fingerprint = "fp2-edited".into();
+
+        let t = tick(&s, &request(&[0], 5), &facts);
+        assert!(started(&t).contains(&3), "the changed render runs: {t:?}");
+        assert_eq!(
+            t.states[4],
+            StepState::Waiting(Wait::Upstream(3)),
+            "the index waits for it"
+        );
+        assert_eq!(t.states[2], StepState::Stale, "mail is not downloaded");
     }
 
     #[test]
