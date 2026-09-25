@@ -3,7 +3,7 @@
 //! whenever a request is open, and between busy periods settles a pause
 //! or a resume into the record and runs a reset.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use datalib_dag::config::ConfigCheck;
 use datalib_dag::scheduler::ResetTarget;
+use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
@@ -31,10 +32,9 @@ pub struct SyncControl {
     root: Arc<PathBuf>,
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
-    wake: Arc<Notify>,
-    /// The handlers' own connection. Never the loop's: the loop notices
-    /// new rows by `PRAGMA data_version`, which a write on its own
-    /// connection does not move.
+    /// For what no announcement carries: a reset, queued in memory.
+    nudge: Arc<Notify>,
+    /// The handlers' own connection, beside the loop's.
     mailbox: Arc<OnceCell<Store>>,
     resets: Arc<Mutex<Vec<Reset>>>,
     stop: Arc<watch::Sender<bool>>,
@@ -48,7 +48,7 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
-            wake: Arc::new(Notify::new()),
+            nudge: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
             resets: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(watch::channel(false).0),
@@ -71,11 +71,6 @@ impl SyncControl {
         self.mailbox
             .get_or_try_init(|| Store::open(&self.root))
             .await
-    }
-
-    /// Something for the loop to look at: a request, a pause, a reset.
-    pub fn wake(&self) {
-        self.wake.notify_one();
     }
 
     /// Empty what `targets` wrote (`docs/dev/plans/supervisor.md` §2.10),
@@ -102,7 +97,7 @@ impl SyncControl {
                 by: by.to_string(),
                 done,
             });
-        self.wake();
+        self.nudge.notify_one();
         answer
             .await
             .unwrap_or_else(|_| Err("the server stopped before the reset ran".into()))
@@ -131,10 +126,6 @@ pub struct HostConfig {
     pub now: Option<String>,
 }
 
-/// How often an idle host looks for intent nobody woke it for: a request
-/// or a pause a `datalib-dag` client wrote.
-const IDLE_POLL: Duration = Duration::from_secs(1);
-
 pub async fn run(cfg: HostConfig) {
     let control = cfg.control.clone();
     host(&cfg).await;
@@ -153,7 +144,9 @@ async fn host(cfg: &HostConfig) {
             return;
         }
     };
-    let Some(_lock) = take_the_lock(cfg, &mut stop).await else {
+    let mut listener = Listener::new(&store, "the server's loop").await;
+    let Some(_lock) = take_the_lock(cfg, &store, &mut listener, &mut stop).await else {
+        store.close().await;
         return;
     };
     cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
@@ -170,61 +163,51 @@ async fn host(cfg: &HostConfig) {
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
+    host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
+    store.close().await;
+}
 
-    // The pauses the record was last settled against; `None` until the
-    // first settle, which also clears what a dead loop left running.
-    let mut settled: Option<BTreeMap<String, String>> = None;
-    while !*stop.borrow() {
-        let resets =
-            std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
+struct ServerPeriods<'a> {
+    cfg: &'a HostConfig,
+}
+
+impl host::Periods for ServerPeriods<'_> {
+    async fn busy_period(&mut self, store: &Store) {
+        serve_period(self.cfg, store).await;
+    }
+
+    async fn settle(&mut self, store: &Store) {
+        settle(&self.cfg.control.root, store).await;
+    }
+
+    async fn idle_work(&mut self, store: &Store) {
+        let resets = std::mem::take(
+            &mut *self
+                .cfg
+                .control
+                .resets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         for reset in resets {
-            let result = run_reset(cfg, &store, &reset.targets, &reset.by).await;
+            let result = run_reset(self.cfg, store, &reset.targets, &reset.by).await;
             let _ = reset.done.send(result);
         }
-        let open = match store.open_requests().await {
-            Ok(open) => open,
-            Err(e) => {
-                tracing::error!("supervisor: could not read the open requests: {e:#}");
-                Vec::new()
-            }
-        };
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
-            serve_period(cfg, &store).await;
-            continue;
-        }
-        // Asked to stop before any loop took them on: closed where they
-        // stand, since a busy period for them would do nothing.
-        for request in open {
-            if let Err(e) = store
-                .close_request(&request.id, RequestOutcome::Stopped, None)
-                .await
-            {
-                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
-            }
-        }
-        match store.paused().await {
-            Ok(paused) if settled.as_ref() != Some(&paused) => {
-                settle(&root, &store).await;
-                settled = Some(paused);
-            }
-            Ok(_) => {}
-            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
-        }
-        tokio::select! {
-            _ = cfg.control.wake.notified() => {}
-            _ = tokio::time::sleep(IDLE_POLL) => {}
-            _ = stop.changed() => {}
-        }
     }
-    store.close().await;
+
+    async fn nudged(&self) {
+        self.cfg.control.nudge.notified().await;
+    }
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`
 /// runs the loop, and serves the UI's requests too.
 async fn take_the_lock(
     cfg: &HostConfig,
+    store: &Store,
+    listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
-) -> Option<datalib_dag::lock::FileLock> {
+) -> Option<datalib_dag::lock::RunnerLock> {
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(&cfg.control.root) {
@@ -247,7 +230,7 @@ async fn take_the_lock(
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep(IDLE_POLL) => {}
+            _ = listener.next(store) => {}
             _ = stop.changed() => return None,
         }
     }
