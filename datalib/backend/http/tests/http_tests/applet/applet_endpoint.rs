@@ -4,88 +4,16 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
 use datalib_http::sha256_hex;
-use datalib_http::ApiToken;
 use datalib_http::{router, AppState};
-use datalib_schema::providers::Provider;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "frontend-test-token";
-
-fn applet_command() -> String {
-    let bin = PathBuf::from(std::env::var("APPLET_BIN").expect("APPLET_BIN set by the BUILD rule"))
-        .canonicalize()
-        .expect("applet binary exists");
-    format!("{} slack", bin.display())
-}
-
-fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
-    use datalib_etl_render::grid_index::RenderedMarkdown;
-    use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-    use datalib_schema::grid_rows::GridRow;
-
-    let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
-        GridRow::builder()
-            .uuid(uuid)
-            .provider(Provider::Slack)
-            .kind(if index.is_some() {
-                "Slack Message"
-            } else {
-                "Slack Thread"
-            })
-            .source_label("Slack")
-            .is_document(index.is_none())
-            .channel(Some(channel.to_string()))
-            .created_at(Some(when.to_string()))
-            .author(author.map(str::to_string))
-            .message_index(index)
-            .conversation_uuid(md)
-            .entire_chat(format!("/chat/{md}"))
-            .text(text)
-            .markdown_uuid(Some(md.to_string()))
-            .build()
-            .unwrap()
-    };
-
-    let first = msgs.first().expect("a thread has at least one message");
-    let mut rows = vec![mk(md.to_string(), None, None, first.2, first.3)];
-    for (index, author, text, when) in msgs {
-        rows.push(mk(
-            format!("{md}-m{index}"),
-            Some(*index),
-            Some(author),
-            text,
-            when,
-        ));
-    }
-
-    let store = IndexedMarkdownStore::open(tree).unwrap();
-    store
-        .put_document(
-            tree,
-            &RenderedMarkdown {
-                markdown_uuid: md.to_string(),
-                source_id: "slack".into(),
-                upstream_cursor: None,
-                bucket_key: None,
-                md_path: tree.join(format!("{md}.md")),
-                render_version: 1,
-                rows,
-                sections: Vec::new(),
-                edges: Vec::new(),
-                problems: Vec::new(),
-            },
-        )
-        .unwrap();
-    // The applet reads at HEAD, as the render step leaves it.
-    store.commit("test").unwrap();
-    store.close();
-}
+use super::{applet_command, seed_doc};
+use crate::support::{get_json, state_with_applets, TEST_TOKEN};
 
 fn seed_tree(root: &Path) {
     let tree = root.join("slack/rendered_md");
@@ -147,27 +75,8 @@ async fn state_bounded(
     start_timeout: std::time::Duration,
 ) -> AppState {
     std::fs::write(root.join("config.toml"), config_toml).unwrap();
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        // No sampler running here, so the monitor is empty and every
-        // tree reports as absent — the state a root nobody has walked
-        // is in.
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root_bounded(
-            &root,
-            None,
-            start_timeout,
-        )),
-    }
+    let applets = AppletRegistry::from_data_root_bounded(root, None, start_timeout);
+    state_with_applets(root, applets).await
 }
 
 /// Save a config the way the wizard does. The writer reconciles the
@@ -198,27 +107,6 @@ async fn reload(registry: &Arc<AppletRegistry>) {
     tokio::task::spawn_blocking(move || registry.reload())
         .await
         .unwrap();
-}
-
-async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::get(uri)
-                .header("x-datalib-token", TEST_TOKEN)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
-    )
 }
 
 /// The whole loop: the applet is started, writes its namespace before
