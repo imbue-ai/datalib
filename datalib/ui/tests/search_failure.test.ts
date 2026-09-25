@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, errorDetail } from "../src/api";
-import { searchFailure } from "../src/cards/searchFailure";
+import { ApiError, errorDetail } from "@/apiError";
+import { searchFailure } from "@/cards/searchFailure";
 
 const URL = "/applet/unified_index/search?q=is%3Adocument&limit=100000";
 

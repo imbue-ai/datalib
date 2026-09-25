@@ -1,6 +1,6 @@
 // What a grid says when its search fails: one sentence for the card, and
 // the raw error — URL, status and all — for the tooltip.
-import { ApiError } from "@/api";
+import { ApiError } from "@/apiError";
 
 export type SearchFailure = { message: string; detail: string };
 

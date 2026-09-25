@@ -1,6 +1,7 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
 import type { FeedbackContext } from "./feedback/context";
+import { ApiError, errorDetail } from "./apiError";
 import { pushToast } from "./toasts";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
@@ -366,32 +367,6 @@ export type AccountsMap = Record<string, AccountInfo>;
 
 export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
   return getJson<AccountsMap>("/api/accounts", signal);
-}
-
-// A request the server answered with an error status. `detail` is what
-// it said: the `error` of a `{"error": …}` body, else the body as text.
-export class ApiError extends Error {
-  constructor(
-    readonly url: string,
-    readonly status: number,
-    readonly detail: string,
-  ) {
-    super(detail ? `${url} → ${status}: ${detail}` : `${url} → ${status}`);
-  }
-}
-
-export function errorDetail(body: string): string {
-  const text = body.trim();
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && "error" in parsed) {
-      const error = (parsed as { error: unknown }).error;
-      if (typeof error === "string") return error;
-    }
-  } catch {
-    // Not JSON; the text is the detail.
-  }
-  return text;
 }
 
 // `toast: false` is for a caller that shows the failure where it happened.
