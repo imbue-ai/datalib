@@ -103,6 +103,24 @@ sh_binary(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
+# `bazelisk run //:rustfmt -- <file or directory>...` formats Rust the way the
+# rustfmt aspect checks it.
+sh_binary(
+    name = "rustfmt",
+    srcs = ["scripts/rustfmt.sh"],
+    data = [
+        "@rules_rust//rust/settings:rustfmt.toml",
+        "@rules_rust//tools/upstream_wrapper:rustfmt",
+    ],
+    env = {
+        "RUSTFMT": "$(rlocationpath @rules_rust//tools/upstream_wrapper:rustfmt)",
+        "RUSTFMT_CONFIG": "$(rlocationpath @rules_rust//rust/settings:rustfmt.toml)",
+        "RUST_EDITION": "$(RUST_DEFAULT_EDITION)",
+    },
+    toolchains = ["@rules_rust//rust/toolchain:current_rust_toolchain"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # The hermetic lint/typecheck gate, grouped for `bazelisk test //:lint`.
 test_suite(
     name = "lint",
