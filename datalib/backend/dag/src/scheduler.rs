@@ -322,7 +322,7 @@ impl Runner {
         &self,
         graph: &Graph,
         state: &mut Record,
-        status: &mut [Option<StepStatus>],
+        status: &mut Option<StepStatus>,
         i: usize,
         st: StepStatus,
         error: Option<String>,
@@ -363,7 +363,7 @@ impl Runner {
                 entry.last_success_at = Some(stamp);
             }
         }
-        status[i] = Some(st);
+        *status = Some(st);
     }
 }
 
