@@ -365,8 +365,8 @@ programs against:
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
-- `mapView(opts?: { q?: string; by?: string })` — the embedding map
-  (`cards/MapCard.ce.vue`, over the applet's `/embedding_map`): every
+- `umapView(opts?: { q?: string; by?: string })` — the embedding map
+  (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
   document qmd embedded, placed by the `embedding_map` step. The search
   bar takes the grid's grammar and greys out what it does not match
   (`/embedding_map/matches`); a legend colours by one field and

@@ -171,7 +171,7 @@ function = "qmd_index"
 inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 # qmd's document embeddings laid out on a plane by UMAP, for the map
-# card (`mapView()`). It reads only the qmd index, so it names that one
+# card (`umapView()`). It reads only the qmd index, so it names that one
 # step. Each run starts from the last map, so documents stay put as more
 # arrive; resetting the step lays the map out afresh.
 [[steps]]

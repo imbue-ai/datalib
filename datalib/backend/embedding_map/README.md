@@ -1,6 +1,6 @@
 # The embedding map
 
-The map card (`mapView()`) shows every document qmd has embedded as a
+The map card (`umapView()`) shows every document qmd has embedded as a
 point on a plane, placed so that documents with similar content sit near
 each other. This crate computes where the points go. It is pure
 computation: the `embedding_map` function in `datalib-step`
@@ -17,7 +17,7 @@ datalib_embedding_map::layout                 this crate
 unified_index/embedding_map/embedding_map.json   path → (x, y), one file
         │  applets/src/unified_index/map.rs — joined to grid_rows by path
         ▼
-the map card                                  datalib/ui/src/cards/MapCard.ce.vue
+the map card                                  datalib/ui/src/cards/UmapCard.ce.vue
 ```
 
 ## What happens in one run

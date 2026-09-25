@@ -172,6 +172,6 @@ export type ViewLibs = {
   logLineView: (seq: number) => CardRender;
   // Every embedded document as a point, placed by the `embedding_map`
   // step so like sits near like; filter with the grid's grammar, colour
-  // by a field, hover to preview, click to open. See cards/MapCard.ce.vue.
-  mapView: (opts?: { q?: string; by?: string }) => CardRender;
+  // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.
+  umapView: (opts?: { q?: string; by?: string }) => CardRender;
 };

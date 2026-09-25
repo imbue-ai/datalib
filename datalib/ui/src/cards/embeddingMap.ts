@@ -1,7 +1,7 @@
 // The map card's decisions, as pure functions over values: what a point
 // is coloured by, which categories get a colour, where the view sits,
 // which point is under the pointer, and what a preview says. The card
-// (MapCard.ce.vue) draws and listens; everything it decides is here.
+// (UmapCard.ce.vue) draws and listens; everything it decides is here.
 
 import type { MapPoint } from "@/api";
 

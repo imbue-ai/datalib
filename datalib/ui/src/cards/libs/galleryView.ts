@@ -34,7 +34,7 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
     description: "Search and browse everything in your library.",
   },
   {
-    source: "mapView()",
+    source: "umapView()",
     title: "Embedding map",
     description:
       "Every document placed by what it says, so like sits near like. Filter, colour by type or source, hover to preview.",
