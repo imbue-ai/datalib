@@ -1,6 +1,7 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
@@ -435,4 +436,77 @@ test("deleting the group takes every step under it", async ({ page }) => {
   // The `[[groups]]` entry, both `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);
+});
+
+/// The data root: the directory the served config lives in.
+async function dataRoot(request: APIRequestContext): Promise<string> {
+  const { path } = (await (await request.get("/api/config")).json()) as { path: string };
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
+/// A comparison of the fixture's Slack, written straight into the config
+/// with a tree on disk, as "Compare two syncs…" and its first sync leave
+/// one. No inputs, so saving it syncs nothing.
+async function addComparison(page: Page, root: string, id: string, name: string) {
+  mkdirSync(`${root}/${id}/render_markdown`, { recursive: true });
+  writeFileSync(`${root}/${id}/render_markdown/indexed_markdown.doltlite_db`, "");
+  await page
+    .locator(".m2-editor")
+    .fill(
+      `${original}\n[[groups]]\nid = "${id}"\nname = "${name}"\ntype = "diff"\nsource = "slack"\n\n` +
+        `[[steps]]\ngroup = "${id}"\nfunction = "render_markdown"\n\n` +
+        `[steps.params.diff]\nfrom = "a"\nto = "b"\n`,
+    );
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await openManager(page);
+}
+
+const removeDialog = (page: Page) => page.getByRole("dialog", { name: "Remove" });
+
+test("removing a comparison deletes its computed changes, checked by default", async ({
+  page,
+  request,
+}) => {
+  const root = await dataRoot(request);
+  await addComparison(page, root, "slack-changes", "Slack changes");
+
+  await pickRowMenu(
+    page,
+    groupRow(page, "slack-changes"),
+    "Remove from config, with everything under it",
+    removeDialog(page),
+  );
+  await expect(removeDialog(page)).toContainText('Remove the comparison "Slack changes"');
+  await expect(removeDialog(page).getByRole("checkbox")).toBeChecked();
+  await removeDialog(page).getByRole("button", { name: "Remove" }).click();
+
+  await expect(
+    page.getByText(/Removed Slack changes\. The computed changes are deleted/),
+  ).toBeVisible();
+  await expect(groupRow(page, "slack-changes")).toHaveCount(0);
+  await expect.poll(() => existsSync(`${root}/slack-changes`)).toBe(false);
+});
+
+test("a comparison removed with the box unchecked keeps its tree", async ({ page, request }) => {
+  const root = await dataRoot(request);
+  await addComparison(page, root, "slack-kept", "Slack kept");
+  try {
+    await pickRowMenu(
+      page,
+      groupRow(page, "slack-kept"),
+      "Remove from config, with everything under it",
+      removeDialog(page),
+    );
+    await removeDialog(page).getByRole("checkbox").uncheck();
+    await removeDialog(page).getByRole("button", { name: "Remove" }).click();
+
+    await expect(page.getByText("Removed Slack kept.", { exact: true })).toBeVisible();
+    await expect(groupRow(page, "slack-kept")).toHaveCount(0);
+    expect(existsSync(`${root}/slack-kept/render_markdown/indexed_markdown.doltlite_db`)).toBe(
+      true,
+    );
+  } finally {
+    rmSync(`${root}/slack-kept`, { recursive: true, force: true });
+  }
 });

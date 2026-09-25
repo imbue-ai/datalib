@@ -21,7 +21,6 @@ use crate::step::{
     StopSignal,
 };
 use crate::supervisor::record::{LastRun, Record};
-use crate::version::tree_version;
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -224,15 +223,17 @@ impl Runner {
             // Emptied, not gone: what reads it sees a new version and runs,
             // which is how the emptiness reaches the grid; and the step
             // keeps no history, so its next run starts from nothing.
-            let version = crate::sink::read_version(&self.data_root.join(spec.output().as_str()))
-                .await
-                .with_context(|| format!("read {} after its reset", target.step))?;
+            let fingerprint = &graph.fingerprints[i];
+            let reported = result.map(|o| o.outputs).unwrap_or_default();
+            let version = reported_version(spec, fingerprint, &reported)?.unwrap_or_else(|| {
+                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+            });
             let saved = store.load_record().await.context("load the record")?;
             let mut state = saved.clone();
             state.steps.insert(
                 target.step.clone(),
                 crate::supervisor::record::StepRecord {
-                    version,
+                    version: Some(version),
                     ..Default::default()
                 },
             );
@@ -416,59 +417,39 @@ pub(crate) fn step_summary(r: &StepReport) -> crate::events::StepSummary {
     }
 }
 
-/// Resolve a step's reported (possibly empty) output states to
-/// concrete `(path, version)` pairs for every declared output.
-/// Reporting on an undeclared output is a contract violation.
+/// The version a step reported for the tree it writes, with its
+/// fingerprint folded in; `None` when it reported none. Reporting on any
+/// other tree is a contract violation.
 ///
-/// The step's `fingerprint` is folded into every recorded version. A step
-/// reports on its content and cannot know its own definition changed, so
-/// without this a bumped `code_version` re-runs the step while leaving the
-/// reported version identical — the tree is rebuilt and consumers skip it.
-pub(crate) fn resolve_outputs(
-    data_root: &std::path::Path,
+/// The fingerprint is folded in because a step reports on its content and
+/// cannot know its own definition changed: without it a bumped
+/// `code_version` re-runs the step while the version stays the same, and
+/// its consumers skip what the new definition wrote.
+pub(crate) fn reported_version(
     spec: &StepSpec,
     fingerprint: &str,
     reported: &[ArtifactState],
-    sink: &dyn EventSink,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Option<String>> {
     let output = spec.output();
-    let mut by_path: BTreeMap<&str, &ArtifactState> = BTreeMap::new();
+    let mut version = None;
     for r in reported {
-        if r.path.as_str() != output.as_str() {
-            anyhow::bail!(
-                "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
-                spec.id,
-                r.path.as_str(),
-                output.as_str()
-            );
-        }
-        by_path.insert(r.path.as_str(), r);
+        anyhow::ensure!(
+            r.path.as_str() == output.as_str(),
+            "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
+            spec.id,
+            r.path.as_str(),
+            output.as_str()
+        );
+        version = Some(format!("{fingerprint}:{}", r.version));
     }
-    let path = output.as_str();
-    let v = match by_path.get(path) {
-        // The step vouched for a version: trust it. The mechanics
-        // behind it (row-set hash, dolt commit, cursor hash) stay
-        // the step's business.
-        Some(a) => a.version.clone(),
-        // Said nothing about its output: decide for ourselves.
-        None => {
-            sink.emit(&Event::Log {
-                step: spec.id.clone(),
-                level: crate::events::LogLevel::Info,
-                msg: format!(
-                    "reported no version for {path}; reading the whole tree to hash it. \
-                     A version the step derives from what it wrote would be cheaper."
-                ),
-                ts: None,
-                stream: None,
-                target: None,
-                thread: None,
-                fields: None,
-            });
-            tree_version(&data_root.join(path))?
-        }
-    };
-    Ok(vec![(path.to_string(), format!("{fingerprint}:{v}"))])
+    Ok(version)
+}
+
+/// The version of a step's tree when the step reported none: new every
+/// time, so each success reaches its consumers, as `make` would have it
+/// with no timestamps to compare.
+pub(crate) fn fresh_version(fingerprint: &str, invocation: &str) -> String {
+    format!("{fingerprint}:run-{invocation}")
 }
 
 /// What each consumer has not read yet, per producer: the seals (a
@@ -923,42 +904,12 @@ mod tests {
         .input(input)
     }
 
-    /// A doltlite store with one table and one commit on `main`; its head.
-    async fn committed_store(path: &std::path::Path) -> String {
-        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-        use std::str::FromStr;
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-            .unwrap()
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        for sql in [
-            "CREATE TABLE t (x INTEGER)",
-            "INSERT INTO t VALUES (1)",
-            "SELECT dolt_commit('-Am', 'seal')",
-        ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-        }
-        let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-        head
-    }
-
-    /// A step's checkpoint and its outcome name one commit in two spellings
-    /// — a bare hash on the seal, `store:<hash>` on the outcome, as render
-    /// does. The runner reads the store rather than comparing the strings,
-    /// so finishing on the commit it last sealed moves nothing and the
-    /// consumer does not run a second time.
+    /// A step that finishes on the version it last sealed moves nothing, so
+    /// the consumer that read that seal does not run a second time. The
+    /// loop compares the strings, so a step spells one version one way on
+    /// both lines.
     #[tokio::test]
-    async fn finishing_on_the_commit_already_sealed_does_not_run_the_consumer_again() {
+    async fn finishing_on_the_version_already_sealed_does_not_run_the_consumer_again() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
         let producer = StepSpec::new(
@@ -968,10 +919,7 @@ mod tests {
                 move |ctx: StepCtx| {
                     let passes = passes.clone();
                     async move {
-                        let dir = ctx.path_str(&ctx.step_id);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        let head = committed_store(&dir.join("store.doltlite_db")).await;
-                        ctx.checkpoint(&head);
+                        ctx.checkpoint("c1");
                         let deadline = std::time::Instant::now() + Duration::from_secs(10);
                         while passes.load(Ordering::SeqCst) == 0 {
                             assert!(std::time::Instant::now() < deadline, "no pass on the seal");
@@ -979,7 +927,7 @@ mod tests {
                         }
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
-                            outputs: vec![ArtifactState::versioned(&pat, format!("store:{head}"))],
+                            outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
                         })
                     }
@@ -3004,7 +2952,7 @@ mod tests {
         let store = fx.root.path().join("email/raw/data.txt");
         assert!(
             store.exists(),
-            "the test needs data on disk, or hashing would give ABSENT and prove nothing"
+            "the test needs data on disk, which the loop must not read"
         );
 
         // Run 2: sync slack only. `email/raw` is out of scope and has
@@ -3181,86 +3129,51 @@ mod tests {
         assert_eq!(audit_runs.load(Ordering::SeqCst), 1);
         assert!(fx.root.path().join("slack/audit/a.txt").is_file());
     }
-    /// A consumer must notice its input *disappearing*, not just
-    /// changing. A deleted tree versions as `absent`, which differs from
-    /// a content hash like any other change, so the consumer re-runs and
-    /// gets a chance to drop the output it built from data that is gone.
+    /// A producer that reports no version gives every success a new one,
+    /// so what reads it runs again each time; one that reports the same
+    /// version run after run lets its reader skip. The loop never reads a
+    /// tree to tell the two apart.
     #[tokio::test]
-    async fn deleted_input_reruns_its_consumer() {
+    async fn an_unversioned_producer_reruns_its_reader_after_every_success() {
         let root = tempfile::tempdir().unwrap();
-
-        // Writes its tree on the first run only. After the user deletes
-        // it, the step still runs (no inputs, so always) but recreates
-        // nothing — which is how the tree stays absent.
-        let wrote = Arc::new(AtomicU32::new(0));
-        let w = wrote.clone();
-        let producer = StepSpec::new(
-            "takeout/raw",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let w = w.clone();
-                async move {
-                    if w.fetch_add(1, Ordering::SeqCst) == 0 {
-                        let dir = ctx.path_str(&ctx.step_id);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        std::fs::write(dir.join("chat.json"), "v1").unwrap();
-                    }
-                    Ok(StepOutcome::default())
-                }
-            }),
-        );
-
-        let runs = Arc::new(AtomicU32::new(0));
-        let rn = runs.clone();
-        let consumer = StepSpec::new(
-            "takeout/rendered_md",
-            StepRun::in_process(move |ctx: StepCtx| {
-                let rn = rn.clone();
-                async move {
-                    rn.fetch_add(1, Ordering::SeqCst);
+        let producer = |id: &'static str, version: Option<&'static str>| {
+            StepSpec::new(
+                id,
+                StepRun::in_process(move |ctx: StepCtx| async move {
                     let dir = ctx.path_str(&ctx.step_id);
                     std::fs::create_dir_all(&dir).unwrap();
-                    let out = std::path::Path::new(&dir).join("chat.md");
-                    match std::fs::read_to_string(ctx.path(&ctx.inputs[0]).join("chat.json")) {
-                        Ok(text) => std::fs::write(out, text).unwrap(),
-                        // Source gone: drop what we rendered from it.
-                        Err(_) => {
-                            let _ = std::fs::remove_file(out);
-                        }
-                    }
-                    Ok(StepOutcome::default())
-                }
-            }),
-        )
-        .input("takeout/raw");
+                    std::fs::write(dir.join("same.txt"), "unchanged").unwrap();
+                    let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                    Ok(StepOutcome {
+                        outputs: version
+                            .map(|v| ArtifactState::versioned(&pat, v))
+                            .into_iter()
+                            .collect(),
+                        exit: None,
+                    })
+                }),
+            )
+        };
+        let reads_plain = Arc::new(AtomicU32::new(0));
+        let reads_versioned = Arc::new(AtomicU32::new(0));
+        let g = Graph::build(vec![
+            producer("plain/raw", None),
+            producer("versioned/raw", Some("v1")),
+            counting_consumer("plain/rendered_md", "plain/raw", reads_plain.clone()),
+            counting_consumer(
+                "versioned/rendered_md",
+                "versioned/raw",
+                reads_versioned.clone(),
+            ),
+        ])
+        .unwrap();
 
-        let g = Graph::build(vec![producer, consumer]).unwrap();
         let r = runner(root.path());
-        assert!(r.run(&g).await.unwrap().all_ok());
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-        assert!(root.path().join("takeout/rendered_md/chat.md").is_file());
-
-        // The user deletes the raw store off disk.
-        std::fs::remove_dir_all(root.path().join("takeout/raw")).unwrap();
-
-        let rep = r.run(&g).await.unwrap();
-        assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(
-            runs.load(Ordering::SeqCst),
-            2,
-            "a deleted input must re-run its consumer, not read as unchanged"
-        );
-        assert!(
-            !root.path().join("takeout/rendered_md/chat.md").exists(),
-            "the consumer got its chance to drop output built from data that is gone"
-        );
-
-        // And it settles: still absent next run, so nothing re-runs.
-        let rep = r.run(&g).await.unwrap();
-        assert_eq!(
-            rep.step("takeout/rendered_md").status,
-            StepStatus::SkippedUpToDate
-        );
-        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        for _ in 0..3 {
+            assert!(r.run(&g).await.unwrap().all_ok());
+        }
+        assert_eq!(reads_plain.load(Ordering::SeqCst), 3);
+        assert_eq!(reads_versioned.load(Ordering::SeqCst), 1);
     }
 
     /// One source's broken render must not keep the others out of the

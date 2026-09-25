@@ -269,54 +269,46 @@ invariants after every episode. A failure prints its seed and the last
 bazelisk test //datalib/backend/dag:supervisor_harness_test --test_env=HARNESS_SEED=27
 ```
 
-## Versions: read from the store, or reported by the step
+## Versions: reported by the step
 
-**A step whose tree holds doltlite stores is versioned by the runner.**
-After every invocation, and at every checkpoint, it reads the commit each
-store's `main` is at (`sink.rs`): `<store file>:<hash>` for each
-`*.doltlite_db` directly in the tree, in name order. That is exactly what
-a pinned reader of the store can see, so it is exactly what a consumer
-reads; what the step reports is not consulted. It is read whether the step
-succeeded or failed, because a writer's `open` publishes a commit its
-crashed predecessor left. Only the stores at the top of the tree count —
-a render tree's per-document directories hold markdown.
+**The loop never opens a step's output.** It takes the version a step
+reports, on each seal and in its outcome, and compares it for equality,
+nothing more. That is what keeps it agnostic to what the steps run: a
+doltlite store, a directory of files, or anything else.
 
-**Any other step reports one version string per output.** It must be a
-function of the output's **content** — a row-set hash, a cursor's hash —
-so that two runs over the same data report the same string and
-"unchanged" is something the scheduler *derives* rather than something a
-step asserts. A timestamp does not qualify. The value is otherwise opaque:
-the runner only ever compares it for equality.
+**A version should be a function of the output's content**, so that two
+runs over the same data report the same string and "unchanged" is
+something the loop *derives* rather than something a step asserts. A
+doltlite commit hash is one: the store's head moves only when a commit
+changed something. The built-in steps report exactly that, and spell it the
+same way on a seal and in the outcome, so finishing on the commit last
+sealed moves nothing downstream.
 
-An output the step says nothing about is content-hashed instead. That is
-`tree_version`, whose only caller in this crate is `resolve_outputs`, and it
-is only ever reached for a step that just ran — hashing is always correct and always slower, since it
-reads every file under the output. When it fires it says so on the event
-stream: an unreported version costs a full read of the tree, and #225 is the
-case for what a slow path nobody can see costs in the end.
+**A step that reports no version gets a new one on every success**
+(`<fingerprint>:run-<invocation id>`), so everything that reads it runs
+again, as `make` would with no timestamps to compare. That is always safe
+and sometimes wasteful; the loop says so on the event stream when it
+happens, and a step that wants its readers to skip reports a version.
 
-The runner never reads a tree to version it on a step's behalf. A step that
-did not run contributes the version recorded for its output last time, or
-`UNKNOWN`. Reading gigabytes to answer a question a step can answer from a
-commit hash — for work this run already decided not to do — is the thing
-that policy exists to prevent.
+**A failed or stopped step's reported version stands**: what it committed
+before it ended, its consumers read (`plans/supervisor.md` §2.5).
+`datalib-step` reports its store's head however it ends, so a commit its
+writer published at open, or at the stop, reaches them. One that reports
+nothing moves nothing, since its tree may be half-written. The one thing
+no report can carry: a step killed outright after publishing and before
+saying so reaches its consumers at its next run, not at once.
 
-**The step's fingerprint is folded into every reported version.** A step
-reports on its content and has no way to know its own definition changed.
-Without folding, a bumped `code_version` re-runs the step (its fingerprint
-moved) while the reported version stays identical, so consumers skip: the
-tree is rebuilt and the index keeps serving what the old definition
-produced. A version read from a store is not folded: a rebuild that
-changes rows is a new commit, and one that changes nothing leaves nothing
-new to read.
+A step that did not run contributes the version recorded for its output
+last time, or `UNKNOWN`, which compares equal to itself so two runs that
+both know nothing agree.
 
-`ABSENT` and `UNKNOWN` are compared for equality like any other version,
-which gives the right answer in both directions. A tree that was never
-produced and still isn't compares equal to itself, so a consumer that
-already recorded it is not dirtied; one that existed and was deleted moves
-to a different string, so its consumers re-run. A real version always
-contains a colon (`<fingerprint>:<version>`), so it can never collide with
-either sentinel.
+**The step's fingerprint is folded into every version.** A step reports on
+its content and has no way to know its own definition changed. Without
+folding, a bumped `code_version` re-runs the step (its fingerprint moved)
+while the reported version stays identical, so consumers skip: the tree is
+rebuilt and the index keeps serving what the old definition produced. A
+real version therefore always contains a colon (`<fingerprint>:<version>`)
+and can never collide with `UNKNOWN`.
 
 ## Diagnostics: severity is blast radius, not mood
 

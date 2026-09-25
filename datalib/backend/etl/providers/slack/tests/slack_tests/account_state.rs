@@ -2,68 +2,41 @@
 //! saved-for-later items and channel bookmarks.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::http::PLAYBACK_ENV;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl::synthesize::Synthesizer;
-use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
-use datalib_etl_slack::synthesize::SlackSynth;
+use datalib_etl_slack::ingest::{db_path_for, FetchSummary, RawDb};
+use datalib_etl_slack::recorded::{
+    record_auth, record_call, record_conversations, record_users, History, CHANNEL_TYPES,
+};
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
-/// `datetime_to_slack_ts` of 2024-01-01T00:00:00Z.
-const TS_SINCE: &str = "1704067200.000000";
+use crate::support::{fetch_into, serve};
 
-fn append_envelope(api: &Path, method: &str, params: Value, response: Value) {
-    let path = api.join(format!("raw_api/{method}/run-1.jsonl"));
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut s = fs::read_to_string(&path).unwrap_or_default();
-    s.push_str(
-        &serde_json::to_string(&json!({"method": method, "params": params, "response": response}))
-            .unwrap(),
-    );
-    s.push('\n');
-    fs::write(path, s).unwrap();
+fn call(api: &Path, method: &str, params: Value, response: Value) {
+    record_call(api, method, params, response).unwrap();
 }
 
 /// Two channels, only `C1` with a bookmarks bar, and a DM the config
 /// (`dms = false`) never asks about.
 fn write_workspace(api: &Path) {
-    append_envelope(
+    record_auth(api).unwrap();
+    record_users(api, json!([{"id": "U1", "name": "picard"}])).unwrap();
+    record_conversations(
         api,
-        "auth.test",
-        json!({}),
-        json!({"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"}),
-    );
-    append_envelope(
-        api,
-        "users.list",
-        json!({"limit": "200"}),
-        json!({"ok": true, "members": [{"id": "U1", "name": "picard"}]}),
-    );
-    append_envelope(
-        api,
-        "conversations.list",
-        json!({"exclude_archived": "true", "limit": "200", "types": "public_channel,private_channel"}),
-        json!({"ok": true, "has_more": false, "channels": [
+        CHANNEL_TYPES,
+        json!([
             {"id": "C1", "name": "bridge", "is_member": true, "is_archived": false,
              "properties": {"tabs": [{"id": "files", "type": "files", "label": ""},
                                      {"id": "bookmarks", "type": "bookmarks", "label": ""}]}},
             {"id": "C2", "name": "engineering", "is_member": true, "is_archived": false,
              "properties": {"tabs": [{"id": "files", "type": "files", "label": ""}]}},
-        ]}),
-    );
+        ]),
+    )
+    .unwrap();
     for channel in ["C1", "C2"] {
-        append_envelope(
-            api,
-            "conversations.history",
-            json!({"channel": channel, "include_all_metadata": "true", "inclusive": "true",
-                   "limit": "200", "oldest": TS_SINCE}),
-            json!({"ok": true, "messages": [], "has_more": false}),
-        );
+        History::cold(channel).record(api, json!([])).unwrap();
     }
     // Served so that asking about `C2` would store something: its
     // absence below then proves the bar was consulted, rather than a
@@ -76,7 +49,7 @@ fn write_workspace(api: &Path) {
                              "title": format!("bookmark {id}"), "link": "https://example.com"})
             })
             .collect();
-        append_envelope(
+        call(
             api,
             "bookmarks.list",
             json!({"channel_id": channel}),
@@ -92,7 +65,7 @@ fn read_state(id: &str, last_read: &str) -> Value {
 }
 
 fn write_counts(api: &Path, c1_last_read: &str) {
-    append_envelope(
+    call(
         api,
         "client.counts",
         json!({}),
@@ -114,7 +87,7 @@ fn write_saved(api: &Path, saved_page: Vec<Value>) {
         if let Some(c) = cursor {
             params["cursor"] = json!(c);
         }
-        append_envelope(
+        call(
             api,
             "saved.list",
             params,
@@ -139,19 +112,8 @@ fn write_saved(api: &Path, saved_page: Vec<Value>) {
     page("archived", None, vec![], "");
 }
 
-async fn run_fetch(out: &Path, playback: &Path) -> FetchSummary {
-    std::env::set_var(PLAYBACK_ENV, playback);
-    let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let r = fetch(FetchOptions {
-        refresh_window_days: 0,
-        members_only: false,
-        media: false,
-        ..FetchOptions::new(db.clone())
-    })
-    .await;
-    db.commit_all("test").await.unwrap();
-    db.close().await;
-    r.unwrap()
+async fn run_fetch(out: &Path) -> FetchSummary {
+    fetch_into(out, |o| o).await.unwrap()
 }
 
 async fn stored(out: &Path) -> (Vec<Value>, Vec<Value>, Vec<Value>, Vec<Value>) {
@@ -198,8 +160,8 @@ async fn read_states_saved_items_and_bookmarks_are_stored() {
         ],
     );
     let playback1 = d.path().join("playback1");
-    SlackSynth::new(&api1).synthesize(&playback1).unwrap();
-    let summary = run_fetch(&out, &playback1).await;
+    serve(&api1, &playback1);
+    let summary = run_fetch(&out).await;
     assert_eq!(summary.account.read_states, 2);
     assert_eq!(summary.account.saved_items, 3);
     assert_eq!(summary.account.bookmarks, 2);
@@ -239,8 +201,8 @@ async fn read_states_saved_items_and_bookmarks_are_stored() {
     write_counts(&api2, "1735689600.000900");
     write_saved(&api2, vec![]);
     let playback2 = d.path().join("playback2");
-    SlackSynth::new(&api2).synthesize(&playback2).unwrap();
-    run_fetch(&out, &playback2).await;
+    serve(&api2, &playback2);
+    run_fetch(&out).await;
 
     let (content2, read_states2, saved_items2, _) = stored(&out).await;
     assert_eq!(content2, content, "reading moved the content payload");
@@ -262,50 +224,42 @@ const C: &str = "1735689600.000300";
 /// thread the account follows (Slack's `replies` copy of its root carries
 /// `last_read`), read up to `channel_mark`.
 fn write_channel_with_marks(api: &Path, channel_mark: &str) {
-    append_envelope(
+    record_auth(api).unwrap();
+    record_users(
         api,
-        "auth.test",
-        json!({}),
-        json!({"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"}),
-    );
-    append_envelope(
+        json!([{"id": "U1", "name": "picard"}, {"id": "U2", "name": "riker"}]),
+    )
+    .unwrap();
+    record_conversations(
         api,
-        "users.list",
-        json!({"limit": "200"}),
-        json!({"ok": true, "members": [{"id": "U1", "name": "picard"}, {"id": "U2", "name": "riker"}]}),
-    );
-    append_envelope(
-        api,
-        "conversations.list",
-        json!({"exclude_archived": "true", "limit": "200", "types": "public_channel,private_channel"}),
-        json!({"ok": true, "has_more": false, "channels": [
+        CHANNEL_TYPES,
+        json!([
             {"id": "C1", "name": "bridge", "is_member": true, "is_archived": false},
-        ]}),
-    );
+        ]),
+    )
+    .unwrap();
     let root = json!({"ts": A, "user": "U2", "text": "status report", "thread_ts": A,
                       "reply_count": 1, "latest_reply": REPLY});
-    append_envelope(
-        api,
-        "conversations.history",
-        json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
-               "limit": "200", "oldest": TS_SINCE}),
-        json!({"ok": true, "has_more": false, "messages": [
-            {"ts": C, "user": "U2", "text": "third"},
-            {"ts": B, "user": "U2", "text": "second"},
-            root,
-        ]}),
-    );
-    append_envelope(
-        api,
-        "conversations.history",
-        json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "false",
-               "limit": "200", "oldest": C}),
-        json!({"ok": true, "has_more": false, "messages": []}),
-    );
+    History::cold("C1")
+        .record(
+            api,
+            json!([
+                {"ts": C, "user": "U2", "text": "third"},
+                {"ts": B, "user": "U2", "text": "second"},
+                root,
+            ]),
+        )
+        .unwrap();
+    History {
+        inclusive: false,
+        ..History::from("C1", C)
+    }
+    .record(api, json!([]))
+    .unwrap();
     let mut followed_root = root.clone();
     followed_root["subscribed"] = json!(true);
     followed_root["last_read"] = json!(A);
-    append_envelope(
+    call(
         api,
         "conversations.replies",
         json!({"channel": "C1", "ts": A, "limit": "200"}),
@@ -314,7 +268,7 @@ fn write_channel_with_marks(api: &Path, channel_mark: &str) {
             {"ts": REPLY, "user": "U2", "text": "all nominal", "thread_ts": A},
         ]}),
     );
-    append_envelope(
+    call(
         api,
         "client.counts",
         json!({}),
@@ -324,8 +278,8 @@ fn write_channel_with_marks(api: &Path, channel_mark: &str) {
 }
 
 async fn sync_to_commit(out: &Path, api: &Path, playback: &Path) -> String {
-    SlackSynth::new(api).synthesize(playback).unwrap();
-    run_fetch(out, playback).await;
+    serve(api, playback);
+    run_fetch(out).await;
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let head = dr::head_commit(db.pool()).await.unwrap().expect("a commit");
     db.close().await;

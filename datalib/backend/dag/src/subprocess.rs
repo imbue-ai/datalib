@@ -1012,11 +1012,11 @@ mod tests {
 
     /// A step written against the older protocol reports
     /// `{"path": …, "changed": true}` and no version. That must not fail
-    /// the step — the row is dropped with a warning and the runner
-    /// content-hashes the output, which is what `changed: true` resolved
-    /// to before the version became the only signal.
+    /// the step: the row is dropped with a warning, and the success gets a
+    /// version of its own, new each time, which is what `changed: true`
+    /// meant.
     #[tokio::test]
-    async fn outcome_row_without_a_version_warns_and_falls_back_to_hashing() {
+    async fn outcome_row_without_a_version_warns_and_gets_a_fresh_version() {
         let root = tempfile::tempdir().unwrap();
         let spec = StepSpec::new(
             "legacy/raw",
@@ -1038,12 +1038,8 @@ mod tests {
             rep.all_ok(),
             "a versionless row must not fail the step: {rep:#?}"
         );
-        // Fell back to the content hash rather than recording nothing.
-        // (Recorded versions carry the step fingerprint as a prefix.)
         let version = &rep.step("legacy/raw").outputs[0].1;
-        let hashed = version.rsplit(':').next().unwrap();
-        assert_ne!(hashed, crate::version::ABSENT);
-        assert_eq!(hashed.len(), 64, "blake3 hex, i.e. the fallback ran");
+        assert!(version.contains(":run-"), "{version}");
 
         let warned = rec.0.lock().unwrap().iter().any(|e| {
             matches!(e, Event::Log { level: LogLevel::Warn, msg, .. } if msg.contains("no version"))

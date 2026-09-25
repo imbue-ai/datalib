@@ -19,8 +19,8 @@ use crate::artifact::ArtifactPath;
 use crate::events::{Event, StepProgress};
 use crate::graph::Graph;
 use crate::scheduler::{
-    invoke_with_retry, mark_running, new_run_id, now_stamp, resolve_outputs, step_summary,
-    QueueLedger, RunReport, Runner, StepReport, StepStatus,
+    fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
+    step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
@@ -570,7 +570,7 @@ impl Runner {
                     let i = graph.by_id[&id];
                     let live = slots[i].live.take().expect("a joined step was started");
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
-                    let e = self.on_ended(graph, i, attempts, res, &live.consumed, &mut facts,
+                    let e = self.on_ended(graph, i, attempts, res, &live, &mut facts,
                         &mut state, &mut changed_now, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
@@ -843,33 +843,6 @@ impl Runner {
         }
     }
 
-    /// The version of what step `i` has published, read from its stores.
-    /// `None` for a tree with no store, whose version is what the step
-    /// reports. Not qualified with the step's fingerprint, as a reported
-    /// version is: a commit names content, and a definition change that
-    /// rewrites nothing leaves nothing new to read.
-    async fn read_sink(&self, graph: &Graph, i: usize) -> Option<String> {
-        let tree = self.data_root.join(graph.steps[i].output().as_str());
-        match crate::sink::read_version(&tree).await {
-            Ok(v) => v,
-            Err(e) => {
-                self.sink.emit(&Event::Log {
-                    step: graph.steps[i].id.clone(),
-                    level: crate::events::LogLevel::Warn,
-                    msg: format!(
-                        "could not read its stores' heads, using the step's report: {e:#}"
-                    ),
-                    ts: None,
-                    stream: None,
-                    target: None,
-                    thread: None,
-                    fields: None,
-                });
-                None
-            }
-        }
-    }
-
     /// A step a request wanted, with no row of its own yet and nothing
     /// left to finish, takes the one its last state settles on.
     fn settle_row(
@@ -891,6 +864,25 @@ impl Runner {
             queue.cleared(graph, i, &*self.sink);
         }
         self.finish(graph, state, &mut s.status, i, st, None, None, 0);
+    }
+
+    /// Once per invocation that reported no version: what that costs its
+    /// consumers, where a person reading the run's log will see it.
+    fn say_unversioned(&self, spec: &crate::step::StepSpec) {
+        self.sink.emit(&Event::Log {
+            step: spec.id.clone(),
+            level: crate::events::LogLevel::Info,
+            msg: format!(
+                "reported no version for {}, so every step reading it runs again; a \
+                 version derived from what it wrote lets them skip when nothing changed",
+                spec.output().as_str()
+            ),
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -929,18 +921,11 @@ impl Runner {
         if facts.steps[p].running.is_none() {
             return;
         }
-        // The commit `main` is at now, which is at least the one the step
-        // announced: it publishes before it says so.
-        let qualified = match self.read_sink(graph, p).await {
-            Some(read) => read,
-            None => {
-                let fingerprint = slots[p]
-                    .live
-                    .as_ref()
-                    .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
-                format!("{fingerprint}:{version}")
-            }
-        };
+        let fingerprint = slots[p]
+            .live
+            .as_ref()
+            .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
+        let qualified = format!("{fingerprint}:{version}");
         let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
@@ -978,13 +963,14 @@ impl Runner {
         i: usize,
         attempts: u32,
         res: Result<StepOutcome, StepError>,
-        consumed: &Consumed,
+        live: &Live,
         facts: &mut Facts,
         state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
+        let consumed = &live.consumed;
         let fingerprint = &consumed.fingerprint;
         let prior = state.steps.get(&spec.id).and_then(|s| s.version.clone());
         let exit = match &res {
@@ -998,40 +984,22 @@ impl Runner {
             attempts,
             pass_ended: false,
         };
-        // Read after every invocation, whatever it reported and however it
-        // ended: a writer's open publishes a commit its crashed predecessor
-        // left, so even a step that failed at once can move its sink.
-        let read = self.read_sink(graph, i).await;
+        let path = spec.output().as_str().to_string();
         match res {
             Ok(outcome) => {
-                let resolved = match &read {
-                    Some(v) => check_reported(spec, &outcome.outputs)
-                        .map(|()| vec![(spec.output().as_str().to_string(), v.clone())]),
-                    None => resolve_outputs(
-                        &self.data_root,
-                        spec,
-                        fingerprint,
-                        &outcome.outputs,
-                        &*self.sink,
-                    ),
-                };
-                let resolved = match resolved {
-                    Ok(r) => r,
+                let v = match reported_version(spec, fingerprint, &outcome.outputs) {
+                    Ok(Some(v)) => v,
+                    Ok(None) => {
+                        self.say_unversioned(spec);
+                        fresh_version(fingerprint, &live.invocation)
+                    }
                     Err(e) => return failed(FailureKind::Data, format!("{e:#}")),
                 };
-                let mut changed = 0usize;
-                for (path, v) in &resolved {
-                    let moved = prior.as_ref() != Some(v);
-                    changed += moved as usize;
-                    facts.sinks[i] = Some(v.clone());
-                    changed_now.insert(path.clone(), moved);
-                    let rows = outcome
-                        .outputs
-                        .iter()
-                        .find(|o| o.path.as_str() == path)
-                        .and_then(|o| o.rows);
-                    queue.sealed(graph, i, v, rows, &*self.sink);
-                }
+                let moved = prior.as_ref() != Some(&v);
+                facts.sinks[i] = Some(v.clone());
+                changed_now.insert(path, moved);
+                let rows = outcome.outputs.first().and_then(|o| o.rows);
+                queue.sealed(graph, i, &v, rows, &*self.sink);
                 let consumed_paths = paths_of(graph, consumed);
                 queue.consumed(
                     graph,
@@ -1042,12 +1010,14 @@ impl Runner {
                 );
                 let entry = state.steps.entry(spec.id.clone()).or_default();
                 entry.reads = consumed_paths.into_iter().collect();
-                entry.version = resolved.into_iter().next().map(|(_, v)| v);
+                entry.version = Some(v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
                 facts.steps[i].last_success = Some(consumed.clone());
                 Ended {
-                    status: StepStatus::Succeeded { changed },
+                    status: StepStatus::Succeeded {
+                        changed: moved as usize,
+                    },
                     error: None,
                     exit,
                     attempts,
@@ -1055,54 +1025,18 @@ impl Runner {
                 }
             }
             Err(step_err) => {
-                // What a failed step committed, its consumers read
-                // (plans/supervisor.md §2.5). A store's `main` holds only
-                // what was published; without a store, only what the step
-                // reported, since an unreported tree may be mid-write.
-                if let Some(v) = read {
-                    let path = spec.output().as_str().to_string();
+                // What a failed or stopped step reports it committed, its
+                // consumers read (plans/supervisor.md §2.5). One that reports
+                // nothing moves nothing: its tree may be mid-write.
+                if let Ok(Some(v)) = reported_version(spec, fingerprint, &step_err.outputs) {
                     changed_now.insert(path, prior.as_ref() != Some(&v));
                     facts.sinks[i] = Some(v.clone());
                     state.steps.entry(spec.id.clone()).or_default().version = Some(v);
-                } else if !step_err.outputs.is_empty() {
-                    if let Ok(resolved) = resolve_outputs(
-                        &self.data_root,
-                        spec,
-                        fingerprint,
-                        &step_err.outputs,
-                        &*self.sink,
-                    ) {
-                        let entry = state.steps.entry(spec.id.clone()).or_default();
-                        for (path, v) in resolved {
-                            changed_now.insert(path, prior.as_ref() != Some(&v));
-                            facts.sinks[i] = Some(v.clone());
-                            entry.version = Some(v);
-                        }
-                    }
                 }
                 failed(step_err.kind, format!("{:#}", step_err.error))
             }
         }
     }
-}
-
-/// A step reports only on the tree it writes; the version itself is read
-/// from the store.
-fn check_reported(
-    spec: &crate::step::StepSpec,
-    reported: &[crate::step::ArtifactState],
-) -> Result<()> {
-    let output = spec.output();
-    for r in reported {
-        anyhow::ensure!(
-            r.path.as_str() == output.as_str(),
-            "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
-            spec.id,
-            r.path.as_str(),
-            output.as_str()
-        );
-    }
-    Ok(())
 }
 
 /// Step index → who paused it, for the steps this graph has.

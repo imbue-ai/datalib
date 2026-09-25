@@ -18,6 +18,7 @@ mod introspect;
 mod login;
 mod methods;
 mod probe;
+mod published;
 mod qmd_index;
 mod render;
 mod render_diff;
@@ -150,6 +151,15 @@ enum Cmd {
 /// from a newer config should not take the run down, and the step's own
 /// default is a safe answer. It is logged, though — a fallback that fires
 /// silently is the kind this repo has been burned by.
+/// What a step that did not finish reports: the version its store is
+/// at. Nothing for a command that is not a step.
+async fn published_claims(data_root: &Path) -> Vec<events::OutputClaim> {
+    match StepEnv::from_env() {
+        Ok(env) => published::claims(&env, data_root).await,
+        Err(_) => Vec::new(),
+    }
+}
+
 fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
     let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
     match datalib_dag::config::CheckpointCadence::decode(&raw) {
@@ -316,9 +326,10 @@ async fn main() {
     match run(cli, &data_root, &now, &control, &emitter).await {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
-        // runner knows not to mark it done. What it committed stands.
-        Ok(_) if stop.requested() => {
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+        // runner knows not to mark it done. What it committed stands, and
+        // the version it reports is how that reaches its consumers.
+        Ok(outputs) if stop.requested() => {
+            emitter.outcome(&outputs, Some(FailureKind::Cancelled));
             std::process::exit(130);
         }
         // Likewise an error after the stop: the transport refuses new
@@ -326,7 +337,10 @@ async fn main() {
         // flag ends with `Interrupted`. That is the stop, not a failure.
         Err(e) if stop.requested() => {
             tracing::info!("stopped: {e:#}");
-            emitter.outcome(&[], Some(FailureKind::Cancelled));
+            emitter.outcome(
+                &published_claims(&data_root).await,
+                Some(FailureKind::Cancelled),
+            );
             std::process::exit(130);
         }
         Ok(outputs) => {
@@ -336,9 +350,8 @@ async fn main() {
         Err(e) => {
             let kind = hints::classify(&e);
             // A failed-but-incremental step may still have committed
-            // partial output; the runner reads its stores' heads and
-            // sees whatever was published.
-            emitter.outcome(&[], Some(kind));
+            // partial output, and reports what it published.
+            emitter.outcome(&published_claims(&data_root).await, Some(kind));
             // `tracing::error!` alone, never a `status_line!` beside it.
             // Both land on the same stderr, so a second copy is a second
             // row in the run store -- one with no `target`, because a

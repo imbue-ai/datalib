@@ -28,7 +28,6 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/parent_watch:datalib_parent_watch",
-        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
@@ -47,7 +46,6 @@ rust_library(
         "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
-        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -58,6 +56,7 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
     ],
 )
 

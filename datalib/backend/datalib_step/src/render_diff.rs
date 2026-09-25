@@ -189,15 +189,7 @@ pub async fn run(
     );
     progress.metric("documents_removed", &[], report.removed as i64);
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    Ok(report
-        .head
-        .map(|h| OutputClaim {
-            path: env.step.clone(),
-            version: format!("store:{h}"),
-            rows: Some(report.unsealed),
-        })
-        .into_iter()
-        .collect())
+    Ok(crate::render::claims(&env.step, &report))
 }
 
 /// One side of the comparison: what the processors emitted at one pin.
