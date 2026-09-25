@@ -1583,8 +1583,23 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let store = mailbox(&s).await?;
+    // A sync of these steps that is already open is this sync: a second
+    // click is not a second run. (A second request from anywhere else
+    // still is: the loop runs its steps once more when the first ends.)
+    let wanted: std::collections::BTreeSet<&str> = roots.iter().map(String::as_str).collect();
+    let open = store.open_requests().await.map_err(internal)?;
+    if let Some(same) = open.into_iter().find(|r| {
+        r.stop_requested_by.is_none()
+            && r.roots
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                == wanted
+    }) {
+        return Ok(Json(RequestView::from(same)));
+    }
+    let by = req.by.unwrap_or_else(|| "ui".to_string());
     let mut listener =
         datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests").await;
     let id = store.open_request(&roots, &by).await.map_err(internal)?;
