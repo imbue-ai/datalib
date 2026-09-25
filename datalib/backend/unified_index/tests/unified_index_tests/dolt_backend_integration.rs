@@ -399,7 +399,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .conversation_uuid("row-1")
         .message_index(Some(0))
         .entire_chat("/chat/row-1")
-        .text("Stardate 47988.1")
+        .body("Stardate 47988.1")
         .qmd_path(Some("claude-api/render_markdown/row-1.md".to_string()))
         .source_url(Some("https://claude.ai/chat/row-1".to_string()))
         .git_sha(Some("abc123".to_string()))

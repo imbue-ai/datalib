@@ -17,6 +17,8 @@ use datalib_schema::problems::ProblemRow;
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
 #[async_trait]
 pub trait IndexRepo: Send + Sync {
+    /// The rows `query`'s structured terms match. Its free text is qmd's;
+    /// nothing here reads it.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
 
     /// Fetch the per-markdown header data (title, account, channel, …)

@@ -1202,7 +1202,7 @@ mod insert_round_trip_tests {
     //! reports success, which is how `org_uuid` / `org_name` shipped. So every
     //! column gets a distinct sentinel and nothing may read back NULL.
     use super::*;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{content_hash, GridRow};
     use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::{Column, Row, ValueRef};
@@ -1232,7 +1232,8 @@ mod insert_round_trip_tests {
             conversation_uuid: "conv-1701".into(),
             message_index: Some(3),
             entire_chat: "/chat/conv-1701".into(),
-            text: "Tea. Earl Grey. Hot.".into(),
+            preview: "Tea. Earl Grey. Hot.".into(),
+            content_hash: content_hash("Tea. Earl Grey. Hot."),
             qmd_path: Some("chats/conv-1701.md".into()),
             source_url: Some("https://claude.ai/chat/conv-1701".into()),
             git_sha: Some("0123456789abcdef".into()),
@@ -1324,7 +1325,7 @@ mod write_lock_tests {
     //! and the losers time out. No artificial sleeps — the contention is real,
     //! from the same code path production uses.
     use super::*;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{content_hash, GridRow};
     use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -1353,7 +1354,8 @@ mod write_lock_tests {
             conversation_uuid: uuid.clone(),
             message_index: None,
             entire_chat: format!("/chat/{uuid}"),
-            text: format!("body for {uuid}"),
+            preview: format!("body for {uuid}"),
+            content_hash: content_hash(&format!("body for {uuid}")),
             qmd_path: Some(format!("chats/{uuid}.md")),
             source_url: None,
             git_sha: None,
@@ -1855,7 +1857,7 @@ mod source_cursor_tests {
             .source_label("Test")
             .conversation_uuid(uuid)
             .entire_chat(format!("/chat/{uuid}"))
-            .text(text)
+            .body(text)
             .markdown_uuid(Some(uuid.to_string()))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
@@ -2112,11 +2114,12 @@ mod source_cursor_tests {
         assert_eq!(s.markdowns_total, 1, "one document read, not two");
         assert_eq!(s.markdowns_loaded, 1);
 
-        let text: String = sqlx::query_scalar("SELECT text FROM grid_rows WHERE uuid = 'md-2'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(text, "b-changed");
+        let preview: String =
+            sqlx::query_scalar("SELECT preview FROM grid_rows WHERE uuid = 'md-2'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(preview, "b-changed");
     }
 
     /// A document a source stops holding is removed. Impossible without a

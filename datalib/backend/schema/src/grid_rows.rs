@@ -121,11 +121,17 @@ pub struct GridRow {
     /// Preview-pane path for the whole thread: `/chat/{conversation_uuid}`.
     #[col(sql = "VARCHAR(255)")]
     pub entire_chat: String,
-    /// The full searchable body. Stored whole rather than pre-truncated,
-    /// because the snippet is computed against the user's needle at query
-    /// time.
-    #[col(sql = "LONGTEXT")]
-    pub text: String,
+    /// The start of the row's body, flattened to one line: what the grid's
+    /// Contents column shows when there is no search term. Cut from the
+    /// body the producer hands the builder (`GridRowBuilder::body`); the
+    /// body itself is not stored here — the rendered markdown holds it,
+    /// and free-text search goes through qmd's index of that markdown.
+    #[col(sql = "TEXT")]
+    pub preview: String,
+    /// blake3 of the whole body, hex. A change past the preview still
+    /// changes the row, so a diff and doltlite's own dedup both see it.
+    #[col(sql = "VARCHAR(64)")]
+    pub content_hash: String,
     /// The rendered Markdown file for this row's thread, relative to the
     /// data root, so the preview pane can load it with no glob and no
     /// frontmatter scan. Set on every row; child rows inherit their parent's.
