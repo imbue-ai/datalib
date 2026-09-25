@@ -54,6 +54,10 @@ pub struct StepSpec {
     /// what it reads, in either order. Not in the fingerprint, for the same
     /// reason as `streams_output`.
     pub reads_pinned: bool,
+    /// The named locks it holds while it runs (`supervisor::locks`);
+    /// `None` for the default one its shape gives it. Not in the
+    /// fingerprint: it changes when the step may run, not what it makes.
+    pub locks: Option<Vec<(String, crate::supervisor::locks::Hold)>>,
     /// The `[[groups]]` entry this step belongs to, when it has one. The
     /// id is then `<group>/<function>`, composed by the loader; a step
     /// with no group carries a verbatim id and none of these three.
@@ -116,6 +120,7 @@ impl StepSpec {
             code_version: None,
             streams_output: false,
             reads_pinned: true,
+            locks: None,
             group: None,
             group_type: None,
             function: None,

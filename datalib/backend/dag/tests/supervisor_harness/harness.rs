@@ -21,7 +21,6 @@ use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store};
-use datalib_dag::supervisor::tick::Budgets;
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::sync::{mpsc, watch};
 
@@ -48,17 +47,21 @@ impl Default for Clocks {
     }
 }
 
-/// A step in the harness's config: a puppet, reading `inputs`.
-#[derive(Clone, Debug)]
+/// A step in the harness's config: a puppet, reading `inputs`, holding
+/// `locks` (as the config writes them, `locks = …`) and reading as
+/// `reads` says.
+#[derive(Clone, Debug, Default)]
 pub struct Step {
     pub id: String,
     pub inputs: Vec<String>,
+    pub locks: Option<String>,
+    pub reads: Option<&'static str>,
 }
 
 pub fn source(id: &str) -> Step {
     Step {
         id: id.into(),
-        inputs: Vec::new(),
+        ..Step::default()
     }
 }
 
@@ -66,8 +69,29 @@ pub fn reads(id: &str, inputs: &[&str]) -> Step {
     Step {
         id: id.into(),
         inputs: inputs.iter().map(|s| s.to_string()).collect(),
+        ..Step::default()
     }
 }
+
+impl Step {
+    /// `locks = <toml>`, as written: `["gpu"]`, `{ gpu = "exclusive" }`.
+    pub fn locks(mut self, toml: &str) -> Step {
+        self.locks = Some(toml.into());
+        self
+    }
+
+    /// Reads its inputs off disk, so no writer of them runs beside it.
+    pub fn reads_files(mut self) -> Step {
+        self.reads = Some("files");
+        self
+    }
+}
+
+/// `[[locks]]` entries every harness config has: the default budgets wide
+/// enough that no scenario waits on one it does not mean to.
+const WIDE_DEFAULTS: &str = "[[locks]]\nname = \"network\"\nslots = 8\n\n\
+                             [[locks]]\nname = \"cpu\"\nslots = 8\n\n\
+                             [[locks]]\nname = \"index\"\nslots = 8\n\n";
 
 #[derive(Debug, Clone)]
 pub enum Seen {
@@ -149,6 +173,8 @@ pub struct Harness {
     backlog: VecDeque<Seen>,
     /// Said first when a check fails: the walk's seed, say.
     pub context: String,
+    /// The scenario's own `[[locks]]` entries, written into every config.
+    locks: String,
     fifos: HashMap<String, (File, File)>,
     pids: HashMap<String, Vec<i32>>,
     stop: watch::Sender<bool>,
@@ -162,6 +188,11 @@ impl Harness {
     }
 
     pub async fn with(steps: &[Step], clocks: Clocks) -> Harness {
+        Harness::with_locks(steps, clocks, "").await
+    }
+
+    /// With `[[locks]]` entries of the scenario's own, as TOML.
+    pub async fn with_locks(steps: &[Step], clocks: Clocks, locks: &str) -> Harness {
         let root = tempfile::tempdir().unwrap();
         let puppets = root.path().join("puppets");
         std::fs::create_dir_all(&puppets).unwrap();
@@ -207,6 +238,7 @@ impl Harness {
             seen_count: 0,
             backlog: VecDeque::new(),
             context: String::new(),
+            locks: locks.to_string(),
             fifos: HashMap::new(),
             pids: HashMap::new(),
             stop: watch::channel(false).0,
@@ -237,16 +269,25 @@ impl Harness {
         }));
     }
 
-    fn config_text(&self, steps: &[Step]) -> String {
-        let mut text = String::new();
+    fn config_text(&self, steps: &[Step], locks: &str) -> String {
+        let mut text = format!("{WIDE_DEFAULTS}{locks}");
         for s in steps {
             let inputs: Vec<String> = s.inputs.iter().map(|i| format!("{i:?}")).collect();
             text.push_str(&format!(
-                "[[steps]]\nid = {:?}\ncommand = {:?}\ninputs = [{}]\n[steps.env]\nPUPPET_DIR = {:?}\n\n",
+                "[[steps]]\nid = {:?}\ncommand = {:?}\ninputs = [{}]\n",
                 s.id,
                 self.puppet_bin,
                 inputs.join(", "),
-                self.puppets.display().to_string(),
+            ));
+            if let Some(locks) = &s.locks {
+                text.push_str(&format!("locks = {locks}\n"));
+            }
+            if let Some(reads) = s.reads {
+                text.push_str(&format!("reads = {reads:?}\n"));
+            }
+            text.push_str(&format!(
+                "[steps.env]\nPUPPET_DIR = {:?}\n\n",
+                self.puppets.display().to_string()
             ));
         }
         text
@@ -258,7 +299,8 @@ impl Harness {
         }
         let path = config::root_config_path(self.root.path());
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, self.config_text(steps)).unwrap();
+        let text = self.config_text(steps, &self.locks);
+        std::fs::write(&tmp, text).unwrap();
         std::fs::rename(&tmp, &path).unwrap();
     }
 
@@ -447,10 +489,34 @@ impl Harness {
             let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
                 Ok(Some(seen)) => seen,
                 Ok(None) => self.fail(&format!("the harness's channel closed waiting for {what}")),
-                Err(_) => self.fail(&format!("no {what} within {DEADLINE:?}")),
+                Err(_) => {
+                    let verdict = self.probe(&mut check).await;
+                    self.fail(&format!("no {what} within {DEADLINE:?}; {verdict}"))
+                }
             };
             self.saw(&seen);
             self.backlog.push_back(seen);
+        }
+    }
+
+    /// Whether a loop that did not do what it was asked lost the
+    /// announcement or is stuck: an announcement of its own wakes a loop
+    /// that is waiting, and a loop that then does it had not heard.
+    async fn probe<T>(&mut self, check: &mut impl FnMut(&State) -> Option<T>) -> &'static str {
+        announce(
+            &datalib_dag::supervisor::announce::listeners_dir(self.root.path()),
+            FROM_SERVER,
+            "probe",
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if check(&self.state().await).is_some() {
+                return "a probe woke the loop and it did it: it had not heard";
+            }
+            match tokio::time::timeout_at(deadline, self.rx.recv()).await {
+                Ok(Some(seen)) => self.saw(&seen),
+                _ => return "a probe did not help: the loop is stuck",
+            }
         }
     }
 
@@ -561,11 +627,6 @@ impl host::Periods for Periods {
             .reload_from(Arc::new(ConfigFile::new(path)));
         runner.stop_grace = self.clocks.stop_grace;
         runner.backstop = self.clocks.backstop;
-        runner.budgets = Budgets {
-            network: 8,
-            cpu: 8,
-            index: 8,
-        };
         if let Err(e) = runner.serve(&checked.graph, store).await {
             let _ = self.report.send(Seen::Broke(format!("{e:#}")));
         }

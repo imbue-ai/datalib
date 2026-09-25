@@ -36,6 +36,9 @@ pub struct Graph {
     /// differs from the one recorded at its last success is stale, which
     /// is how a config edit takes effect.
     pub fingerprints: Vec<String>,
+    /// The named locks its steps may hold: the defaults, and whatever the
+    /// config declares (`supervisor::locks`).
+    pub locks: Vec<crate::supervisor::locks::LockSpec>,
 }
 
 impl Graph {
@@ -268,6 +271,7 @@ impl Graph {
                 topo,
                 fingerprints,
                 steps,
+                locks: crate::supervisor::locks::defaults(),
             },
             Vec::new(),
         )
