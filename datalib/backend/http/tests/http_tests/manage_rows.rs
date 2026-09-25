@@ -196,11 +196,17 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // A step's Browse is its group's: the same button, just as enabled.
     assert_eq!(render["actions"][0], slack["actions"][0]);
     assert_eq!(ingest["actions"][0], slack["actions"][0]);
-    assert_eq!(render["actions"][1]["enabled"], false);
-    assert!(render["actions"][1]["disabled_reason"]
+    // A render that has never run is out of date: Sync reruns it alone,
+    // and says which source to sync for fresh data.
+    assert_eq!(
+        render["seeds"],
+        serde_json::json!(["slack/render_markdown"])
+    );
+    assert_eq!(render["actions"][1]["enabled"], true, "{render}");
+    assert!(render["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("Run slack/ingest"));
+        .contains("sync slack/ingest"));
 
     // The applet shares its group's id; the group's key keeps them apart.
     let applet = &rows["unified_index"];
@@ -232,10 +238,13 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // The index group browses as the projection over every source.
     assert_eq!(index["actions"][0]["label"], "Browse every source");
     assert_eq!(index["actions"][0]["enabled"], true);
-    assert!(index["actions"][1]["disabled_reason"]
+    // With no source step, the index group syncs its own steps, which
+    // have never run.
+    assert_eq!(index["actions"][1]["enabled"], true, "{index}");
+    assert!(index["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("none of this group's steps"));
+        .contains("out-of-date steps"));
     assert!(applet["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()

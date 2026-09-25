@@ -69,20 +69,27 @@ props.ctx.setHelp(`
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
-<p>Each row says what its step is doing now. <b>Sync</b> on a row asks for that
-source and everything downstream of it: its own steps, and the index every source
+<p>Each row says what its step is doing now. <b>Sync</b> on a source fetches what’s
+new, then rebuilds everything downstream: its own steps, and the index every source
 feeds. Each of those rows then shows the sync in its own <b>Status</b> — queued, and
 what it waits for; running; then how it ended — so pressing Sync on one row moves
 others too. Syncs run side by side: a source synced while another syncs starts at
 once.</p>
+<p>On a step that reads another — a render, the index — Sync reruns it on what its
+inputs already hold, then rebuilds everything downstream; nothing upstream runs. It
+is offered while that step is out of date: its code, its settings or what it reads
+changed since it last succeeded, as after an upgrade that changes how a source
+renders.</p>
 <p>While a sync wants a row, its Sync button is a <b>Stop</b> that names the sync —
 “Stop the sync of Work Gmail” — and who started it, if not you: a row can be part of
 a sync started on another row, from a terminal or by an agent, and Stop stops all of
 it. The steps in flight checkpoint what they have and exit; until they do the button
-reads Stopping. <b>Pause</b> keeps a step from starting until you press
-<b>Resume</b>, and stops it if it is running; what reads it waits. On a group it
-pauses every step under it. A pause says who made it.</p>
-<p>A group row reads off its steps: <b>Status</b> is running if any step is, paused
+reads Stopping.</p>
+<p>The <b>switch</b> at the end of a row says whether it runs in syncs. Turned off,
+every sync skips it, and if it is running it stops; what reads it waits. Turned back
+on, it runs in the next sync — turning it on starts nothing by itself. On a group it
+turns every step under it off or on. Hover it to see who turned it off.</p>
+<p>A group row reads off its steps: <b>Status</b> is running if any step is, off
 if any is, failed if any failed, and otherwise the last step’s in pipeline order;
 while a sync is in flight it draws one segment per step. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
@@ -94,8 +101,8 @@ part in, with a picker for its other runs — as a grid you can sort, filter and
 search; on a group row, the log of the step its status came from.
 <b>Activity</b> is what a running step has reported: how much is queued ahead of
 it, what it has counted so far, and how many warnings and errors it has logged.</p>
-<p><b>Browse</b>, <b>Sync</b> and <b>Pause</b> are buttons: they are what a row does
-often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
+<p><b>Browse</b>, <b>Sync</b> and the switch are on the row: they are what a row
+does often. <b>Right-click a row</b> for everything it can do — browse, edit, reveal,
 remove, the log, a rename (on the Name cell), <b>Reset</b>, and its
 <b>commit history</b>: every store under it
 is versioned, and the panel lists each commit — when, what it said, what it did to
@@ -383,8 +390,10 @@ const rowActions: Record<string, (row: Row) => void> = {
   stop: (row) => {
     if (row.stop_request_id) void stopSync(row.stop_request_id);
   },
-  pause: (row) => void pauseRows([row], true),
-  resume: (row) => void pauseRows([row], false),
+  in_syncs: (row) => {
+    const on = row.actions.find((a) => a.id === "in_syncs")?.on;
+    void pauseRows([row], !!on);
+  },
 };
 
 let gridApi: TableGridApi<Row> | null = null;

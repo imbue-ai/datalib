@@ -38,6 +38,7 @@ rust_library(
         "src/logging.rs",
         "src/loop_guard.rs",
         "src/manage/activity.rs",
+        "src/manage/buttons.rs",
         "src/manage/documents.rs",
         "src/manage/group.rs",
         "src/manage/mod.rs",

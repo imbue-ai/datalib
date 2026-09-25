@@ -1069,10 +1069,10 @@ fn record_states(
         let paused_by = paused.get(&i).cloned();
         let detail = match st {
             Row::Running if t.stops.contains(&i) => Some(match &paused_by {
-                Some(by) => format!("stopping: paused by {by}"),
+                Some(by) => format!("stopping: turned off by {by}"),
                 None => "stopping: no open request wants it".to_string(),
             }),
-            Row::Paused => paused_by.as_ref().map(|by| format!("paused by {by}")),
+            Row::Paused => paused_by.as_ref().map(|by| format!("turned off by {by}")),
             Row::Blocked(p) => Some(format!(
                 "{} has published nothing and is not going to run",
                 id(p)
@@ -1855,7 +1855,7 @@ mod tests {
             .clone();
         assert_eq!(a.state, Some(StateKind::Paused));
         assert_eq!(a.paused_by.as_deref(), Some("claude"));
-        assert_eq!(a.state_detail.as_deref(), Some("paused by claude"));
+        assert_eq!(a.state_detail.as_deref(), Some("turned off by claude"));
 
         store.resume("a/raw").await.unwrap();
         runner.settle(&f.graph, &store).await.unwrap();

@@ -211,6 +211,38 @@
   color: var(--datalib-log-error);
   border-color: var(--datalib-log-error);
 }
+/* An on/off switch: the knob sits right, on the accent, when on. */
+.tg-switch {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  margin: 0 3px;
+  padding: 0;
+  border: 1px solid var(--datalib-border);
+  border-radius: 7px;
+  background: var(--datalib-hover);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.tg-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--datalib-muted);
+  transition: left 0.12s;
+}
+.tg-switch[aria-checked="true"] {
+  background: var(--datalib-accent);
+  border-color: var(--datalib-accent);
+}
+.tg-switch[aria-checked="true"] .tg-switch-knob {
+  left: 13px;
+  background: var(--datalib-card-bg);
+}
+.tg-switch:disabled { opacity: 0.35; cursor: not-allowed; }
 .tg-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);

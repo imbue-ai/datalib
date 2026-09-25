@@ -234,12 +234,20 @@ pub struct Action {
     pub id: String,
     pub label: String,
     pub enabled: bool,
+    /// The enabled button's hover: what pressing it does, in a sentence.
+    /// `label` alone when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// The disabled button's hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
     /// Drawn as something to think twice about.
     #[serde(default)]
     pub danger: bool,
+    /// Drawn as an on/off switch in this position rather than a button;
+    /// pressing it asks for the other one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
 }
 
 #[cfg(test)]

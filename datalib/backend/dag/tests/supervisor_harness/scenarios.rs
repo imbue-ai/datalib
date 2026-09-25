@@ -481,7 +481,7 @@ async fn a_paused_consumer_waits_out_seals_and_runs_on_resume() {
     h.run("a", "seal s2").await;
     h.until("c to read paused after the seals", |s| {
         let sealed = s.version("a").is_some_and(|v| v.contains("s2"));
-        (sealed && s.detail("c") == Some("paused by person")).then_some(())
+        (sealed && s.detail("c") == Some("turned off by person")).then_some(())
     })
     .await;
     assert_eq!(h.state().await.started("c"), 0);
@@ -719,7 +719,7 @@ async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
     h.until("d to read paused after the burst", |s| {
         let sealed = s.version("a").is_some_and(|v| v.ends_with(":a2"))
             && s.version("b").is_some_and(|v| v.ends_with(":b2"));
-        (sealed && s.detail("d") == Some("paused by person")).then_some(())
+        (sealed && s.detail("d") == Some("turned off by person")).then_some(())
     })
     .await;
     assert_eq!(h.state().await.started("d"), 0);

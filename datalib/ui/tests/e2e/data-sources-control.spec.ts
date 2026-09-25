@@ -537,13 +537,18 @@ test.describe("steering one source among several", () => {
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
   });
 
-  test("a backlogged step can be put on ice, and taken off it", async ({ page }) => {
-    // A step paused from its row's menu is not started, and what reads
-    // it waits; the sync of its source runs everything else and closes.
-    // Resumed, the next sync takes it on.
+  test("a backlogged step can be turned off, and turned back on", async ({ page }) => {
+    // A step switched off on its row is not started, and what reads it
+    // waits; the sync of its source runs everything else and closes.
+    // Turned back on from the menu, the next sync takes it on.
     await writeConfigAndOpen(page, [PDFS]);
-    await pickRowMenu(page, row(page, INDEX), "Pause", statusFace(page, INDEX, "Paused"));
-    expect(await statusOf(page, INDEX)).toBe("Paused");
+    const inSyncs = row(page, INDEX).getByRole("switch", { name: "Runs in syncs" });
+    await expect(inSyncs).toHaveAttribute("aria-checked", "true");
+    await expect(inSyncs).toHaveAttribute("title", /^On: it runs in syncs/);
+    await inSyncs.click();
+    await expect(statusFace(page, INDEX, "Off")).toBeVisible();
+    await expect(inSyncs).toHaveAttribute("aria-checked", "false");
+    await expect(inSyncs).toHaveAttribute("title", /^Off: you turned it off/);
 
     const was = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS), INDEX]);
     await start(page, PDFS);
@@ -552,13 +557,14 @@ test.describe("steering one source among several", () => {
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await untilClosed(page.request, PDFS, ["done"]);
-    expect(await statusOf(page, INDEX)).toBe("Paused");
-    expect(await stampOf(page, INDEX), "a paused step took no part").toBe(was[INDEX]);
+    expect(await statusOf(page, INDEX)).toBe("Off");
+    expect(await stampOf(page, INDEX), "a step turned off took no part").toBe(was[INDEX]);
 
-    await (await rowMenuEntry(page, row(page, INDEX), "Resume").open()).click();
+    await (await rowMenuEntry(page, row(page, INDEX), "Turn on").open()).click();
     await expect
       .poll(() => statusOf(page, INDEX), { timeout: 10_000, intervals: [200] })
-      .not.toBe("Paused");
+      .not.toBe("Off");
+    await expect(inSyncs).toHaveAttribute("aria-checked", "true");
     const again = await stampsBefore(page, [INDEX]);
     await start(page, PDFS);
     const st = await settleRow(page, INDEX, again[INDEX], 120_000);

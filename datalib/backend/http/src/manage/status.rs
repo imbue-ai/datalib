@@ -24,7 +24,7 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("config_blocked", "Can\u{2019}t run"),
     ("running", "Running"),
     ("queued", "Queued"),
-    ("paused", "Paused"),
+    ("paused", "Off"),
     ("succeeded", "Succeeded"),
     ("skipped_up_to_date", "Up to date"),
     ("failed", "Failed"),
@@ -251,12 +251,12 @@ mod tests {
         );
 
         let paused = step_status(
-            Some(&at(StateKind::Paused, Some("paused by claude"))),
+            Some(&at(StateKind::Paused, Some("turned off by claude"))),
             None,
             None,
         );
-        assert_eq!(paused.label, "Paused");
-        assert_eq!(paused.detail.as_deref(), Some("paused by claude"));
+        assert_eq!(paused.label, "Off");
+        assert_eq!(paused.detail.as_deref(), Some("turned off by claude"));
     }
 
     /// At rest — idle, stale, failed — the row is the last outcome and
