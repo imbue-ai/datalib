@@ -49,6 +49,10 @@ pub struct DagConfig {
     /// a request for its prefix arrives. Empty is normal.
     #[serde(default)]
     pub applets: Vec<AppletEntry>,
+    /// Named locks steps hold, beside the three every config has
+    /// (`supervisor::locks`).
+    #[serde(default)]
+    pub locks: Vec<LockEntry>,
     /// How often a step seals what it has written, so a consumer can see it
     /// before the step finishes. Omitted means the step's own default.
     #[serde(default)]
@@ -149,6 +153,83 @@ impl CheckpointCadence {
             return None;
         }
         Some(Self { at_most_every_secs })
+    }
+}
+
+/// One `[[locks]]` entry: a named lock steps hold while they run, so that
+/// steps sharing something the graph does not show (an account's rate
+/// limit, a GPU) keep apart. `slots` is how many may hold it at once.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockEntry {
+    pub name: String,
+    #[serde(default = "LockEntry::one")]
+    pub slots: usize,
+}
+
+impl LockEntry {
+    fn one() -> usize {
+        1
+    }
+}
+
+/// A step's `locks`: a list holds each `shared`, one slot apiece; a table
+/// says how it holds each, `shared` or `exclusive` (every slot).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum StepLocks {
+    Shared(Vec<String>),
+    Held(BTreeMap<String, crate::supervisor::locks::Hold>),
+}
+
+impl StepLocks {
+    pub fn held(&self) -> Vec<(String, crate::supervisor::locks::Hold)> {
+        use crate::supervisor::locks::Hold;
+        match self {
+            StepLocks::Shared(names) => {
+                let unique: BTreeSet<&String> = names.iter().collect();
+                unique
+                    .into_iter()
+                    .map(|n| (n.clone(), Hold::Shared))
+                    .collect()
+            }
+            StepLocks::Held(held) => held.iter().map(|(n, h)| (n.clone(), *h)).collect(),
+        }
+    }
+}
+
+/// How a step reads its inputs, which says whether a writer of them may
+/// run beside it.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Reads {
+    /// At a pinned commit: a writer may go on writing meanwhile.
+    Pinned,
+    /// Files off disk: no writer of what it reads runs beside it, in
+    /// either order.
+    Files,
+}
+
+impl Reads {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 }
 
@@ -268,6 +349,12 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
+    /// The named locks it holds while it runs. `None` holds the one lock
+    /// its shape gives it: `network`, `cpu` or `index`.
+    pub locks: Option<StepLocks>,
+    /// How it reads its inputs. `None` is at a pinned commit, but for the
+    /// built-in steps that read files (`UNPINNED_BUILTINS`).
+    pub reads: Option<Reads>,
 }
 
 /// A `[[steps]]` table exactly as a person writes it. Either `group` and
@@ -294,6 +381,10 @@ struct StepTable {
     env: BTreeMap<String, String>,
     #[serde(default)]
     code_version: Option<String>,
+    #[serde(default)]
+    locks: Option<StepLocks>,
+    #[serde(default)]
+    reads: Option<Reads>,
 }
 
 impl TryFrom<StepTable> for StepEntry {
@@ -342,6 +433,8 @@ impl TryFrom<StepTable> for StepEntry {
             params: t.params,
             env: t.env,
             code_version: t.code_version,
+            locks: t.locks,
+            reads: t.reads,
         })
     }
 }
@@ -639,6 +732,8 @@ struct RawConfig {
     #[serde(default)]
     applets: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
+    locks: Vec<toml::Spanned<toml::Value>>,
+    #[serde(default)]
     checkpoint_cadence: Option<CheckpointCadence>,
     #[serde(default)]
     run_history: Option<RunHistory>,
@@ -697,6 +792,7 @@ fn candidates<T: Clone>(
 
 /// Every entry on its way in, plus which groups anything *wrote* under.
 struct Candidates {
+    locks: Vec<Candidate<LockEntry>>,
     groups: Vec<Candidate<GroupEntry>>,
     steps: Vec<Candidate<StepEntry>>,
     applets: Vec<Candidate<AppletEntry>>,
@@ -713,6 +809,7 @@ fn cfg_candidates(cfg: &DagConfig) -> Candidates {
     named.extend(cfg.steps.iter().filter_map(|s| s.group.clone()));
     named.extend(cfg.applets.iter().filter_map(|a| a.group.clone()));
     Candidates {
+        locks: candidates(&cfg.locks, EntryRef::lock, |l| Some(l.name.clone())),
         groups: candidates(&cfg.groups, EntryRef::group, |g| Some(g.id.clone())),
         steps: candidates(&cfg.steps, EntryRef::step, |e| Some(e.id.clone())),
         applets: candidates(&cfg.applets, EntryRef::applet, |a| Some(a.id.clone())),
@@ -722,6 +819,10 @@ fn cfg_candidates(cfg: &DagConfig) -> Candidates {
 
 /// What survived the entry rules, and what each problem cost.
 struct Accepted {
+    locks: Vec<LockEntry>,
+    /// Every lock a step may hold: the defaults, resized or joined by
+    /// what the config declares.
+    lock_specs: Vec<crate::supervisor::locks::LockSpec>,
     groups: Vec<GroupEntry>,
     steps: Vec<(StepEntry, StepSpec)>,
     applets: Vec<AppletEntry>,
@@ -733,6 +834,8 @@ struct Accepted {
 /// which groups exist; steps and applets after, each against that list.
 fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
     let mut diags = Vec::new();
+    let (locks, lock_specs, lock_diags) = accept_locks(c.locks, text);
+    diags.extend(lock_diags);
     let (groups, group_diags) = accept_groups(c.groups, &c.named, text);
     let dropped_groups: BTreeSet<String> = group_diags
         .iter()
@@ -742,7 +845,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
     diags.extend(group_diags);
 
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let (steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, text);
+    let (steps, step_diags) = accept_steps(c.steps, &by_id, &dropped_groups, &lock_specs, text);
     diags.extend(step_diags);
 
     let (applets, applet_diags) = accept_applets(c.applets, text);
@@ -765,6 +868,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
     }
 
     Accepted {
+        locks,
+        lock_specs,
         groups,
         steps,
         applets,
@@ -903,6 +1008,58 @@ fn diff_source_problem(
     }
 }
 
+/// The lock rules: a name is one id segment and declared once, and a lock
+/// has at least one slot. A declared lock named like a default resizes it.
+fn accept_locks(
+    candidates: Vec<Candidate<LockEntry>>,
+    text: Option<&str>,
+) -> (
+    Vec<LockEntry>,
+    Vec<crate::supervisor::locks::LockSpec>,
+    Vec<Diagnostic>,
+) {
+    let mut accepted: Vec<LockEntry> = Vec::new();
+    let mut diags = Vec::new();
+    for c in candidates {
+        let name = &c.entry.name;
+        let problem = if !valid_id_segment(name) {
+            Some((
+                "name",
+                format!("lock name {name:?} is not usable: {SEGMENT_RULE}"),
+            ))
+        } else if c.entry.slots == 0 {
+            Some((
+                "slots",
+                "a lock needs at least one slot, or nothing holding it could ever run".into(),
+            ))
+        } else if accepted.iter().any(|l| &l.name == name) {
+            Some((
+                "name",
+                format!("lock {name:?} is declared twice; the first one stands"),
+            ))
+        } else {
+            None
+        };
+        match problem {
+            Some((key, message)) => {
+                diags.push(c.diag(Severity::Rejected, text, Some(key), message))
+            }
+            None => accepted.push(c.entry),
+        }
+    }
+    let mut specs = crate::supervisor::locks::defaults();
+    for l in &accepted {
+        match specs.iter_mut().find(|s| s.name == l.name) {
+            Some(default) => default.slots = l.slots,
+            None => specs.push(crate::supervisor::locks::LockSpec {
+                name: l.name.clone(),
+                slots: l.slots,
+            }),
+        }
+    }
+    (accepted, specs, diags)
+}
+
 /// The step rules, applied entry by entry. A grouped step's `function` must
 /// be one directory name and its group must exist; a custom step's `id` must
 /// be a usable path. Every step's id is unique, un-nested with every other,
@@ -919,6 +1076,7 @@ fn accept_steps(
     candidates: Vec<Candidate<StepEntry>>,
     groups: &BTreeMap<&str, &GroupEntry>,
     dropped_groups: &BTreeSet<String>,
+    locks: &[crate::supervisor::locks::LockSpec],
     text: Option<&str>,
 ) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
@@ -1159,6 +1317,30 @@ fn accept_steps(
                 continue;
             }
         };
+        let undeclared: Vec<String> = crate::supervisor::locks::held_by(&spec)
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| !locks.iter().any(|l| &l.name == name))
+            .collect();
+        if !undeclared.is_empty() {
+            let declared: Vec<&str> = locks.iter().map(|l| l.name.as_str()).collect();
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("locks"),
+                    format!(
+                        "holds lock(s) no `[[locks]]` entry declares: {}",
+                        undeclared.join(", ")
+                    ),
+                )
+                .with_help(format!(
+                    "declare each with `[[locks]]` and a `name`; declared: {}",
+                    declared.join(", ")
+                )),
+            );
+            continue;
+        }
         seen.insert(id);
         accepted.push((c.entry, spec));
     }
@@ -1214,6 +1396,29 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
     (Some("perseus"), "render_markdown"),
 ];
 
+/// The shape of the store each built-in function writes: the hash of its
+/// DDL, as `datalib_store_meta::schema_hash` takes it. A build that moves
+/// one re-runs the steps that write that store (`StepSpec::store_shape`).
+/// `datalib_step`'s `builtin_store_shapes_are_the_ddl_the_step_writes`
+/// fails until these match the real DDL, and prints the new hash.
+pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
+    (
+        "render_markdown",
+        "aa9e17f258659ee150edd64d67dd9770aa3e8a73fa04df6829f595a3d34ed8b2",
+    ),
+    (
+        "grid_index",
+        "3c8765bda92c931c46fd682f3abe75db4e66da9a2cbd5a682c1bd62db3cc77be",
+    ),
+];
+
+pub fn builtin_store_shape(function: &str) -> Option<&'static str> {
+    BUILTIN_STORE_SHAPES
+        .iter()
+        .find(|&&(f, _)| f == function)
+        .map(|&(_, shape)| shape)
+}
+
 fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
     UNPINNED_BUILTINS
         .iter()
@@ -1265,10 +1470,21 @@ fn spec_of(
     }
     let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
     spec.code_version = e.code_version.clone();
+    if e.command.is_none() {
+        spec.store_shape = e
+            .function
+            .as_deref()
+            .and_then(builtin_store_shape)
+            .map(str::to_string);
+    }
     spec.group = e.group.clone();
     spec.group_type = group_type.map(str::to_string);
     spec.function = e.function.clone();
-    spec.reads_pinned = e.command.is_some() || !reads_unpinned(group_type, e.function.as_deref());
+    spec.reads_pinned = match e.reads {
+        Some(reads) => reads == Reads::Pinned,
+        None => e.command.is_some() || !reads_unpinned(group_type, e.function.as_deref()),
+    };
+    spec.locks = e.locks.as_ref().map(StepLocks::held);
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -1379,6 +1595,7 @@ fn key_span(text: &str, header: std::ops::Range<usize>, key: &str) -> std::ops::
 struct Entries {
     cfg: DagConfig,
     specs: Vec<StepSpec>,
+    lock_specs: Vec<crate::supervisor::locks::LockSpec>,
     /// step id → byte range of the `[[steps]]` header. Includes dropped
     /// steps: a graph diagnostic naming one still wants somewhere to point.
     spans: BTreeMap<String, std::ops::Range<usize>>,
@@ -1447,6 +1664,7 @@ fn entries_of(text: &str) -> Entries {
             return Entries {
                 cfg: DagConfig::empty(),
                 specs: Vec::new(),
+                lock_specs: crate::supervisor::locks::defaults(),
                 spans: BTreeMap::new(),
                 dropped: BTreeSet::new(),
                 diagnostics: vec![d],
@@ -1459,6 +1677,14 @@ fn entries_of(text: &str) -> Entries {
     let mut named: BTreeSet<String> = BTreeSet::new();
 
     let id_key = |v: &toml::Value| v.get("id").and_then(v_str);
+    let locks = deserialize_each(
+        text,
+        raw.locks,
+        EntryRef::lock,
+        |v: &toml::Value| v.get("name").and_then(v_str),
+        &mut diags,
+        |_, _| {},
+    );
     let groups = deserialize_each(
         text,
         raw.groups,
@@ -1494,6 +1720,7 @@ fn entries_of(text: &str) -> Entries {
 
     let accepted = accept_entries(
         Candidates {
+            locks,
             groups,
             steps,
             applets,
@@ -1530,11 +1757,13 @@ fn entries_of(text: &str) -> Entries {
             groups: accepted.groups,
             steps,
             applets: accepted.applets,
+            locks: accepted.locks,
             checkpoint_cadence: raw.checkpoint_cadence,
             run_history: raw.run_history,
             log_level: raw.log_level,
         },
         specs,
+        lock_specs: accepted.lock_specs,
         spans,
         dropped,
         diagnostics: diags,
@@ -1612,8 +1841,9 @@ impl ConfigCheck {
 /// silently breaks.
 pub fn check_text(text: &str) -> ConfigCheck {
     let mut entries = entries_of(text);
-    let (graph, mut graph_diags) =
+    let (mut graph, mut graph_diags) =
         Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
+    graph.locks = std::mem::take(&mut entries.lock_specs);
 
     // Graph assembly drops more than the entry pass could see — a step whose
     // input names nothing, a ring — so narrow the surviving config to what the
@@ -1661,6 +1891,7 @@ impl DagConfig {
             groups: Vec::new(),
             steps: Vec::new(),
             applets: Vec::new(),
+            locks: Vec::new(),
             checkpoint_cadence: None,
             run_history: None,
             log_level: None,
@@ -1730,6 +1961,71 @@ mod tests {
             "a bumped code_version must change what the step fingerprints to"
         );
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
+    }
+
+    /// A derived store rebuilds to a new shape only when its writer runs,
+    /// and a render step with nothing new upstream never runs: after a
+    /// `grid_rows` change the grid index found six render stores still in
+    /// the old shape and failed. The shape of the store a built-in step
+    /// writes is part of what the step is, so a build that moves it makes
+    /// the step due once.
+    #[test]
+    fn a_builtin_steps_fingerprint_carries_the_shape_of_the_store_it_writes() {
+        let cfg: DagConfig = toml::from_str(
+            r#"
+            [[groups]]
+            id = "mail"
+            type = "email"
+
+            [[groups]]
+            id = "unified_index"
+
+            [[steps]]
+            group = "mail"
+            function = "ingest"
+
+            [[steps]]
+            group = "mail"
+            function = "render_markdown"
+            inputs = ["mail/ingest"]
+
+            [[steps]]
+            group = "unified_index"
+            function = "grid_index"
+            inputs = ["mail/render_markdown"]
+
+            [[steps]]
+            id = "custom/render"
+            command = "render-it"
+            inputs = ["mail/ingest"]
+            "#,
+        )
+        .expect("parse");
+        let specs = to_specs(&cfg).expect("to_specs");
+        let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
+
+        for (id, function) in [
+            ("mail/render_markdown", "render_markdown"),
+            ("unified_index/grid_index", "grid_index"),
+        ] {
+            let loaded = spec(id);
+            let shape = builtin_store_shape(function).expect("a built-in store shape");
+            assert!(
+                loaded.fingerprint_material().contains(shape),
+                "{id}'s fingerprint must carry its store's shape"
+            );
+            let mut older = loaded.clone();
+            older.store_shape = Some("an older shape".to_string());
+            assert_ne!(
+                loaded.fingerprint_material(),
+                older.fingerprint_material(),
+                "{id}: a store written in another shape must make the step due"
+            );
+        }
+        // A step with no store of ours keeps the fingerprint it had, so the
+        // fix re-runs only the steps whose store has a shape.
+        assert_eq!(spec("mail/ingest").store_shape, None);
+        assert_eq!(spec("custom/render").store_shape, None);
     }
 
     /// Editing `params` changes the argv the runner executes, which is
@@ -3246,5 +3542,121 @@ command = "datalib-applet unified_index"
              [[steps]]\ngroup = \"slack\"\nfunction = \"ingest\"\ncommand = \"datalib-step --playback-root /tmp/pb\"\n",
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    use crate::supervisor::locks::Hold;
+
+    fn step<'a>(check: &'a ConfigCheck, id: &str) -> &'a StepSpec {
+        &check.graph.steps[check.graph.by_id[id]]
+    }
+
+    fn slots(check: &ConfigCheck, name: &str) -> Option<usize> {
+        check
+            .graph
+            .locks
+            .iter()
+            .find(|l| l.name == name)
+            .map(|l| l.slots)
+    }
+
+    /// Both ways to write `locks`, and `reads`: a list holds each once
+    /// and shared, a table says how.
+    #[test]
+    fn a_step_holds_the_locks_it_names_as_it_names_them() {
+        let check = check_text(
+            r#"
+[[locks]]
+name = "quota"
+
+[[locks]]
+name = "gpu"
+slots = 2
+
+[[steps]]
+id = "a"
+command = "x"
+locks = ["quota", "quota"]
+
+[[steps]]
+id = "b"
+command = "x"
+locks = { gpu = "exclusive" }
+reads = "files"
+inputs = ["a"]
+"#,
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert_eq!(slots(&check, "quota"), Some(1));
+        assert_eq!(slots(&check, "gpu"), Some(2));
+        assert_eq!(
+            step(&check, "a").locks,
+            Some(vec![("quota".to_string(), Hold::Shared)])
+        );
+        let b = step(&check, "b");
+        assert_eq!(b.locks, Some(vec![("gpu".to_string(), Hold::Exclusive)]));
+        assert!(!b.reads_pinned);
+        assert!(step(&check, "a").reads_pinned);
+    }
+
+    #[test]
+    fn a_step_holding_a_lock_no_one_declared_is_rejected() {
+        let check = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"nope\"]\n");
+        assert!(check.graph.steps.is_empty());
+        let d = &check.diagnostics[0];
+        assert_eq!(d.severity, Severity::Rejected);
+        assert!(d.message.contains("nope"), "{}", d.message);
+    }
+
+    #[test]
+    fn a_lock_declared_twice_or_with_no_slots_is_rejected() {
+        let check = check_text(
+            "[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"q\"\n\n[[locks]]\nname = \"z\"\nslots = 0\n",
+        );
+        let rejected: Vec<&str> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Rejected)
+            .filter_map(|d| d.id())
+            .collect();
+        assert_eq!(rejected, ["q", "z"], "{:?}", check.diagnostics);
+        assert_eq!(slots(&check, "q"), Some(1), "the first stands");
+        assert_eq!(slots(&check, "z"), None);
+    }
+
+    /// The budgets are locks every config has; declaring one resizes it.
+    #[test]
+    fn declaring_a_default_lock_resizes_it() {
+        let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["network", "cpu", "index"]);
+        assert_eq!(slots(&check, "network"), Some(1));
+        assert_eq!(slots(&check, "cpu"), Some(4));
+    }
+
+    /// When a step may run is not what it makes: neither re-runs anything.
+    #[test]
+    fn locks_and_reads_are_not_in_the_fingerprint() {
+        let plain = check_text("[[steps]]\nid = \"a\"\ncommand = \"x\"\n");
+        let held = check_text(
+            "[[locks]]\nname = \"q\"\n\n[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"q\"]\nreads = \"files\"\n",
+        );
+        assert_eq!(plain.graph.fingerprints, held.graph.fingerprints);
+    }
+
+    /// strum and serde spell these independently: the config is read with
+    /// serde, and anything that names a mode back uses strum.
+    #[test]
+    fn reads_as_str_matches_the_serde_spelling() {
+        use strum::VariantArray;
+        for &v in Reads::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+            assert_eq!(Reads::parse(v.as_str()), Some(v));
+        }
     }
 }

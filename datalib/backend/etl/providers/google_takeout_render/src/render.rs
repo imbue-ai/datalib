@@ -8,9 +8,8 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
-};
+use datalib_etl_chat_common::changed_chats;
+use datalib_etl_chat_common::render::{render_all as cc_render_all, Buckets, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
@@ -130,53 +129,16 @@ pub fn render(
     };
 
     let mut all_chats = build_chats(source_id, &messages, &groups);
-    let voice_start = all_chats.len();
     all_chats.extend(build_voice_chats(source_id, &voice_messages));
-
-    // Narrow to the conversations the diff named and the ones the driver
-    // found stale through their declared inputs. The driver names them by
-    // chat uuid; the chats are by id.
-    let by_uuid: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
-        by_uuid.get(key).map(|id| id.to_string())
+    let changed = changed_chats(all_chats, range, scan.render.as_ref(), |id| {
+        chat_uuid_for(source_id, id)
     });
     let mut outcome = RenderOutcome {
+        buckets: changed.buckets,
         new_head: scan.new_head,
-        ..Default::default()
     };
-    // Named first, with no documents: a conversation this run looked at
-    // that has no message left builds no chat, and chat-common never
-    // sees it. The rendered ones follow and replace that.
-    let uuid_of: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.id.as_str(), c.chat_uuid.as_str()))
-        .collect();
-    outcome.buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|id| match uuid_of.get(id.as_str()) {
-            Some(uuid) => uuid.to_string(),
-            None => chat_uuid_for(source_id, id),
-        })
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let (chats, voice_chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) = {
-        let mut voice = all_chats.split_off(voice_start);
-        let mut chats = all_chats;
-        if let Some(render) = &narrowed.render {
-            chats.retain(|c| render.contains(&c.id));
-            voice.retain(|c| render.contains(&c.id));
-        }
-        (chats, voice)
-    };
+    let (voice_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) =
+        changed.chats.into_iter().partition(|c| is_voice(&c.id));
 
     if !chats.is_empty() {
         let blobs: HashMap<String, BlobBundle> = HashMap::new();
@@ -211,11 +173,15 @@ pub fn render(
 /// named that no longer has a message: a Google Chat space, or a Google
 /// Voice conversation carrying its `voice:` prefix.
 fn chat_uuid_for(source_id: &str, id: &str) -> String {
-    if id.starts_with("voice:") {
+    if is_voice(id) {
         ids::voice_conversation(source_id, id).uuid
     } else {
         ids::space(source_id, id).uuid
     }
+}
+
+fn is_voice(chat_id: &str) -> bool {
+    chat_id.starts_with("voice:")
 }
 
 /// Which conversations a new or changed row maps to: a Google Chat

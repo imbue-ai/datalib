@@ -4,7 +4,7 @@
 //! the account is not a scope this can rely on: the ids are scoped to
 //! the configured source instead, which is what the old recipe did.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Whatsapp;
@@ -15,28 +15,14 @@ pub const KIND_PERIOD: &str = "chat_period";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_REACTION: &str = "reaction";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn chat(source_id: &str, chat_jid: &str) -> Identity {
-    identity(source_id, KIND_CHAT, chat_jid.to_string(), None)
+    IDS.mint(source_id, KIND_CHAT, chat_jid.to_string(), None)
 }
 
 pub fn period(source_id: &str, chat_jid: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PERIOD,
         composite_key(&[chat_jid, period_key]),
@@ -55,7 +41,7 @@ pub fn message(
     from_me: i64,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_MESSAGE,
         message_key(chat_jid, key_id, from_me),
@@ -70,7 +56,7 @@ pub fn reaction(
     from_me: i64,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_REACTION,
         message_key(chat_jid, key_id, from_me),

@@ -116,7 +116,8 @@ fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<Str
 
 /// Implement `datalib_etl::store_handle::RawStoreHandle` by reading the
 /// struct's fields: every `SqlitePool` and every `BlobCas`, in declaration
-/// order, and nothing else.
+/// order, and nothing else. A field that is itself a handle
+/// (`EntityStore`, `CasEntityStore`) contributes every pool it reports.
 ///
 /// The point is exhaustiveness. A handle that grows a second store is the
 /// shape that has already gone wrong here — `RawStoreSession::finish`
@@ -139,6 +140,9 @@ enum StoreField {
     Cas,
     OptionalPool,
     OptionalCas,
+    /// A handle that is itself a `RawStoreHandle`: `datalib_etl`'s
+    /// `EntityStore` or `CasEntityStore`, which a provider's `RawDb` wraps.
+    Nested,
 }
 
 fn classify_store_field(ty: &Type) -> Option<StoreField> {
@@ -149,6 +153,7 @@ fn classify_store_field(ty: &Type) -> Option<StoreField> {
     match seg.ident.to_string().as_str() {
         "SqlitePool" => Some(StoreField::Pool),
         "BlobCas" => Some(StoreField::Cas),
+        "EntityStore" | "CasEntityStore" => Some(StoreField::Nested),
         "Option" => {
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
                 return None;
@@ -181,14 +186,17 @@ fn expand_raw_store_handle(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(StoreField::OptionalCas) => pushes.push(quote! {
                 if let Some(c) = self.#ident.as_ref() { out.push(c.pool()); }
             }),
+            Some(StoreField::Nested) => pushes.push(quote! {
+                out.extend(::datalib_etl::store_handle::RawStoreHandle::pools(&self.#ident));
+            }),
             None => {}
         }
     }
     if pushes.is_empty() {
         return Err(syn::Error::new_spanned(
             name,
-            "#[derive(RawStoreHandle)] found no store field; add a SqlitePool or BlobCas, \
-             or drop the derive",
+            "#[derive(RawStoreHandle)] found no store field; add a SqlitePool, BlobCas \
+             or EntityStore, or drop the derive",
         ));
     }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

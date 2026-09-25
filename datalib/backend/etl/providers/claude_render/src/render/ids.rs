@@ -1,6 +1,6 @@
 //! Claude entity ids.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Claude;
@@ -29,24 +29,10 @@ pub const KIND_PROJECT_DOCUMENT: &str = "project_document";
 /// row's `created_at` is stored from — so the stamp in the id is the
 /// row's. A chat-level id passes `None`: its row's stamp is derived
 /// from its items.
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn conversation(source_id: &str, conversation_uuid: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_CONVERSATION,
         conversation_uuid.to_string(),
@@ -55,7 +41,7 @@ pub fn conversation(source_id: &str, conversation_uuid: &str) -> Identity {
 }
 
 pub fn message(source_id: &str, message_uuid: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_MESSAGE, message_uuid.to_string(), date_ms)
+    IDS.mint(source_id, KIND_MESSAGE, message_uuid.to_string(), date_ms)
 }
 
 /// A `thinking` block. Keyed on `(message_uuid, block_index)` — a
@@ -68,7 +54,7 @@ pub fn thinking_block(
     block_index: usize,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_THINKING,
         composite_key(&[message_uuid, &block_index.to_string()]),
@@ -86,7 +72,7 @@ pub fn tool_use(
     tool_use_id: &str,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_USE,
         composite_key(&[message_uuid, tool_use_id]),
@@ -100,7 +86,7 @@ pub fn tool_result(
     tool_use_id: &str,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_RESULT,
         composite_key(&[message_uuid, tool_use_id]),
@@ -114,7 +100,7 @@ pub fn block_fallback(
     block_index: usize,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_BLOCK,
         composite_key(&[message_uuid, &block_index.to_string()]),
@@ -123,11 +109,11 @@ pub fn block_fallback(
 }
 
 pub fn project(source_id: &str, project_uuid: &str) -> Identity {
-    identity(source_id, KIND_PROJECT, project_uuid.to_string(), None)
+    IDS.mint(source_id, KIND_PROJECT, project_uuid.to_string(), None)
 }
 
 pub fn project_description(source_id: &str, project_uuid: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PROJECT_DESCRIPTION,
         project_uuid.to_string(),
@@ -136,7 +122,7 @@ pub fn project_description(source_id: &str, project_uuid: &str, date_ms: Option<
 }
 
 pub fn project_instructions(source_id: &str, project_uuid: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PROJECT_INSTRUCTIONS,
         project_uuid.to_string(),
@@ -145,7 +131,7 @@ pub fn project_instructions(source_id: &str, project_uuid: &str, date_ms: Option
 }
 
 pub fn project_document(source_id: &str, doc_uuid: &str, date_ms: Option<i64>) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PROJECT_DOCUMENT,
         doc_uuid.to_string(),

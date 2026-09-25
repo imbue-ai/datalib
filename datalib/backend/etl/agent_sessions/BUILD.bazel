@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# What the agent-session sources' downloads (claude_code, codex) share:
+# the walk over the session files an agent keeps on this machine.
+# Ingest side: it does not know `datalib_schema`. Bazel-only (no
+# Cargo.toml).
+rust_library(
+    name = "datalib_etl_agent_sessions",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_agent_sessions",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)

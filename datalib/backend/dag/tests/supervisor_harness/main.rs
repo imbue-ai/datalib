@@ -6,5 +6,6 @@
 //! queue it keeps. Nothing about what a step wrote.
 
 mod harness;
+mod locks;
 mod scenarios;
 mod walk;

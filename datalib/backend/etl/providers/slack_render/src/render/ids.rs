@@ -1,6 +1,6 @@
 //! Slack entity ids, and the `ts` parsing they share with the render.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::{IsoOffsetTimestamp, RecordStampPrecision};
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Slack;
@@ -57,25 +57,10 @@ pub fn ts_to_ms(ts: &str) -> Option<i64> {
 /// message's or reaction's id comes from the `ts` in its key; nothing
 /// else has to agree with it. A thread's id carries none: its row's
 /// stamp is derived from its items.
-fn identity(
-    source_id: &str,
-    team_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    ts: Option<&str>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        Some(team_id),
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(ts.and_then(ts_to_ms)),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn thread(source_id: &str, team_id: &str, channel_id: &str, thread_ts: &str) -> Identity {
-    identity(
+    IDS.mint_in(
         source_id,
         team_id,
         KIND_THREAD,
@@ -85,12 +70,12 @@ pub fn thread(source_id: &str, team_id: &str, channel_id: &str, thread_ts: &str)
 }
 
 pub fn message(source_id: &str, team_id: &str, channel_id: &str, ts: &str) -> Identity {
-    identity(
+    IDS.mint_in(
         source_id,
         team_id,
         KIND_MESSAGE,
         composite_key(&[channel_id, ts]),
-        Some(ts),
+        ts_to_ms(ts),
     )
 }
 
@@ -102,12 +87,12 @@ pub fn reaction(
     name: &str,
     user: &str,
 ) -> Identity {
-    identity(
+    IDS.mint_in(
         source_id,
         team_id,
         KIND_REACTION,
         composite_key(&[channel_id, ts, name, user]),
-        Some(ts),
+        ts_to_ms(ts),
     )
 }
 

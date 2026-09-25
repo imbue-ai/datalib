@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_claude_code_config::ClaudeCodeConfig;
+use datalib_etl_claude_code_config::{ClaudeCodeConfig, DEFAULT_SESSIONS_DIR};
 
 use crate::ingest;
 
@@ -21,7 +21,7 @@ pub fn plan_ingest(
     let input_path = config
         .sessions
         .ok_or_else(|| anyhow!("claude_code source {name} missing its `sessions` table"))?
-        .path();
+        .path_or(DEFAULT_SESSIONS_DIR);
     Ok(vec![Box::new(ClaudeCodeIngest {
         id: format!("claude_code/{name}/ingest"),
         raw_path,
@@ -53,18 +53,6 @@ impl DataProcessor for ClaudeCodeIngest {
             control: ctx.control.clone(),
         })
         .await?;
-        let summary = format!(
-            "files={} read={} transcripts={} subagents={} records={} malformed_lines={} \
-             not_transcripts={} unreadable={}",
-            s.files,
-            s.files_read,
-            s.transcripts,
-            s.subagents,
-            s.records,
-            s.malformed_lines,
-            s.not_transcripts,
-            s.unreadable,
-        );
-        session.finish(ctx, summary).await
+        session.finish(ctx, s.line()).await
     }
 }

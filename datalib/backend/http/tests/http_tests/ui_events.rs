@@ -6,32 +6,13 @@
 
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::router;
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "ui-events-test-token";
-const PAGE: &str = "0192b9c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
+use crate::support::{state, TEST_TOKEN};
 
-async fn state(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
+const PAGE: &str = "0192b9c1-7d2e-7a4b-9c3d-1e2f3a4b5c6d";
 
 async fn send(
     root: &Path,

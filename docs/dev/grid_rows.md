@@ -105,12 +105,20 @@ index, a free-text search answers with an error, not a weaker search.
    draws them by type (`cards/typedColumns.ts`, over the renderers in
    `cards/cellRenderers.ts`); a width or a hover the type cannot know
    goes in `GridCard`'s `columnOverrides`.
-5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+5. Set the new DDL hashes in `BUILTIN_STORE_SHAPES`
+   (`datalib/backend/dag/src/config.rs`). The test
+   `builtin_store_shapes_are_the_ddl_the_step_writes` in `datalib_step`
+   fails until you do, and prints the hash to paste.
+6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
-Nothing to bump for an existing root: the render store's DDL hash is
-one of the render params (`_store_schema`), so a new column re-renders
-every source on the next run rather than sitting `NULL` on every row
-rendered before it, and the grid index rebuilds itself on any drift.
+On an existing root, a render store and the grid index change shape only
+when the step that writes them runs, and the loop runs a step only when
+it is stale. Step 5 is what makes them stale: each store's shape is in
+its writer's fingerprint, so the next sync re-runs every render step and
+the grid index once, whether or not anything new came in upstream. The
+render step then sees its own DDL hash moved (it is one of the render
+params, `_store_schema`) and re-renders every document into the new
+shape, and the grid index rebuilds itself from the stores.
 
 ## Adding a provider
 

@@ -94,6 +94,7 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
+    path: PathBuf,
     listeners: PathBuf,
     /// Who this store is in its announcements: tests in one binary share
     /// a pid, so the pid alone does not say.
@@ -119,6 +120,7 @@ impl Store {
             .with_context(|| format!("open {}", path.display()))?;
         let store = Store {
             pool,
+            path: path.clone(),
             listeners: super::announce::listeners_dir(data_root),
             me: format!(
                 "store-{}-{}",
@@ -182,6 +184,10 @@ impl Store {
 
     pub(super) fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn listeners(&self) -> &Path {
@@ -274,6 +280,30 @@ impl Store {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(request_of).collect()
+    }
+
+    /// The open requests and the pauses (step id → who), as one commit
+    /// left them. Read apart, a stop and then a resume landing between the
+    /// two reads looked like a request still open for a step no longer
+    /// paused, and the loop ran a stopped sync's step again.
+    pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+             FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let paused = sqlx::query("SELECT step, paused_by FROM pauses")
+            .fetch_all(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        let requests = rows.iter().map(request_of).collect::<Result<_>>()?;
+        let paused = paused
+            .iter()
+            .map(|r| Ok((r.try_get("step")?, r.try_get("paused_by")?)))
+            .collect::<Result<_>>()?;
+        Ok((requests, paused))
     }
 
     /// The open requests and then the newest closed ones, up to `limit`
@@ -377,6 +407,46 @@ fn options(path: &Path) -> SqliteConnectOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn columns(store: &Store, table: &str) -> Vec<String> {
+        // Safe: `table` is a literal from `ADDED_COLUMNS`.
+        let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+        sqlx::query(pragma)
+            .fetch_all(store.pool())
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get("name"))
+            .collect()
+    }
+
+    /// A store written before a column was added gains it when opened,
+    /// and its record reads as before.
+    #[tokio::test]
+    async fn a_store_missing_an_added_column_gains_it_on_open() {
+        use crate::supervisor::record::ADDED_COLUMNS;
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store.pause("a/ingest", "test").await.unwrap();
+        for (table, column, _) in ADDED_COLUMNS {
+            // Safe: every name here is a literal from `ADDED_COLUMNS`.
+            let drop = sqlx::AssertSqlSafe(format!("ALTER TABLE {table} DROP COLUMN {column}"));
+            sqlx::query(drop).execute(store.pool()).await.unwrap();
+            assert!(!columns(&store, table).await.iter().any(|c| c == column));
+        }
+        store.close().await;
+
+        let store = Store::open(root.path()).await.unwrap();
+        for (table, column, _) in ADDED_COLUMNS {
+            assert!(
+                columns(&store, table).await.iter().any(|c| c == column),
+                "{table}.{column}"
+            );
+        }
+        store.load_record().await.unwrap();
+        assert_eq!(store.paused().await.unwrap().len(), 1);
+        store.close().await;
+    }
 
     #[tokio::test]
     async fn a_request_opens_and_closes_once() {

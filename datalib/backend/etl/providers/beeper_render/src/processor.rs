@@ -6,57 +6,49 @@ use async_trait::async_trait;
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_beeper_config::BeeperRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
-use std::path::PathBuf;
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use std::path::Path;
 
 pub fn plan_render(
     ctx: PlanContext,
     config: BeeperRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
     let period = Period::from_config(config.period.as_deref()).context("parse beeper period")?;
-    Ok(vec![Box::new(BeeperRender {
-        id: format!("beeper/{name}/render"),
-        raw_path,
-        name,
-        period,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        BeeperRender { period },
+    ))
 }
 
 /// Beeper's render processor — reads the raw store and emits one rendered
 /// markdown per `(room, period)` through the fused-Load callback.
 struct BeeperRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
     period: Period,
 }
 
 #[async_trait]
-impl RenderProcessor for BeeperRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for BeeperRender {
+    const PROVIDER: &'static str = "beeper";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::render::RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        crate::render::render::RENDER_VERSION
     }
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, &self.name, self.period, ctx.raw_range())
-            .with_context(|| format!("beeper parse {}", self.raw_path.display()))?;
-        let raw_db_path = datalib_etl::doltlite_raw::db_path_for(&self.raw_path);
+        let parsed = parse(raw_path, ctx.name, self.period, ctx.raw_range())
+            .with_context(|| format!("beeper parse {}", raw_path.display()))?;
+        let raw_db_path = datalib_etl::doltlite_raw::db_path_for(raw_path);
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(
             &parsed,
             ctx.root,
-            &self.name,
+            ctx.name,
             ctx.progress,
             &mut on_doc,
             &raw_db_path,
@@ -66,17 +58,10 @@ impl RenderProcessor for BeeperRender {
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.
         for room in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::room(&self.name, room).uuid, &[])?;
+            ctx.declare_bucket(&crate::render::ids::room(ctx.name, room).uuid, &[])?;
         }
-        for bucket in &parsed.scan.gone {
-            ctx.declare_bucket(bucket, &[])?;
-        }
-        for bucket in &summary.buckets {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
-        }
-        if let Some(head) = parsed.scan.new_head.as_deref() {
-            ctx.consumed(head);
-        }
+        ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
+        ctx.finish(&summary.buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

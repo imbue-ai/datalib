@@ -46,18 +46,30 @@ pub fn standalone_html(quantity: &Quantity, subtitle: &str, traces: &[Trace]) ->
     let spec = json!({
         "data": data,
         "layout": layout_json(quantity, subtitle),
-        "config": {
-            "responsive": true,
-            "displaylogo": false,
-            "scrollZoom": true,
-            "toImageButtonOptions": {"filename": quantity.key, "format": "png", "scale": 2},
-        },
+        "config": figure_config(quantity.key),
     });
-    let spec_json = escape_json_for_html(
-        &serde_json::to_string(&spec).context("serialize plotly figure spec")?,
-    );
+    figure_page(quantity.title, &spec)
+}
 
-    let title = html_escape(quantity.title);
+/// The Plotly `config` every page here uses; `filename` names the PNG
+/// a download saves.
+pub fn figure_config(filename: &str) -> Value {
+    json!({
+        "responsive": true,
+        "displaylogo": false,
+        "scrollZoom": true,
+        "toImageButtonOptions": {"filename": filename, "format": "png", "scale": 2},
+    })
+}
+
+/// A self-contained page drawing the Plotly figure `spec` (its `data`,
+/// `layout` and `config`), under the page title `title`. The figure is
+/// inlined, so the page works opened straight off disk; only Plotly
+/// itself comes from the CDN, and the page says so when it can't.
+pub fn figure_page(title: &str, spec: &Value) -> Result<String> {
+    let spec_json =
+        escape_json_for_html(&serde_json::to_string(spec).context("serialize plotly figure spec")?);
+    let title = html_escape(title);
     let notice = html_escape(OFFLINE_NOTICE);
     Ok(format!(
         r#"<!doctype html>

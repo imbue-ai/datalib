@@ -851,7 +851,9 @@ mod tests {
 
         let (stop, stop_rx) = tokio::sync::watch::channel(false);
         let mut runner = Runner::new(root.path()).stop_on(stop_rx);
-        runner.budgets.network = 1;
+        runner
+            .lock_slots
+            .insert(crate::supervisor::locks::NETWORK.into(), 1);
         let round = tokio::spawn(async move { runner.run(&g).await });
 
         let count = || std::fs::read_dir(&started).unwrap().count();

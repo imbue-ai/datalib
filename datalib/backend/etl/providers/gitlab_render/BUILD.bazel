@@ -15,6 +15,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/etl/forge-render-common:datalib_etl_forge_render_common",
         "//datalib/backend/etl/providers/gitlab:datalib_etl_gitlab",
         "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -23,11 +24,8 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:once_cell",
-        "@datalib_crates//:regex",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 
