@@ -441,7 +441,7 @@ impl AppletRegistry {
         path_and_query: &str,
         content_type: Option<&str>,
         body: &[u8],
-    ) -> Result<ProxyResponse, String> {
+    ) -> Result<ProxyResponse, ProxyError> {
         // Configured but not running is a different failure from not
         // configured at all, and the message says which.
         let port = match self.supervisor.port(id) {
@@ -453,7 +453,7 @@ impl AppletRegistry {
                     .ok()
                     .and_then(|s| s.errors.get(id).cloned())
                     .unwrap_or_else(|| "it is not running".to_string());
-                return Err(format!("applet {id:?}: {why}"));
+                return Err(ProxyError::Failed(format!("applet {id:?}: {why}")));
             }
             // Not in the list. That has two very different causes, and
             // they used to produce the same message: the applet really
@@ -463,13 +463,15 @@ impl AppletRegistry {
             // truth is "your config.toml has a syntax error" sends
             // people looking in exactly the wrong place.
             None => {
-                return Err(match config_load_error(&self.data_root, id) {
-                    Some(why) => format!(
-                        "applet {id:?} is unavailable because {} could not be loaded: {why}",
-                        datalib_dag::config::root_config_path(&self.data_root).display()
-                    ),
-                    None => format!("no applet {id:?}"),
-                })
+                return Err(ProxyError::Failed(
+                    match config_load_error(&self.data_root, id) {
+                        Some(why) => format!(
+                            "applet {id:?} is unavailable because {} could not be loaded: {why}",
+                            datalib_dag::config::root_config_path(&self.data_root).display()
+                        ),
+                        None => format!("no applet {id:?}"),
+                    },
+                ))
             }
         };
         forward(
@@ -480,6 +482,10 @@ impl AppletRegistry {
             body,
             Some(&self.secret),
         )
+        .map_err(|e| match e {
+            ProxyError::TimedOut(why) => ProxyError::TimedOut(format!("applet {id:?} {why}")),
+            other => other,
+        })
     }
 }
 
@@ -878,6 +884,7 @@ impl Drop for Supervisor {
 
 // The proxy
 
+#[derive(Debug)]
 pub struct ProxyResponse {
     pub status: u16,
     pub content_type: String,
@@ -922,6 +929,28 @@ pub fn encode_path(decoded: &str) -> String {
     out
 }
 
+/// Why a request did not reach the applet and back. A timeout is its own
+/// kind because it is the gateway giving up on a live applet, not the
+/// applet failing, and the caller answers it with 504 rather than 502.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyError {
+    TimedOut(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyError::TimedOut(msg) | ProxyError::Failed(msg) => f.write_str(msg),
+        }
+    }
+}
+
+/// How long the gateway waits for the applet's next bytes — including
+/// the first, which is the whole search for an applet that builds its
+/// answer before sending it.
+const APPLET_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub fn forward(
     port: u16,
     method: &str,
@@ -929,23 +958,44 @@ pub fn forward(
     content_type: Option<&str>,
     body: &[u8],
     secret: Option<&str>,
-) -> Result<ProxyResponse, String> {
+) -> Result<ProxyResponse, ProxyError> {
+    forward_within(
+        port,
+        method,
+        path_and_query,
+        content_type,
+        body,
+        secret,
+        APPLET_READ_TIMEOUT,
+    )
+}
+
+fn forward_within(
+    port: u16,
+    method: &str,
+    path_and_query: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+    secret: Option<&str>,
+    read_timeout: Duration,
+) -> Result<ProxyResponse, ProxyError> {
+    let failed = ProxyError::Failed;
     // The caller encodes; this is the check that it did, because the
     // request below is written by hand.
     if path_and_query
         .bytes()
         .any(|b| matches!(b, b'\r' | b'\n' | b' '))
     {
-        return Err(format!(
+        return Err(failed(format!(
             "refusing to forward a malformed target {path_and_query:?}"
-        ));
+        )));
     }
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("connect 127.0.0.1:{port}: {e}"))?;
+        .map_err(|e| failed(format!("connect 127.0.0.1:{port}: {e}")))?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|e| e.to_string())?;
+        .set_read_timeout(Some(read_timeout))
+        .map_err(|e| failed(e.to_string()))?;
 
     let mut req = format!(
         "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n"
@@ -966,19 +1016,35 @@ pub fn forward(
     req.push_str("\r\n");
     stream
         .write_all(req.as_bytes())
-        .map_err(|e| format!("write request: {e}"))?;
+        .map_err(|e| failed(format!("write request: {e}")))?;
     if !body.is_empty() {
         stream
             .write_all(body)
-            .map_err(|e| format!("write body: {e}"))?;
+            .map_err(|e| failed(format!("write body: {e}")))?;
     }
-    stream.flush().map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| failed(e.to_string()))?;
 
     let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| format!("read response: {e}"))?;
-    parse_response(&raw)
+    if let Err(e) = stream.read_to_end(&mut raw) {
+        return Err(read_error(&e, raw.len(), read_timeout));
+    }
+    parse_response(&raw).map_err(failed)
+}
+
+/// A read timeout reaches us as `WouldBlock` on Unix ("Resource
+/// temporarily unavailable", os error 35 on macOS) and `TimedOut` on
+/// Windows; neither spelling tells a person what happened.
+fn read_error(e: &std::io::Error, got: usize, waited: Duration) -> ProxyError {
+    use std::io::ErrorKind::{TimedOut, WouldBlock};
+    if !matches!(e.kind(), WouldBlock | TimedOut) {
+        return ProxyError::Failed(format!("read response: {e}"));
+    }
+    let secs = waited.as_secs_f64();
+    ProxyError::TimedOut(if got == 0 {
+        format!("did not answer within {secs}s")
+    } else {
+        format!("sent {got} bytes and then nothing for {secs}s")
+    })
 }
 
 fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
@@ -1093,10 +1159,69 @@ mod tests {
     #[test]
     fn forward_refuses_an_unencoded_target() {
         let err = match forward(1, "GET", "/x\r\nEvil: 1", None, b"", None) {
-            Err(e) => e,
+            Err(e) => e.to_string(),
             Ok(_) => panic!("a target with CR/LF in it was forwarded"),
         };
         assert!(err.contains("malformed"), "{err}");
+    }
+
+    /// An applet that accepts and then says nothing. The request is read
+    /// before anything is written, so the gateway's write never fails.
+    fn silent_applet(prefix: &'static [u8]) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            sock.write_all(prefix).unwrap();
+            // Hold the socket open until the gateway hangs up.
+            let _ = sock.read(&mut buf);
+        });
+        (port, handle)
+    }
+
+    /// The error that reached the grid as "read response: Resource
+    /// temporarily unavailable (os error 35)" — the gateway's own read
+    /// timeout, which must say so and be told apart from a failure.
+    #[test]
+    fn a_silent_applet_is_a_timeout_that_says_how_long() {
+        let (port, applet) = silent_applet(b"");
+        let err = forward_within(
+            port,
+            "GET",
+            "/search",
+            None,
+            b"",
+            None,
+            Duration::from_millis(200),
+        )
+        .expect_err("nothing was sent");
+        assert_eq!(
+            err,
+            ProxyError::TimedOut("did not answer within 0.2s".into())
+        );
+        applet.join().unwrap();
+    }
+
+    #[test]
+    fn an_applet_that_stalls_mid_answer_says_how_far_it_got() {
+        let (port, applet) = silent_applet(b"HTTP/1.1 200 OK\r\n");
+        let err = forward_within(
+            port,
+            "GET",
+            "/search",
+            None,
+            b"",
+            None,
+            Duration::from_millis(200),
+        )
+        .expect_err("the answer never finished");
+        assert_eq!(
+            err,
+            ProxyError::TimedOut("sent 17 bytes and then nothing for 0.2s".into())
+        );
+        applet.join().unwrap();
     }
 
     #[test]

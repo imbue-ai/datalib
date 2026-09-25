@@ -404,7 +404,8 @@ async fn proxy_impl(
         // the reason rather than an empty body it would render as "no
         // data" — the same instinct as a failed step's last stderr
         // lines becoming its error message.
-        Ok(Err(e)) => applet_error(StatusCode::BAD_GATEWAY, &e),
+        Ok(Err(applets::ProxyError::TimedOut(e))) => applet_error(StatusCode::GATEWAY_TIMEOUT, &e),
+        Ok(Err(applets::ProxyError::Failed(e))) => applet_error(StatusCode::BAD_GATEWAY, &e),
         Err(e) => applet_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("proxy task: {e}"),

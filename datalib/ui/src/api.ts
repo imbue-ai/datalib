@@ -368,28 +368,61 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
   return getJson<AccountsMap>("/api/accounts", signal);
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+// A request the server answered with an error status. `detail` is what
+// it said: the `error` of a `{"error": …}` body, else the body as text.
+export class ApiError extends Error {
+  constructor(
+    readonly url: string,
+    readonly status: number,
+    readonly detail: string,
+  ) {
+    super(detail ? `${url} → ${status}: ${detail}` : `${url} → ${status}`);
+  }
+}
+
+export function errorDetail(body: string): string {
+  const text = body.trim();
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && "error" in parsed) {
+      const error = (parsed as { error: unknown }).error;
+      if (typeof error === "string") return error;
+    }
+  } catch {
+    // Not JSON; the text is the detail.
+  }
+  return text;
+}
+
+// `toast: false` is for a caller that shows the failure where it happened.
+type GetOptions = { toast?: boolean };
+
+async function getJson<T>(
+  url: string,
+  signal?: AbortSignal,
+  { toast = true }: GetOptions = {},
+): Promise<T> {
   let r: Response;
   try {
     r = await fetch(url, { signal });
   } catch (e) {
     // Network error / aborted before headers. Don't toast on abort
     // (caller-initiated cancellation, e.g. debounced search supersession).
-    if ((e as { name?: string }).name !== "AbortError") {
+    if (toast && (e as { name?: string }).name !== "AbortError") {
       pushToast(`${url}: ${(e as Error).message}`);
     }
     throw e;
   }
   if (!r.ok) {
-    let detail = "";
+    let body = "";
     try {
-      detail = (await r.text()).trim();
+      body = await r.text();
     } catch {
       // ignore
     }
-    const msg = detail ? `${url} → ${r.status}: ${detail}` : `${url} → ${r.status}`;
-    pushToast(msg);
-    throw new Error(msg);
+    const err = new ApiError(url, r.status, errorDetail(body));
+    if (toast) pushToast(err.message);
+    throw err;
   }
   return (await r.json()) as T;
 }
@@ -404,9 +437,14 @@ export async function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
+  options: GetOptions = {},
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await getJson<SearchResponse>(`${UNIFIED_INDEX}/search?${params.toString()}`, signal);
+  const r = await getJson<SearchResponse>(
+    `${UNIFIED_INDEX}/search?${params.toString()}`,
+    signal,
+    options,
+  );
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
