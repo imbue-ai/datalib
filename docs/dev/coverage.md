@@ -32,6 +32,22 @@ tools/run_coverage.sh \
   //datalib/backend/etl:doltlite_two_process
 ```
 
+**A test that runs library code in its own process goes after `--`
+too.** The list after `--` is every binary whose hit counts the report
+reads, and that includes the test binary itself when the code you care
+about runs inside it. Leave it out and the report still names the
+library's files, taken from a helper binary that links them, but every
+line the test ran reads 0. It looks like a finished report, not an
+error. The supervisor's tests run the loop in-process and spawn two
+helpers, so all of them are listed:
+
+```bash
+T="//datalib/backend/dag:dag_unittests //datalib/backend/dag:supervisor_harness_test"
+tools/run_coverage.sh $T -- $T \
+  //datalib/backend/dag:puppet \
+  //datalib/backend/dag:supervisor_store_worker
+```
+
 The report is first-party only. `--instrumentation_filter` cannot make
 it so — `llvm-cov export` reads the coverage-mapping section out of the
 linked binary, and that section names every file compiled into it,
