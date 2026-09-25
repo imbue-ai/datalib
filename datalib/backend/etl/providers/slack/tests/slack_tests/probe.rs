@@ -7,14 +7,15 @@ use std::path::Path;
 use datalib_etl::http::PLAYBACK_ENV;
 use datalib_etl::synthesize::Synthesizer;
 use datalib_etl_slack::probe::probe;
-use datalib_etl_slack::synthesize::{write_recorded_call, SlackSynth};
+use datalib_etl_slack::recorded::record_call;
+use datalib_etl_slack::synthesize::SlackSynth;
 use datalib_etl_slack_config::SlackConfig;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
 fn write_workspace(api: &Path) {
     let call = |method: &str, params: Value, response: Value| {
-        write_recorded_call(api, method, "run-1", params, response).unwrap();
+        record_call(api, method, params, response).unwrap();
     };
     call(
         "auth.test",
