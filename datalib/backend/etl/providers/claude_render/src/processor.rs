@@ -5,55 +5,49 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_claude_config::ClaudeRenderConfig;
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
-use std::path::PathBuf;
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use std::path::Path;
 
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: ClaudeRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(ClaudeRender {
-        id: format!("claude/{name}/render"),
-        raw_path,
-        name,
-        max_project_doc_bytes: config.max_project_doc_bytes,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        ClaudeRender {
+            max_project_doc_bytes: config.max_project_doc_bytes,
+        },
+    ))
 }
 
 struct ClaudeRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
     /// See [`ClaudeRenderConfig::max_project_doc_bytes`].
     max_project_doc_bytes: Option<usize>,
 }
 
 #[async_trait]
-impl RenderProcessor for ClaudeRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for ClaudeRender {
+    const PROVIDER: &'static str = "claude";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::render::RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        crate::render::render::RENDER_VERSION
     }
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse::parse, render::render_all};
-        let parsed = parse(&self.raw_path, &self.name, ctx.raw_range())
-            .with_context(|| format!("claude parse {}", self.raw_path.display()))?;
+        let parsed = parse(raw_path, ctx.name, ctx.raw_range())
+            .with_context(|| format!("claude parse {}", raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
             ctx.root,
-            &self.name,
+            ctx.name,
             crate::render::render::RenderOptions {
                 max_project_doc_bytes: self.max_project_doc_bytes,
             },
@@ -67,20 +61,13 @@ impl RenderProcessor for ClaudeRender {
         // and replace that.
         for bucket in parsed.scan.render.iter().flatten() {
             ctx.declare_bucket(
-                &crate::render::ids::conversation(&self.name, bucket).uuid,
+                &crate::render::ids::conversation(ctx.name, bucket).uuid,
                 &[],
             )?;
-            ctx.declare_bucket(&crate::render::ids::project(&self.name, bucket).uuid, &[])?;
+            ctx.declare_bucket(&crate::render::ids::project(ctx.name, bucket).uuid, &[])?;
         }
-        for bucket in &parsed.scan.gone {
-            ctx.declare_bucket(bucket, &[])?;
-        }
-        for bucket in &buckets {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
-        }
-        if let Some(head) = parsed.scan.new_head.as_deref() {
-            ctx.consumed(head);
-        }
+        ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
+        ctx.finish(&buckets, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

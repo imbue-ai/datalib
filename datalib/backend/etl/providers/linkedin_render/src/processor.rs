@@ -6,21 +6,19 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
 use datalib_etl_render::inputs::{Buckets, Input, RawRange};
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
-use std::path::{Path, PathBuf};
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use std::path::Path;
 
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: LinkedinRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(LinkedinRender {
-        id: format!("linkedin/{name}/render"),
-        raw_path,
-        name,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        LinkedinRender,
+    ))
 }
 
 /// What every feed's render needs to know about the source it is
@@ -50,34 +48,28 @@ pub struct FeedOutcome {
 /// LinkedIn's render processor — renders the three feeds (messages,
 /// connections, posts) and emits each rendered markdown through the
 /// fused-Load callback.
-struct LinkedinRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
-}
+struct LinkedinRender;
 
 #[async_trait]
-impl RenderProcessor for LinkedinRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for LinkedinRender {
+    const PROVIDER: &'static str = "linkedin";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(crate::render::RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        crate::render::RENDER_VERSION
     }
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let mut on_doc = |md| ctx.emit_doc(md);
-        let account = crate::account::load_account(&self.raw_path, ctx.raw_range())
-            .context("linkedin account")?;
+        let account =
+            crate::account::load_account(raw_path, ctx.raw_range()).context("linkedin account")?;
         let source = Source {
-            raw_dir: &self.raw_path,
+            raw_dir: raw_path,
             out_dir: ctx.root,
-            name: &self.name,
+            name: ctx.name,
             account: account.label.as_deref(),
             account_inputs: &account.inputs,
             range: ctx.raw_range(),
