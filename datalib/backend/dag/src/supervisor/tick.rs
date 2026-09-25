@@ -27,11 +27,11 @@ pub struct LockShape {
     pub slots: usize,
 }
 
-/// The graph as the tick needs it: who writes and reads which sink.
+/// The graph as the tick needs it: who reads which sink. Each step writes
+/// one, the one its own index names.
 #[derive(Debug, Clone)]
 pub struct Shape {
     pub steps: Vec<StepShape>,
-    pub sink_count: usize,
     pub locks: Vec<LockShape>,
     /// Every step, producers before the steps that read them.
     pub topo: Vec<StepIx>,
@@ -39,7 +39,6 @@ pub struct Shape {
 
 #[derive(Debug, Clone)]
 pub struct StepShape {
-    pub writes: SinkIx,
     pub reads: Vec<SinkIx>,
     /// The hash of the step's own definition; a change makes it stale.
     pub fingerprint: String,
@@ -162,8 +161,6 @@ impl StateKind {
 pub enum Wait {
     /// A producer it reads is running or about to.
     Upstream(StepIx),
-    /// Another writer of its sink is running.
-    Sink(SinkIx),
     /// A step that reads its sink unpinned is running, and would read a
     /// write in progress.
     Reader(StepIx),
@@ -183,10 +180,8 @@ pub enum Outcome {
 
 pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     let n = shape.steps.len();
-    let mut writers: Vec<Vec<StepIx>> = vec![Vec::new(); shape.sink_count];
-    let mut readers: Vec<Vec<StepIx>> = vec![Vec::new(); shape.sink_count];
+    let mut readers: Vec<Vec<StepIx>> = vec![Vec::new(); n];
     for (i, s) in shape.steps.iter().enumerate() {
-        writers[s.writes].push(i);
         for &r in &s.reads {
             readers[r].push(i);
         }
@@ -270,12 +265,12 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             continue;
         }
 
-        if let Some(w) = blocking_producer(i, shape, facts, &writers, &states) {
+        if let Some(w) = blocking_producer(i, shape, facts, &states) {
             pending[i] = true;
             states[i] = StepState::Waiting(Wait::Upstream(w));
             continue;
         }
-        if let Some(w) = nothing_to_read(step, facts, &writers) {
+        if let Some(w) = nothing_to_read(step, facts) {
             if pending[w] {
                 pending[i] = true;
                 states[i] = StepState::Waiting(Wait::Upstream(w));
@@ -285,11 +280,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             continue;
         }
         pending[i] = true;
-        if writers[step.writes].iter().any(|&w| busy[w]) {
-            states[i] = StepState::Waiting(Wait::Sink(step.writes));
-            continue;
-        }
-        if let Some(&r) = readers[step.writes]
+        if let Some(&r) = readers[i]
             .iter()
             .find(|&&r| busy[r] && !shape.steps[r].pins_reads)
         {
@@ -372,7 +363,7 @@ fn closure(shape: &Shape, readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool
         if std::mem::replace(&mut seen[i], true) {
             continue;
         }
-        stack.extend(readers[shape.steps[i].writes].iter().copied());
+        stack.extend(readers[i].iter().copied());
     }
     seen
 }
@@ -406,19 +397,19 @@ fn started_since(f: &StepFacts, opened: Seq) -> bool {
     running || attempted
 }
 
-/// A writer of what the step reads, when nothing it reads has ever been
+/// A producer of what the step reads, when nothing it reads has ever been
 /// published. A fan-in reads whichever of its sources exist.
-fn nothing_to_read(step: &StepShape, facts: &Facts, writers: &[Vec<StepIx>]) -> Option<StepIx> {
-    if step.reads.is_empty() || step.reads.iter().any(|&s| facts.sinks[s].is_some()) {
+fn nothing_to_read(step: &StepShape, facts: &Facts) -> Option<StepIx> {
+    if step.reads.iter().any(|&s| facts.sinks[s].is_some()) {
         return None;
     }
-    writers[step.reads[0]].first().copied()
+    step.reads.first().copied()
 }
 
 /// A producer of something `i` reads that `i` must wait for. Two reasons,
 /// and only two: it is running and does not stream, so its sink may be
-/// half-written; or it is about to run, held only by a lock, its sink or
-/// a reader or a lock, and will rewrite what `i` would read. A producer that is
+/// half-written; or it is about to run, held only by a lock or a reader,
+/// and will rewrite what `i` would read. A producer that is
 /// itself waiting on something upstream may not run for a long time, and a
 /// fan-in that waited on it would wait for its slowest source. A step that
 /// reads unpinned treats even a streaming producer as half-written.
@@ -426,23 +417,16 @@ fn blocking_producer(
     i: StepIx,
     shape: &Shape,
     facts: &Facts,
-    writers: &[Vec<StepIx>],
     states: &[StepState],
 ) -> Option<StepIx> {
-    shape.steps[i]
-        .reads
-        .iter()
-        .flat_map(|&s| writers[s].iter().copied())
-        .find(|&w| {
-            w != i
-                && match states[w] {
-                    StepState::Running => {
-                        !facts.steps[w].streams_output || !shape.steps[i].pins_reads
-                    }
-                    StepState::Waiting(Wait::Lock(_) | Wait::Sink(_) | Wait::Reader(_)) => true,
-                    _ => false,
-                }
-        })
+    shape.steps[i].reads.iter().copied().find(|&w| {
+        w != i
+            && match states[w] {
+                StepState::Running => !facts.steps[w].streams_output || !shape.steps[i].pins_reads,
+                StepState::Waiting(Wait::Lock(_) | Wait::Reader(_)) => true,
+                _ => false,
+            }
+    })
 }
 
 #[cfg(test)]
@@ -465,15 +449,12 @@ mod tests {
             .collect()
     }
 
-    /// A graph in the shape the tree has today: each step writes the sink
-    /// its own index names. `reads` are step indices, which are then also
-    /// sink indices.
+    /// `reads` are step indices, which are also sink indices.
     fn shape(reads: &[&[StepIx]]) -> Shape {
         let steps: Vec<StepShape> = reads
             .iter()
             .enumerate()
             .map(|(i, r)| StepShape {
-                writes: i,
                 reads: r.to_vec(),
                 fingerprint: format!("fp{i}"),
                 locks: vec![(if r.is_empty() { NETWORK } else { CPU }, Hold::Shared)],
@@ -481,7 +462,6 @@ mod tests {
             })
             .collect();
         Shape {
-            sink_count: steps.len(),
             topo: (0..steps.len()).collect(),
             steps,
             locks: default_locks(),
@@ -497,7 +477,7 @@ mod tests {
 
     /// Every step succeeded against the sinks as they are now.
     fn all_fresh(shape: &Shape, at: u64) -> Facts {
-        let sinks: Vec<Option<String>> = (0..shape.sink_count)
+        let sinks: Vec<Option<String>> = (0..shape.steps.len())
             .map(|s| Some(format!("v{s}")))
             .collect();
         let steps = shape
@@ -1065,17 +1045,6 @@ mod tests {
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[0], StepState::Waiting(Wait::Lock(gpu)));
         assert_eq!(t.states[2], StepState::Waiting(Wait::Lock(gpu)));
-    }
-
-    #[test]
-    fn two_writers_of_one_sink_take_turns() {
-        let mut s = shape(&[&[], &[], &[0]]);
-        s.steps[1].writes = 0;
-        s.sink_count = 3;
-        let facts = all_fresh(&s, 1);
-        let t = tick(&s, &request(&[0, 1], 5), &facts);
-        assert_eq!(started(&t), vec![0]);
-        assert_eq!(t.states[1], StepState::Waiting(Wait::Sink(0)));
     }
 
     #[test]

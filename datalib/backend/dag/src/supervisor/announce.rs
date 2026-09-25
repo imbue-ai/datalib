@@ -434,4 +434,18 @@ mod tests {
         // Other tests share the count, and none of them misses one.
         assert!(missed_announcements() > before);
     }
+
+    /// A listener that cannot make its FIFO still wakes, on the backstop
+    /// alone: it hears no announcement, so every commit reads as missed.
+    #[tokio::test]
+    async fn a_listener_that_cannot_listen_wakes_on_the_backstop() {
+        let td = tempfile::tempdir().unwrap();
+        let store = Store::open(td.path()).await.unwrap();
+        let other = Store::open(td.path()).await.unwrap();
+        let _ = std::fs::remove_dir_all(store.listeners());
+        std::fs::write(store.listeners(), "not a directory").unwrap();
+        let mut listener = Listener::new(&store, "test").backstop(Duration::from_millis(1));
+        other.pause("x/y", "test").await.unwrap();
+        assert_eq!(listener.next().await, [UNANNOUNCED]);
+    }
 }
