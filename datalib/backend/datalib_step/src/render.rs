@@ -125,19 +125,25 @@ pub async fn run(
     // backups (`restic --exclude-caches` etc.) may skip it. No-op until
     // the first render materializes the dir.
     datalib_core::layout::mark_derived_cache(&rendered_root);
-    // The store's HEAD is the tree's content version: doltlite advances
-    // it only when a commit changed something, so a run that rewrote
-    // nothing reports the same string. Without doltlite there is nothing
-    // content-derived to vouch for, and the runner hashes the tree.
-    Ok(report
+    Ok(claims(&env.step, &report))
+}
+
+/// What a render reports: its store's HEAD, the tree's content version.
+/// Doltlite advances it only when a commit changed something, so a run
+/// that rewrote nothing reports the same string, and it is spelled as each
+/// seal spells its commit, so finishing on the commit last sealed moves
+/// nothing downstream. Without doltlite there is nothing content-derived
+/// to vouch for, and every success reads as new.
+pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
+    report
         .head
+        .iter()
         .map(|h| OutputClaim {
-            path: env.step.clone(),
-            version: format!("store:{h}"),
+            path: step.to_string(),
+            version: h.clone(),
             rows: Some(report.unsealed),
         })
-        .into_iter()
-        .collect())
+        .collect()
 }
 
 /// One source's render, as the core takes it: everything the step shell

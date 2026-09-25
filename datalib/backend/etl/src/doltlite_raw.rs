@@ -941,7 +941,7 @@ async fn open_inner(
     // so a build without the extensions is not a supported configuration —
     // it is a broken one, and it fails *quietly*: `commit_run` returns
     // `Ok(None)` so nothing ever commits, `head_commit` returns `Ok(None)`
-    // so the runner content-hashes instead, and `pin::head` returns `None`
+    // so every success reads as new downstream, and `pin::head` returns `None`
     // so every render skips. A whole pipeline that does nothing and reports
     // success. This is the first place that would notice, so it does.
     //
@@ -1580,10 +1580,10 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 /// The store's current HEAD, which is its *content version*: doltlite
 /// advances HEAD only when a commit changed something, so two downloads that
 /// pulled the same rows leave the same hash. That is what a step reports to
-/// the DAG runner, instead of hashing a multi-gigabyte store.
+/// the DAG runner as its version.
 ///
-/// `Ok(None)` against stock libsqlite3 or an empty log; the runner then
-/// content-hashes instead.
+/// `Ok(None)` against stock libsqlite3 or an empty log; the step then
+/// reports no version, and the runner takes each success as new.
 pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
@@ -2700,6 +2700,25 @@ mod tests {
             !tables.iter().any(|t| t == "sync_runs"),
             "reading a version must not provision write-path tables: {tables:?}"
         );
+    }
+
+    /// A step seals with the hash `commit_run` returns and finishes with the
+    /// head read off disk; the loop compares the two as strings, so they
+    /// must be one spelling, or every sync runs the consumers once more for
+    /// a commit they already read.
+    #[tokio::test]
+    async fn a_seal_and_the_head_read_after_it_name_one_commit_the_same_way() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let pool = plain_pool(&path).await;
+        sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let sealed = commit_run(&pool, "seal").await.unwrap();
+        pool.close().await;
+        assert!(sealed.is_some(), "the fixture must commit");
+        assert_eq!(head_commit_at_path(&path).await.unwrap(), sealed);
     }
 
     /// A store nobody has downloaded yet has no version to report.

@@ -139,8 +139,8 @@ somewhere downstream:
   *left*, which is how a document a source stops holding reaches the
   grid index as a deletion. Reading whole stores could never see that.
 - **The step's output version is free.** A doltlite artifact versions
-  as its commit hash, so the render step reports its store's HEAD and
-  the runner never content-hashes the tree
+  as its commit hash, so the render step reports its store's HEAD, and
+  the index skips a render that changed nothing
   ([`dag/README.md`](../../datalib/backend/dag/README.md) says what an
   unreported version costs).
 

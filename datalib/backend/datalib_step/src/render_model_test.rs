@@ -1114,3 +1114,41 @@ async fn a_run_over_an_unchanged_store_moves_nothing() {
     );
     world.index.close().await;
 }
+
+/// A render reports its store's HEAD exactly as the store spells it, which
+/// is how a seal spells its commit (`doltlite_raw`'s
+/// `a_seal_and_the_head_read_after_it_name_one_commit_the_same_way`). Spelled
+/// any other way, the index would run once more on every sync, for a commit
+/// it had already read at the seal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_render_reports_its_head_as_the_store_spells_it() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    if !world.dolt {
+        return;
+    }
+    let synth = SynthRender::new(world.raw_db.clone());
+    world
+        .commit(&[
+            Mutation::RenameAuthor("a0".into(), "ann".into()),
+            Mutation::InsertParent(
+                "p1".into(),
+                Parent {
+                    title: "title 1".into(),
+                    author_id: "a0".into(),
+                },
+            ),
+        ])
+        .await;
+    let report = world.render_report(&synth, true).await.unwrap();
+    let store = datalib_etl_render::indexed_markdown::path_for(
+        &datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE),
+    );
+    let head = doltlite_raw::head_commit_at_path(&store).await.unwrap();
+    assert!(head.is_some(), "the render must have committed");
+    let claimed: Vec<String> = crate::render::claims("s/render_markdown", &report)
+        .into_iter()
+        .map(|c| c.version)
+        .collect();
+    assert_eq!(claimed, head.into_iter().collect::<Vec<_>>());
+}

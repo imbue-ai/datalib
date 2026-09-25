@@ -2,8 +2,7 @@
 
 The sync engine (`datalib-dag`) runs a DAG of arbitrary commands. Any
 executable can be a step: the runner spawns it, feeds it what it
-declared in the config, watches its stdout/stderr, and hashes its
-outputs. Everything beyond "run a program and exit 0/non-0" is an
+declared in the config, and watches its stdout/stderr. Everything beyond "run a program and exit 0/non-0" is an
 *optional* protocol layer — a plain shell script is a valid step, and
 each layer you adopt buys better incrementality, progress reporting,
 or failure handling.
@@ -227,47 +226,35 @@ version of each output you produced:
 output gained since your last seal (or in all, if you never sealed) —
 finishing is the last seal, as far as a consumer's queue is concerned.
 
-**If your tree holds doltlite stores, you need not report a version
-at all.** The runner reads the commit each `*.doltlite_db` at the top of
-your tree has on `main`, after every invocation and at every checkpoint,
-and uses that; anything you report for such a tree is not consulted.
-Publish before you checkpoint (`commit_run` does), and the checkpoint
-means what it says.
+For your output there are two cases, and that is the whole protocol:
 
-For any other tree there are two cases per declared output, and that is
-the whole protocol:
-
-* **`version`** — a content version you vouch for: a dolt commit hash,
-  a row-set hash, a cursor hash. Trusted verbatim, and compared only
-  for equality.
-* **nothing** (omit the path, or the whole outcome line) — the
-  scheduler blake3-hashes the output tree and decides for itself.
-  Always correct, and always slower: it reads every byte under the
-  output.
+* **`version`**: a content version you vouch for, such as a dolt commit
+  hash, a row-set hash or a cursor hash. Trusted verbatim, and compared
+  only for equality. The runner never opens your output to check it.
+* **nothing** (omit the path, or the whole outcome line): each success
+  counts as new, so every step that reads your output runs again after
+  it. Always safe, and wasteful when nothing changed; the runner says so
+  on the event stream (`info`: "reported no version for `<path>`, so
+  every step reading it runs again").
 
 **The version must be a function of the output's content.** Two runs
 that leave the same data behind must report the same string, because
-that string is the entire signal for "did this change?" — a step that
+that string is the entire signal for "did this change?": a step that
 did nothing this pass reports the version it reported last time, and
 its consumers skip. There is no separate "unchanged" flag to assert;
 unchanged is something the scheduler *derives* from two equal
 versions. A timestamp, a run id, or a counter is not a version: it
-moves every run and re-runs everything downstream forever.
+moves every run and re-runs everything downstream, which is exactly
+what reporting nothing already gets you.
 
-If you cannot cheaply derive one, omit the output and let the
-scheduler hash. That is correct, just slower — and for a big output
-(a raw store with a blob CAS, a large rendered tree) the difference is
-substantial, so prefer a logical version wherever the underlying store
-already has one. When the scheduler does hash, it says so on the event
-stream (`info`: "reported no version for `<path>`; reading the whole
-tree to hash it"), so the cost is visible rather than showing up as an
-unexplained pause.
+**Spell one version the same way everywhere.** A checkpoint's `version`
+and the outcome's are compared as strings, so if you finish on the
+commit you last sealed, report it exactly as the checkpoint did, and
+your consumers do not run again for it. A doltlite store's head is a
+good version for both: it moves only when a commit changed something.
 
-The hash only ever happens for a step that **ran**. The runner does
-not hash a tree on behalf of a step it skipped: a skipped step's
-output keeps the version recorded for it last time, or
-`datalib_dag::version::UNKNOWN` if there is none. So omitting a
-version costs a tree read per invocation, not per run of the pipeline.
+A step that did not run keeps the version recorded for its output last
+time, or `datalib_dag::version::UNKNOWN` if there is none.
 
 Claiming a path you didn't declare in `outputs` is a contract
 violation and fails the step. Exit `0` means success; the outcome
@@ -295,6 +282,9 @@ kind* of failure this is, which drives retry policy:
 `outputs` on a failure outcome reports partial progress you *did*
 commit. The scheduler records those versions, the next run resumes from
 them, and your dependents read them now: a commit is a correct state.
+That includes `cancelled`: a step that stops at a consistent point and
+commits should report where it got to. A failure that reports nothing
+moves nothing, since the runner cannot know your tree is whole.
 
 ### Rendering a source with no data
 
@@ -332,10 +322,6 @@ pub fn parse(path: &Path) -> Result<Parsed> {
     Ok(Parsed::default())                  // never downloaded — not an error
 }
 ```
-
-The scheduler models the same distinction: an artifact that doesn't
-exist hashes to the distinguished version `absent`
-(`datalib_dag::version::ABSENT`) rather than being an error state.
 
 ## stdin: nothing to read
 
@@ -455,7 +441,8 @@ what a step wrote so the next run does its work from the start: the
 runner invokes the step once with `DATALIB_DAG_RESET` set to `store`, or
 to whatever followed the `+` (`blobs`: the built-in ingest step's store
 *and* its blob CAS), then forgets the step ever succeeded and records
-its tree's new version. Empty that part of your tree, keep whatever
+the version the reset reports, or a new one if it reports none, so
+everything reading the tree runs again. Empty that part of your tree, keep whatever
 history you keep, commit if you commit, exit 0, and do nothing else: no
 inputs are resolved and no sync follows unless `--sync` was also given.
 A command that does not know the verb exits non-zero and nothing is
@@ -490,7 +477,8 @@ part-way is backfilled by the next run rather than believed done.
 
 ## Minimal examples
 
-A shell step, no protocol at all (scheduler hashes the output tree):
+A shell step, no protocol at all (each success counts as new, so what
+reads its tree runs after every sync):
 
 ```toml
 [[steps]]

@@ -245,7 +245,7 @@ pub async fn run(
     // Not qmd's sqlite, which is touched on every pass: what was indexed.
     // Exact, because the runner never lets a render write while this step
     // globs its `.md` files. Run by hand, with nothing from the runner, it
-    // reports nothing and the runner, if any, hashes the tree.
+    // reports nothing, and a runner, if any, takes every success as new.
     let reads = std::env::var(datalib_dag::subprocess::ENV_READS).unwrap_or_default();
     Ok(version_of_reads(&reads)
         .map(|version| OutputClaim {
