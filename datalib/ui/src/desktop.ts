@@ -30,7 +30,7 @@
  * `invoke` throws a bare `TypeError` rather than degrading.
  */
 
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 /** Tauri's IPC bridge, injected only into windows it trusts. */
@@ -119,6 +119,24 @@ export function filePathFromUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Ask the user to confirm a destructive action; call this, never
+ * `window.confirm`.
+ *
+ * In the app, `window.confirm` is broken beyond a permission: the
+ * dialog plugin's init script replaces it with an async function
+ * that invokes `plugin:dialog|confirm`, a command the plugin does not
+ * register, and the Promise it returns is truthy — `if
+ * (!window.confirm(…)) return` never returns. The plugin's own
+ * `confirm` goes through `plugin:dialog|message`, granted by
+ * `capabilities/confirm-actions.json`. A refused call rejects, and the
+ * action does not happen.
+ */
+export async function confirmAction(message: string): Promise<boolean> {
+  if (!isDesktopApp()) return window.confirm(message);
+  return confirmDialog(message, { kind: "warning" });
 }
 
 /**
