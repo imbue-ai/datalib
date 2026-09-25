@@ -502,7 +502,7 @@ export type Diagnostic = {
   // is null for problems raised after loading, where the array position
   // has already shifted and the id is the identity.
   entry: {
-    kind: "group" | "step" | "applet";
+    kind: "group" | "step" | "applet" | "lock";
     index: number | null;
     id: string | null;
   } | null;

@@ -9,7 +9,9 @@ test surface.
 Rust unit + integration tests, the cross-language goldens, the `//:lint`
 gate (ruff / pyright / vue-tsc / prettier, all sandboxed), and the Playwright
 e2e suite, the same way CI does. Formatting is checked in every language,
-never fixed by the gate: `cargo fmt` for Rust (or read the aspect's diff),
+never fixed by the gate: `bazelisk run //:rustfmt -- <file or directory>...`
+for Rust (it runs the aspect's rustfmt with the aspect's flags, and works
+from a checkout whose path has spaces, which `@rules_rust//:rustfmt` does not),
 `uv run ruff format .` for Python, and `pnpm exec prettier --write .` from
 `datalib/ui` for TypeScript and Vue — `.prettierrc` sets 100 columns and
 `.prettierignore` keeps it to what `//datalib/ui:format_test` checks. Bazel's action cache makes re-runs cheap, so for a

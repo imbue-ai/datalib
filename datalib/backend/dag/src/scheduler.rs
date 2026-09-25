@@ -21,7 +21,6 @@ use crate::step::{
     StopSignal,
 };
 use crate::supervisor::record::{LastRun, Record};
-use crate::supervisor::tick::Budgets;
 use crate::version::tree_version;
 
 #[derive(Debug, Clone)]
@@ -57,9 +56,9 @@ impl RetryPolicy {
 
 pub struct Runner {
     pub data_root: PathBuf,
-    /// How many invocations of each class may run at once. Separate
-    /// budgets are what keep four downloads from starving the index.
-    pub budgets: Budgets,
+    /// Slots for named locks, over what the config declares: what
+    /// `--parallelism N` sets for `network` and `cpu`.
+    pub lock_slots: BTreeMap<String, usize>,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
     /// Extra environment applied to every subprocess step — run-wide
@@ -84,7 +83,7 @@ impl Runner {
     pub fn new(data_root: impl Into<PathBuf>) -> Self {
         Self {
             data_root: data_root.into(),
-            budgets: Budgets::from_parallelism(4),
+            lock_slots: BTreeMap::new(),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             child_env: Arc::new(BTreeMap::new()),
@@ -112,6 +111,18 @@ impl Runner {
 
     pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
         self.child_env = Arc::new(env);
+        self
+    }
+
+    /// `--parallelism N`: N downloads and N renders at once, whatever the
+    /// config says of `network` and `cpu`.
+    pub fn parallelism(mut self, n: usize) -> Self {
+        for lock in [
+            crate::supervisor::locks::NETWORK,
+            crate::supervisor::locks::CPU,
+        ] {
+            self.lock_slots.insert(lock.to_string(), n);
+        }
         self
     }
 
@@ -311,7 +322,7 @@ impl Runner {
         &self,
         graph: &Graph,
         state: &mut Record,
-        status: &mut [Option<StepStatus>],
+        status: &mut Option<StepStatus>,
         i: usize,
         st: StepStatus,
         error: Option<String>,
@@ -352,7 +363,7 @@ impl Runner {
                 entry.last_success_at = Some(stamp);
             }
         }
-        status[i] = Some(st);
+        *status = Some(st);
     }
 }
 
@@ -1818,7 +1829,7 @@ mod tests {
         let graph = Graph::build(specs).unwrap();
 
         let mut r = runner(root.path());
-        r.budgets = Budgets::from_parallelism(4); // exactly the number of producers
+        r = r.parallelism(4); // exactly the number of producers
         let report = tokio::time::timeout(Duration::from_secs(10), r.run(&graph))
             .await
             .expect("a streaming pass competing for ordinary slots would deadlock here")

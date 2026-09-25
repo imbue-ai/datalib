@@ -12,7 +12,7 @@ use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
-    tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
+    tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
 use crate::artifact::ArtifactPath;
@@ -55,6 +55,57 @@ impl Ended {
             signal: self.exit.and_then(|x| x.signal),
         }
     }
+}
+
+/// What the loop holds for one step through a round. A config swap
+/// carries it to the step's place in the new graph.
+struct Slot {
+    /// Whether an open request has wanted it this round.
+    ever_in_scope: bool,
+    /// Its state the last time a request wanted it: what its row settles
+    /// on once none does.
+    last_state: Row,
+    live: Option<Live>,
+    ended: Option<Ended>,
+    warned_not_streaming: bool,
+    /// What the round's report says of it.
+    status: Option<StepStatus>,
+    attempts: u32,
+    error: Option<String>,
+}
+
+impl Default for Slot {
+    fn default() -> Self {
+        Slot {
+            ever_in_scope: false,
+            last_state: Row::Idle,
+            live: None,
+            ended: None,
+            warned_not_streaming: false,
+            status: None,
+            attempts: 0,
+            error: None,
+        }
+    }
+}
+
+impl Slot {
+    fn remapped(mut self, to_new: &HashMap<usize, usize>) -> Slot {
+        self.last_state = remap_row(self.last_state, to_new);
+        self.live = self.live.map(|l| Live {
+            consumed: remap_consumed(l.consumed, to_new),
+            ..l
+        });
+        self
+    }
+}
+
+/// An invocation in flight.
+struct Live {
+    invocation: String,
+    consumed: Consumed,
+    /// Taken when the loop tells it to stop: what ends then was asked to.
+    stop: Option<watch::Sender<bool>>,
 }
 
 type Done = (String, u32, Result<StepOutcome, StepError>);
@@ -164,9 +215,7 @@ impl Runner {
 
         // Made before the first look at the mailbox, so a row written
         // after that look is heard.
-        let mut listener = Listener::new(store, "the loop")
-            .await
-            .backstop(self.backstop);
+        let mut listener = Listener::new(store, "the loop").backstop(self.backstop);
         let mut current = graph.clone();
         let mut config_seen: Option<String> = None;
         // The host loaded the config before this period began, and it may
@@ -174,31 +223,14 @@ impl Runner {
         let mut config_moved = true;
         let mut next_graph: Option<Graph> = None;
         let mut said_waiting_to_swap = false;
-        let mut n = graph.steps.len();
-        let mut shape = shape_of(graph);
+        let mut shape = shape_of(graph, &self.lock_slots);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
         let mut paused: BTreeMap<usize, String> = BTreeMap::new();
-        let mut ever_in_scope = vec![false; n];
         let mut seq = 0u64;
-
-        let mut status: Vec<Option<StepStatus>> = vec![None; n];
-        let mut attempts_taken = vec![0u32; n];
-        let mut errors: Vec<Option<String>> = vec![None; n];
+        let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
         let mut changed_now: HashMap<String, bool> = HashMap::new();
-        let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
-        let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
-        // Whether the loop told each running step to stop: what ends then
-        // was stopped, whatever it reported.
-        let mut stop_sent = vec![false; n];
-        let mut invocations: Vec<Option<String>> = vec![None; n];
-        // What each running invocation was started against.
-        let mut consumed_by: Vec<Option<Consumed>> = vec![None; n];
-        let mut warned_not_streaming = vec![false; n];
-        let mut queue = QueueLedger::new(n);
-        // Each step's state the last time a request wanted it, which is
-        // what its row settles on once none does.
-        let mut last_states: Vec<Row> = vec![Row::Idle; n];
+        let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
@@ -208,7 +240,7 @@ impl Runner {
             &mut open,
             &mut paused,
             &mut seq,
-            &mut ever_in_scope,
+            &mut slots,
         )
         .await?;
 
@@ -269,15 +301,15 @@ impl Runner {
                         .collect();
                     // A step the new graph lacks, done but for what it
                     // reads settling, is done now, under the graph it ran in.
-                    for (i, slot) in ended.iter_mut().enumerate() {
+                    for (i, s) in slots.iter_mut().enumerate() {
                         if to_new.contains_key(&i) {
                             continue;
                         }
-                        if let Some(e) = slot.take() {
+                        if let Some(e) = s.ended.take() {
                             self.finish(
                                 &old,
                                 &mut state,
-                                &mut status,
+                                &mut s.status,
                                 i,
                                 e.status,
                                 e.error,
@@ -286,24 +318,10 @@ impl Runner {
                             );
                         }
                     }
-                    n = graph.steps.len();
-                    shape = shape_of(graph);
-                    status = carry(&mut status, &from_old);
-                    attempts_taken = carry(&mut attempts_taken, &from_old);
-                    errors = carry(&mut errors, &from_old);
-                    ended = carry(&mut ended, &from_old);
-                    stops = carry(&mut stops, &from_old);
-                    stop_sent = carry(&mut stop_sent, &from_old);
-                    invocations = carry(&mut invocations, &from_old);
-                    warned_not_streaming = carry(&mut warned_not_streaming, &from_old);
-                    ever_in_scope = carry(&mut ever_in_scope, &from_old);
-                    consumed_by = carry(&mut consumed_by, &from_old)
+                    shape = shape_of(graph, &self.lock_slots);
+                    slots = carry(&mut slots, &from_old)
                         .into_iter()
-                        .map(|c| c.map(|c| remap_consumed(c, &to_new)))
-                        .collect();
-                    last_states = from_old
-                        .iter()
-                        .map(|o| o.map_or(Row::Idle, |o| remap_row(last_states[o], &to_new)))
+                        .map(|s| s.remapped(&to_new))
                         .collect();
                     queue.remap(&from_old);
                     // The record holds everything the facts are made of
@@ -326,8 +344,8 @@ impl Runner {
                             *r = to_new[r];
                         }
                         o.scope = downstream_of(graph, &o.request.roots);
-                        for (e, &s) in ever_in_scope.iter_mut().zip(&o.scope) {
-                            *e |= s;
+                        for (slot, &s) in slots.iter_mut().zip(&o.scope) {
+                            slot.ever_in_scope |= s;
                         }
                     }
                     paused = paused_in(graph, store).await?;
@@ -361,7 +379,7 @@ impl Runner {
                     &mut open,
                     &mut paused,
                     &mut seq,
-                    &mut ever_in_scope,
+                    &mut slots,
                 )
                 .await?;
             }
@@ -369,10 +387,10 @@ impl Runner {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
                 paused: paused.keys().copied().collect(),
             };
-            let t = tick(&shape, &intent, &facts, &self.budgets);
-            for (i, st) in t.states.iter().enumerate() {
+            let t = tick(&shape, &intent, &facts);
+            for (slot, st) in slots.iter_mut().zip(&t.states) {
                 if !matches!(st, Row::Idle | Row::Stale) {
-                    last_states[i] = *st;
+                    slot.last_state = *st;
                 }
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
@@ -380,15 +398,15 @@ impl Runner {
             // A step between passes has not settled either, so the index
             // behind a render that is waiting on its download's next seal
             // keeps reading Running too, not just the render.
-            let mut unsettled = vec![false; n];
+            let mut unsettled = vec![false; slots.len()];
             for &i in &graph.topo {
                 let upstream = graph.deps_in_order(i).any(|p| unsettled[p]);
                 unsettled[i] = matches!(t.states[i], Row::Running | Row::Waiting(_))
-                    || (ended[i].is_some() && upstream);
+                    || (slots[i].ended.is_some() && upstream);
             }
 
-            for (i, slot) in ended.iter_mut().enumerate() {
-                let Some(e) = slot.as_mut() else { continue };
+            for (i, s) in slots.iter_mut().enumerate() {
+                let Some(e) = s.ended.as_mut() else { continue };
                 let again = starting.contains(&i);
                 let upstream_busy = graph.deps_in_order(i).any(|p| unsettled[p]);
                 if (again || upstream_busy) && !e.pass_ended {
@@ -400,13 +418,13 @@ impl Runner {
                     });
                 }
                 if again {
-                    *slot = None;
+                    s.ended = None;
                 } else if !upstream_busy {
-                    let e = slot.take().expect("checked above");
+                    let e = s.ended.take().expect("checked above");
                     self.finish(
                         graph,
                         &mut state,
-                        &mut status,
+                        &mut s.status,
                         i,
                         e.status,
                         e.error,
@@ -420,24 +438,18 @@ impl Runner {
             // its own left to finish, says so now rather than when the
             // loop ends, which may be a long sync of some other source
             // away.
-            for i in 0..n {
+            for (i, s) in slots.iter_mut().enumerate() {
                 let unwanted = matches!(t.states[i], Row::Idle | Row::Stale);
-                if ever_in_scope[i] && status[i].is_none() && ended[i].is_none() && unwanted {
-                    let Some(st) = settled(graph, &last_states, i, cancelled) else {
-                        continue;
-                    };
-                    if st == StepStatus::SkippedUpToDate {
-                        queue.cleared(graph, i, &*self.sink);
-                    }
-                    self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
+                if s.ended.is_none() && unwanted {
+                    self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
                 }
             }
 
             // A request closing now is closed after the save below, and a
             // reader that sees it closed must find no step still serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            let held: Vec<bool> = ended.iter().map(Option::is_some).collect();
-            record_states(graph, &mut state, &t, &held, &paused, |i| {
+            let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            record_states(graph, &shape, &mut state, &t, &held, &paused, |i| {
                 let mut serving = open
                     .iter()
                     .enumerate()
@@ -450,10 +462,8 @@ impl Runner {
                 let i = start.step;
                 seq += 1;
                 facts.steps[i].running = Some(Running { started: Seq(seq) });
-                let (tx, rx) = watch::channel(false);
-                stops[i] = Some(tx);
+                let (stop, rx) = watch::channel(false);
                 let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
-                consumed_by[i] = Some(start.consumed);
                 let started_at = now_stamp();
                 mark_running(&mut state, &graph.steps[i].id, &started_at);
                 let invocation = InvocationRow {
@@ -467,7 +477,11 @@ impl Runner {
                     started_at_utc: started_at,
                 };
                 store.open_invocation(&invocation).await?;
-                invocations[i] = Some(invocation.id);
+                slots[i].live = Some(Live {
+                    invocation: invocation.id,
+                    consumed: start.consumed,
+                    stop: Some(stop),
+                });
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
@@ -480,9 +494,8 @@ impl Runner {
                 });
             }
             for &i in &t.stops {
-                if let Some(tx) = stops[i].take() {
-                    stop_sent[i] = true;
-                    let _ = tx.send(true);
+                if let Some(stop) = slots[i].live.as_mut().and_then(|l| l.stop.take()) {
+                    let _ = stop.send(true);
                 }
             }
             record.save(&state).await?;
@@ -518,7 +531,7 @@ impl Runner {
                 biased;
                 Some(signal) = checkpoints.recv() => {
                     self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut warned_not_streaming, &consumed_by).await;
+                        &mut queue, &mut slots).await;
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
@@ -527,7 +540,7 @@ impl Runner {
                     cancelled = true;
                     open.clear();
                 }
-                heard = listener.next(store), if listening => {
+                heard = listener.next(), if listening => {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 joined = set.join_next() => {
@@ -536,35 +549,35 @@ impl Runner {
                         .context("step task panicked")?;
                     // A graph that drops a running step waits for it.
                     let i = graph.by_id[&id];
-                    let consumed = consumed_by[i].take().expect("started with what it read");
-                    stops[i] = None;
+                    let live = slots[i].live.take().expect("a joined step was started");
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
-                    let e = self.on_ended(graph, i, attempts, res, &consumed, &mut facts,
+                    let e = self.on_ended(graph, i, attempts, res, &live.consumed, &mut facts,
                         &mut state, &mut changed_now, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
-                        stopped: std::mem::take(&mut stop_sent[i]),
-                        consumed,
+                        // Asked to stop, and it did: one that says it
+                        // failed has failed, whatever it was asked.
+                        stopped: live.stop.is_none()
+                            && e.status.state() == crate::run_state::RunState::Stopped,
+                        consumed: live.consumed,
                     });
-                    attempts_taken[i] = e.attempts;
-                    errors[i] = e.error.clone();
-                    if let Some(id) = invocations[i].take() {
-                        store.close_invocation(&id, &e.as_end()).await?;
-                    }
-                    ended[i] = Some(e);
+                    store.close_invocation(&live.invocation, &e.as_end()).await?;
+                    slots[i].attempts = e.attempts;
+                    slots[i].error = e.error.clone();
+                    slots[i].ended = Some(e);
                     record.save(&state).await?;
                 }
             }
         }
 
         let graph = &current;
-        for (i, slot) in ended.iter_mut().enumerate() {
-            if let Some(e) = slot.take() {
+        for (i, s) in slots.iter_mut().enumerate() {
+            if let Some(e) = s.ended.take() {
                 self.finish(
                     graph,
                     &mut state,
-                    &mut status,
+                    &mut s.status,
                     i,
                     e.status,
                     e.error,
@@ -572,25 +585,22 @@ impl Runner {
                     e.attempts,
                 );
             }
-        }
-        for i in 0..n {
-            if status[i].is_some() || !ever_in_scope[i] {
-                continue;
-            }
-            let Some(st) = settled(graph, &last_states, i, cancelled) else {
-                continue;
-            };
-            if st == StepStatus::SkippedUpToDate {
-                queue.cleared(graph, i, &*self.sink);
-            }
-            self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
+            self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
         }
         let at_rest = Intent {
             requests: Vec::new(),
             paused: paused.keys().copied().collect(),
         };
-        let t = tick(&shape, &at_rest, &facts, &self.budgets);
-        record_states(graph, &mut state, &t, &vec![false; n], &paused, |_| None);
+        let t = tick(&shape, &at_rest, &facts);
+        record_states(
+            graph,
+            &shape,
+            &mut state,
+            &t,
+            &vec![false; slots.len()],
+            &paused,
+            |_| None,
+        );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
@@ -609,9 +619,9 @@ impl Runner {
                 let changed = changed_now.get(&path).copied().unwrap_or(false);
                 Some(StepReport {
                     id: graph.steps[i].id.clone(),
-                    status: status[i].clone()?,
-                    attempts: attempts_taken[i],
-                    error: errors[i].clone(),
+                    status: slots[i].status.clone()?,
+                    attempts: slots[i].attempts,
+                    error: slots[i].error.clone(),
                     outputs: vec![(path, now, changed)],
                 })
             })
@@ -634,12 +644,12 @@ impl Runner {
         open: &mut Vec<Open>,
         paused: &mut BTreeMap<usize, String>,
         seq: &mut u64,
-        ever_in_scope: &mut [bool],
+        slots: &mut [Slot],
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
             let scope = downstream_of(graph, &roots);
-            for (i, &reached) in scope.iter().enumerate() {
-                ever_in_scope[i] |= reached;
+            for (slot, &reached) in slots.iter_mut().zip(&scope) {
+                slot.ever_in_scope |= reached;
             }
             *seq += 1;
             open.push(Open {
@@ -668,7 +678,7 @@ impl Runner {
                 // loaded.
                 let first = !std::mem::replace(started, true);
                 *seen = Some(version);
-                let rows = store.open_requests().await?;
+                let (rows, all_paused) = store.mailbox().await?;
                 deferred.retain(|id, _| {
                     rows.iter()
                         .any(|r| &r.id == id && r.stop_requested_by.is_none())
@@ -738,7 +748,7 @@ impl Runner {
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
-                *paused = paused_in(graph, store).await?;
+                *paused = paused_of(graph, &all_paused);
             }
         }
         Ok(())
@@ -758,14 +768,10 @@ impl Runner {
             requests: Vec::new(),
             paused: paused.keys().copied().collect(),
         };
-        let t = tick(
-            &shape_of(graph),
-            &intent,
-            &facts_of(graph, &state),
-            &self.budgets,
-        );
+        let shape = shape_of(graph, &self.lock_slots);
+        let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![false; graph.steps.len()];
-        record_states(graph, &mut state, &t, &held, &paused, |_| None);
+        record_states(graph, &shape, &mut state, &t, &held, &paused, |_| None);
         record.save(&state).await?;
         Ok(all)
     }
@@ -845,6 +851,29 @@ impl Runner {
         }
     }
 
+    /// A step a request wanted, with no row of its own yet and nothing
+    /// left to finish, takes the one its last state settles on.
+    fn settle_row(
+        &self,
+        graph: &Graph,
+        state: &mut Record,
+        queue: &mut QueueLedger,
+        s: &mut Slot,
+        i: usize,
+        cancelled: bool,
+    ) {
+        if !s.ever_in_scope || s.status.is_some() {
+            return;
+        }
+        let Some(st) = settled(graph, s.last_state, cancelled) else {
+            return;
+        };
+        if st == StepStatus::SkippedUpToDate {
+            queue.cleared(graph, i, &*self.sink);
+        }
+        self.finish(graph, state, &mut s.status, i, st, None, None, 0);
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn on_signal(
         &self,
@@ -854,8 +883,7 @@ impl Runner {
         state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
-        warned_not_streaming: &mut [bool],
-        consumed_by: &[Option<Consumed>],
+        slots: &mut [Slot],
     ) {
         use crate::step::StepSignal;
         let (step, version, rows) = match signal {
@@ -887,9 +915,10 @@ impl Runner {
         let qualified = match self.read_sink(graph, p).await {
             Some(read) => read,
             None => {
-                let fingerprint = consumed_by[p]
+                let fingerprint = slots[p]
+                    .live
                     .as_ref()
-                    .map_or(&graph.fingerprints[p], |c| &c.fingerprint);
+                    .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
                 format!("{fingerprint}:{version}")
             }
         };
@@ -906,8 +935,8 @@ impl Runner {
                 rows,
             });
         }
-        if !facts.steps[p].streams_output && !warned_not_streaming[p] {
-            warned_not_streaming[p] = true;
+        if !facts.steps[p].streams_output && !slots[p].warned_not_streaming {
+            slots[p].warned_not_streaming = true;
             self.sink.emit(&Event::Log {
                 step,
                 level: crate::events::LogLevel::Warn,
@@ -1074,6 +1103,7 @@ fn paused_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, S
 /// run for.
 fn record_states(
     graph: &Graph,
+    shape: &Shape,
     state: &mut Record,
     t: &Tick,
     held: &[bool],
@@ -1101,8 +1131,17 @@ fn record_states(
                 "waiting for {}, which reads what this writes",
                 id(r)
             )),
-            Row::Waiting(Wait::Budget(class)) => {
-                Some(format!("waiting for a free {} slot", class.as_str()))
+            Row::Waiting(Wait::Lock(l)) => {
+                let holders: Vec<&str> = (0..t.states.len())
+                    .filter(|&j| t.states[j] == Row::Running)
+                    .filter(|&j| shape.steps[j].locks.iter().any(|&(h, _)| h == l))
+                    .map(id)
+                    .collect();
+                Some(format!(
+                    "waiting for lock {}, held by {}",
+                    shape.locks[l].name,
+                    holders.join(", ")
+                ))
             }
             _ => None,
         };
@@ -1138,8 +1177,8 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
 
 /// What a step's row settles on once no open request wants it and it has
 /// nothing of its own left to finish. A paused step took no part: none.
-fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> Option<StepStatus> {
-    Some(match last_states[i] {
+fn settled(graph: &Graph, last_state: Row, cancelled: bool) -> Option<StepStatus> {
+    Some(match last_state {
         Row::Paused => return None,
         Row::Waiting(_) if cancelled => StepStatus::Failed {
             kind: FailureKind::Cancelled,
@@ -1220,8 +1259,24 @@ fn same_graph(a: &Graph, b: &Graph) -> bool {
 }
 
 /// Today's graph as the tick sees it: each step writes the sink its own
-/// index names, and reads the sinks of the steps it names as inputs.
-fn shape_of(graph: &Graph) -> Shape {
+/// index names, reads the sinks of the steps it names as inputs, and holds
+/// its named locks, sized as the config declares them unless `slots` (the
+/// host's `--parallelism`) says otherwise.
+fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
+    let locks: Vec<LockShape> = graph
+        .locks
+        .iter()
+        .map(|l| LockShape {
+            name: l.name.clone(),
+            slots: slots.get(&l.name).copied().unwrap_or(l.slots),
+        })
+        .collect();
+    let lock_ix = |name: &str| {
+        locks
+            .iter()
+            .position(|l| l.name == name)
+            .unwrap_or_else(|| panic!("the loader declares every lock a step holds: {name}"))
+    };
     let steps = graph
         .steps
         .iter()
@@ -1231,19 +1286,17 @@ fn shape_of(graph: &Graph) -> Shape {
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
-            class: if spec.inputs.is_empty() {
-                Class::Network
-            } else if spec.group_type.is_none() {
-                Class::Index
-            } else {
-                Class::Cpu
-            },
+            locks: super::locks::held_by(spec)
+                .iter()
+                .map(|(name, hold)| (lock_ix(name), *hold))
+                .collect(),
         })
         .collect();
     Shape {
         steps,
         sink_count: graph.steps.len(),
         topo: graph.topo.clone(),
+        locks,
     }
 }
 
