@@ -133,7 +133,8 @@ starts** in a tick, visited in topological order, iff:
    again. One that says it failed has failed, whatever it was asked;
 5. **it is due**: it is **stale** (it has never succeeded, an input's
    version differs from the one it read at its last success, or its
-   fingerprint, meaning argv, env and declared inputs, differs from the
+   fingerprint, meaning argv, env, declared inputs, `code_version` and,
+   for a built-in step, the shape of the store it writes, differs from the
    one recorded then), or it declares no inputs and has not run since the
    request opened, since a source's real input is outside the graph;
 6. **no producer it reads holds it**: none is running without streaming
@@ -144,6 +145,14 @@ starts** in a tick, visited in topological order, iff:
 7. **it has something to read**: a step with inputs none of whose
    producers ever published is `blocked`, or waits if one is about to run;
 8. **every lock it would take is free** (below, "What keeps steps apart").
+
+The store shape is in the fingerprint because a derived store takes a
+new shape only when its writer runs. Without it, a build that adds a
+`grid_rows` column leaves every source with nothing new upstream holding
+a render store in the old shape, and the grid index cannot read it.
+`BUILTIN_STORE_SHAPES` in `src/config.rs` names the shape of each
+built-in function's store; a test in `datalib_step` keeps it equal to the
+real DDL.
 
 A step that waits says why, in its row's `state_detail`: `waiting for
 a`, `waiting for c, which reads what this writes`, `waiting for lock
