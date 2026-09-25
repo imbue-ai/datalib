@@ -19,6 +19,7 @@ use std::time::Duration;
 use datalib_dag::config::load_graded;
 use datalib_dag::scheduler::RetryPolicy;
 use datalib_dag::supervisor::announce::{self, Listener};
+use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::record::{Record, StepRecord};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
@@ -444,8 +445,8 @@ impl Harness {
     }
 }
 
-/// The loop as the server runs it: a busy period whenever a request is
-/// open, woken by commits to the store and nothing else.
+/// The loop as the server runs it: `run_idle`, the server's own idle
+/// side, with a busy period that serves this harness's config.
 async fn host(
     root: PathBuf,
     config: PathBuf,
@@ -455,32 +456,45 @@ async fn host(
 ) {
     let store = Store::open(&root).await.unwrap();
     let mut listener = Listener::new(&store, "harness host").await;
-    while !*stop.borrow() {
-        let open = store.open_requests().await.unwrap();
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
-            let (checked, _) = load_graded(&config).unwrap();
-            let mut runner = Runner::new(&root)
-                .sink(sink.clone())
-                .retry(RetryPolicy {
-                    backoff: options.backoff,
-                    ..RetryPolicy::default()
-                })
-                .stop_on(stop.clone())
-                .reload_from(Arc::new(ConfigFile::new(&config)));
-            runner.stop_grace = STOP_GRACE;
-            runner.serve(&checked.graph, &store).await.unwrap();
-            continue;
-        }
-        for r in open {
-            store
-                .close_request(&r.id, RequestOutcome::Stopped, None)
-                .await
-                .unwrap();
-        }
-        tokio::select! {
-            _ = listener.next(&store) => {}
-            _ = stop.changed() => {}
-        }
-    }
+    let mut periods = HarnessPeriods {
+        root,
+        config,
+        sink,
+        stop: stop.clone(),
+        options,
+    };
+    host::run_idle(&store, &mut listener, &mut stop, &mut periods).await;
     store.close().await;
+}
+
+struct HarnessPeriods {
+    root: PathBuf,
+    config: PathBuf,
+    sink: Arc<dyn EventSink>,
+    stop: watch::Receiver<bool>,
+    options: Options,
+}
+
+impl host::Periods for HarnessPeriods {
+    async fn busy(&mut self, store: &Store) {
+        let (checked, _) = load_graded(&self.config).unwrap();
+        let mut runner = Runner::new(&self.root)
+            .sink(self.sink.clone())
+            .retry(RetryPolicy {
+                backoff: self.options.backoff,
+                ..RetryPolicy::default()
+            })
+            .stop_on(self.stop.clone())
+            .reload_from(Arc::new(ConfigFile::new(&self.config)));
+        runner.stop_grace = STOP_GRACE;
+        runner.serve(&checked.graph, store).await.unwrap();
+    }
+
+    async fn settle(&mut self, store: &Store) {
+        let (checked, _) = load_graded(&self.config).unwrap();
+        Runner::new(&self.root)
+            .settle(&checked.graph, store)
+            .await
+            .unwrap();
+    }
 }

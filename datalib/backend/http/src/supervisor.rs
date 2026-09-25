@@ -3,7 +3,7 @@
 //! whenever a request is open, and between busy periods settles a pause
 //! or a resume into the record and runs a reset.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -168,52 +168,7 @@ async fn host(cfg: &HostConfig) {
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
-
-    // The pauses the record was last settled against; `None` until the
-    // first settle, which also clears what a dead loop left running.
-    let mut settled: Option<BTreeMap<String, String>> = None;
-    while !*stop.borrow() {
-        let resets =
-            std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
-        for reset in resets {
-            let result = run_reset(cfg, &store, &reset.targets, &reset.by).await;
-            let _ = reset.done.send(result);
-        }
-        let open = match store.open_requests().await {
-            Ok(open) => open,
-            Err(e) => {
-                tracing::error!("supervisor: could not read the open requests: {e:#}");
-                Vec::new()
-            }
-        };
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
-            serve_period(cfg, &store).await;
-            continue;
-        }
-        // Asked to stop before any loop took them on: closed where they
-        // stand, since a busy period for them would do nothing.
-        for request in open {
-            if let Err(e) = store
-                .close_request(&request.id, RequestOutcome::Stopped, None)
-                .await
-            {
-                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
-            }
-        }
-        match store.paused().await {
-            Ok(paused) if settled.as_ref() != Some(&paused) => {
-                settle(&root, &store).await;
-                settled = Some(paused);
-            }
-            Ok(_) => {}
-            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
-        }
-        tokio::select! {
-            _ = cfg.control.wake.notified() => {}
-            _ = listener.next(&store) => {}
-            _ = stop.changed() => {}
-        }
-    }
+    host::run_idle(&store, &mut listener, &mut stop, &mut ServerPeriods(cfg)).await;
     store.close().await;
 }
 
@@ -280,9 +235,33 @@ fn extra_path() -> Vec<PathBuf> {
     crate::user_bin_dir().into_iter().collect()
 }
 
-/// One tick with nothing open, so a pause or a resume made while the loop
-/// is idle reaches the record, and so do the steps a dead loop left
-/// running.
+/// The server's busy periods and what it does between them.
+struct ServerPeriods<'a>(&'a HostConfig);
+
+impl host::Periods for ServerPeriods<'_> {
+    async fn busy(&mut self, store: &Store) {
+        serve_period(self.0, store).await;
+    }
+
+    async fn settle(&mut self, store: &Store) {
+        settle(&self.0.control.root, store).await;
+    }
+
+    async fn idle_work(&mut self, store: &Store) {
+        let cfg = self.0;
+        let resets =
+            std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
+        for reset in resets {
+            let result = run_reset(cfg, store, &reset.targets, &reset.by).await;
+            let _ = reset.done.send(result);
+        }
+    }
+
+    async fn nudged(&self) {
+        self.0.control.wake.notified().await;
+    }
+}
+
 async fn settle(root: &Path, store: &Store) {
     let checked = match load_config(root) {
         Ok(checked) => checked,
