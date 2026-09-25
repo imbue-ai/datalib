@@ -809,20 +809,20 @@ function submit() {
   <!-- The backdrop deliberately does not close this dialog: a stray
        click beside a half-filled form would discard every field in it
        with nothing to undo it. The × and Cancel are the ways out. -->
-  <div class="wiz-backdrop">
+  <div class="wiz-backdrop dialog-backdrop">
     <div
-      class="wiz"
+      class="wiz dialog"
       role="dialog"
       aria-modal="true"
       :aria-label="isEdit ? 'Edit source' : 'Add data source'"
     >
-      <header class="wiz-head">
+      <header class="wiz-head dialog-head">
         <h2>{{ isEdit ? `Edit ${name || id}` : "Add a data source" }}</h2>
-        <button class="wiz-x" aria-label="Close" @click="emit('close')">×</button>
+        <button class="wiz-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
 
       <!-- Stage 1: pick a type -->
-      <div v-if="stage === 'pick'" class="wiz-body">
+      <div v-if="stage === 'pick'" class="wiz-body dialog-body">
         <input
           v-model="query"
           class="wiz-filter"
@@ -859,7 +859,7 @@ function submit() {
       </div>
 
       <!-- Stage 2: configure -->
-      <div v-else-if="chosen" class="wiz-body">
+      <div v-else-if="chosen" class="wiz-body dialog-body">
         <div class="wiz-chosen">
           <img v-if="iconUrl(chosen.icon)" :src="iconUrl(chosen.icon)!" alt="" class="wiz-icon" />
           <div>
@@ -1272,7 +1272,7 @@ function submit() {
         </details>
       </div>
 
-      <footer class="wiz-foot">
+      <footer class="wiz-foot dialog-foot">
         <span v-if="stage === 'configure' && missingRequired.length" class="wiz-foot-note">
           Still needed: {{ missingRequired.join(", ") }}
         </span>
@@ -1290,58 +1290,10 @@ function submit() {
   </div>
 </template>
 
+<style scoped src="./dialog.css"></style>
 <style scoped>
-.wiz-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 6vh 16px;
-  z-index: 50;
-}
 .wiz {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
   width: min(760px, 100%);
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-}
-.wiz-head,
-.wiz-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-}
-.wiz-head {
-  border-bottom: 1px solid var(--datalib-border);
-}
-.wiz-foot {
-  border-top: 1px solid var(--datalib-border);
-  justify-content: flex-end;
-}
-.wiz-head h2 {
-  margin: 0;
-  font-size: 17px;
-  flex: 1;
-}
-.wiz-x {
-  background: none;
-  border: none;
-  color: var(--datalib-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-}
-.wiz-body {
-  padding: 16px 18px;
-  overflow-y: auto;
 }
 
 .wiz-filter,
