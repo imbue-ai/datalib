@@ -685,3 +685,35 @@ async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
     assert_eq!(h.state().await.started("d"), 1);
     h.finish().await;
 }
+
+/// A step that says it failed is not a stopped run, though the loop had
+/// just asked it to stop: its failure stands, and a resume does not run it
+/// again for the request it failed. (One that exits with no word after a
+/// stop was asked is taken to have stopped: that is all a plain command
+/// can tell us.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_that_fails_after_being_asked_to_stop_is_a_failure_not_a_stop() {
+    // `b` holds the request open across the pause and the resume.
+    let mut h = Harness::new(&[source("a"), source("b")]).await;
+    let sync = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "on_stop ignore").await;
+    h.pause("a").await;
+    h.ack("a", "sigint").await;
+    h.run("a", "fail data").await;
+    assert_eq!(h.ended("a", 1).await.outcome, "failed");
+    h.resume("a").await;
+    h.run("b", "ok v1").await;
+    h.until("the request to close, or a to run again", |s| {
+        (s.outcome(&sync).is_some() || s.started("a") > 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        h.state().await.started("a"),
+        1,
+        "a failure is not run again"
+    );
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Failed);
+    h.finish().await;
+}

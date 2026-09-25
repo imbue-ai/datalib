@@ -542,7 +542,10 @@ impl Runner {
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
-                        stopped: std::mem::take(&mut stop_sent[i]),
+                        // Asked to stop, and it did: one that says it
+                        // failed has failed, whatever it was asked.
+                        stopped: std::mem::take(&mut stop_sent[i])
+                            && e.status.state() == crate::run_state::RunState::Stopped,
                         consumed,
                     });
                     attempts_taken[i] = e.attempts;

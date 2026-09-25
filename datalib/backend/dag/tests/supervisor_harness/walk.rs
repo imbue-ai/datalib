@@ -54,6 +54,9 @@ struct Walk {
     paused: BTreeSet<&'static str>,
     /// Per source: how many runs its requests and resumes allow.
     allowed: BTreeMap<&'static str, usize>,
+    /// Per source: what the walk did that allows a run, for the message
+    /// when a source runs more often than that.
+    allowances: BTreeMap<&'static str, Vec<String>>,
     requests: Vec<String>,
     version: u32,
 }
@@ -94,6 +97,9 @@ impl Walk {
         for r in roots {
             if let Some(n) = self.allowed.get_mut(r) {
                 *n += 1;
+            }
+            if let Some(log) = self.allowances.get_mut(r) {
+                log.push(format!("sync {roots:?}"));
             }
         }
         // Nothing says the loop has taken a request on while an older one
@@ -139,6 +145,9 @@ impl Walk {
         self.paused.remove(step);
         if let Some(n) = self.allowed.get_mut(step) {
             *n += 1;
+        }
+        if let Some(log) = self.allowances.get_mut(step) {
+            log.push("resume".to_string());
         }
         self.h.resume(step).await;
         let what = format!("{step} to read resumed");
@@ -236,8 +245,23 @@ impl Walk {
         for (step, allowed) in &self.allowed {
             let ran = state.started(step);
             if ran > *allowed {
+                let runs: Vec<String> = state
+                    .invocations
+                    .iter()
+                    .filter(|(row, _)| row.step == *step)
+                    .map(|(row, end)| match end {
+                        Some(e) => format!(
+                            "{} {} (attempts {}, exit {:?}, signal {:?})",
+                            row.started_at_utc, e.outcome, e.attempts, e.exit_code, e.signal
+                        ),
+                        None => format!("{} still open", row.started_at_utc),
+                    })
+                    .collect();
                 self.h.fail(&format!(
-                    "{step} ran {ran} times; its syncs and resumes allow {allowed}"
+                    "{step} ran {ran} times; its syncs and resumes allow {allowed}\n\
+                     its runs:\n  {}\nwhat allowed them:\n  {}",
+                    runs.join("\n  "),
+                    self.allowances[step].join("\n  ")
                 ));
             }
         }
@@ -276,6 +300,7 @@ async fn walk(seed: u64) {
         stopped: BTreeSet::new(),
         paused: BTreeSet::new(),
         allowed: [("a", 0), ("b", 0)].into_iter().collect(),
+        allowances: [("a", Vec::new()), ("b", Vec::new())].into_iter().collect(),
         requests: Vec::new(),
         version: 0,
     };
