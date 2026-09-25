@@ -678,8 +678,8 @@ mod tests {
         );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));
-        assert!(row.text.contains("Weekly on Monday and Thursday"));
-        assert!(row.text.contains("troi@enterprise.test"));
+        assert!(row.preview.contains("Weekly on Monday and Thursday"));
+        assert!(row.preview.contains("troi@enterprise.test"));
     }
 
     #[test]

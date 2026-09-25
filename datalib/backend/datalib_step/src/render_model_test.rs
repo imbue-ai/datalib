@@ -575,7 +575,7 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
             let mut rows: Vec<(String, String)> = md
                 .rows
                 .iter()
-                .map(|r| (r.uuid.clone(), r.text.clone()))
+                .map(|r| (r.uuid.clone(), r.preview.clone()))
                 .collect();
             rows.sort();
             let mut edges: Vec<(String, String)> = md

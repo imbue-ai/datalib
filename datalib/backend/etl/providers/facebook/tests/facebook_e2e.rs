@@ -151,7 +151,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // ☕ that the export had mangled.
         let check_in = docs
             .iter()
-            .find(|d| d.rows.iter().any(|r| r.text.contains("Tea, Earl Grey, hot.")))
+            .find(|d| d.rows.iter().any(|r| r.preview.contains("Tea, Earl Grey, hot.")))
             .expect("check-in post rendered");
         let md = fs::read_to_string(&check_in.md_path)?;
         assert!(md.contains("Tea, Earl Grey, hot. ☕"), "{md}");
@@ -166,7 +166,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // materialized beside the page, so the markdown embeds them.
         let photo_post = docs
             .iter()
-            .find(|d| d.rows.iter().any(|r| r.text.contains("Two views of the bridge")))
+            .find(|d| d.rows.iter().any(|r| r.preview.contains("Two views of the bridge")))
             .expect("photo post rendered");
         let md = fs::read_to_string(&photo_post.md_path)?;
         assert_eq!(

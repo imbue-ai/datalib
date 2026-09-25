@@ -406,8 +406,8 @@ mod tests {
             row.source_url.as_deref(),
             Some("https://www.linkedin.com/in/jlp")
         );
-        assert!(row.text.contains("Jean-Luc Picard"));
-        assert!(row.text.contains("Starfleet"));
+        assert!(row.preview.contains("Jean-Luc Picard"));
+        assert!(row.preview.contains("Starfleet"));
         assert_eq!(
             row.conversation_name.as_deref(),
             Some("LinkedIn Connections")
