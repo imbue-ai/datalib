@@ -10,9 +10,9 @@ page is the map.
 ## One store
 
 Everything any datalib process says lands in one file,
-`<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
-`sqlite3` opens it and two writers share it through SQLite's own
-locking. The runner writes it during a run; `datalib-http` writes it
+`<data_root>/system/runs/runs.sqlite` — plain SQLite in rollback-journal
+mode (doltlite's plain-SQLite engine refuses WAL), so `sqlite3` opens it
+and two writers share it through SQLite's own locking. The runner writes it during a run; `datalib-http` writes it
 for the life of the server. The tables:
 
 | table | one row per |
@@ -42,9 +42,8 @@ inode nobody will ever read. `runs_two_process_test` runs four writers
 at once — on a fresh root, and on one this build has to remake — and
 checks that every line published reaches the store.
 
-One thing this rests on: WAL keeps shared state in a file beside the
-store, and SQLite's locking is not dependable on a network or
-file-syncing filesystem. **A data root belongs on local disk**, not on
+One thing this rests on: SQLite's file locking, which is not
+dependable on a network or file-syncing filesystem. **A data root belongs on local disk**, not on
 an NFS or SMB mount or inside a Dropbox folder.
 
 Retention is `[run_history]` in `config.toml`

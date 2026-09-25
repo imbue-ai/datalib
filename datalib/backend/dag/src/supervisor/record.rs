@@ -403,6 +403,7 @@ impl Store {
             }
         }
         tx.commit().await?;
+        self.announce("record saved");
         Ok(())
     }
 
@@ -431,6 +432,7 @@ impl Store {
         .bind(&started.tz_offset)
         .execute(self.pool())
         .await?;
+        self.announce(&format!("invocation opened {} {}", row.step, row.id));
         Ok(())
     }
 
@@ -450,6 +452,7 @@ impl Store {
         .bind(id)
         .execute(self.pool())
         .await?;
+        self.announce(&format!("invocation closed {id}"));
         Ok(())
     }
 
@@ -468,6 +471,7 @@ impl Store {
         .execute(self.pool())
         .await?
         .rows_affected();
+        self.announce("abandoned invocations closed");
         Ok(closed)
     }
 

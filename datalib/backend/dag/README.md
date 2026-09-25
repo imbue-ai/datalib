@@ -84,8 +84,13 @@ pressed on, or every source step for `datalib-dag` with no `--sync` —
 and who opened it (`by`). Its **scope** is the roots and everything
 downstream of them. Anyone may open one, or ask one to stop, or pause a
 step: that is a row too. Only the process holding `runner-lock` runs the
-loop, and it reads new rows by watching the store's `PRAGMA
-data_version`. A **run** is one busy period of the loop — from taking a
+loop. It never polls for new rows: whoever commits to the store
+announces it, as a step announces a seal — `Store` after every commit
+it makes, the server when `config.toml` changes, a process letting
+`runner-lock` go — one line to each listener's FIFO in
+`system/supervisor-listeners/` (`supervisor/announce.rs`). A 5 s backstop
+looks at the store anyway; a commit it finds that nobody announced (a
+`sqlite3` shell, an older build) is logged at ERROR. A **run** is one busy period of the loop — from taking a
 request on while idle to having none left — and every request served in
 it shares that run's id.
 

@@ -497,7 +497,7 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
     let state = state_with(tmp.path(), &config_for(&["first"])).await;
-    datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone());
+    datalib_http::watch::spawn(tmp.path().to_path_buf(), state.root_tx.clone()).await;
     datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());
     let app = router(state);
 

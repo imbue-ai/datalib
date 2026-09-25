@@ -1,7 +1,8 @@
 //! What a process running the loop builds around it, the same whichever
 //! process that is (`datalib-dag`, or the app's server): the steps'
-//! environment and the run store's record of one busy period, and what it
-//! puts right when it takes the lock.
+//! environment and the run store's record of one busy period, what it puts
+//! right when it takes the lock, and the idle side between busy periods
+//! ([`run_idle`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,8 @@ use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RUN_ID};
-use crate::supervisor::store::Store;
+use crate::supervisor::announce::Listener;
+use crate::supervisor::store::{RequestOutcome, Store};
 
 /// The environment every step of one busy period gets on top of the
 /// host's own, and the log filter it was built with.
@@ -74,6 +76,79 @@ pub fn start_record(
     let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
     let commit = datalib_runs::git_hash_and_origin().map(|(hash, _)| hash);
     RunStoreSink::start(data_root, run_id, now, commit, retention)
+}
+
+/// What a host does in a busy period and between them; [`run_idle`] is
+/// the rest, the same for every host.
+#[allow(async_fn_in_trait)]
+pub trait Periods {
+    /// One busy period: the config loaded, a run opened, the loop served
+    /// until no request it can place is open.
+    async fn busy(&mut self, store: &Store);
+
+    /// One tick with nothing open, so a pause or a resume made while idle
+    /// reaches the record, and so do the steps a dead loop left running.
+    async fn settle(&mut self, store: &Store);
+
+    /// Work that needs the root to itself, done while idle: a reset.
+    async fn idle_work(&mut self, _store: &Store) {}
+
+    /// Resolves when something outside the store wants the host's
+    /// attention, as a queued reset does.
+    async fn nudged(&self) {
+        std::future::pending().await
+    }
+}
+
+/// Between busy periods, until `stop`: run one whenever a request is open,
+/// close those asked to stop before any period took them on, settle the
+/// record when the pauses move, and otherwise wait to be told.
+pub async fn run_idle(
+    store: &Store,
+    listener: &mut Listener,
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+    periods: &mut impl Periods,
+) {
+    // The pauses the record was last settled against; `None` until the
+    // first settle, which also clears what a dead loop left running.
+    let mut settled: Option<BTreeMap<String, String>> = None;
+    while !*stop.borrow() {
+        periods.idle_work(store).await;
+        let open = match store.open_requests().await {
+            Ok(open) => open,
+            Err(e) => {
+                tracing::error!("supervisor: could not read the open requests: {e:#}");
+                Vec::new()
+            }
+        };
+        if open.iter().any(|r| r.stop_requested_by.is_none()) {
+            periods.busy(store).await;
+            continue;
+        }
+        // Asked to stop before any loop took them on: closed where they
+        // stand, since a busy period for them would do nothing.
+        for request in open {
+            if let Err(e) = store
+                .close_request(&request.id, RequestOutcome::Stopped, None)
+                .await
+            {
+                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
+            }
+        }
+        match store.paused().await {
+            Ok(paused) if settled.as_ref() != Some(&paused) => {
+                periods.settle(store).await;
+                settled = Some(paused);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
+        }
+        tokio::select! {
+            _ = periods.nudged() => {}
+            _ = listener.next(store) => {}
+            _ = stop.changed() => {}
+        }
+    }
 }
 
 /// What [`take_over`] found to put right.

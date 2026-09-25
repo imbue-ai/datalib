@@ -45,6 +45,7 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
         "@datalib_crates//:walkdir",
     ],
@@ -196,5 +197,72 @@ build_test(
     name = "manual_targets_build",
     targets = [
         ":manual_e2e_live_sync_golden",
+    ],
+)
+
+# A puppet step for the supervisor's scenario tests: a process the loop
+# manages that does only what it is told.
+rust_binary(
+    name = "test_driver",
+    testonly = True,
+    srcs = ["tests/driver/main.rs"],
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# The supervisor's scenario tests: real driver steps, the loop in-process,
+# and a person at the controls through the store. No sleeps: every wait
+# is for an ack, an event or a commit, under a deadline.
+rust_test(
+    name = "supervisor_harness_test",
+    size = "medium",
+    srcs = glob(["tests/harness/*.rs"]),
+    crate_root = "tests/harness/main.rs",
+    data = [":test_driver"],
+    edition = "2021",
+    env = {
+        "DRIVER_BIN": "$(rootpath :test_driver)",
+    },
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# One process's share of the load in supervisor_writers_test.
+rust_binary(
+    name = "supervisor_writer",
+    testonly = True,
+    srcs = ["tests/supervisor_writer/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Seven processes on one supervisor.sqlite in rollback-journal mode: every
+# write lands, no process gives up on a lock.
+rust_test(
+    name = "supervisor_writers_test",
+    size = "medium",
+    srcs = ["tests/supervisor_writers.rs"],
+    data = [":supervisor_writer"],
+    edition = "2021",
+    env = {
+        "WRITER_BIN": "$(rootpath :supervisor_writer)",
+    },
+    tags = ["cpu:4"],
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )

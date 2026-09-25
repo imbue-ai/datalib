@@ -7,7 +7,7 @@
 //! `docs/dev/plans/supervisor.md` §2.7–§2.8.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -93,6 +93,8 @@ pub struct RequestRow {
 
 pub struct Store {
     pool: SqlitePool,
+    /// Where this store's listeners are, told after every commit.
+    listeners: PathBuf,
 }
 
 impl Store {
@@ -110,7 +112,10 @@ impl Store {
             .connect_with(options(&path))
             .await
             .with_context(|| format!("open {}", path.display()))?;
-        let store = Store { pool };
+        let store = Store {
+            pool,
+            listeners: super::announce::listeners_dir(data_root),
+        };
         store.refuse_if_newer(&path).await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
         for stmt in ddl() {
@@ -168,6 +173,22 @@ impl Store {
         &self.pool
     }
 
+    /// Where a listener for this store's commits makes its FIFO.
+    pub fn listeners(&self) -> &Path {
+        &self.listeners
+    }
+
+    /// Tell every listener what was just committed (`announce.rs`).
+    pub(super) fn announce(&self, what: &str) {
+        super::announce::announce(&self.listeners, what);
+    }
+
+    /// A write no listener is told of, as a `sqlite3` shell makes one.
+    #[cfg(test)]
+    pub async fn write_unannounced(&self, sql: &'static str) {
+        sqlx::query(sql).execute(&self.pool).await.unwrap();
+    }
+
     pub async fn close(self) {
         self.pool.close().await;
     }
@@ -194,6 +215,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request opened {id}"));
         Ok(id)
     }
 
@@ -210,6 +232,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("stop asked {id}"));
         Ok(())
     }
 
@@ -231,6 +254,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("request closed {id} {}", outcome.as_str()));
         Ok(())
     }
 
@@ -281,6 +305,7 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
+        self.announce(&format!("paused {step}"));
         Ok(())
     }
 
@@ -289,6 +314,7 @@ impl Store {
             .bind(step)
             .execute(&self.pool)
             .await?;
+        self.announce(&format!("resumed {step}"));
         Ok(())
     }
 
@@ -334,7 +360,11 @@ fn options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(format!("file:{escaped}?doltlite_engine=sqlite"))
         .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        // Doltlite's plain-SQLite engine answers `wal` to a request for
+        // WAL and stays in rollback-journal mode, so the mode is said as
+        // it is: a commit takes the file, a reader waits it out.
+        // `supervisor_writers_test` is the measurement.
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
         .busy_timeout(BUSY_TIMEOUT)
 }
 
