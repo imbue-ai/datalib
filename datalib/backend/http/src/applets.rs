@@ -178,8 +178,13 @@ fn tail_lines(s: &str, n: usize) -> String {
 /// The one place a config change reaches the registry from outside a
 /// request: the root watcher says `config.toml` moved, the registry
 /// reconciles. A lagged receiver reloads too — a change may be in the
-/// gap, and a reload of an unchanged file costs a `stat`.
-pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<RootFrame>) {
+/// gap, and a reload of an unchanged file costs a `stat`. The receiver
+/// counts the reloads finished, for a caller that has to know one was.
+pub fn watch_config(
+    registry: Arc<AppletRegistry>,
+    mut rx: broadcast::Receiver<RootFrame>,
+) -> tokio::sync::watch::Receiver<u64> {
+    let (reloaded_tx, reloaded) = tokio::sync::watch::channel(0);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -190,12 +195,14 @@ pub fn watch_config(registry: Arc<AppletRegistry>, mut rx: broadcast::Receiver<R
                 | Err(broadcast::error::RecvError::Lagged(_)) => {
                     let registry = registry.clone();
                     let _ = tokio::task::spawn_blocking(move || registry.reload()).await;
+                    reloaded_tx.send_modify(|n| *n += 1);
                 }
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             }
         }
     });
+    reloaded
 }
 
 /// The applets from `config.toml`, the frontend store they write into,

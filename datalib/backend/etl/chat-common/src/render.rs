@@ -644,7 +644,7 @@ fn build_grid_rows(
             .conversation_name(conversation_name.clone())
             .conversation_uuid(chat.chat_uuid.clone())
             .entire_chat(entire_chat.clone())
-            .text(
+            .body(
                 doc.items
                     .iter()
                     .filter(|i| !matches!(i.kind, ItemKind::System))
@@ -722,7 +722,7 @@ fn build_grid_rows(
                 .conversation_uuid(chat.chat_uuid.clone())
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
-                .text(text)
+                .body(text)
                 .qmd_path(Some(md_rel.to_string()))
                 // Per-message linkout wins; fall back to an attachment's URL.
                 .source_url(
@@ -800,7 +800,7 @@ fn reaction_row(
         .conversation_name(conversation_name.clone())
         .conversation_uuid(chat.chat_uuid.clone())
         .entire_chat(entire_chat.to_string())
-        .text(r.emoji.clone())
+        .body(r.emoji.clone())
         .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(doc.markdown_uuid.clone()))
         .build_or_record(

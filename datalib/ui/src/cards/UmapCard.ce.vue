@@ -8,6 +8,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { EMBEDDING_MAP_STEP, type DagStep, type EmbeddingMapResponse, type MapPoint } from "@/api";
 import { subscribeLive, changed } from "@/live";
+import { confirmAction } from "@/desktop";
 import { useApi } from "./cardApi";
 import { isBrowserClick } from "./chatLink";
 import {
@@ -230,8 +231,8 @@ function syncMap() {
   });
 }
 
-function layOutAfresh() {
-  const sure = window.confirm(
+async function layOutAfresh() {
+  const sure = await confirmAction(
     "Throw away the current layout and compute a new one? Documents will land in new places.",
   );
   if (!sure) return;

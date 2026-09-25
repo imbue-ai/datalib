@@ -222,10 +222,11 @@ Pick the surface that fits the question:
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `author`, `channel`, `conversation_uuid`,
-  `text`, `entire_chat`, etc. `is_document = 1` picks the one row per
-  rendered document — the thread, the conversation, the PR, the page —
-  and leaves out the messages inside them, which is usually the row
-  count you meant.
+  `preview` (the first 240 characters of the row's text; the whole text
+  is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
+  picks the one row per rendered document — the thread, the
+  conversation, the PR, the page — and leaves out the messages inside
+  them, which is usually the row count you meant.
 
   Read it with **`datalib-doltlite`**, which is in the release tarball
   and so sits next to `datalib-dag` in `~/.local/bin` (it is plain

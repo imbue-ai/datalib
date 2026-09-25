@@ -8,8 +8,7 @@ function summarize(s: string): string {
 }
 
 /// What one row looks like to this file. `score` is the whole point:
-/// `api.ts` documents it as present only on qmd-routed rows and absent
-/// on the LIKE fallback.
+/// `api.ts` documents it as present only on qmd-routed rows.
 type Row = { score?: number };
 
 setup("warm the qmd daemon", async ({ request }) => {
@@ -50,14 +49,14 @@ setup("warm the qmd daemon", async ({ request }) => {
         };
         const failed = body.query_echo?.qmd_error;
         if (failed) {
-          return `qmd failed, and the applet fell back to LIKE: ${summarize(failed)}`;
+          return `qmd failed: ${summarize(failed)}`;
         }
         const rows = body.rows ?? [];
         if (rows.length === 0) {
           return 'qmd answered with no rows for "grey earl" — the index is empty or unqueryable';
         }
         if (typeof rows[0].score !== "number") {
-          return "rows carry no score, so they came from the LIKE fallback rather than qmd";
+          return "rows carry no score, so they did not come from qmd";
         }
         return "warm";
       },

@@ -23,8 +23,8 @@ use datalib_columns::Identity;
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
 use datalib_unified_index::qmd::{
-    CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader, QmdIndexSummary,
-    QmdRunner, QmdRunnerConfig, QueryMode,
+    display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdHit,
+    QmdIndexReader, QmdIndexSummary, QmdRunner, QmdRunnerConfig, QueryMode,
 };
 use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -136,7 +136,7 @@ fn ensure_models(root: &std::path::Path) {
     if !datalib_unified_index::qmd::qmd_index_path(root).exists() {
         eprintln!(
             "datalib-applet unified_index: no qmd index yet — free-text \
-             search falls back to SQL until the first sync builds one"
+             search answers with an error until the first sync builds one"
         );
         return;
     }
@@ -200,8 +200,7 @@ pub struct SearchResponse {
     pub rows: Vec<SearchRow>,
     pub total_estimated: u64,
     /// Backend-side errors the user should know about even though we
-    /// returned 200 + rows. Populated when a degraded path ran (qmd
-    /// fallback) or when a swallowed error would otherwise leave the
+    /// returned 200, where a swallowed error would otherwise leave the
     /// UI staring at an empty grid with no signal. The UI surfaces
     /// these as toasts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -249,19 +248,11 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(200).min(100_000);
-    // Three routing cases:
-    //   1. Empty free-text — pure structured query, route through repo.search.
-    //   2. Non-empty free-text + qmd index present — shell out to qmd, map
-    //      hits to row uuids via the repo's grid_row_refs, then fetch full
-    //      rows via repo.search_by_uuids preserving rank order.
-    //   3. Non-empty free-text but no qmd index — degrade gracefully: surface
-    //      the error in `query_echo.qmd_error` and fall back to repo.search
-    //      (SQL substring LIKE) so the UI isn't dead.
+    // Structured terms alone are a SQL filter; free text is qmd's, with the
+    // structured terms applied to its hits. A qmd failure is the answer —
+    // `query_echo.qmd_error`, no rows — not a quieter search in its place.
     let mut qmd_error: Option<String> = None;
     let mut errors: Vec<String> = Vec::new();
-    // Run repo.search but collect any error instead of swallowing it.
-    // The previous `unwrap_or_default()` hid schema mismatches and
-    // connection failures behind an empty grid with no signal.
     let rows = if parsed.free_text.is_empty() {
         match s.repo.search(&parsed, limit).await {
             Ok(rows) => rows,
@@ -277,15 +268,7 @@ async fn search_handler(
             Ok(rows) => rows,
             Err(e) => {
                 qmd_error = Some(format!("{e:#}"));
-                match s.repo.search(&parsed, limit).await {
-                    Ok(rows) => rows,
-                    Err(e2) => {
-                        let msg = format!("LIKE fallback: {e2}");
-                        eprintln!("search: {msg}");
-                        errors.push(msg);
-                        Vec::new()
-                    }
-                }
+                Vec::new()
             }
         }
     };
@@ -378,9 +361,9 @@ async fn run_qmd_search(
         );
     });
     let uuids: Vec<String> = ranked.iter().map(|(row, _)| row.uuid.clone()).collect();
-    let scores: std::collections::HashMap<String, f64> = ranked
+    let hit_for: std::collections::HashMap<String, &QmdHit> = ranked
         .iter()
-        .map(|(row, score)| (row.uuid.clone(), *score))
+        .map(|(row, hit)| (row.uuid.clone(), *hit))
         .collect();
     drop(idx);
     let mut rows = repo
@@ -388,7 +371,15 @@ async fn run_qmd_search(
         .await
         .map_err(|e| anyhow::anyhow!("search_by_uuids: {e}"))?;
     for r in rows.iter_mut() {
-        r.score = scores.get(&r.uuid).copied();
+        let Some(hit) = hit_for.get(&r.uuid) else {
+            continue;
+        };
+        r.score = Some(hit.score);
+        // The words the hit matched, rather than the row's opening words.
+        let context = display_snippet(&hit.snippet);
+        if !context.is_empty() {
+            r.snippet = context;
+        }
     }
     Ok(rows)
 }

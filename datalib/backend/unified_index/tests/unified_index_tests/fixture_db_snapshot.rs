@@ -1,7 +1,7 @@
 //! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
 //!
 //! One row per source is a storage report (`provider: "datalib"`,
-//! `kind: "Source Size"`). Its `text` deliberately carries no byte
+//! `kind: "Source Size"`). Its body deliberately carries no byte
 //! figure: a doltlite store's size is not reproducible — it drifts
 //! between rebuilds on one machine and differs outright between
 //! machines — so nothing hashed may contain it. That is enforced at
@@ -60,12 +60,10 @@ async fn open_readonly(path: &std::path::Path) -> SqlitePool {
         .unwrap_or_else(|e| panic!("open {}: {e}", real.display()))
 }
 
-/// SHA-256 of a long string, truncated to 16 hex chars. We snapshot
-/// the digest of long body fields (`text`, `entire_chat`) instead of
-/// the body itself: the body changes break ~50 lines of diff for what
-/// is conceptually a one-row update, and reading a 5KB markdown chat
-/// in a `.snap` file isn't actually useful. The digest still catches
-/// the regression — if a row's body changes, its digest changes.
+/// SHA-256 of a long string, truncated to 16 hex chars, for the few long
+/// fields a `.snap` would otherwise carry whole. A row's body is already
+/// digested for us: `content_hash`, which this snapshot cuts to the same
+/// width.
 fn digest(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
@@ -107,7 +105,7 @@ async fn snapshot_grid_rows_and_documents() {
     let rows = sqlx::query(
         "SELECT uuid, provider, kind, source_label, created_at, author, account, \
                 project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
-                message_index, entire_chat, text, qmd_path, \
+                message_index, entire_chat, preview, content_hash, qmd_path, \
                 source_url, git_sha, upstream_id, upstream_entity_kind, upstream_account, \
                 notion_page_uuid, \
                 notion_block_uuid, markdown_uuid, byte_size, item_count \
@@ -120,7 +118,8 @@ async fn snapshot_grid_rows_and_documents() {
     let grid_rows: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let text: String = r.try_get("text").unwrap_or_default();
+            let preview: String = r.try_get("preview").unwrap_or_default();
+            let content_hash: String = r.try_get("content_hash").unwrap_or_default();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             json!({
                 "uuid": r.try_get::<String, _>("uuid").ok(),
@@ -143,8 +142,8 @@ async fn snapshot_grid_rows_and_documents() {
                 "conversation_name": r.try_get::<Option<String>, _>("conversation_name").ok().flatten(),
                 "conversation_uuid": r.try_get::<String, _>("conversation_uuid").ok(),
                 "message_index": r.try_get::<Option<i64>, _>("message_index").ok().flatten(),
-                "text_len": text.chars().count(),
-                "text_sha": digest(&text),
+                "preview_len": preview.chars().count(),
+                "content_hash": content_hash.get(..16).unwrap_or_default(),
                 "entire_chat": entire_chat,
                 "qmd_path": r.try_get::<Option<String>, _>("qmd_path").ok().flatten(),
                 "source_url": stable_source_url(
@@ -253,8 +252,8 @@ async fn snapshot_grid_rows_and_documents() {
     //
     // The digest keeps the coverage that belongs at this level: a row
     // added, removed, re-keyed, or whose count moved all change it,
-    // because it is taken over each row's `(uuid, text)` and the text
-    // carries the count.
+    // because it is taken over each row's `(uuid, content_hash)` and the
+    // body carries the count.
     let (storage, grid_rows): (Vec<_>, Vec<_>) = grid_rows
         .into_iter()
         .partition(|r| r["provider"] == json!(provider_datalib()));
@@ -273,7 +272,7 @@ async fn snapshot_grid_rows_and_documents() {
         by_source_kind.entry(key).or_default().push(format!(
             "{}\t{}",
             r["uuid"].as_str().unwrap_or_default(),
-            r["text_sha"].as_str().unwrap_or_default(),
+            r["content_hash"].as_str().unwrap_or_default(),
         ));
     }
     let storage_rows: Vec<serde_json::Value> = by_source_kind
