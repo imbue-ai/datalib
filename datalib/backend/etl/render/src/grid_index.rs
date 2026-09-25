@@ -249,6 +249,9 @@ pub struct GridIndexSummary {
     pub markdowns_removed: usize,
     /// Problem rows copied in from the render stores this run read.
     pub problems_copied: usize,
+    /// Sources whose render store this build could not read, left as the
+    /// index already had them.
+    pub sources_unreadable: Vec<String>,
 }
 
 /// Whole-index counts by severity, for the step's report.
@@ -291,6 +294,62 @@ pub(crate) async fn replace_source_problems(
             .await
             .with_context(|| format!("insert problem {}", row.problem_uuid))?;
     }
+    Ok(())
+}
+
+/// A render store written in a shape this build does not read: a column
+/// its rows are decoded by is not there. The render step rebuilds it the
+/// next time it runs.
+fn written_in_another_shape(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        matches!(
+            c.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::ColumnNotFound(_))
+        )
+    })
+}
+
+/// The warning a source whose render store could not be read is filed
+/// under. The next pass that reads the store replaces the source's
+/// problems wholesale, which is what clears it.
+fn unreadable_store_problem(source_id: &str, now: &datalib_time::StoredStamp) -> ProblemRow {
+    use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Severity, Stage};
+    let mut row = ProblemRow::new(
+        source_id,
+        Stage::Render,
+        Scope::Entity("render_store"),
+        None,
+        Outcome::Dropped,
+        Problem::record(
+            Reason::RenderFailed,
+            "its render store is in an older shape; sync this source to re-render it",
+        )
+        .severity(Severity::Warning),
+        None,
+    );
+    row.first_seen_at_utc = now.utc.clone();
+    row.last_seen_at_utc = now.utc.clone();
+    row.tz_offset = now.tz_offset.clone();
+    row
+}
+
+async fn record_unreadable_store(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    row: &ProblemRow,
+) -> Result<()> {
+    sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+        .bind(&row.problem_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("clear the unreadable-store warning")?;
+    // Audited: `insert_sql` is built from `ProblemRow`'s associated
+    // consts, never from row data; all values bound.
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
+        datalib_etl::bulk::insert_sql::<ProblemRow>(),
+    )))
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("record that {}'s render store is unreadable", row.source_id))?;
     Ok(())
 }
 
@@ -574,6 +633,7 @@ pub async fn build_grid_index_for(
     // copy is wholesale per source: the pinned store is the complete
     // truth about that source's problems, so there is nothing to diff.
     let mut problems: Vec<(String, Vec<ProblemRow>)> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     // One line per pass says what the pass found; the per-source lines
     // are `debug` unless a source moved, because a streaming pass runs
     // on every producer checkpoint and most sources moved on none.
@@ -656,9 +716,23 @@ pub async fn build_grid_index_for(
                     )
                 }
             }
-            let found = store
-                .documents_matching(out_dir, scan.render.as_ref(), &pin)
-                .with_context(|| format!("read documents from {stanza}"))?;
+            let found = match store.documents_matching(out_dir, scan.render.as_ref(), &pin) {
+                Ok(found) => found,
+                // Its rows, cursor and problems stay as the index has them.
+                Err(e) if written_in_another_shape(&e) => {
+                    tracing::warn!(
+                        source = %stanza,
+                        error = %format!("{e:#}"),
+                        "this render store is in a shape this build cannot read; \
+                         indexing the other sources and leaving this one as it was \
+                         until it re-renders"
+                    );
+                    store.close();
+                    unreadable.push(stanza.clone());
+                    continue;
+                }
+                Err(e) => return Err(e.context(format!("read documents from {stanza}"))),
+            };
             problems.push((
                 stanza.clone(),
                 store
@@ -706,11 +780,13 @@ pub async fn build_grid_index_for(
         read_whole,
         sources_changed,
         documents_changed,
+        unreadable = unreadable.len(),
         "read the render stores"
     );
 
     let mut summary = GridIndexSummary {
         markdowns_total: docs.len(),
+        sources_unreadable: unreadable,
         ..Default::default()
     };
 
@@ -736,6 +812,9 @@ pub async fn build_grid_index_for(
                 .await
                 .with_context(|| format!("copy {source_id}'s problems into the index"))?;
             summary.problems_copied += rows.len();
+        }
+        for source_id in &summary.sources_unreadable {
+            record_unreadable_store(conn, &unreadable_store_problem(source_id, &now)).await?;
         }
         for (source_id, store_commit) in &advanced {
             write_source_cursor(
@@ -1999,6 +2078,83 @@ mod source_cursor_tests {
             1,
             "the grid must be left holding only the surviving conversation"
         );
+    }
+
+    /// Put a source's store back in the shape a build before
+    /// `grid_rows.preview` wrote: the column is `text` there.
+    async fn into_older_shape(root: &Path, source: &str) {
+        let path = crate::indexed_markdown::path_for(&rendered_root(root, source));
+        let writer = datalib_etl::doltlite_raw::open_derived(
+            &path,
+            &[],
+            datalib_etl::doltlite_raw::StoreKind::Render,
+        )
+        .await
+        .unwrap();
+        sqlx::query("ALTER TABLE grid_rows RENAME COLUMN preview TO text")
+            .execute(&writer)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&writer, "an older build's shape")
+            .await
+            .unwrap();
+        writer.close().await;
+    }
+
+    /// A render store an older build wrote, and whose source has not
+    /// re-rendered since, left the whole grid empty: the index failed on
+    /// it and indexed nothing. It must cost only its own source: the rest
+    /// are indexed, its rows stay as they were, and a warning says why
+    /// until it re-renders.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_in_an_older_shape_costs_only_its_own_source() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["fresh".to_string(), "stale".to_string()];
+        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        build_grid_index_for(&pool, root, &sources, |_| {}, None)
+            .await
+            .unwrap();
+
+        render(root, "fresh", &[doc(root, "fresh", "md-f2", "more")]);
+        into_older_shape(root, "stale").await;
+        // As after the index rebuilds itself for a new build: no cursors,
+        // so every store is read whole.
+        sqlx::query("DELETE FROM source_cursors")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None)
+            .await
+            .expect("the other sources are indexed");
+        assert_eq!(s.sources_unreadable, vec!["stale".to_string()]);
+        assert_eq!(
+            index_row_count(&pool).await,
+            3,
+            "fresh's new document lands and stale's stays"
+        );
+        let (severity, sample): (String, String) =
+            sqlx::query_as("SELECT severity, sample FROM problems WHERE source_id = 'stale'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(severity, "warning");
+        assert!(sample.contains("sync"), "{sample}");
+
+        // Its next render rebuilds the store in the current shape.
+        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        let s = build_grid_index_for(&pool, root, &sources, |_| {}, None)
+            .await
+            .unwrap();
+        assert!(s.sources_unreadable.is_empty());
+        let warnings: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM problems WHERE source_id = 'stale'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(warnings, 0, "the warning goes once the store reads");
     }
 
     async fn index_row_count(pool: &SqlitePool) -> i64 {
