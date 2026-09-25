@@ -491,10 +491,34 @@ impl Harness {
             let seen = match tokio::time::timeout_at(deadline, self.rx.recv()).await {
                 Ok(Some(seen)) => seen,
                 Ok(None) => self.fail(&format!("the harness's channel closed waiting for {what}")),
-                Err(_) => self.fail(&format!("no {what} within {DEADLINE:?}")),
+                Err(_) => {
+                    let verdict = self.probe(&mut check).await;
+                    self.fail(&format!("no {what} within {DEADLINE:?}; {verdict}"))
+                }
             };
             self.saw(&seen);
             self.backlog.push_back(seen);
+        }
+    }
+
+    /// Whether a loop that did not do what it was asked lost the
+    /// announcement or is stuck: an announcement of its own wakes a loop
+    /// that is waiting, and a loop that then does it had not heard.
+    async fn probe<T>(&mut self, check: &mut impl FnMut(&State) -> Option<T>) -> &'static str {
+        announce(
+            &datalib_dag::supervisor::announce::listeners_dir(self.root.path()),
+            FROM_SERVER,
+            "probe",
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if check(&self.state().await).is_some() {
+                return "a probe woke the loop and it did it: it had not heard";
+            }
+            match tokio::time::timeout_at(deadline, self.rx.recv()).await {
+                Ok(Some(seen)) => self.saw(&seen),
+                _ => return "a probe did not help: the loop is stuck",
+            }
         }
     }
 

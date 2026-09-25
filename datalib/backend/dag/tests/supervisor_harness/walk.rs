@@ -1,5 +1,6 @@
 //! A seeded random walk over everything the scenarios do one at a time:
-//! sources `a` and `b`, a consumer `c` of `a`, and syncs, stops, pauses,
+//! sources `a` and `b`, a consumer `c` of `a`, a fan-in `d` of both, and
+//! syncs, stops, pauses,
 //! resumes and every way a step can end, in any order. The invariants are
 //! checked as it goes (one process per step, on every start) and after
 //! each episode. `HARNESS_SEED=<n>` replays one walk; `HARNESS_SEEDS=<n>`
@@ -14,7 +15,7 @@ use crate::harness::{reads, source, Clocks, Harness, Seen};
 
 const EPISODES: usize = 4;
 const ACTIONS: usize = 12;
-const STEPS: [&str; 3] = ["a", "b", "c"];
+const STEPS: [&str; 4] = ["a", "b", "c", "d"];
 
 /// splitmix64: enough randomness for a walk, and the same walk for a seed.
 struct Rng(u64);
@@ -180,7 +181,7 @@ impl Walk {
             "reads".to_string(),
             format!("metric rows {v}"),
         ];
-        if step == "a" {
+        if step == "a" || step == "b" {
             choices.extend(["streams".to_string(), format!("seal s{v} {v}")]);
         }
         let instruction = self.rng.pick(&choices).clone();
@@ -259,7 +260,12 @@ async fn walk(seed: u64) {
         backoff: Duration::ZERO,
         ..Clocks::default()
     };
-    let steps = [source("a"), source("b"), reads("c", &["a"])];
+    let steps = [
+        source("a"),
+        source("b"),
+        reads("c", &["a"]),
+        reads("d", &["a", "b"]),
+    ];
     let mut h = Harness::with(&steps, clocks).await;
     h.context = format!("walk seed {seed} (replay: HARNESS_SEED={seed}): ");
     let mut w = Walk {
