@@ -66,7 +66,7 @@ pub async fn load(raw_dir: &Path, range: RawRange<'_>) -> Result<Option<Loaded>>
     if !db_path.exists() {
         return Ok(None);
     }
-    let Some(db) = RawDb::open_reader_at(&db_path, range.pin).await? else {
+    let Some(db) = RawDb::open_reader(&db_path, range.pin).await? else {
         return Ok(None);
     };
     let loaded = async {

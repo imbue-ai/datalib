@@ -1,6 +1,8 @@
-//! GitLab REST API client (`gitlab.com/api/v4`). Every request goes
-//! through [`datalib_etl::http::latchkey_curl`]. Latchkey injects
-//! `PRIVATE-TOKEN: <token>` for the `gitlab` service.
+//! A forge's REST client. Every request goes through
+//! [`datalib_etl::http::latchkey_curl_classified`], which handles the
+//! latchkey subprocess, the rate-limit and transient retries, and
+//! playback from disk fixtures. Latchkey injects the credential for the
+//! service — don't add it here.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,22 +13,25 @@ use regex::Regex;
 use serde_json::Value;
 
 use datalib_etl::http::{
-    latchkey_curl, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
+    latchkey_curl_classified, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
+    Retryability,
 };
 
-pub const BASE: &str = "https://gitlab.com/api/v4";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const PER_PAGE: u32 = 100;
 
 static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
 
 #[derive(thiserror::Error, Debug)]
-pub enum GitLabError {
+pub enum ForgeError {
     #[error("{0}")]
     Permanent(String),
 }
 
-pub struct GitLabClient {
+pub struct ForgeClient {
+    service: HttpService,
+    /// Which responses the shared loop retries, and after how long.
+    classify: fn(&HttpResponse) -> Retryability,
     requests: AtomicU64,
     network_ms: AtomicU64,
     /// The source's latchkey settings, forwarded onto every request this
@@ -34,25 +39,18 @@ pub struct GitLabClient {
     latchkey: LatchkeySettings,
 }
 
-impl Default for GitLabClient {
-    fn default() -> Self {
+impl ForgeClient {
+    pub fn new(
+        service: HttpService,
+        classify: fn(&HttpResponse) -> Retryability,
+        latchkey: LatchkeySettings,
+    ) -> Self {
         Self {
+            service,
+            classify,
             requests: AtomicU64::new(0),
             network_ms: AtomicU64::new(0),
-            latchkey: LatchkeySettings::default(),
-        }
-    }
-}
-
-impl GitLabClient {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_latchkey(latchkey: LatchkeySettings) -> Self {
-        Self {
             latchkey,
-            ..Self::default()
         }
     }
 
@@ -60,24 +58,25 @@ impl GitLabClient {
         self.requests.load(Ordering::Relaxed)
     }
 
-    async fn request_once(&self, url: &str) -> Result<HttpResponse, GitLabError> {
-        let req = HttpRequest::get(HttpService::Gitlab, url)
+    async fn request_once(&self, url: &str) -> Result<HttpResponse, ForgeError> {
+        let req = HttpRequest::get(self.service, url)
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
-        let resp = latchkey_curl(&req)
+        // A `GaveUp` from the shared loop is terminal: it has already
+        // waited out every rate limit and transient it could.
+        let resp = latchkey_curl_classified(&req, self.classify)
             .await
-            .map_err(|e: HttpError| GitLabError::Permanent(e.to_string()))?;
+            .map_err(|e: HttpError| ForgeError::Permanent(e.to_string()))?;
         self.network_ms
             .fetch_add(resp.duration_ms, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
         Ok(resp)
     }
 
-    /// Rate-limit (429) and transient (5xx) retry — including `Retry-After`
-    /// / `ratelimit-reset` waits — is handled centrally in
-    /// [`datalib_etl::http::latchkey_curl`], so this just parses the
-    /// definitive response the chokepoint hands back.
-    pub async fn get(&self, url: &str) -> Result<(Value, HashMap<String, String>), GitLabError> {
+    /// GET and parse the definitive response. Returns the JSON body and
+    /// the response headers, so callers can walk the `Link: rel=next`
+    /// pagination chain.
+    pub async fn get(&self, url: &str) -> Result<(Value, HashMap<String, String>), ForgeError> {
         let resp = self.request_once(url).await?;
         let body = resp.body_str().into_owned();
         if (200..300).contains(&resp.status) {
@@ -86,7 +85,7 @@ impl GitLabClient {
             } else {
                 serde_json::from_str(&body).map_err(|e| {
                     let preview: String = body.chars().take(200).collect();
-                    GitLabError::Permanent(format!(
+                    ForgeError::Permanent(format!(
                         "{url}: HTTP {} but non-JSON: {e}; body[:200]={preview:?}",
                         resp.status
                     ))
@@ -96,23 +95,31 @@ impl GitLabClient {
             return Ok((value, headers));
         }
         let preview: String = body.chars().take(300).collect();
-        Err(GitLabError::Permanent(format!(
+        Err(ForgeError::Permanent(format!(
             "{url}: HTTP {} body={preview:?}",
             resp.status
         )))
     }
 
-    pub async fn paginate(&self, start_url: &str) -> Result<Vec<Value>, GitLabError> {
+    /// Walk `Link: rel=next` pagination until exhausted, accumulating
+    /// items. A page is a top-level array, or GitHub search's
+    /// `{"items": [...]}`; any other object is one item, handed back
+    /// alone.
+    pub async fn paginate(&self, start_url: &str) -> Result<Vec<Value>, ForgeError> {
         let mut url = start_url.to_string();
         let mut out: Vec<Value> = Vec::new();
         loop {
             let (data, headers) = self.get(&url).await?;
             match &data {
                 Value::Array(arr) => out.extend(arr.iter().cloned()),
-                _ => {
-                    out.push(data.clone());
-                    return Ok(out);
-                }
+                Value::Object(obj) => match obj.get("items").and_then(|v| v.as_array()) {
+                    Some(items) => out.extend(items.iter().cloned()),
+                    None => {
+                        out.push(data.clone());
+                        return Ok(out);
+                    }
+                },
+                _ => return Ok(out),
             }
             let Some(link) = headers.get("link") else {
                 return Ok(out);

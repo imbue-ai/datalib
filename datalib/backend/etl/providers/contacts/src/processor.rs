@@ -2,7 +2,7 @@
 //! a **download** processor ([`ContactsIngest`] — live CardDAV server sync
 //! or file-backed `.vcf` ingest, chosen by which method table is set) and a **render**
 //! processor ([`ContactsRender`]). [`plan_ingest`] / [`plan_render`] build the
-//! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
+//! per-wave processors the orchestrator drives, owning every contacts-specific decision (which
 //! download mode) so the orchestrator destructures nothing.
 
 use std::path::PathBuf;
@@ -38,14 +38,14 @@ pub fn plan_ingest(
         ),
     };
     Ok(vec![Box::new(ContactsIngest {
-        id: format!("carddav/{name}/download"),
+        id: format!("contacts/{name}/download"),
         raw_path,
         mode,
         latchkey,
     })])
 }
 
-/// Which download path carddav takes for this source.
+/// Which download path contacts takes for this source.
 enum DownloadMode {
     /// Live CardDAV server sync.
     Server(CarddavSync),
@@ -56,7 +56,7 @@ enum DownloadMode {
     },
 }
 
-/// Carddav's download processor. Owns its raw doltlite store end to end.
+/// Contacts' download processor. Owns its raw doltlite store end to end.
 pub struct ContactsIngest {
     id: String,
     raw_path: PathBuf,

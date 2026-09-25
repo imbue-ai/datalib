@@ -1,50 +1,16 @@
 //! Open + non-DDL data-manipulation for the Signal raw store.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use datalib_time::IsoOffsetTimestamp;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
-
-use datalib_etl::blob_cas::{self, BlobCas};
-use datalib_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     // ── ingested_backups (resume cursor) ────────────────────────────
 
     /// Returns true if a row with this snapshot fingerprint already
@@ -54,7 +20,7 @@ impl RawDb {
     pub async fn snapshot_already_ingested(&self, fingerprint: &str) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE fingerprint = ? LIMIT 1")
             .bind(fingerprint)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("snapshot_already_ingested")?;
         Ok(row.is_some())
@@ -82,7 +48,7 @@ impl RawDb {
         .bind(total_byte_size as i64)
         .bind(now)
         .bind(tz_offset)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .context("record_snapshot_ingested")?;
         Ok(())
@@ -93,7 +59,7 @@ impl RawDb {
             "SELECT snapshot_dir, blake3 FROM ingested_backups
              ORDER BY ingested_at_utc DESC LIMIT 1",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("last_ingested_snapshot")?;
         Ok(row.and_then(|r| {

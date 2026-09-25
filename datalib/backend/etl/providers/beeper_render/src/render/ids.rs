@@ -2,7 +2,7 @@
 //! their Matrix ids, which are unique across Matrix, so the natural key
 //! is the raw key and the scope is provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Beeper;
@@ -14,28 +14,14 @@ pub const KIND_PERIOD: &str = "room_period";
 pub const KIND_USER: &str = "user";
 pub const KIND_EVENT: &str = "event";
 
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn room(source_id: &str, native_room_id: &str) -> Identity {
-    identity(source_id, KIND_ROOM, native_room_id.to_string(), None)
+    IDS.mint(source_id, KIND_ROOM, native_room_id.to_string(), None)
 }
 
 pub fn period(source_id: &str, native_room_id: &str, period_key: &str) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_PERIOD,
         composite_key(&[native_room_id, period_key]),
@@ -44,7 +30,7 @@ pub fn period(source_id: &str, native_room_id: &str, period_key: &str) -> Identi
 }
 
 pub fn user(source_id: &str, native_user_id: &str) -> Identity {
-    identity(source_id, KIND_USER, native_user_id.to_string(), None)
+    IDS.mint(source_id, KIND_USER, native_user_id.to_string(), None)
 }
 
 /// An event's stamp is its `timestamp_ms`, which is also the raw row's;
@@ -52,7 +38,7 @@ pub fn user(source_id: &str, native_user_id: &str) -> Identity {
 /// a sync's new events land in adjacent leaves of the raw store as
 /// well as the render store.
 pub fn event(source_id: &str, native_event_id: &str, timestamp_ms: i64) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_EVENT,
         native_event_id.to_string(),

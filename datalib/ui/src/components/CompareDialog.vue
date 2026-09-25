@@ -117,13 +117,13 @@ function submit() {
 </script>
 
 <template>
-  <div class="cmp-backdrop" @click.self="emit('close')" @keydown="onKeydown">
-    <div class="cmp" role="dialog" aria-modal="true" aria-label="Compare two syncs">
-      <header class="cmp-head">
+  <div class="cmp-backdrop dialog-backdrop" @click.self="emit('close')" @keydown="onKeydown">
+    <div class="cmp dialog" role="dialog" aria-modal="true" aria-label="Compare two syncs">
+      <header class="cmp-head dialog-head">
         <h2>Compare two syncs of {{ source.name }}</h2>
-        <button class="cmp-x" aria-label="Close" @click="emit('close')">×</button>
+        <button class="cmp-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
-      <div class="cmp-body">
+      <div class="cmp-body dialog-body">
         <p class="cmp-blurb">
           A comparison is a source of its own: every record that was added, removed or changed
           between two syncs, as documents with the changes marked and rows the grid colours. It
@@ -161,7 +161,7 @@ function submit() {
           </label>
         </template>
       </div>
-      <footer class="cmp-foot">
+      <footer class="cmp-foot dialog-foot">
         <button class="btn ghost" @click="emit('close')">Cancel</button>
         <button class="btn primary" :disabled="!ready" @click="submit">Compare</button>
       </footer>
@@ -169,58 +169,12 @@ function submit() {
   </div>
 </template>
 
+<style scoped src="./dialog.css"></style>
 <style scoped>
-.cmp-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 6vh 16px;
-  z-index: 50;
-}
 .cmp {
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  border: 1px solid var(--datalib-border);
-  border-radius: 8px;
   width: min(640px, 100%);
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-}
-.cmp-head,
-.cmp-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-}
-.cmp-head {
-  border-bottom: 1px solid var(--datalib-border);
-}
-.cmp-foot {
-  border-top: 1px solid var(--datalib-border);
-  justify-content: flex-end;
-}
-.cmp-head h2 {
-  margin: 0;
-  font-size: 17px;
-  flex: 1;
-}
-.cmp-x {
-  background: none;
-  border: none;
-  color: var(--datalib-muted);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
 }
 .cmp-body {
-  padding: 16px 18px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;

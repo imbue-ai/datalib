@@ -15,6 +15,7 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/etl/timeseries_render:datalib_etl_timeseries_render",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/providers/garmin:datalib_etl_garmin",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",

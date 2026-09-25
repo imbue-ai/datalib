@@ -10,5 +10,6 @@ name = "datalib_id"
 path = "src/lib.rs"
 
 [dependencies]
+datalib-time = { path = "../time" }
 strum = { workspace = true }
 uuid = { workspace = true }

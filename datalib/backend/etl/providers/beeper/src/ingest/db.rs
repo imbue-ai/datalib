@@ -1,27 +1,17 @@
 //! Doltlite-backed raw store for the Beeper provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::bulk::bulk_upsert_in_tx;
-use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::full_ddl;
 pub use super::schema_raw::{BeeperMediaAttachmentRow, EventRow, RoomRow, UserRow};
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 /// Distinct-row counts of every object table this provider
 /// populates, taken from the destination DB after the run completes.
@@ -35,28 +25,6 @@ pub struct RowCounts {
 }
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     /// Distinct-row counts read straight from the destination DB
     /// after a run. Authoritative numbers for the summary —
     /// previous attempts at counting via `summary.events += 1`
@@ -75,13 +43,13 @@ impl RawDb {
             .with_context(|| format!("count {table}"))?;
             Ok(row.try_get("n").unwrap_or(0))
         }
-        let rooms = one(&self.pool, "rooms").await? as usize;
-        let users = one(&self.pool, "users").await? as usize;
-        let events = one(&self.pool, "events").await? as usize;
+        let rooms = one(self.pool(), "rooms").await? as usize;
+        let users = one(self.pool(), "users").await? as usize;
+        let events = one(self.pool(), "events").await? as usize;
         let blobs = sqlx::query(
             "SELECT COUNT(*) AS n FROM beeper_media_attachments WHERE blake3 IS NOT NULL",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(self.pool())
         .await
         .context("count beeper_media_attachments with bytes")?
         .try_get::<i64, _>("n")
@@ -107,7 +75,7 @@ impl RawDb {
             return Ok(());
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin bulk rooms tx")?;
+        let mut tx = self.pool().begin().await.context("begin bulk rooms tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk rooms tx")?;
         Ok(())
@@ -118,7 +86,7 @@ impl RawDb {
             return Ok(());
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin bulk users tx")?;
+        let mut tx = self.pool().begin().await.context("begin bulk users tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk users tx")?;
         Ok(())
@@ -129,7 +97,7 @@ impl RawDb {
             return Ok(());
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin bulk events tx")?;
+        let mut tx = self.pool().begin().await.context("begin bulk events tx")?;
         bulk_upsert_in_tx(&mut tx, rows, &now).await?;
         tx.commit().await.context("commit bulk events tx")?;
         Ok(())
@@ -144,7 +112,7 @@ impl RawDb {
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin bulk media attachments tx")?;

@@ -1,7 +1,5 @@
 //! Doltlite-backed raw store for the Claude provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -10,51 +8,20 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, MIGRATION_CONVERSATIONS_ADD_ORG_NAME};
+use super::schema_raw::full_ddl;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        // Idempotent migration for pre-org_name DBs.
-        let _ = sqlx::query(MIGRATION_CONVERSATIONS_ADD_ORG_NAME)
-            .execute(&pool)
-            .await;
-        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
     // ── users ──────────────────────────────────────────────────────
 
     pub async fn has_any_user(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM users LIMIT 1")
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("has_any_user")?;
         Ok(row.is_some())
@@ -64,7 +31,7 @@ impl RawDb {
         let scope = format!("claude:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(&scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select claude sweep marker")?;
         let Some(row) = row else { return Ok(None) };
@@ -81,7 +48,7 @@ impl RawDb {
     pub async fn record_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("claude:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        dr::upsert_scope_state(&self.pool, &scope, &now)
+        dr::upsert_scope_state(self.pool(), &scope, &now)
             .await
             .context("record claude sweep marker")?;
         Ok(())
@@ -90,15 +57,15 @@ impl RawDb {
     /// The `orgs` rows we already have, as raw payloads — what a warm
     /// [`Self::sweep_age`] hit serves instead of re-listing upstream.
     pub async fn load_orgs(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "orgs").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "orgs").await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "users").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "users").await
     }
 
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
-        first_user_uuid_from(&self.pool, datalib_etl::pin::Reads::Own).await
+        first_user_uuid_from(self.pool(), datalib_etl::pin::Reads::Own).await
     }
 
     // ── conversations: listing skip-check ──────────────────────────
@@ -148,7 +115,7 @@ impl RawDb {
             q = q.bind(*id);
         }
         let rows = q
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .with_context(|| format!("existing_updated_at {table}"))?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -162,11 +129,11 @@ impl RawDb {
     }
 
     pub async fn load_projects(&self) -> Result<Vec<LoadedProject>> {
-        load_projects_from(&self.pool, datalib_etl::pin::Reads::Own).await
+        load_projects_from(self.pool(), datalib_etl::pin::Reads::Own).await
     }
 
     pub async fn load_project_docs(&self) -> Result<Vec<LoadedProjectDoc>> {
-        load_project_docs_from(&self.pool, datalib_etl::pin::Reads::Own).await
+        load_project_docs_from(self.pool(), datalib_etl::pin::Reads::Own).await
     }
 
     /// Delete this org's conversations that a **complete** listing of that
@@ -191,7 +158,7 @@ impl RawDb {
         let held: Vec<String> =
             sqlx::query_scalar("SELECT id FROM conversations WHERE org_uuid = ?")
                 .bind(org_uuid)
-                .fetch_all(&self.pool)
+                .fetch_all(self.pool())
                 .await
                 .context("list org conversation ids for prune")?;
         let gone: Vec<String> = held
@@ -202,7 +169,7 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        let mut tx = self.pool().begin().await.context("begin prune tx")?;
         for chunk in gone.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -235,7 +202,7 @@ impl RawDb {
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin record_conversation_error tx")?;
@@ -247,11 +214,11 @@ impl RawDb {
     }
 
     pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
-        dr::failed_ids(&self.pool, "conversations").await
+        dr::failed_ids(self.pool(), "conversations").await
     }
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
-        load_conversations_from(&self.pool, datalib_etl::pin::Reads::Own).await
+        load_conversations_from(self.pool(), datalib_etl::pin::Reads::Own).await
     }
 
     /// Snapshot `(file_uuid → blake3)` for every attachment whose
@@ -259,7 +226,7 @@ impl RawDb {
     /// a fetch run; updated in-place as new downloads land. Replaces
     /// the per-file SQL `attachment_has_bytes` lookup.
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
-        datalib_etl::blob_cas::load_blake3_index(&self.pool, "claude_attachments", "file_uuid")
+        datalib_etl::blob_cas::load_blake3_index(self.pool(), "claude_attachments", "file_uuid")
             .await
     }
 }

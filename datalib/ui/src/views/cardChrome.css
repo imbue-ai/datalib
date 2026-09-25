@@ -1,0 +1,65 @@
+/* The header bar over a card, in every layout (MillerView, TilingNode,
+   TreeView): the source box in dev mode, the card's title otherwise,
+   and the card's controls. Each layout includes this as a scoped style
+   and adds a class of its own beside these for what differs. */
+.card-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #888;
+  background: rgba(0, 0, 0, 0.08);
+}
+/* Highlight the whole header while the source box is being edited —
+   a tinted box inside the gray bar looks patchy. */
+.card-chrome:focus-within {
+  background: rgba(99, 102, 241, 0.18);
+}
+/* Non-dev: an accent-washed title bar with the title and controls
+   inked in the accent itself. Mixing the accent toward --datalib-fg keeps
+   the ink readable in both themes: it darkens on the light ground and
+   lightens on the dark one. */
+.card-chrome--title {
+  background: color-mix(in srgb, var(--datalib-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
+}
+.card-source {
+  flex: 1 1 auto;
+  font:
+    12px/1.5 ui-monospace,
+    Menlo,
+    monospace;
+  padding: 0.2rem 0.4rem;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  min-width: 0;
+  /* Soft-wrap multi-line source; height is managed by growSourceBox. */
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+  display: block;
+}
+.card-source:focus {
+  outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
+.card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

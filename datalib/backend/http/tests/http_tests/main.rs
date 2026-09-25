@@ -22,5 +22,6 @@ mod remote_media;
 mod request_log;
 mod runs_endpoints;
 mod server_log;
+mod support;
 mod sync_loop;
 mod ui_events;

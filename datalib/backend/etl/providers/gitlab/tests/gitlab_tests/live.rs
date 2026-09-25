@@ -50,8 +50,8 @@ async fn gitlab_live_single_mr_snapshot() {
     sealed.expect("seal the raw store");
 
     let parsed = parse_api_dir(&tmp, "gitlab", RawRange::cold()).expect("parse_api_dir");
-    assert_eq!(parsed.merge_requests.len(), 1, "expected exactly one MR");
-    let mr = &parsed.merge_requests[0];
+    assert_eq!(parsed.change_requests.len(), 1, "expected exactly one MR");
+    let mr = &parsed.change_requests[0];
 
     let render_root = tmp.clone();
     let stanza = "gitlab";
@@ -68,11 +68,8 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_rel = datalib_etl_gitlab_render::render::render::mr_qmd_path_rel(
-        stanza,
-        &mr.project_full_path,
-        mr.mr_iid,
-    );
+    let qmd_rel =
+        datalib_etl_gitlab_render::render::PROFILE.qmd_path_rel(stanza, &mr.container, mr.number);
     let qmd_abs = render_root.join(&qmd_rel);
     assert!(
         qmd_abs.exists(),
@@ -87,29 +84,25 @@ async fn gitlab_live_single_mr_snapshot() {
     );
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use datalib_etl_gitlab_render::render::parse::NoteSection;
+    use datalib_etl_gitlab_render::render::Section;
     if parsed
-        .notes
+        .comments
         .iter()
-        .any(|n| n.section == NoteSection::General)
+        .any(|n| n.section == Section::General)
     {
         sections.push("General");
     }
-    if parsed
-        .notes
-        .iter()
-        .any(|n| n.section == NoteSection::Inline)
-    {
+    if parsed.comments.iter().any(|n| n.section == Section::Inline) {
         sections.push("Inline");
     }
 
     let view = json!({
-        "project": mr.project_full_path,
-        "mr_iid": mr.mr_iid,
+        "project": mr.container,
+        "mr_iid": mr.number,
         "has_title": !mr.title.is_empty(),
-        "has_web_url": mr.web_url.is_some(),
+        "has_web_url": mr.url.is_some(),
         "state_known": mr.state.is_some(),
-        "note_count": parsed.notes.len(),
+        "note_count": parsed.comments.len(),
         "sections_present": sections,
         "render_markdown_exists": qmd_abs.exists(),
         "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),

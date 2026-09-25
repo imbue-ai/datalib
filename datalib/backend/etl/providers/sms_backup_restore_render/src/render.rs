@@ -8,12 +8,11 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobBundle, CasEdgeRow};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
-};
+use datalib_etl_chat_common::render::RenderProfile;
 use datalib_etl_chat_common::types::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
+use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::Value;
@@ -55,6 +54,8 @@ fn profile() -> RenderProfile {
         render_version: RENDER_VERSION,
     }
 }
+
+pub use datalib_etl_chat_common::RenderOutcome;
 
 pub fn render(
     raw_dir: &Path,
@@ -105,75 +106,20 @@ pub fn render(
     // No early return on an empty store: a reset one still has to
     // name the conversations it lost, so their documents go.
     let all_chats = build_chats(source_id, &messages, &calls);
-
-    // Narrow to the conversations the diff named and the ones the driver
-    // found stale through their declared inputs. Everything else is
-    // byte-identical to what the store already holds.
-    let mut outcome = RenderOutcome {
-        new_head: scan.new_head.clone(),
-        scan_elapsed: scan.scan_elapsed,
-        ..Default::default()
-    };
-    // The driver names stale buckets by chat uuid; the chats are by key.
-    let by_uuid: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
-        by_uuid.get(key).map(|id| id.to_string())
-    });
-    // Named buckets first, with no documents: a conversation this run
-    // looked at that has no message or call left builds no chat, and
-    // chat-common never sees it. The rendered ones follow and replace
-    // that.
-    outcome.buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|key| ids::conversation(source_id, key).uuid)
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let chats: Vec<NormalizedChat> = match &narrowed.render {
-        None => all_chats,
-        Some(changed) => {
-            let before = all_chats.len();
-            let kept: Vec<NormalizedChat> = all_chats
-                .into_iter()
-                .filter(|c| changed.contains(&c.id))
-                .collect();
-            outcome.skipped = before.saturating_sub(kept.len());
-            kept
-        }
-    };
-    let s = cc_render_all(
+    render_changed(
         &profile(),
-        &chats,
-        out_root,
-        source_id,
+        all_chats,
+        scan,
+        range,
+        |id| ids::conversation(source_id, id).uuid,
         &blobs,
-        progress,
-        on_doc_complete,
-    )?;
-    outcome.rendered = s.docs_rendered;
-    outcome.buckets.extend(s.buckets);
-    Ok(outcome)
-}
-
-/// What one render pass did, and what the caller must act on: the cursor
-/// to stamp and the conversations that went away.
-#[derive(Debug, Clone, Default)]
-pub struct RenderOutcome {
-    pub rendered: usize,
-    pub skipped: usize,
-    pub new_head: Option<String>,
-    pub scan_elapsed: Option<std::time::Duration>,
-    /// Every conversation rendered, with the documents considered for it
-    /// — what the processor declares through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+        RenderTarget {
+            out_root,
+            source_id,
+            progress,
+            on_doc_complete,
+        },
+    )
 }
 
 /// Which conversations moved since `last_render_hash`.
