@@ -188,6 +188,9 @@ impl Runner {
         let mut changed_now: HashMap<String, bool> = HashMap::new();
         let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
         let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
+        // Whether the loop told each running step to stop: what ends then
+        // was stopped, whatever it reported.
+        let mut stop_sent = vec![false; n];
         let mut invocations: Vec<Option<String>> = vec![None; n];
         // What each running invocation was started against.
         let mut consumed_by: Vec<Option<Consumed>> = vec![None; n];
@@ -290,6 +293,7 @@ impl Runner {
                     errors = carry(&mut errors, &from_old);
                     ended = carry(&mut ended, &from_old);
                     stops = carry(&mut stops, &from_old);
+                    stop_sent = carry(&mut stop_sent, &from_old);
                     invocations = carry(&mut invocations, &from_old);
                     warned_not_streaming = carry(&mut warned_not_streaming, &from_old);
                     ever_in_scope = carry(&mut ever_in_scope, &from_old);
@@ -477,6 +481,7 @@ impl Runner {
             }
             for &i in &t.stops {
                 if let Some(tx) = stops[i].take() {
+                    stop_sent[i] = true;
                     let _ = tx.send(true);
                 }
             }
@@ -539,6 +544,7 @@ impl Runner {
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
+                        stopped: std::mem::take(&mut stop_sent[i]),
                         consumed,
                     });
                     attempts_taken[i] = e.attempts;
@@ -741,10 +747,13 @@ impl Runner {
     /// One tick with no request open, its states saved: for a host whose
     /// loop is idle when a pause or a resume lands, or that has just taken
     /// the lock from a loop that died with steps running.
-    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<()> {
+    /// The pauses it recorded, as the store held them: a host compares
+    /// the pauses it finds later with these, not with any it read before.
+    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<BTreeMap<String, String>> {
         let mut record = Recorded::load(store).await?;
         let mut state = record.saved.clone();
-        let paused = paused_in(graph, store).await?;
+        let all = store.paused().await?;
+        let paused = paused_of(graph, &all);
         let intent = Intent {
             requests: Vec::new(),
             paused: paused.keys().copied().collect(),
@@ -757,7 +766,8 @@ impl Runner {
         );
         let held = vec![false; graph.steps.len()];
         record_states(graph, &mut state, &t, &held, &paused, |_| None);
-        record.save(&state).await
+        record.save(&state).await?;
+        Ok(all)
     }
 
     fn note(&self, step: &str, msg: String) {
@@ -1049,12 +1059,13 @@ fn check_reported(
 
 /// Step index → who paused it, for the steps this graph has.
 async fn paused_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
-    Ok(store
-        .paused()
-        .await?
-        .into_iter()
-        .filter_map(|(id, by)| Some((*graph.by_id.get(&id)?, by)))
-        .collect())
+    Ok(paused_of(graph, &store.paused().await?))
+}
+
+fn paused_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, String> {
+    all.iter()
+        .filter_map(|(id, by)| Some((*graph.by_id.get(id)?, by.clone())))
+        .collect()
 }
 
 /// Write what the tick made of each step into its record. A step between

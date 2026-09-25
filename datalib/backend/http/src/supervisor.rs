@@ -3,7 +3,7 @@
 //! whenever a request is open, and between busy periods settles a pause
 //! or a resume into the record and runs a reset.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -176,8 +176,8 @@ impl host::Periods for ServerPeriods<'_> {
         serve_period(self.cfg, store).await;
     }
 
-    async fn settle(&mut self, store: &Store) {
-        settle(&self.cfg.control.root, store).await;
+    async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
+        settle(&self.cfg.control.root, store).await
     }
 
     async fn idle_work(&mut self, store: &Store) {
@@ -266,13 +266,20 @@ fn extra_path() -> Vec<PathBuf> {
 /// One tick with nothing open, so a pause or a resume made while the loop
 /// is idle reaches the record, and so do the steps a dead loop left
 /// running.
-async fn settle(root: &Path, store: &Store) {
+async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> {
     let checked = match load_config(root) {
         Ok(checked) => checked,
-        Err(why) => return tracing::warn!("supervisor: cannot settle the record: {why}"),
+        Err(why) => {
+            tracing::warn!("supervisor: cannot settle the record: {why}");
+            return None;
+        }
     };
-    if let Err(e) = Runner::new(root).settle(&checked.graph, store).await {
-        tracing::error!("supervisor: could not settle the record: {e:#}");
+    match Runner::new(root).settle(&checked.graph, store).await {
+        Ok(paused) => Some(paused),
+        Err(e) => {
+            tracing::error!("supervisor: could not settle the record: {e:#}");
+            None
+        }
     }
 }
 

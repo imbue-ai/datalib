@@ -171,9 +171,15 @@ or was blocked, or `done`. **A stop** closes it at once as `stopped`, and
 a running step no open request wants any more gets SIGINT; it
 checkpoints and exits, and until it has, its row reads Stopping. **A
 pause** keeps a step from starting and stops it if it is running; a
-paused step a request skipped takes no part and records no run. A pause
-made while the loop is idle reaches the record through
-`Runner::settle`, one tick with nothing open. A request naming a step
+paused step a request skipped takes no part and records no run. **A run
+the loop stopped is neither a failure nor a run**: resumed while a
+request still wants it, the step runs again. That is a run the loop
+asked to stop, not one that reported `cancelled` on its own, which is a
+failure like any other. A pause made while the loop is idle reaches the
+record through `Runner::settle`, one tick with nothing open; the idle
+host settles again after every busy period, and compares the pauses it
+finds later with the ones the settle recorded, not with any it read
+before. A request naming a step
 no config the loop has taken on has waits, with its roots recorded as
 waiting on it, for one that has it.
 
@@ -196,6 +202,31 @@ not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The design, and what
 is still to come (two steps writing one tree), is
 [`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+
+## How the loop is proven
+
+`//datalib/backend/dag:supervisor_harness_test` asks one question: does
+the loop manage processes correctly? A puppet step (`tests/puppet`)
+does only what it is told over a FIFO and acks each instruction; the
+harness (`tests/supervisor_harness`) writes a real `config.toml` of
+puppets, runs the loop in-process under `host::run_idle` as the server
+does, and plays a person through the store. It waits only on what it
+can observe (an ack, a loop event, an announcement), each under a
+deadline, and asserts only what the loop owns: processes started and
+ended, never two of one step at once (checked on every start), each
+request's outcome, each run's recorded status, the versions recorded
+and handed on, the queues. Nothing about what a step wrote. Product
+timers a scenario depends on (stop grace, retry backoff, backstop) are
+parameters it sets; no test sleeps.
+
+Beside the scenarios, a seeded random walk over all of it keeps the
+invariants after every episode. A failure prints its seed and the last
+40 things seen; `HARNESS_SEED=<n>` replays one walk,
+`HARNESS_SEEDS=<n>` runs that many (32 by default):
+
+```sh
+bazelisk test //datalib/backend/dag:supervisor_harness_test --test_env=HARNESS_SEED=27
+```
 
 ## Versions: read from the store, or reported by the step
 
