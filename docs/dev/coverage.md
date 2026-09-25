@@ -22,6 +22,16 @@ binary on disk to translate the runtime hit counts back into source
 locations). Output lands at `/tmp/datalib_coverage.lcov` by
 default; override with `$LCOV_OUT`.
 
+The test can be any kind. A `rust_test` that only spawns a helper
+binary works the same way:
+
+```bash
+tools/run_coverage.sh \
+  //datalib/backend/etl:doltlite_two_process_test \
+  -- \
+  //datalib/backend/etl:doltlite_two_process
+```
+
 The report is first-party only. `--instrumentation_filter` cannot make
 it so — `llvm-cov export` reads the coverage-mapping section out of the
 linked binary, and that section names every file compiled into it,
@@ -30,7 +40,7 @@ instead; override the pattern with `$IGNORE_RE`. Without it the report
 was 8.0 MB, 81% of it code we do not own (doltlite's `sqlite3.c`
 amalgamation alone was 5.4 MB, plus oniguruma and ring's vendored
 crypto), so `genhtml`'s tree view opened on third-party sources. With
-it: 2.0 MB.
+it: 3.2 MB (2026-09-25).
 
 HTML report:
 
@@ -46,8 +56,9 @@ The most useful single coverage target right now is
 `//tests/fixtures:ingested_tng_test`. It's a `py_test` wrapper around
 the same `run_sync_pipeline.py` invocation as the `:ingested_tng`
 genrule, exercising the **entire ETL pipeline** end-to-end across every
-provider's TNG fixtures. With the wrapper above you get **302 source
-files** covered (measured 2026-09-04), including:
+provider's TNG fixtures. With the wrapper above you get **489 source
+files** covered, all of them first-party (measured 2026-09-25),
+including:
 
   - the per-provider download + render (`claude`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
@@ -65,69 +76,88 @@ below makes it work.
 ## How it works
 
 ```
-┌──────────────────┐   bazelisk coverage runs the py_test.
-│  ingested_tng_   │   rules_rust's coverage transition propagates
-│      test        │   through `data` deps (yes, even data!) so
-│   (py_test)      │   datalib_dag / datalib_step get built with
-└────────┬─────────┘   -Cinstrument-coverage.
+┌──────────────────┐   bazelisk coverage runs the test (py_test,
+│  ingested_tng_   │   rust_test, ...). rules_rust's coverage
+│      test        │   transition propagates through `data` deps
+│                  │   (yes, even data!) so datalib_dag /
+└────────┬─────────┘   datalib_step get built with -Cinstrument-coverage.
          │ data
          ▼
-┌──────────────────┐   At test time, the py_test spawns the
-│  datalib_dag +   │   instrumented binaries. LLVM's static runtime
-│  datalib_step    │   writes a .profraw on clean exit, paths
-│  (rust_binary,   │   chosen by LLVM_PROFILE_FILE in COVERAGE_DIR.
-│  -Cinstrument-   │
+┌──────────────────┐   At test time the test spawns the
+│  datalib_dag +   │   instrumented binaries. Each process writes a
+│  datalib_step    │   .profraw on clean exit, at the path bazel sets
+│  (rust_binary,   │   in LLVM_PROFILE_FILE (COVERAGE_DIR/%h-%p-%m),
+│  -Cinstrument-   │   which children inherit.
 │  coverage on)    │
 └────────┬─────────┘
          │ profraw
          ▼
-┌──────────────────┐   Bazel's per-test coverage runner merges
-│ coverage.dat     │   profraws → indexed profile data, lands
-│   (LLVM indexed  │   at .../testlogs/<target>/coverage.dat.
-│   profile, v12)  │
+┌──────────────────┐   --experimental_split_coverage_postprocessing
+│ testlogs/<pkg>/  │   makes COVERAGE_DIR an output of the test
+│ <name>/_coverage │   action, so the profraws outlive the sandbox.
 └────────┬─────────┘
-         │ + binaries  (llvm-cov needs the binary to map counters
-         ▼              back to source locations)
-┌──────────────────┐
-│ llvm-cov export  │   Manual step — bazel's auto-export step
-│  --format=lcov   │   doesn't know which rust_binary subprocess to
-│                  │   point at, so it produces an empty lcov.
-└────────┬─────────┘   tools/run_coverage.sh does this step.
-         │
-         ▼
+         │ llvm-profdata merge, then llvm-cov export
+         ▼  + binaries (llvm-cov needs them to map counters to source)
    /tmp/datalib_coverage.lcov
 ```
 
-### Three things had to be true
+Bazel's own `coverage.dat` is not used. For a rust_test, rules_rust's
+collection step (`util/collect_coverage/collect_coverage.rs`) merges
+the profraws and exports them against the *test* binary. A test that
+only spawns helpers links none of our code, so that binary has no
+coverage mapping, the export says "no coverage data found", and
+`coverage.dat` comes out empty. Without split post-processing the
+profraws lived in the sandbox and were gone by then.
+
+### Five things had to be true
 
 1. **`-Cinstrument-coverage` reaches the binaries that run.** The
-   `data` deps from the py_test to `datalib_dag` / `datalib_step`
-   carry rules_rust's coverage transition through, so the binaries at
+   `data` deps from the test to `datalib_dag` / `datalib_step` carry
+   rules_rust's coverage transition through, so the binaries at
    `bazel-bin/datalib/backend/dag/datalib_dag_bin` and
    `bazel-bin/datalib/backend/datalib_step/datalib_step` after a
    `bazelisk coverage` invocation are the instrumented ones. This Just
    Works in rules_rust 0.70 — no custom transition, no
-   `rustc_flags = select(...)`, no second binary target. The audit
-   trail of how we found this out is in `docs/dev/data_architecture_ingestion.md`'s
-   commit history.
+   `rustc_flags = select(...)`, no second binary target. Check one
+   with `otool -l <binary> | grep -c __llvm_prf` (nonzero means
+   instrumented).
 
-2. **LLVM tools are on PATH where bazel can find them.** The bazel
-   coverage runner's collection script needs `llvm-profdata` and
-   `llvm-cov`. On macOS those come from Xcode Command Line Tools at
-   `/Library/Developer/CommandLineTools/usr/bin/`.
-   `tools/run_coverage.sh` sets `LLVM_PROFDATA` and `LLVM_COV` via
-   `xcrun --find` and passes them through to the test environment
-   with `--test_env=LLVM_PROFDATA --test_env=LLVM_COV`. Without
-   these, the collection script aborts with
-   `LLVM_PROFDATA: unbound variable` and `error: coverage collection
-   script failed`.
+2. **The profraws survive the test.** The wrapper passes
+   `--experimental_split_coverage_postprocessing` (and
+   `--experimental_fetch_all_coverage_outputs`, so a remote-cache hit
+   brings them down too). Each test's profraws then sit in
+   `$(bazelisk info bazel-testlogs)/<pkg>/<name>/_coverage/`, and the
+   wrapper merges only the ones for the targets you passed. Because
+   they are now outputs, a remote cache would take them too, so the
+   wrapper also passes `--noremote_upload_local_results`. For
+   `ingested_tng_test` they are 564 files and 1.0 GB, and on a slow
+   link the upload held a finished test in "Testing" for over ten
+   minutes.
 
-3. **The lcov export step uses the right binary.** Bazel's auto-export
-   pass produces an empty lcov for our case because it can't tell
-   which `rust_binary` the py_test invoked. `tools/run_coverage.sh`
-   does the explicit `llvm-cov export --format=lcov
-   --instr-profile=<dat> <primary-bin> --object <extra-bin>...` call
-   itself.
+3. **The LLVM tools match rustc's LLVM.** A profraw's format follows
+   the compiler's LLVM version. The wrapper uses the `llvm-profdata`
+   and `llvm-cov` shipped in the rules_rust toolchain repo (rustc
+   1.98.0 ships LLVM 22; Xcode's is Apple LLVM 21), and passes them to
+   the test as `--test_env=LLVM_PROFDATA --test_env=LLVM_COV`, which
+   bazel's C++ collection script needs or it aborts with
+   `LLVM_PROFDATA: unbound variable`. Set both variables yourself to
+   override.
+
+4. **The export names the right binaries.** `tools/run_coverage.sh`
+   runs `llvm-cov export --format=lcov --instr-profile=<merged>
+   <primary-bin> --object <extra-bin>...` with the binaries you list
+   after `--`.
+
+5. **The test crate is instrumented too.** An async fn's body is
+   compiled into the crate that awaits it, not the one that defines
+   it. When a `rust_test` awaits a library's async fn, the body that
+   runs is the test crate's copy, and bazel leaves test crates
+   uninstrumented unless told otherwise. Measured on
+   `supervisor_harness_test`: `Store::invocations` counted 1,615 calls
+   while every line of its body read 0; the profile held no record for
+   the body at all. The wrapper passes `--instrument_test_targets`, so
+   to see library code a `rust_test` exercises in-process, list the
+   test itself after `--` as well.
 
 ### Why `data` and not `deps`?
 
@@ -135,11 +165,8 @@ A `py_test`'s `deps` are Python libraries — the Rust binaries can
 only be `data`. The fact that the rules_rust coverage transition
 flows through `data` is what makes this arrangement viable at all —
 we don't need to re-architect the py_test to be a `rust_test`, and we
-don't need a custom Starlark transition.
-
-For `rust_test` targets the coverage transition flows through `deps`
-the same way it does through `data`; there's no functional difference
-for our purposes.
+don't need a custom Starlark transition. A `rust_test` that spawns a
+helper takes it as `data` too (`doltlite_two_process_test`).
 
 ## Adding coverage for a new pipeline
 
@@ -151,10 +178,24 @@ subprocess, the steps are:
 2. Run `tools/run_coverage.sh <test-target> -- <rust-binary>` —
    passing every `rust_binary` whose code you want represented in
    the lcov.
-3. If the bazel auto-coverage step still complains about
-   `LLVM_PROFDATA: unbound variable`, the env var wasn't propagated;
-   check that `--test_env=LLVM_PROFDATA --test_env=LLVM_COV` was
-   passed (the wrapper script does this automatically).
+3. If the wrapper says `no .profraw`, nothing instrumented ran: the
+   binary is probably outside `$INSTRUMENT` (default
+   `^//datalib/backend[/:]`) or found on PATH instead of from `data`.
+   If it says no line was hit, the binaries after `--` are not the
+   ones the test ran.
+
+## Branch coverage
+
+Not available on the pinned compiler. The report has line and function
+counts only; no `BRDA` records. Rust's branch coverage is
+`-Zcoverage-options=branch`, and on stable rustc 1.98.0 both spellings
+are refused (measured 2026-09-25): `-Ccoverage-options` is an unknown
+codegen option, and `-Z` is only accepted on nightly. With
+`RUSTC_BOOTSTRAP=1`, which unlocks nightly flags on a stable compiler,
+a toy program did produce `BRDA` records, so the LLVM side works. We
+have not wired that in. It would rebuild every crate under a flag
+Rust makes no promises about, and a Rust bump does not help until the
+option is stabilized.
 
 ## Future: Playwright / UI e2e coverage
 
@@ -169,24 +210,15 @@ auth middleware, etc.).
 
 ## Limitations and gotchas
 
-  - **macOS only as configured.** `tools/run_coverage.sh` uses `xcrun
-    --find` to locate the LLVM tools. On Linux you'd point
-    `LLVM_PROFDATA` and `LLVM_COV` at whatever ships with the system
-    LLVM and skip the xcrun lookup.
-  - **Per-test profdatas don't merge across runs.** If you run
-    coverage on one test target and then on another, the second
-    run's `tools/run_coverage.sh` invocation only includes the
-    profdata from the second run. Coverage is per-invocation, not
-    cumulative across invocations — the runner only walks the test
-    targets you pass in.
-  - **Stale `coverage.dat` files under `bazel-testlogs/`.** Old
-    profdatas from prior coverage runs against different binaries
-    can sit on disk indefinitely. The runner avoids them by
-    resolving per-target paths from the labels you pass in, not by
-    globbing testlogs. If you ever switch back to a glob-based
-    workflow, `llvm-profdata merge` will reject the batch with
-    `malformed instrumentation profile data: function hash is not a
-    valid integer`.
+  - **Coverage is per-invocation.** The wrapper reads the
+    `_coverage/` directories of the targets you pass, nothing else.
+    Pass every test you want in one report in one call.
+  - **Don't glob testlogs for profraws.** A `_coverage/` left by
+    another target was written by binaries built at another time, and
+    `llvm-profdata merge` rejects mismatched ones with `malformed
+    instrumentation profile data: function hash is not a valid
+    integer`. The wrapper resolves one directory per label for that
+    reason.
   - **`bazelisk build` between coverage and export is a footgun.**
     After `bazelisk coverage`, the `bazel-bin/.../<binary>` symlink
     points at the *instrumented* artifact. A subsequent plain
@@ -194,6 +226,10 @@ auth middleware, etc.).
     output path with an *un-instrumented* binary, and `llvm-cov
     export` then fails with `no coverage data found`. The runner
     script deliberately does not do a second build.
+  - **A failed BuildBuddy upload stops the wrapper.** `bazelisk
+    coverage` exits non-zero when the build-event upload fails
+    (`No route to host`), even though the test passed. Re-run; the
+    test result is cached.
 
 ## Sources
 
