@@ -10,6 +10,7 @@
 //! step's Download/Import label.
 
 mod activity;
+mod buttons;
 mod documents;
 mod group;
 mod problems;
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
 use crate::{usage, AppState, DagRecord, DagRunInfo};
+use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
 
@@ -402,13 +404,15 @@ fn child_label(step: &WrittenStep) -> String {
     .to_string()
 }
 
-fn browse_action(label: &str, blocked: Option<String>) -> Action {
+fn browse_action(label: &str, hint: &str, blocked: Option<String>) -> Action {
     Action {
         id: "browse".into(),
         label: label.into(),
         enabled: blocked.is_none(),
+        hint: Some(hint.into()),
         disabled_reason: blocked,
         danger: false,
+        on: None,
     }
 }
 
@@ -496,10 +500,12 @@ impl Snapshot<'_> {
             id: "sync".into(),
             label: "Sync now".into(),
             enabled: false,
+            hint: None,
             disabled_reason: Some(
                 "Nothing here runs on its own \u{2014} every run writes to it.".to_string(),
             ),
             danger: false,
+            on: None,
         };
         let row = |id: &str,
                    path: Vec<String>,
@@ -564,6 +570,7 @@ impl Snapshot<'_> {
             },
             browse_action(
                 "Browse the log",
+                "Open every run\u{2019}s step states and log lines.",
                 Some("The log under this group is what to browse.".to_string()),
             ),
             dir_disk,
@@ -589,7 +596,11 @@ impl Snapshot<'_> {
                     ),
                 }),
             },
-            browse_action("Browse the log", None),
+            browse_action(
+                "Browse the log",
+                "Open every run\u{2019}s step states and log lines.",
+                None,
+            ),
             log_disk,
         );
         [group, logs]
@@ -699,7 +710,7 @@ impl RowCtx<'_> {
 
     /// Sync, or Stop while an open request wants the row: the one button
     /// beside Browse.
-    fn sync_action(&self, id: &str, run_blocked: Option<String>) -> (Action, Option<String>) {
+    fn sync_action(&self, id: &str, offer: SyncOffer) -> (Action, Option<String>) {
         let step = self.step(id);
         let request = step
             .and_then(|s| s.request.as_deref())
@@ -707,10 +718,12 @@ impl RowCtx<'_> {
         let stop = |label: String, stopping: bool| Action {
             id: "stop".into(),
             enabled: !stopping,
+            hint: None,
             disabled_reason: stopping
                 .then(|| format!("{label} \u{2014} its steps are checkpointing and exiting.")),
             label,
             danger: true,
+            on: None,
         };
         if let Some(r) = request {
             // The sync a row is part of may be one started elsewhere — of
@@ -733,12 +746,18 @@ impl RowCtx<'_> {
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
             return (stop("Stopping the sync".into(), true), None);
         }
+        let (hint, blocked) = match offer {
+            Ok(hint) => (Some(hint), None),
+            Err(why) => (None, Some(why)),
+        };
         let sync = Action {
             id: "sync".into(),
             label: "Sync now".into(),
-            enabled: run_blocked.is_none(),
-            disabled_reason: run_blocked,
+            enabled: blocked.is_none(),
+            hint,
+            disabled_reason: blocked,
             danger: false,
+            on: None,
         };
         (sync, None)
     }
@@ -769,26 +788,6 @@ impl RowCtx<'_> {
         }
     }
 
-    /// Pause, or Resume while it is paused: whether the loop may start it.
-    fn pause_action(paused_by: Option<&str>, blocked: Option<String>) -> Action {
-        match paused_by {
-            Some(by) => Action {
-                id: "resume".into(),
-                label: format!("Resume (paused by {by})"),
-                enabled: blocked.is_none(),
-                disabled_reason: blocked,
-                danger: false,
-            },
-            None => Action {
-                id: "pause".into(),
-                label: "Pause".into(),
-                enabled: blocked.is_none(),
-                disabled_reason: blocked,
-                danger: false,
-            },
-        }
-    }
-
     fn entry_row(&self, e: &Entry<'_>) -> ManageRow {
         let id = e.id().to_string();
         let dropped = self.dropped(&id, e.entry_kind());
@@ -801,38 +800,19 @@ impl RowCtx<'_> {
         };
         let on_disk = tree.filter(|o| o.present);
 
-        let (status, run_blocked, seeds, last_run_id, live_run_id) = match e {
+        let (status, sync_offer, seeds, last_run_id, live_run_id) = match e {
             Entry::Step(s) => {
                 let status = self.step_status(&id, dropped);
-                // A sync starts at a *source* step — one with no declared
-                // inputs — and everything downstream follows.
-                // `datalib-dag` rejects a `--sync` naming anything else.
                 let fed_by = status::sources_feeding(self.edges, &id);
-                let run_blocked = dropped_why.clone().or_else(|| {
-                    if s.inputs.is_empty() {
-                        None
-                    } else if fed_by.len() == 1 {
-                        Some(format!(
-                            "A sync starts at a source step. Run {} \u{2014} this runs with it.",
-                            fed_by[0]
-                        ))
-                    } else {
-                        let list = if fed_by.is_empty() {
-                            "none it can reach".to_string()
-                        } else {
-                            fed_by.join(", ")
-                        };
-                        Some(format!(
-                            "A sync starts at a source step. This one runs whenever any of its \
-                             sources does: {list}."
-                        ))
-                    }
-                });
-                let seeds = if s.inputs.is_empty() {
-                    vec![id.clone()]
-                } else {
-                    vec![]
+                let sync_offer = match &dropped_why {
+                    Some(why) => Err(why.clone()),
+                    None => buttons::step_sync(
+                        s.inputs.is_empty(),
+                        self.step(&id).and_then(|st| st.state),
+                        &fed_by,
+                    ),
                 };
+                let seeds = vec![id.clone()];
                 let last_run_id = self
                     .step(&id)
                     .and_then(|st| st.last_run.as_ref())
@@ -845,7 +825,7 @@ impl RowCtx<'_> {
                     .as_ref()
                     .filter(|r| r.finished_at.is_none() && r.run_id == last_run_id)
                     .map(|r| r.run_id.clone());
-                (status, run_blocked, seeds, last_run_id, live_run_id)
+                (status, sync_offer, seeds, last_run_id, live_run_id)
             }
             Entry::Applet(_) => {
                 // An applet's health is its own thing: it isn't
@@ -871,7 +851,7 @@ impl RowCtx<'_> {
                 };
                 (
                     status,
-                    Some(
+                    Err(
                         "Applets aren't scheduled \u{2014} the server starts one when something asks for it."
                             .to_string(),
                     ),
@@ -977,6 +957,7 @@ impl RowCtx<'_> {
         // outside any group.
         let browse = browse_action(
             "Browse this data",
+            "Open this source\u{2019}s rows in the grid.",
             Some(match e {
                 Entry::Step(_) => "A step outside any group has no source to browse.".to_string(),
                 Entry::Applet(_) => {
@@ -984,10 +965,13 @@ impl RowCtx<'_> {
                 }
             }),
         );
-        let (sync, stop_request_id) = self.sync_action(&id, run_blocked);
+        let (sync, stop_request_id) = self.sync_action(&id, sync_offer);
         let paused_by = self.step(&id).and_then(|st| st.paused_by.clone());
-        let pause = match e {
-            Entry::Step(_) => Some(Self::pause_action(
+        let switch = match e {
+            Entry::Step(_) => Some(buttons::switch(
+                false,
+                usize::from(paused_by.is_some()),
+                1,
                 paused_by.as_deref(),
                 dropped_why.clone(),
             )),
@@ -1020,7 +1004,7 @@ impl RowCtx<'_> {
             problems,
             documents,
             disk,
-            actions: [browse, sync].into_iter().chain(pause).collect(),
+            actions: [browse, sync].into_iter().chain(switch).collect(),
             seeds,
             reveal_blocked,
             stop_request_id,
@@ -1139,36 +1123,50 @@ impl RowCtx<'_> {
         let is_dropped = |c: &Entry<'_>| row_of(c.id()).dropped.is_some();
         // A diff group has no source step of its own: a sync of it is a
         // sync of what its step reads, which is its source's ingest.
-        let seeds = if g.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
+        let source_seeds = if g.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
             group::diff_group_seeds(&ordered, is_dropped)
         } else {
             group::group_seeds(&ordered, is_dropped)
         };
-        let run_blocked = dropped_why.clone().or_else(|| {
-            if !seeds.is_empty() {
-                None
-            } else if !steps.is_empty() {
-                Some(
-                    "A sync starts at a source step, and none of this group's steps is one \u{2014} \
-                     they run whenever the sources feeding them do."
-                        .to_string(),
-                )
-            } else {
-                Some("Nothing under this group runs.".to_string())
+        let has_source = !source_seeds.is_empty();
+        // With no source step to start from, a sync of the group is a
+        // sync of its own steps: those out of date rerun.
+        let seeds = if has_source {
+            source_seeds
+        } else {
+            steps
+                .iter()
+                .filter(|c| !is_dropped(c))
+                .map(|c| c.id().to_string())
+                .collect()
+        };
+        let sync_offer = match &dropped_why {
+            Some(why) => Err(why.clone()),
+            None => {
+                let states: Vec<Option<StateKind>> = seeds
+                    .iter()
+                    .map(|id| self.step(id).and_then(|st| st.state))
+                    .collect();
+                buttons::group_sync(has_source, &states)
             }
-        });
+        };
         // A group's rows reach the index through its `render_markdown`
         // step, so having one is exactly the condition for having
         // anything to browse. The index group has no type and no render
         // step: browsing it is the projection across every source.
         let browse = if g.r#type.is_none() {
-            browse_action("Browse every source", dropped_why.clone())
+            browse_action(
+                "Browse every source",
+                "Open every source\u{2019}s rows in one grid.",
+                dropped_why.clone(),
+            )
         } else {
             let has_render = ordered
                 .iter()
                 .any(|c| c.kind() == ChildKind::Step && row_of(c.id()).phase == Phase::Render);
             browse_action(
                 "Browse this data",
+                "Open this source\u{2019}s rows in the grid.",
                 dropped_why.clone().or_else(|| {
                     (!has_render).then(|| {
                         "This source has no render step, so none of what it downloads reaches \
@@ -1186,9 +1184,8 @@ impl RowCtx<'_> {
                 let stop = r.actions.iter().find(|a| a.id == "stop")?;
                 Some((stop.clone(), r.stop_request_id.clone()))
             })
-            .unwrap_or_else(|| self.sync_action(&g.id, run_blocked));
-        // A group is paused when every step under it is: Pause pauses the
-        // rest, Resume lifts them all.
+            .unwrap_or_else(|| self.sync_action(&g.id, sync_offer));
+        // A group is off when every step under it is.
         let paused: Vec<Option<String>> = steps
             .iter()
             .map(|c| row_of(c.id()).paused_by.clone())
@@ -1197,7 +1194,10 @@ impl RowCtx<'_> {
             Some(first) if paused.iter().all(Option::is_some) => first.clone(),
             _ => None,
         };
-        let pause = Self::pause_action(
+        let switch = buttons::switch(
+            true,
+            paused.iter().filter(|p| p.is_some()).count(),
+            paused.len(),
             paused_by.as_deref(),
             dropped_why.clone().or_else(|| {
                 steps
@@ -1268,7 +1268,7 @@ impl RowCtx<'_> {
             last_synced,
             last_success,
             disk,
-            actions: vec![browse, sync, pause],
+            actions: vec![browse, sync, switch],
             seeds,
             reveal_blocked: on_disk.is_none().then(|| {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()

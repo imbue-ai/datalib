@@ -141,15 +141,13 @@ function treeCell<T extends Record<string, unknown>>(inner: Formatter<T>): Forma
 }
 
 /// 24×24 Material-ish glyphs for the action ids the viewer knows a
-/// picture for, drawn in `currentColor`. Any other id draws its label.
+/// picture for, drawn in `currentColor`. An action carrying `on` draws
+/// a switch; any other id draws its label.
 const ACTION_ICONS: Record<string, string> = {
   // A table: what Browse opens is this row's data as rows and columns.
   browse: "M3 5h18v4H3V5zm0 6h8v8H3v-8zm10 0h8v8h-8v-8z",
   sync: "M8 5v14l11-7z",
   stop: "M6 6h12v12H6z",
-  pause: "M6 5h4v14H6zm8 0h4v14h-4z",
-  // A bar, then play: carry on from where it was held.
-  resume: "M5 5h3v14H5zm5 0v14l10-7z",
 };
 
 /// The buttons of an `actions` cell. One element per row, kept across
@@ -185,7 +183,13 @@ function actionsFormatter<T extends Record<string, unknown>>(
         b = document.createElement("button");
         b.type = "button";
         const glyph = ACTION_ICONS[a.id];
-        if (glyph) {
+        if (a.on != null) {
+          b.className = "tg-switch";
+          b.setAttribute("role", "switch");
+          const knob = document.createElement("span");
+          knob.className = "tg-switch-knob";
+          b.appendChild(knob);
+        } else if (glyph) {
           b.className = "tg-icon-btn";
           const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
           svg.setAttribute("viewBox", "0 0 24 24");
@@ -207,8 +211,9 @@ function actionsFormatter<T extends Record<string, unknown>>(
         });
         held.buttons.set(a.id, b);
       }
-      if (!ACTION_ICONS[a.id]) b.textContent = a.label;
-      b.title = a.enabled ? a.label : (a.disabled_reason ?? a.label);
+      if (a.on != null) b.setAttribute("aria-checked", String(a.on));
+      else if (!ACTION_ICONS[a.id]) b.textContent = a.label;
+      b.title = a.enabled ? (a.hint ?? a.label) : (a.disabled_reason ?? a.label);
       b.setAttribute("aria-label", a.label);
       b.disabled = !a.enabled;
       b.classList.toggle("danger", !!a.danger);

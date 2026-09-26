@@ -33,7 +33,7 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
   await expect(menuEntries(page)).toHaveText([
     "Browse every source",
     "Sync now",
-    "Pause",
+    "Turn off",
     "Edit settings…",
     "Compare two syncs…",
     "Show log",

@@ -463,10 +463,11 @@ async fn a_config_the_loop_cannot_read_refuses_the_request_and_says_why() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
-/// A pause made while nothing syncs reaches the row at once, saying who;
-/// a sync of it then closes without running it, and a resume lifts it.
+/// A step turned off while nothing syncs reads off at once, saying who;
+/// a sync of it then closes without running it, and turning it on lifts
+/// that.
 #[tokio::test]
-async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
+async fn a_step_turned_off_reads_off_and_does_not_run() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
@@ -487,16 +488,23 @@ async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
     .await;
     let paused = row(&state, "a/out").await;
     assert_eq!(paused["paused_by"], "claude", "{paused}");
-    assert_eq!(paused["status"]["detail"], "paused by claude", "{paused}");
-    // The row's button is Resume, and so is its group's: every step
-    // under it is paused.
+    assert_eq!(paused["status"]["label"], "Off", "{paused}");
     assert_eq!(
-        action(&paused, "resume")["label"],
-        "Resume (paused by claude)"
+        paused["status"]["detail"], "turned off by claude",
+        "{paused}"
     );
+    // The row's switch reads off, and so does its group's: every step
+    // under it is off.
+    let switch = action(&paused, "in_syncs");
+    assert_eq!(switch["on"], false, "{paused}");
+    assert!(switch["hint"]
+        .as_str()
+        .unwrap()
+        .contains("claude turned it off"));
     let group = row(&state, "group:a").await;
     assert_eq!(group["paused_by"], "claude", "{group}");
-    assert_eq!(action(&group, "resume")["enabled"], true, "{group}");
+    assert_eq!(action(&group, "in_syncs")["on"], false, "{group}");
+    assert_eq!(action(&group, "in_syncs")["enabled"], true, "{group}");
 
     let id = sync(&state, "a/out").await;
     until("the request to close", Duration::from_secs(30), || async {
@@ -506,20 +514,102 @@ async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
     assert!(!started(root, "a"), "a paused step ran");
 
     call(&state, "POST", "/api/steps/a%2Fout/resume", None).await;
+    until("the row to read on", Duration::from_secs(10), || async {
+        let r = row(&state, "a/out").await;
+        r["status"]["key"] == "never_run"
+            && r["paused_by"].is_null()
+            && r["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == "in_syncs" && a["on"] == true)
+    })
+    .await;
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A step and one that reads it, each counting its runs in a file named
+/// for its function. `version` goes on the reader's argv, so changing it
+/// changes the reader's fingerprint and nothing else.
+fn chain(root: &Path, version: &str) -> String {
+    let script = |function: &str| {
+        let path = root.join(format!("{function}.sh"));
+        std::fs::write(
+            &path,
+            format!(
+                "mkdir -p \"$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP\"\n\
+                 echo run >> \"$DATALIB_DAG_DATA_ROOT/runs-{function}\"\n"
+            ),
+        )
+        .unwrap();
+        path.display().to_string()
+    };
+    format!(
+        "[[groups]]\nid = \"a\"\n\n\
+         [[steps]]\ngroup = \"a\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\n\
+         [[steps]]\ngroup = \"a\"\nfunction = \"derived\"\ncommand = \"/bin/sh {} {version}\"\n\
+         inputs = [\"a/out\"]\n",
+        script("out"),
+        script("derived"),
+    )
+}
+
+fn runs(root: &Path, function: &str) -> usize {
+    std::fs::read_to_string(root.join(format!("runs-{function}"))).map_or(0, |s| s.lines().count())
+}
+
+/// Sync on a step that reads another used to be disabled outright, so a
+/// render whose code moved could only rerun behind a fresh download. It
+/// is offered once the step is out of date, and reruns it alone.
+#[tokio::test]
+async fn a_derived_step_out_of_date_syncs_alone() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("config.toml"), chain(root, "v1")).unwrap();
+    let state = server(root).await;
+
+    let id = sync(&state, "a/out").await;
     until(
-        "the row to read unpaused",
-        Duration::from_secs(10),
-        || async {
-            let r = row(&state, "a/out").await;
-            r["status"]["key"] == "never_run"
-                && r["paused_by"].is_null()
-                && r["actions"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|a| a["id"] == "pause")
-        },
+        "the first sync to close",
+        Duration::from_secs(30),
+        || async { request(&state, &id).await["state"] == "done" },
     )
     .await;
+    assert_eq!((runs(root, "out"), runs(root, "derived")), (1, 1));
+    until(
+        "the derived step's Sync to read up to date",
+        Duration::from_secs(10),
+        || async { action(&row(&state, "a/derived").await, "sync")["enabled"] == false },
+    )
+    .await;
+    let up_to_date = row(&state, "a/derived").await;
+    assert!(
+        action(&up_to_date, "sync")["disabled_reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Up to date"),
+        "{up_to_date}"
+    );
+
+    std::fs::write(root.join("config.toml"), chain(root, "v2")).unwrap();
+    until(
+        "the derived step's Sync to read out of date",
+        Duration::from_secs(10),
+        || async { action(&row(&state, "a/derived").await, "sync")["enabled"] == true },
+    )
+    .await;
+
+    let id = sync(&state, "a/derived").await;
+    until(
+        "the second sync to close",
+        Duration::from_secs(30),
+        || async { request(&state, &id).await["state"] == "done" },
+    )
+    .await;
+    assert_eq!(
+        (runs(root, "out"), runs(root, "derived")),
+        (1, 2),
+        "the derived step reran and its input did not"
+    );
     state.sync.shutdown(Duration::from_secs(5)).await;
 }

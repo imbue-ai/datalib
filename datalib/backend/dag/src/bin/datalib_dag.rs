@@ -65,6 +65,9 @@ async fn main() -> Result<()> {
          CAS with it), keeping its doltlite history, so the next run does its work \
          from the start. Alone, that is all the invocation does; with --sync it runs \
          first.\n\n\
+         --sync runs the named steps and everything downstream of them. A source step \
+         (one with no inputs) always runs; any other runs only if it is out of date, \
+         and nothing upstream of it runs.\n\n\
          A sync is a request in <root>/system/supervisor.sqlite, tagged --by (default \
          `cli`). If another process is already running the loop on this root — the app, \
          or another datalib-dag — this one hands it the request and follows it; either \
@@ -195,17 +198,13 @@ async fn main() -> Result<()> {
     let cfg = checked.cfg;
     let graph = checked.graph;
 
-    if !sync_only.is_empty() {
-        let fringe = graph.fringe_ids();
-        for id in &sync_only {
-            if !fringe.contains(&id.as_str()) {
-                bail!(
-                    "--sync {id:?}: not a source step (a step with no inputs). \
-                     Available: {}",
-                    fringe.join(", ")
-                );
-            }
-        }
+    if let Some(id) = sync_only.iter().find(|id| !graph.by_id.contains_key(*id)) {
+        let mut known: Vec<&str> = graph.steps.iter().map(|s| s.id.as_str()).collect();
+        known.sort();
+        bail!(
+            "--sync {id:?}: no such step. Available: {}",
+            known.join(", ")
+        );
     }
 
     // `--reset` empties stores, so it needs the root to itself: it is

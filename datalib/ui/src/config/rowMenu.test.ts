@@ -161,7 +161,7 @@ describe("rowMenu", () => {
     expect(entry(mixed, "sync").disabled).toMatch(/already syncing/);
   });
 
-  it("offers Resume only when every target is paused, and Pause on nothing unscheduled", () => {
+  it("offers Turn on only when every target is off, and Turn off on nothing unscheduled", () => {
     expect(entry(rowMenu([target({ pausedBy: "claude" })], opts), "resume").disabled).toBeNull();
     const mixed = rowMenu([target({ pausedBy: "ui" }), target({ id: "mail" })], opts);
     expect(entry(mixed, "pause").disabled).toBeNull();

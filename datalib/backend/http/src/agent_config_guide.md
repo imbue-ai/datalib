@@ -39,7 +39,7 @@ behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
 applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter. A step
-with no `inputs` is a **source step** (what a sync can target); every
+with no `inputs` is a **source step** (where a sync normally starts); every
 source's rendered markdown feeds the two fan-in steps under the
 `unified_index` group:
 
@@ -179,5 +179,7 @@ so the shared index steps pick it up.
   produces (`{ok, error, steps: [{id, command, inputs, outputs,
   deps}]}`), in topological order — use it to confirm the wiring you
   intended.
-- `GET <origin>/api/sync/sources` lists the source steps a sync can
-  target, as derived from the saved config.
+- `GET <origin>/api/sync/sources` lists the source steps, as derived
+  from the saved config. A sync may name any step: a source step always
+  runs, any other only if it is out of date, and nothing upstream of it
+  runs.

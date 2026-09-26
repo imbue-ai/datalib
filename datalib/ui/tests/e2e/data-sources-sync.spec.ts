@@ -772,18 +772,40 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await settleRunner(page);
   });
 
-  test("a downstream step can't be synced on its own, and says what would carry it", async ({
+  test("a render whose code_version moved syncs on its own, and not while up to date", async ({
     page,
   }) => {
     await writeConfigAndOpenGroups(page, config());
+    const render = "pdfs/render_markdown";
+    const btn = syncBtn(page, render);
 
-    // A sync starts at a source step, so this button is disabled, and
-    // names the row that does carry it.
-    const btn = syncBtn(page, "pdfs/render_markdown");
+    const was = await stampsBefore(page, ["pdfs/ingest", render]);
+    await syncBtn(page, "pdfs/ingest").click();
+    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await settleRow(page, render, was[render]);
+    await settleRunner(page);
+    // Up to date, a Sync of it would do nothing, so it is disabled and
+    // says so.
     await expect(btn).toBeDisabled();
-    await expect(btn).toHaveAttribute("title", /Run pdfs\/ingest/);
+    await expect(btn).toHaveAttribute("title", /^Up to date/);
 
-    // A source step, by contrast, is runnable.
-    await expect(syncBtn(page, "pdfs/ingest")).toBeEnabled();
+    // A bumped code_version is what an upgrade that renders differently
+    // looks like: the render is out of date, and its Sync reruns it alone.
+    const bumped = config().replace(
+      'inputs = ["pdfs/ingest"]\n',
+      'inputs = ["pdfs/ingest"]\ncode_version = "bumped"\n',
+    );
+    expect(bumped).not.toBe(config());
+    await writeConfigAndOpenGroups(page, bumped);
+    await expect(btn).toBeEnabled();
+    await expect(btn).toHaveAttribute("title", /^Out of date.*sync pdfs\/ingest/);
+    const before = await stampsBefore(page, ["pdfs/ingest", render]);
+    await btn.click();
+    await settleRow(page, render, before[render]);
+    await settleRunner(page);
+    expect(await lastSyncedOf(page, "pdfs/ingest"), "the download did not run").toBe(
+      before["pdfs/ingest"],
+    );
+    await expect(btn).toBeDisabled();
   });
 });

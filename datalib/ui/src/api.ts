@@ -911,8 +911,12 @@ export type Action = {
   id: string;
   label: string;
   enabled: boolean;
+  /// The enabled button's hover: what pressing it does.
+  hint?: string | null;
   disabled_reason?: string | null;
   danger?: boolean;
+  /// Drawn as an on/off switch in this position rather than a button.
+  on?: boolean | null;
 };
 
 /// One row of the Manage screen's tree, as `GET /api/manage/rows`

@@ -27,7 +27,7 @@ export type MenuTarget = {
   /// Non-null while an open request wants this row — the state in which
   /// Sync reads as Stop.
   stopRequestId: string | null;
-  /// Who paused it; for a group, who paused a step under it.
+  /// Who turned it off; for a group, who turned off every step under it.
   pausedBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
@@ -125,7 +125,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   return null;
 }
 
-/// Why "Pause" does not apply: only the loop's steps are scheduled.
+/// Why "Turn off" does not apply: only the loop's steps are scheduled.
 export function notPausableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet is not scheduled";
@@ -212,7 +212,7 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const paused = targets.filter((t) => t.pausedBy).length;
   entries.push({
     action: paused === targets.length ? "resume" : "pause",
-    name: paused === targets.length ? "Resume" : "Pause",
+    name: paused === targets.length ? "Turn on" : "Turn off",
     disabled: firstBlocked(targets, notPausableReason),
   });
   entries.push({

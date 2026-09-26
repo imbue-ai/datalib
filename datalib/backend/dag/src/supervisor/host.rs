@@ -14,15 +14,15 @@ use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RUN_ID};
-use crate::supervisor::announce::Listener;
+use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, Store};
 
 /// What an idle host does at each turn of [`run_idle`].
 pub trait Periods {
     /// Serve the open requests until none is left.
     fn busy_period(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
-    /// The pauses moved while nothing ran: bring the record to them. The
-    /// pauses it recorded, or `None` if it could not.
+    /// The pauses or the config moved while nothing ran: bring the record
+    /// to them. The pauses it recorded, or `None` if it could not.
     fn settle(
         &mut self,
         store: &Store,
@@ -37,9 +37,9 @@ pub trait Periods {
 /// The loop between busy periods, for a host holding `runner-lock`: a busy
 /// period whenever a request is open, requests asked to stop before any
 /// period took them closed where they stand, the record settled when the
-/// pauses move, and otherwise a wait for an announcement, a nudge or
-/// `stop`. `listener` is made before the first look, so nothing announced
-/// after it is missed.
+/// pauses or the config move, and otherwise a wait for an announcement, a
+/// nudge or `stop`. `listener` is made before the first look, so nothing
+/// announced after it is missed.
 pub async fn run_idle(
     store: &Store,
     listener: &mut Listener,
@@ -84,7 +84,13 @@ pub async fn run_idle(
             Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
         }
         tokio::select! {
-            _ = listener.next() => {}
+            heard = listener.next() => {
+                // A step's settings are in its fingerprint, so a config
+                // edit can make it stale, and the record should say so.
+                if heard.iter().any(|line| line == CONFIG_CHANGED) {
+                    settled = None;
+                }
+            }
             () = periods.nudged() => {}
             _ = stop.changed() => {}
         }
@@ -314,6 +320,39 @@ mod tests {
         stop_tx.send(true).unwrap();
         host.await.unwrap();
         assert_eq!(calls.recv().await, None, "nothing more after the stop");
+    }
+
+    /// A config edit can make a step stale, and the Manage row's Sync
+    /// offers a derived step only when the record says it is. Without a
+    /// settle on the announcement the record kept saying "up to date".
+    #[tokio::test]
+    async fn a_config_change_settles_the_record_again() {
+        use crate::supervisor::announce::{announce, listeners_dir};
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(root.path()).await.unwrap());
+        let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, mut stop) = watch::channel(false);
+        let mut fake = Fake {
+            calls: tx,
+            release: Arc::new(tokio::sync::Notify::new()),
+            nudge: Arc::new(tokio::sync::Notify::new()),
+            queued: Arc::default(),
+            pause_in_settle: None,
+        };
+        let host = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                let mut listener =
+                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
+                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
+            })
+        };
+        expect(&mut calls, "settle []").await;
+        announce(&listeners_dir(root.path()), "test", CONFIG_CHANGED);
+        expect(&mut calls, "settle []").await;
+        stop_tx.send(true).unwrap();
+        host.await.unwrap();
     }
 
     /// A busy period's last save holds the pauses as it last read them.
