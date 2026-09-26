@@ -1,7 +1,7 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 to 4 of "Order of work" are built; the
-rest is not. Every number was measured
+*Proposal (2026-09-25); steps 1 to 4 and 6 of "Order of work" are
+built; the rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
 `datalib-doltlite` shell; each measurement includes about 0.1 s of
@@ -351,13 +351,23 @@ free-text search still loads all of `grid_rows` through
 
 ## Server: the log
 
-`/api/log` gains `before_seq` and newest-first order: `ORDER BY seq
-DESC LIMIT ?`, with the page reversed for display. The card opens on the
-newest 500 lines. Tailing stays `after_seq`, but it loops until caught
-up instead of taking one 5000-line page per frame. No schema change.
-Free-text `msg` search scans (4 s for a word that matches nothing in
-238k lines), which is tolerable for now. FTS5 would be the fix if it
-ever matters.
+`/api/log` reads from a cursor: with none, the newest `limit` lines;
+`after_seq`, the lines after a line (the tail); `before_seq`, the newest
+lines before one (a page back). Every page comes back oldest first, and
+both cursors at once is a 400. No schema change: `seq` is the primary
+key, so each is a seek. Free-text `msg` search scans (4 s for a word that
+matches nothing in 238k lines), which is tolerable for now. FTS5 would
+be the fix if it ever matters.
+
+The panel (`RunLogPanel`) holds the log's newest lines through the same
+`pagedWindow.ts` the search grid does, with `seq` as the cursor where the
+search has an offset. It opens on the newest 500 lines at the bottom,
+reads older pages above as it is scrolled up, holding the line on screen
+in place, and follows the tail a 5000-line page at a time until a page
+comes back short, rather than one page per live frame. Older pages load
+only while the lines are in the log's own order: sorted by another
+column or grouped, the top of the grid is not the oldest line, and the
+sort or the groups cover the lines held.
 
 ## What the grid does in the browser today, and where each goes
 
@@ -448,7 +458,8 @@ Each step is one PR, useful on its own:
      header filter row as query terms is left.
 5. **Server-side drag-to-group** in `GridCard`: the group list, a
    paged window per expanded group, and nesting.
-6. **`/api/log` newest-first, and `RunLogPanel` on the same module.**
+6. **Done: `/api/log` newest-first, and `RunLogPanel` on the same
+   module.**
 7. **Problems** (`TableGrid`), only if it grows large enough to need it.
 
 ## When the snapshot moves

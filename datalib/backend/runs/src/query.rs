@@ -9,8 +9,20 @@ use datalib_query::Token;
 use crate::runs_path;
 use crate::store::{log_line_from, open_existing, LogLine, LOG_LINE_COLUMNS};
 
+/// Which lines of the log a read wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogCursor {
+    /// The newest lines: what a panel opens on.
+    Newest,
+    /// The lines after this `seq`: a panel following the tail.
+    After(i64),
+    /// The newest lines before this `seq`: a panel scrolled up past the
+    /// oldest line it holds.
+    Before(i64),
+}
+
 /// One read of the log. `run` and `step` narrow it the way the panel
-/// does; `q` is what was typed; `after_seq` is the tail cursor.
+/// does; `q` is what was typed; `cursor` is where in the log.
 pub struct LogQuery<'a> {
     pub run: Option<&'a str>,
     /// The lines one process wrote: a launch of the server, or the
@@ -21,7 +33,7 @@ pub struct LogQuery<'a> {
     /// of the attempt, and what the runner said about it.
     pub attempt: Option<i64>,
     pub q: &'a str,
-    pub after_seq: i64,
+    pub cursor: LogCursor,
     pub limit: i64,
 }
 
@@ -88,9 +100,20 @@ struct Compiled {
 
 fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
     let mut c = Compiled {
-        clauses: vec!["l.seq > ?".to_string()],
-        binds: vec![Bound::Int(q.after_seq)],
+        clauses: Vec::new(),
+        binds: Vec::new(),
     };
+    match q.cursor {
+        LogCursor::Newest => {}
+        LogCursor::After(seq) => {
+            c.clauses.push("l.seq > ?".to_string());
+            c.binds.push(Bound::Int(seq));
+        }
+        LogCursor::Before(seq) => {
+            c.clauses.push("l.seq < ?".to_string());
+            c.binds.push(Bound::Int(seq));
+        }
+    }
     if let Some(run) = q.run {
         c.clauses.push("l.run_id = ?".to_string());
         c.binds.push(Bound::Text(run.to_string()));
@@ -183,9 +206,9 @@ fn escape_like(s: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Log lines matching `q`, oldest first, at most `limit`. Empty when the
-/// store does not exist yet; an error only for a query the vocabulary
-/// cannot read.
+/// Log lines matching `q`, at most `limit` of them at the cursor, oldest
+/// first. Empty when the store does not exist yet; an error only for a
+/// query the vocabulary cannot read.
 pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine>, QueryError> {
     let compiled = compile(q)?;
     let path = runs_path(data_root);
@@ -195,10 +218,20 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine
     let Ok(pool) = open_existing(&path).await else {
         return Ok(Vec::new());
     };
+    // Newest and Before read back from their end of the log, and turn
+    // the page round below.
+    let (order, newest_first) = match q.cursor {
+        LogCursor::After(_) => ("ASC", false),
+        LogCursor::Newest | LogCursor::Before(_) => ("DESC", true),
+    };
+    let filter = if compiled.clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", compiled.clauses.join(" AND "))
+    };
     let sql = format!(
         "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
-         WHERE {} ORDER BY l.seq LIMIT ?",
-        compiled.clauses.join(" AND ")
+         {filter} ORDER BY l.seq {order} LIMIT ?"
     );
     // Audited: every clause is assembled from the `&'static str` column
     // names in KEYS and FREE_TEXT_COLUMNS with `?` placeholders; every
@@ -216,7 +249,11 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine
         .await
         .unwrap_or_default();
     pool.close().await;
-    Ok(rows.iter().map(log_line_from).collect())
+    let mut lines: Vec<LogLine> = rows.iter().map(log_line_from).collect();
+    if newest_first {
+        lines.reverse();
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -230,7 +267,7 @@ mod tests {
             step: None,
             attempt: None,
             q: s,
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 10,
         }
     }

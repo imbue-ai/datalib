@@ -1230,7 +1230,10 @@ export function fetchLog(
     // With `step`: the lines about one attempt of it.
     attempt?: number;
     q?: string;
+    // The lines after this `seq` (the tail), or the newest before it (an
+    // older page); neither is the newest lines.
     afterSeq?: number;
+    beforeSeq?: number;
     limit?: number;
   },
   signal?: AbortSignal,
@@ -1242,6 +1245,7 @@ export function fetchLog(
   if (opts.attempt != null) params.set("attempt", String(opts.attempt));
   if (opts.q) params.set("q", opts.q);
   if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.beforeSeq != null) params.set("before_seq", String(opts.beforeSeq));
   if (opts.limit != null) params.set("limit", String(opts.limit));
   return fetchLogLines(`/api/log?${params.toString()}`, signal);
 }
