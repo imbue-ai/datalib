@@ -153,8 +153,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
 }
 
 /// Row count of every user table at the pinned commit. A table in
-/// `sqlite_master` with no `dolt_at_` module has never been committed,
-/// so at any commit it holds nothing.
+/// `sqlite_master` that the commit does not have holds nothing there.
 async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i64>> {
     let names: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' ORDER BY name",

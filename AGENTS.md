@@ -342,10 +342,11 @@ The rules, none optional; the reasons and measurements are in
   (`DoltRepo::pinned`); it costs the writer nothing, measured at full
   size. A second process that *moves a ref* is a writer, and refuses
   the real one's seals (`etl/README.md`).
-- **A reader never runs `dolt_status`.** From a read-only connection it
-  fails the writer's commit and loses the rows behind it (#400). Any
-  other statement a reader adds is presumed guilty until
-  `doltlite_two_process_test` has run with it.
+- **A statement a reader adds is presumed guilty until
+  `doltlite_two_process_test` has run with it.** Looking like a read is
+  not enough: `dolt_status` from a read-only connection failed the
+  writer's commit and lost its rows until doltlite 0.50.10 (#400); the
+  test now holds it safe. The allowlist is in `etl/README.md`.
 - **Never run a store call on a runtime you are about to drop**;
   `indexed_markdown::blocking` keeps one process-wide runtime for that.
 
