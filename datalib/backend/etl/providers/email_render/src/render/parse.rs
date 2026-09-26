@@ -16,7 +16,7 @@ use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
 use datalib_etl_email::ingest::schema_raw::EmlBlobRow;
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
-/// bytes. Consumed by [`BlobBundle::load`]. After the eml-as-canonical
+/// bytes. Consumed by [`BlobBundle::load_many`]. After the eml-as-canonical
 /// port we only load `.eml`s — attachment parts are mail-parsed out of
 /// the loaded `.eml` bytes and added to the same per-bucket
 /// `BlobBundle` under synthesized content-hash ref ids. `DISTINCT`
@@ -188,19 +188,16 @@ async fn parse_async(
     // `bucket.joins.attachments[email_id]` so render's existing
     // `bucket.blobs.get(&att.blob_id)` lookup resolves uniformly.
     if let Some(cas_pool) = cas_pool.as_ref() {
-        for bucket in &mut docs {
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut refs: Vec<&str> = Vec::new();
-            for em in &bucket.emails {
-                if seen.insert(em.blob_id.clone()) {
-                    refs.push(em.blob_id.as_str());
-                }
+        let refs = docs
+            .iter()
+            .enumerate()
+            .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+        let mut blobs = BlobBundle::load_many(&pool, cas_pool, EML_PROJECTION_SQL, refs).await?;
+        for (i, bucket) in docs.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                bucket.blobs = b;
+                extract_attachments_from_emls(bucket);
             }
-            if refs.is_empty() {
-                continue;
-            }
-            bucket.blobs = BlobBundle::load(&pool, cas_pool, EML_PROJECTION_SQL, &refs).await?;
-            extract_attachments_from_emls(bucket);
         }
     }
 
