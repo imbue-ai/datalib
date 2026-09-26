@@ -183,8 +183,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pipeline/history", get(history::tree_history))
         .route("/api/requests", get(requests_list).post(request_open))
         .route("/api/requests/{id}/stop", post(request_stop))
-        .route("/api/steps/{id}/pause", post(step_pause))
-        .route("/api/steps/{id}/resume", post(step_resume))
+        .route("/api/steps/{id}/turn_off", post(step_turn_off))
+        .route("/api/steps/{id}/turn_on", post(step_turn_on))
         .route("/api/reset", post(reset_steps))
         .route("/api/purge", post(purge_groups))
         .route("/api/runs", get(runs_list))
@@ -1481,7 +1481,7 @@ async fn pipeline_storage(
     Json(s.usage.snapshot(s.root.as_path(), &steps).await)
 }
 
-// --- Intent: requests, pauses, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]
@@ -1651,9 +1651,9 @@ async fn request_stop(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/pause` — the step is not started until resumed,
-/// and one running is stopped; what reads it waits.
-async fn step_pause(
+/// `POST /api/steps/{id}/turn_off` — every sync skips the step until it
+/// is turned on, and one running is stopped; what reads it waits.
+async fn step_turn_off(
     State(s): State<AppState>,
     Path(id): Path<String>,
     body: axum::body::Bytes,
@@ -1666,16 +1666,21 @@ async fn step_pause(
         ));
     }
     let by = by_of(&body)?;
-    mailbox(&s).await?.pause(&id, &by).await.map_err(internal)?;
+    mailbox(&s)
+        .await?
+        .turn_off(&id, &by)
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/steps/{id}/resume`.
-async fn step_resume(
+/// `POST /api/steps/{id}/turn_on` — syncs include it again; this alone
+/// starts nothing.
+async fn step_turn_on(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
-    mailbox(&s).await?.resume(&id).await.map_err(internal)?;
+    mailbox(&s).await?.turn_on(&id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

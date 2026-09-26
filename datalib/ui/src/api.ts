@@ -944,8 +944,8 @@ export type ManageRow = {
   reveal_blocked: string | null;
   /// The open request this row is being run for: what Stop stops.
   stop_request_id: string | null;
-  /// Who paused this step, while it is paused.
-  paused_by: string | null;
+  /// Who turned this step off, while it is off.
+  turned_off_by: string | null;
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
@@ -1071,12 +1071,12 @@ export async function stopRequest(id: string): Promise<void> {
   await post(`/api/requests/${encodeURIComponent(id)}/stop`);
 }
 
-export async function pauseStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/pause`);
+export async function turnOffStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_off`);
 }
 
-export async function resumeStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/resume`);
+export async function turnOnStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_on`);
 }
 
 /// Empty what the targets wrote, keeping the history, and sync what reads

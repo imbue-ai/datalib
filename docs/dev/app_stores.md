@@ -24,7 +24,7 @@
                                                   Its own directory, so the journal beside
                                                   it counts with it on the Manage screen
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
-                                                  and how it ended) and pauses: the
+                                                  and how it ended) and steps turned off: the
                                                   mailbox the loop reads; and the loop's
                                                   record — each step's state now, its
                                                   last run and last success, each

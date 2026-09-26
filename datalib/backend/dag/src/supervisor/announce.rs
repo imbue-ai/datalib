@@ -332,9 +332,9 @@ mod tests {
         let other = Store::open(td.path()).await.unwrap();
         let mut a = Listener::new(&store, "a");
         let mut b = Listener::new(&store, "b");
-        other.pause("x/y", "test").await.unwrap();
-        assert_eq!(a.next().await, ["paused x/y"]);
-        assert_eq!(b.next().await, ["paused x/y"]);
+        other.turn_off("x/y", "test").await.unwrap();
+        assert_eq!(a.next().await, ["turned off x/y"]);
+        assert_eq!(b.next().await, ["turned off x/y"]);
     }
 
     /// A listener is waited on under `select!` and `timeout`, and dropped
@@ -350,9 +350,9 @@ mod tests {
         let other = Store::open(td.path()).await.unwrap();
         let mut listener = Listener::new(&store, "test").backstop(Duration::ZERO);
         for i in 0..50 {
-            other.pause(&format!("s{i}"), "test").await.unwrap();
+            other.turn_off(&format!("s{i}"), "test").await.unwrap();
             let _ = tokio::time::timeout(Duration::ZERO, listener.next()).await;
-            tokio::time::timeout(Duration::from_secs(5), store.paused())
+            tokio::time::timeout(Duration::from_secs(5), store.turned_off())
                 .await
                 .expect("the store answers after a dropped wait")
                 .unwrap();
@@ -382,9 +382,9 @@ mod tests {
         let store = Store::open(td.path()).await.unwrap();
         let other = Store::open(td.path()).await.unwrap();
         let mut listener = Listener::new(&store, "test");
-        store.pause("mine", "test").await.unwrap();
-        other.pause("theirs", "test").await.unwrap();
-        assert_eq!(listener.next().await, ["paused theirs"]);
+        store.turn_off("mine", "test").await.unwrap();
+        other.turn_off("theirs", "test").await.unwrap();
+        assert_eq!(listener.next().await, ["turned off theirs"]);
     }
 
     #[tokio::test]
@@ -420,12 +420,12 @@ mod tests {
         let store = Store::open(td.path()).await.unwrap();
         let other = Store::open(td.path()).await.unwrap();
         let mut listener = Listener::new(&store, "test").backstop(Duration::from_millis(1));
-        other.pause("x/y", "test").await.unwrap();
-        assert_eq!(listener.next().await, ["paused x/y"]);
+        other.turn_off("x/y", "test").await.unwrap();
+        assert_eq!(listener.next().await, ["turned off x/y"]);
 
         // Past `Store`, as a `sqlite3` shell would write.
         let before = missed_announcements();
-        sqlx::query("DELETE FROM pauses")
+        sqlx::query("DELETE FROM turned_off")
             .execute(other.pool())
             .await
             .unwrap();
@@ -445,7 +445,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.listeners());
         std::fs::write(store.listeners(), "not a directory").unwrap();
         let mut listener = Listener::new(&store, "test").backstop(Duration::from_millis(1));
-        other.pause("x/y", "test").await.unwrap();
+        other.turn_off("x/y", "test").await.unwrap();
         assert_eq!(listener.next().await, [UNANNOUNCED]);
     }
 }

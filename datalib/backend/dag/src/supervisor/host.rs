@@ -21,8 +21,9 @@ use crate::supervisor::store::{RequestOutcome, Store};
 pub trait Periods {
     /// Serve the open requests until none is left.
     fn busy_period(&mut self, store: &Store) -> impl Future<Output = ()> + Send;
-    /// The pauses or the config moved while nothing ran: bring the record
-    /// to them. The pauses it recorded, or `None` if it could not.
+    /// The switches or the config moved while nothing ran: bring the
+    /// record to them. The switches it recorded (step id → who turned it
+    /// off), or `None` if it could not.
     fn settle(
         &mut self,
         store: &Store,
@@ -37,7 +38,7 @@ pub trait Periods {
 /// The loop between busy periods, for a host holding `runner-lock`: a busy
 /// period whenever a request is open, requests asked to stop before any
 /// period took them closed where they stand, the record settled when the
-/// pauses or the config move, and otherwise a wait for an announcement, a
+/// switches or the config move, and otherwise a wait for an announcement, a
 /// nudge or `stop`. `listener` is made before the first look, so nothing
 /// announced after it is missed.
 pub async fn run_idle(
@@ -46,8 +47,8 @@ pub async fn run_idle(
     periods: &mut impl Periods,
     stop: &mut watch::Receiver<bool>,
 ) {
-    // The pauses the record was last settled against, as the settle read
-    // them: a pause landing between this loop's look and the settle's is
+    // The switches the record was last settled against, as the settle read
+    // them: a switch flipped between this loop's look and the settle's is
     // in the record, and a comparison with the look would miss the next
     // change. `None` until the first settle, which also clears what a
     // dead loop left running.
@@ -63,8 +64,8 @@ pub async fn run_idle(
         };
         if open.iter().any(|r| r.stop_requested_by.is_none()) {
             periods.busy_period(store).await;
-            // Its last save holds the pauses as it last read them, which
-            // may not be the pauses now.
+            // Its last save holds the switches as it last read them, which
+            // may not be where they stand now.
             settled = None;
             continue;
         }
@@ -76,12 +77,14 @@ pub async fn run_idle(
                 tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
             }
         }
-        match store.paused().await {
-            Ok(paused) if settled.as_ref() != Some(&paused) => {
+        match store.turned_off().await {
+            Ok(turned_off) if settled.as_ref() != Some(&turned_off) => {
                 settled = periods.settle(store).await;
             }
             Ok(_) => {}
-            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
+            Err(e) => {
+                tracing::error!("supervisor: could not read which steps are turned off: {e:#}")
+            }
         }
         tokio::select! {
             heard = listener.next() => {
@@ -230,9 +233,9 @@ mod tests {
         nudge: std::sync::Arc<tokio::sync::Notify>,
         /// Set by the test beside a nudge: the in-memory work a nudge is for.
         queued: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        /// A step the first settle pauses before it reads the pauses: one
-        /// landing between the host's look and the settle's.
-        pause_in_settle: Option<&'static str>,
+        /// A step the first settle turns off before it reads the switches:
+        /// one flipped between the host's look and the settle's.
+        turn_off_in_settle: Option<&'static str>,
     }
 
     impl Periods for Fake {
@@ -249,13 +252,13 @@ mod tests {
             }
         }
         async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
-            if let Some(step) = self.pause_in_settle.take() {
-                store.pause(step, "ui").await.unwrap();
+            if let Some(step) = self.turn_off_in_settle.take() {
+                store.turn_off(step, "ui").await.unwrap();
             }
-            let paused = store.paused().await.ok();
-            let steps: Vec<&String> = paused.iter().flat_map(|p| p.keys()).collect();
+            let turned_off = store.turned_off().await.ok();
+            let steps: Vec<&String> = turned_off.iter().flat_map(|p| p.keys()).collect();
             let _ = self.calls.send(format!("settle {steps:?}"));
-            paused
+            turned_off
         }
         async fn idle_work(&mut self, _: &Store) {
             if self.queued.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -269,7 +272,7 @@ mod tests {
 
     /// The idle side, woken only by announcements and nudges (its backstop
     /// is an hour): a request starts a busy period, one asked to stop
-    /// before any period took it is closed without one, a pause settles
+    /// before any period took it is closed without one, a switch settles
     /// the record, a nudge runs the work it was for, and a stop ends it.
     #[tokio::test]
     async fn the_idle_host_answers_each_kind_of_wake_and_nothing_else() {
@@ -288,7 +291,7 @@ mod tests {
             release: release.clone(),
             nudge: nudge.clone(),
             queued: queued.clone(),
-            pause_in_settle: None,
+            turn_off_in_settle: None,
         };
         let host = {
             let store = store.clone();
@@ -308,7 +311,7 @@ mod tests {
         release.notify_one();
 
         // A busy period for the stopped request would come before this.
-        other.pause("a/x", "ui").await.unwrap();
+        other.turn_off("a/x", "ui").await.unwrap();
         next(r#"settle ["a/x"]"#).await;
         let closed = async |id: &str| other.request(id).await.unwrap().unwrap().closed;
         assert_eq!(closed(&served).await, Some(Some(RequestOutcome::Done)));
@@ -338,7 +341,7 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
-            pause_in_settle: None,
+            turn_off_in_settle: None,
         };
         let host = {
             let store = store.clone();
@@ -355,8 +358,8 @@ mod tests {
         host.await.unwrap();
     }
 
-    /// A busy period's last save holds the pauses as it last read them.
-    /// A pause and a resume and a pause again under it leave the pauses
+    /// A busy period's last save holds the switches as it last read them.
+    /// Off, on and off again under it leave the switches
     /// where they were before it, and the record where the busy period
     /// left it; so it is settled again after every one. Found by the
     /// harness's walk (seed 27).
@@ -374,7 +377,7 @@ mod tests {
             release: release.clone(),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
-            pause_in_settle: None,
+            turn_off_in_settle: None,
         };
         let host = {
             let store = store.clone();
@@ -386,13 +389,13 @@ mod tests {
         };
         let mut next = async |want: &str| expect(&mut calls, want).await;
         next("settle []").await;
-        other.pause("a/x", "ui").await.unwrap();
+        other.turn_off("a/x", "ui").await.unwrap();
         next(r#"settle ["a/x"]"#).await;
 
         other.open_request(&["a/x".into()], "ui").await.unwrap();
         next("busy").await;
-        other.resume("a/x").await.unwrap();
-        other.pause("a/x", "ui").await.unwrap();
+        other.turn_on("a/x").await.unwrap();
+        other.turn_off("a/x", "ui").await.unwrap();
         release.notify_one();
         next(r#"settle ["a/x"]"#).await;
 
@@ -400,13 +403,13 @@ mod tests {
         host.await.unwrap();
     }
 
-    /// A pause landing between the host's look at the pauses and the
+    /// A switch flipped between the host's look at the switches and the
     /// settle's own read is in the record; the host must compare what it
-    /// sees next with what the settle recorded, or a resume that puts the
-    /// pauses back where its look found them is never settled. Found by
+    /// sees next with what the settle recorded, or a turn-on that puts the
+    /// switches back where its look found them is never settled. Found by
     /// the harness's walk (seeds 11, 15, 22, 25).
     #[tokio::test]
-    async fn a_pause_landing_during_a_settle_is_not_lost() {
+    async fn a_turn_off_landing_during_a_settle_is_not_lost() {
         use std::sync::Arc;
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(root.path()).await.unwrap());
@@ -418,7 +421,7 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
-            pause_in_settle: Some("a/x"),
+            turn_off_in_settle: Some("a/x"),
         };
         let host = {
             let store = store.clone();
@@ -429,9 +432,9 @@ mod tests {
             })
         };
         let mut next = async |want: &str| expect(&mut calls, want).await;
-        // The first settle looked at no pauses and recorded `a/x` paused.
+        // The first settle looked at no switches and recorded `a/x` off.
         next(r#"settle ["a/x"]"#).await;
-        other.resume("a/x").await.unwrap();
+        other.turn_on("a/x").await.unwrap();
         next("settle []").await;
 
         stop_tx.send(true).unwrap();

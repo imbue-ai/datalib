@@ -56,8 +56,8 @@ const {
   fetchTreeHistory,
   openRequest,
   stopRequest,
-  pauseStep,
-  resumeStep,
+  turnOffStep,
+  turnOnStep,
   resetSteps,
   purgeGroups,
 } = useApi();
@@ -392,7 +392,7 @@ const rowActions: Record<string, (row: Row) => void> = {
   },
   in_syncs: (row) => {
     const on = row.actions.find((a) => a.id === "in_syncs")?.on;
-    void pauseRows([row], !!on);
+    void setTurnedOff([row], !!on);
   },
 };
 
@@ -597,7 +597,7 @@ function menuTarget(row: Row): MenuTarget {
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
     stopRequestId: row.stop_request_id,
-    pausedBy: row.paused_by,
+    turnedOffBy: row.turned_off_by,
     statusFrom: row.status_from,
     revealPath: row.reveal_path,
   };
@@ -632,9 +632,9 @@ async function runMenuAction(action: MenuAction, targets: Row[], anchor: Row) {
       for (const id of ids) await stopSync(id);
       return;
     }
-    case "pause":
-    case "resume":
-      await pauseRows(targets, action === "pause");
+    case "turn_off":
+    case "turn_on":
+      await setTurnedOff(targets, action === "turn_off");
       return;
     case "edit":
       if (first.editGroup) await openEdit(first.editGroup);
@@ -1412,14 +1412,14 @@ function stepsUnder(group: ManageRow): ManageRow[] {
   return rows.value.filter((r) => r.kind === "step" && r.group === group.id);
 }
 
-/// Pause or resume what these rows stand for: a step itself, a group
+/// Turn off or on what these rows stand for: a step itself, a group
 /// every step under it.
-async function pauseRows(targets: Row[], pause: boolean) {
+async function setTurnedOff(targets: Row[], off: boolean) {
   const steps = targets.flatMap((t) => (t.kind === "group" ? stepsUnder(t) : [t]));
   busy.value = true;
   clearBanner();
   try {
-    for (const s of steps) await (pause ? pauseStep(s.id) : resumeStep(s.id));
+    for (const s of steps) await (off ? turnOffStep(s.id) : turnOnStep(s.id));
     await loadRows();
   } catch (e) {
     banner.value = { ok: false, text: (e as Error).message };

@@ -248,8 +248,8 @@ config entry the loader cannot use costs that entry and nothing else;
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; a sync, a stop, a pause is a row it writes
-there (`POST /api/requests`, `/api/steps/<id>/pause`); the Manage tab
+`runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`

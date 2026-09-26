@@ -1,7 +1,7 @@
 //! The server's side of the supervisor loop (`docs/dev/plans/supervisor.md`
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
-//! whenever a request is open, and between busy periods settles a pause
-//! or a resume into the record, runs a reset and deletes a removed
+//! whenever a request is open, and between busy periods settles a step
+//! turned off or on into the record, runs a reset and deletes a removed
 //! group's tree.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -341,7 +341,7 @@ fn extra_path() -> Vec<PathBuf> {
     crate::user_bin_dir().into_iter().collect()
 }
 
-/// One tick with nothing open, so a pause or a resume made while the loop
+/// One tick with nothing open, so a step turned off or on while the loop
 /// is idle reaches the record, and so do the steps a dead loop left
 /// running.
 async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> {
@@ -353,7 +353,7 @@ async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> 
         }
     };
     match Runner::new(root).settle(&checked.graph, store).await {
-        Ok(paused) => Some(paused),
+        Ok(turned_off) => Some(turned_off),
         Err(e) => {
             tracing::error!("supervisor: could not settle the record: {e:#}");
             None

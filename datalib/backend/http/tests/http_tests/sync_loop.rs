@@ -476,33 +476,31 @@ async fn a_step_turned_off_reads_off_and_does_not_run() {
     call(
         &state,
         "POST",
-        "/api/steps/a%2Fout/pause",
+        "/api/steps/a%2Fout/turn_off",
         Some(serde_json::json!({ "by": "claude" })),
     )
     .await;
-    until(
-        "the row to read paused",
-        Duration::from_secs(10),
-        || async { row(&state, "a/out").await["status"]["key"] == "paused" },
-    )
+    until("the row to read off", Duration::from_secs(10), || async {
+        row(&state, "a/out").await["status"]["key"] == "off"
+    })
     .await;
-    let paused = row(&state, "a/out").await;
-    assert_eq!(paused["paused_by"], "claude", "{paused}");
-    assert_eq!(paused["status"]["label"], "Off", "{paused}");
+    let turned_off = row(&state, "a/out").await;
+    assert_eq!(turned_off["turned_off_by"], "claude", "{turned_off}");
+    assert_eq!(turned_off["status"]["label"], "Off", "{turned_off}");
     assert_eq!(
-        paused["status"]["detail"], "turned off by claude",
-        "{paused}"
+        turned_off["status"]["detail"], "turned off by claude",
+        "{turned_off}"
     );
     // The row's switch reads off, and so does its group's: every step
     // under it is off.
-    let switch = action(&paused, "in_syncs");
-    assert_eq!(switch["on"], false, "{paused}");
+    let switch = action(&turned_off, "in_syncs");
+    assert_eq!(switch["on"], false, "{turned_off}");
     assert!(switch["hint"]
         .as_str()
         .unwrap()
         .contains("claude turned it off"));
     let group = row(&state, "group:a").await;
-    assert_eq!(group["paused_by"], "claude", "{group}");
+    assert_eq!(group["turned_off_by"], "claude", "{group}");
     assert_eq!(action(&group, "in_syncs")["on"], false, "{group}");
     assert_eq!(action(&group, "in_syncs")["enabled"], true, "{group}");
 
@@ -511,13 +509,13 @@ async fn a_step_turned_off_reads_off_and_does_not_run() {
         request(&state, &id).await["state"] == "done"
     })
     .await;
-    assert!(!started(root, "a"), "a paused step ran");
+    assert!(!started(root, "a"), "a step turned off ran");
 
-    call(&state, "POST", "/api/steps/a%2Fout/resume", None).await;
+    call(&state, "POST", "/api/steps/a%2Fout/turn_on", None).await;
     until("the row to read on", Duration::from_secs(10), || async {
         let r = row(&state, "a/out").await;
         r["status"]["key"] == "never_run"
-            && r["paused_by"].is_null()
+            && r["turned_off_by"].is_null()
             && r["actions"]
                 .as_array()
                 .unwrap()
