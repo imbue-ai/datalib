@@ -29,7 +29,13 @@ import type {
   SlickEventData,
 } from "@slickgrid-universal/common";
 import { FILTER_GRID_OPTIONS, typedColumns, groupTitle } from "./typedColumns";
-import { type AccountsMap, type ColumnSpec, type QmdDocState, type SearchRow } from "@/api";
+import {
+  type AccountsMap,
+  type ColumnSpec,
+  type QmdDocState,
+  type SearchResponse,
+  type SearchRow,
+} from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
@@ -57,6 +63,7 @@ import {
   refreshLimit,
   withoutPage,
   withPage,
+  type Page,
   type PagedWindow,
 } from "@/grid/pagedWindow";
 import { searchFailure, type SearchFailure } from "./searchFailure";
@@ -556,7 +563,7 @@ let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /// The rows the grid holds, a prefix of the search's.
-let win: PagedWindow<SearchRow> | null = null;
+let win: PagedWindow<SearchRow, number> | null = null;
 /// The search they answer. Replaced, never mutated, so a page that comes
 /// back for a search since replaced can tell. `tail` is the default
 /// order, newest first, which the grid shows the other way up: newest at
@@ -571,6 +578,11 @@ let seekingSelection = sel.value !== null;
 /// The rows in the order the grid shows them.
 function display(rows: SearchRow[]): SearchRow[] {
   return shown?.tail ? [...rows].reverse() : rows;
+}
+
+/// A `/search` answer as a page of the search, read on by offset.
+function searchPage(r: SearchResponse): Page<SearchRow, number> {
+  return { rows: r.rows, next: r.next_offset, total: r.total, at: r.at };
 }
 
 /// Grouping and the header filters work over every row the grid holds,
@@ -604,10 +616,10 @@ async function runSearch(q: string, refresh = false) {
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
-    win = firstWindow(r);
+    win = firstWindow(searchPage(r));
     if (!again) shown = { q, sort, tail: sort === null && !r.query_echo?.free_text };
     rows.value = win.rows;
-    total.value = win.total;
+    total.value = r.total;
     qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     shownQuery.value = q;
     if (again) showChanged(true);
@@ -638,21 +650,21 @@ async function loadThrough(through: number, uuid: string | null = null) {
         fetch.limit,
         undefined,
         { toast: false },
-        { offset: fetch.offset, sort: search.sort, through: uuid },
+        { offset: fetch.from, sort: search.sort, through: uuid },
       );
       if (search !== shown || !win) return;
-      const next = withPage(win, fetch.offset, r);
+      const next = withPage(win, fetch.from, searchPage(r));
       if (next === "moved") {
         void runSearch(search.q, true);
         return;
       }
       win = next;
       rows.value = win.rows;
-      total.value = win.total;
+      total.value = r.total;
       showChanged(false);
     } catch (e) {
       if (search !== shown || !win) return;
-      win = withoutPage(win, fetch.offset);
+      win = withoutPage(win, fetch.from);
       error.value = searchFailure(e);
     }
   })();
@@ -682,7 +694,7 @@ function loadWanted() {
 async function seek(uuid: string): Promise<number | null> {
   while (vueGrid && win && vueGrid.dataView.getRowById(uuid) == null) {
     if (loadingMore) await loadingMore;
-    else if (win.nextOffset === null) break;
+    else if (win.next === null) break;
     else await loadThrough(win.rows.length, uuid);
   }
   return vueGrid?.dataView.getRowById(uuid) ?? null;
@@ -709,7 +721,7 @@ function tryRestoreSelection() {
   if (selectedRow.value && rowKey(selectedRow.value) === target_sel) return;
   const target = rows.value.find((r) => rowKey(r) === target_sel);
   if (!target) {
-    if (win?.nextOffset === null) seekingSelection = false;
+    if (win?.next === null) seekingSelection = false;
     return;
   }
   seekingSelection = false;

@@ -225,6 +225,51 @@ async fn the_log_is_read_through_the_shared_query_grammar() {
     assert!(text.contains("`author:`"), "{text}");
 }
 
+/// With no cursor the log answers with its newest lines; `before_seq`
+/// pages back from the oldest one a panel holds, `after_seq` follows the
+/// tail, and both at once is refused rather than guessed at.
+#[tokio::test]
+async fn the_log_opens_on_its_newest_lines_and_pages_back() {
+    let td = tempfile::tempdir().unwrap();
+    write_two_runs(td.path());
+    let msgs = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["msg"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let all = get(td.path(), "/api/log?step=slack/ingest").await;
+    let newest = get(td.path(), "/api/log?step=slack/ingest&limit=2").await;
+    assert_eq!(msgs(&newest), msgs(&all)[2..]);
+    let oldest_held = newest[0]["seq"].as_i64().unwrap();
+    let before = get(
+        td.path(),
+        &format!("/api/log?step=slack/ingest&limit=2&before_seq={oldest_held}"),
+    )
+    .await;
+    assert_eq!(msgs(&before), msgs(&all)[..2]);
+    let after = get(
+        td.path(),
+        &format!("/api/log?step=slack/ingest&after_seq={oldest_held}"),
+    )
+    .await;
+    assert_eq!(msgs(&after), msgs(&all)[3..]);
+
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/log?after_seq=1&before_seq=9")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
 fn urlencoding(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {

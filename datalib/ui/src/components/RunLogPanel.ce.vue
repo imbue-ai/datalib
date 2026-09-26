@@ -33,6 +33,17 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
+import {
+  asking,
+  firstWindow,
+  MARGIN,
+  newestFirst,
+  nextFetch,
+  withNewer,
+  withoutPage,
+  withPage,
+  type PagedWindow,
+} from "@/grid/pagedWindow";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
@@ -155,8 +166,18 @@ const lineCount = ref(0);
 const busy = ref(false);
 const error = ref<string | null>(null);
 const panelEl = ref<HTMLElement | null>(null);
-/// The newest `seq` in the grid, which the next fetch resumes after.
-let lastSeq = 0;
+/// The lines the grid holds: the newest of the log, newest first, grown
+/// at the near end by the tail and at the far end a page at a time as the
+/// reader scrolls up (grid/pagedWindow.ts).
+let win: PagedWindow<RunLogLine, number> | null = null;
+/// Lines per page when opening or scrolling back.
+const LOG_PAGE = 500;
+/// Lines per request while catching up with the tail.
+const TAIL_PAGE = 5000;
+/// Bumped by every fresh load, so an older page asked for before it is
+/// dropped rather than put above lines it does not belong with.
+let generation = 0;
+const bySeq = (l: RunLogLine) => l.seq;
 const boxEl = ref<HTMLDivElement | null>(null);
 // The bundle types its grid and view as optional because they can be
 // asked for before `init`; here neither is handed out before both exist.
@@ -241,6 +262,34 @@ async function untilLetAlone() {
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
+/// What the panel is showing, as a log read: a step's attempt by subject
+/// — what came out of it and what the runner said about it; a launch or
+/// the runner by author. A step opened before its first attempt started
+/// has no process to pick yet; its lines are still its own by name.
+function scope() {
+  const attempt = currentProcess.value?.step ? currentProcess.value : null;
+  const byName = runId.value && !processId.value && props.step && !runProcesses.value.length;
+  return {
+    run: runId.value ?? undefined,
+    process: launchId.value ?? (attempt ? undefined : (processId.value ?? undefined)),
+    step: attempt?.step ?? (byName ? props.step! : undefined),
+    attempt: attempt?.attempt ?? undefined,
+    q: query.value,
+  };
+}
+
+/// Lines written after the newest one held, however many: the tail is
+/// read a page at a time until a page comes back short.
+async function tailLines(): Promise<RunLogLine[]> {
+  const out: RunLogLine[] = [];
+  for (;;) {
+    const after = out[out.length - 1]?.seq ?? win!.rows[0]?.seq ?? 0;
+    const got = await fetchLog({ ...scope(), afterSeq: after, limit: TAIL_PAGE });
+    out.push(...got);
+    if (got.length < TAIL_PAGE) return out;
+  }
+}
+
 async function load(fresh: boolean) {
   if (inflight) {
     if (fresh) freshPending = true;
@@ -248,30 +297,25 @@ async function load(fresh: boolean) {
     return;
   }
   inflight = true;
+  // Nothing held yet, after a first load that failed, say: the tail has
+  // nothing to follow on from.
+  fresh ||= win === null;
   if (fresh) {
-    lastSeq = 0;
+    generation++;
+    win = null;
     lineCount.value = 0;
     busy.value = true;
   }
   error.value = null;
   try {
-    // A step's attempt is shown by subject — what came out of it and
-    // what the runner said about it; a launch or the runner by author.
-    // A step opened before its first attempt started has no process to
-    // pick yet; its lines are still its own by name.
-    const attempt = currentProcess.value?.step ? currentProcess.value : null;
-    const byName = runId.value && !processId.value && props.step && !runProcesses.value.length;
-    const got = await fetchLog({
-      run: runId.value ?? undefined,
-      process: launchId.value ?? (attempt ? undefined : (processId.value ?? undefined)),
-      step: attempt?.step ?? (byName ? props.step! : undefined),
-      attempt: attempt?.attempt ?? undefined,
-      q: query.value,
-      afterSeq: lastSeq,
-    });
+    // A fresh load opens on the newest lines; the older ones come as the
+    // reader scrolls up to them.
+    const got = fresh ? await fetchLog({ ...scope(), limit: LOG_PAGE }) : await tailLines();
     await untilLetAlone();
+    win = fresh
+      ? firstWindow(newestFirst(got, LOG_PAGE, bySeq))
+      : withNewer(win!, [...got].reverse());
     if (got.length > 0) {
-      lastSeq = got[got.length - 1].seq;
       lineCount.value += got.length;
       // The box is shown once there is a count; the grid must be built
       // or resized after that paint, not before it.
@@ -279,8 +323,11 @@ async function load(fresh: boolean) {
       if (!bundle) {
         createGrid(got);
         if (props.jumpToEnd) jumpToEnd(got);
+        else bundle!.slickGrid.scrollRowIntoView(got.length - 1);
       } else if (fresh) {
         bundle.dataset = got;
+        atBottom = true;
+        bundle.slickGrid.scrollRowIntoView(got.length - 1);
       } else {
         // Appended rather than handed over as a new dataset, which would
         // redraw every row and lose the scroll; only the rows the new
@@ -341,6 +388,50 @@ function onScroll(_e: unknown, args: { grid: SlickGrid }) {
   const vp = args.grid.getViewportNode();
   if (!vp) return;
   atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
+  void loadOlder();
+}
+
+/// Lines from before the oldest one held, once the reader scrolls near
+/// it. Only while the lines are in the log's own order: sorted by another
+/// column or grouped, the top of the grid is not the oldest line, and the
+/// sort or the groups cover the lines held.
+async function loadOlder() {
+  if (!bundle || !win) return;
+  const grid = bundle.slickGrid;
+  if (grid.getSortColumns().length > 0 || (groupingPlugin?.columnsGroupBy.length ?? 0) > 0) {
+    return;
+  }
+  const top = grid.getViewport().top;
+  const fetch = nextFetch(win, win.rows.length - 1 - top + MARGIN, LOG_PAGE);
+  if (!fetch) return;
+  const asked = generation;
+  win = asking(win, fetch);
+  try {
+    const got = await fetchLog({ ...scope(), beforeSeq: fetch.from, limit: fetch.limit });
+    await untilLetAlone();
+    if (asked !== generation || !win || !bundle) return;
+    // A log page carries no commit (`at` is null on both), so it never
+    // comes back as "moved".
+    win = withPage(win, fetch.from, newestFirst(got, fetch.limit, bySeq)) as typeof win;
+    if (got.length === 0) return;
+    lineCount.value += got.length;
+    const { slickGrid, dataView } = bundle;
+    // The line at the top stays at the top: the older ones go above it,
+    // out of sight until the reader scrolls on.
+    const anchor = (dataView.getItem(slickGrid.getViewport().top) as RunLogLine | undefined)?.seq;
+    keepActiveOnRecord(slickGrid, dataView, () => {
+      redrawChanged(slickGrid, dataView, () => {
+        dataView.beginUpdate();
+        dataView.insertItems(0, got);
+        dataView.endUpdate();
+      });
+      const row = anchor == null ? undefined : dataView.getRowById(anchor);
+      if (row != null) slickGrid.scrollRowToTop(row);
+    });
+  } catch (e) {
+    if (asked === generation && win) win = withoutPage(win, fetch.from);
+    error.value = (e as Error).message;
+  }
 }
 
 function setQuery(q: string) {
@@ -874,6 +965,9 @@ function createGrid(first: RunLogLine[]) {
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.
   (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
     groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
+    // Whether lines older than the oldest held are still to be read: a
+    // test scrolls up until they are not, and the top is the log's start.
+    hasOlder: () => win !== null && (win.next !== null || win.pending !== null),
   };
 }
 

@@ -1903,28 +1903,44 @@ struct LogParams {
     /// `level:warn -target:sqlx "history"`.
     #[serde(default)]
     q: String,
+    /// The lines after this `seq`: how a panel follows the tail.
     #[serde(default)]
     after_seq: Option<i64>,
+    /// The newest lines before this `seq`: how a panel pages back.
+    #[serde(default)]
+    before_seq: Option<i64>,
     #[serde(default)]
     limit: Option<i64>,
 }
 
-/// `GET /api/log?run=…&step=…&q=…` — log lines, oldest first, across
-/// every run the store holds unless `run` narrows it. Tails the same way
-/// `/api/runs/{run}/log` does. A `q` naming a key a log line does not
-/// have is a 400 with the key spelled out.
+/// `GET /api/log?run=…&step=…&q=…` — log lines across every run the
+/// store holds unless `run` narrows it: the newest `limit` of them, or the
+/// page `after_seq` or `before_seq` names, oldest first either way. A `q`
+/// naming a key a log line does not have is a 400 with the key spelled
+/// out, and so are both cursors at once.
 async fn log_lines(
     State(s): State<AppState>,
     Query(p): Query<LogParams>,
 ) -> Result<Json<Vec<datalib_runs::LogLine>>, (StatusCode, String)> {
     let limit = p.limit.unwrap_or(5000).clamp(1, 50_000);
+    let cursor = match (p.after_seq, p.before_seq) {
+        (None, None) => datalib_runs::LogCursor::Newest,
+        (Some(seq), None) => datalib_runs::LogCursor::After(seq),
+        (None, Some(seq)) => datalib_runs::LogCursor::Before(seq),
+        (Some(_), Some(_)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "ask for the lines after_seq or before_seq a line, not both".to_string(),
+            ))
+        }
+    };
     let q = datalib_runs::LogQuery {
         run: p.run.as_deref(),
         process: p.process.as_deref(),
         step: p.step.as_deref(),
         attempt: p.attempt,
         q: &p.q,
-        after_seq: p.after_seq.unwrap_or(0),
+        cursor,
         limit,
     };
     datalib_runs::log_query(&s.root, &q)
