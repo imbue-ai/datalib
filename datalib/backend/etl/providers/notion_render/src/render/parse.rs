@@ -121,21 +121,15 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
             refs_by_page.entry(a.page_id).or_default().push(a.ref_id);
         }
     }
-    let mut blobs_by_page: HashMap<String, BlobBundle> = HashMap::new();
-    for (page_id, refs) in refs_by_page {
-        let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
-        let bundle = BlobBundle::load(
-            db.pool(),
-            db.cas().pool(),
-            ATTACHMENTS_PROJECTION_SQL,
-            &refs,
-        )
-        .await
-        .with_context(|| format!("load attachments of page {page_id}"))?;
-        if !bundle.is_empty() {
-            blobs_by_page.insert(page_id, bundle);
-        }
-    }
+    let mut blobs_by_page = BlobBundle::load_many(
+        db.pool(),
+        db.cas().pool(),
+        ATTACHMENTS_PROJECTION_SQL,
+        refs_by_page,
+    )
+    .await
+    .context("load attachments")?;
+    blobs_by_page.retain(|_, bundle| !bundle.is_empty());
 
     Ok(ParsedNotion {
         pages,

@@ -34,7 +34,7 @@ use datalib_schema::providers::Provider;
 ///     among them.
 pub const RENDER_VERSION: u32 = 3;
 
-/// Projection for [`BlobBundle::load`] over the Voice CAS edge: the
+/// Projection for [`BlobBundle::load_many`] over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
 /// falls back to `cas_objects` (we don't store it on the edge).
 const VOICE_BLOB_PROJECTION: &str = "SELECT ref_name AS ref_id, blake3, \
@@ -246,24 +246,13 @@ async fn load_voice_blobs(
             bag.push(r);
         }
     }
-    let mut out: HashMap<String, BlobBundle> = HashMap::new();
-    for (chat_id, mut refs) in refs_by_chat {
-        refs.sort();
-        refs.dedup();
-        if refs.is_empty() {
-            continue;
-        }
-        let ref_slices: Vec<&str> = refs.iter().map(String::as_str).collect();
-        let bundle = BlobBundle::load(
-            db.pool(),
-            db.cas().pool(),
-            VOICE_BLOB_PROJECTION,
-            &ref_slices,
-        )
-        .await?;
-        out.insert(chat_id, bundle);
-    }
-    Ok(out)
+    BlobBundle::load_many(
+        db.pool(),
+        db.cas().pool(),
+        VOICE_BLOB_PROJECTION,
+        refs_by_chat,
+    )
+    .await
 }
 
 /// Messages as `(row id, payload)`, groups as `(dir name, payload)`;

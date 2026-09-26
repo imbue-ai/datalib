@@ -379,7 +379,7 @@ pub struct LoadedRaw {
 /// `datalib_etl_claude_render::render::parse::parse(..., last_render_hash)` instead;
 /// this one ignores the cursor and loads everything. Attachment bytes
 /// are NOT loaded here — tests that need them load a `BlobBundle`
-/// via `BlobBundle::load(...)` directly.
+/// via `BlobBundle::load_many(...)` directly.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

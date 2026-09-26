@@ -570,10 +570,11 @@ order. The derive reads the second and third field names to emit
 and the attribute and nothing else.
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
-arrive and drains the bundle at end of bucket; parse loads one document's
-refs in two queries regardless of how many attachments it has; render then
-consumes an already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn
-blob reader.
+arrive and drains the bundle at end of bucket; parse loads every document's
+bundle at once with `BlobBundle::load_many`; render then consumes an
+already-loaded bag of bytes — no SQL, no `block_in_place`, no dyn blob reader.
+Parse reads the edge table through a `pinned_*` view, which uses no index, so
+a query per document would be a full scan per document.
 
 **A source that keeps a CAS opens its session with the CAS attached**
 (`RunCtx::open_store_with_blobs`), so every seal commits `blobs.doltlite_db`
