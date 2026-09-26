@@ -949,6 +949,7 @@ export type ManageRow = {
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
+  raw_store_path: string | null;
 };
 
 export type ManageResponse = {

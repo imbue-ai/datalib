@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import type { Column } from "@slickgrid-universal/common";
-import { type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
+import { type Action, type ManageResponse, type ManageRow, type ColumnSpec } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -36,7 +36,12 @@ import { browseColumns, browseName, browseQuery } from "@/config/browsePresets";
 import { logSource } from "./libs/logView";
 import { pushToast } from "@/toasts";
 import { historyRows, truncatedStores, type HistoryRow } from "@/config/commitHistory";
-import { rowMenu, type MenuAction, type MenuTarget } from "@/config/rowMenu";
+import {
+  RAW_STORE_BROWSE_LABEL,
+  rowMenu,
+  type MenuAction,
+  type MenuTarget,
+} from "@/config/rowMenu";
 import { formatRelative, formatStamp } from "@/config/timeFormat";
 import { changed, subscribeLive } from "@/live";
 import SourceWizard from "@/components/SourceWizard.vue";
@@ -44,7 +49,13 @@ import CompareDialog from "@/components/CompareDialog.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
 
 const props = defineProps<{ ctx: CardCtx }>();
-import { confirmAction, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
+import {
+  confirmAction,
+  isDesktopApp,
+  openRawStore,
+  revealActionLabel,
+  revealInFileManager,
+} from "@/desktop";
 
 const {
   fetchConfig,
@@ -263,6 +274,9 @@ type Row = ManageRow & {
   /// The card source a Browse of this row opens, or null where the
   /// row's `browse` action says there is nothing to browse.
   browseSource: string | null;
+  /// The raw store Browse opens instead of a card: a download step's,
+  /// in the desktop app, which is the only host that can open one.
+  rawStore: string | null;
 };
 
 /// The tree the grid shows, as the server assembled it, with the
@@ -282,6 +296,7 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
       editBlocked: "Not a config entry.",
       editGroup: null,
       browseSource: browseAction(r)?.enabled ? "logView()" : null,
+      rawStore: null,
     };
   }
   if (r.kind === "group") {
@@ -291,6 +306,7 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
       editBlocked,
       editGroup: editBlocked ? null : r.id,
       browseSource: groupBrowse(r),
+      rawStore: null,
     };
   }
   // Edit: the wizard's one form describes a source — a group and its two
@@ -315,15 +331,33 @@ function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
   const group = r.group ? groups.get(r.group) : undefined;
   const ingestLabelled =
     r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
+  const rawStore = canReveal ? r.raw_store_path : null;
   return {
     ...r,
     name: ingestLabelled ? { ...r.name, label: ingestLabelled } : r.name,
+    actions: rawStore
+      ? r.actions.map((a) => (a.id === "browse" ? RAW_STORE_BROWSE : a))
+      : r.actions,
     editBlocked,
     editGroup: editBlocked ? null : r.group,
     // A step's rows are its source's: Browse opens the group's view.
     browseSource: r.kind === "step" && group ? groupBrowse(group) : null,
+    rawStore,
   };
 }
+
+/// Browse on a download step with a raw store: enabled whatever the
+/// group's Browse says, since a source that renders nothing still has
+/// the tables it downloaded.
+const RAW_STORE_BROWSE: Action = {
+  id: "browse",
+  label: RAW_STORE_BROWSE_LABEL,
+  enabled: true,
+  hint:
+    "Open what this step downloaded, read-only: in DB Browser for SQLite when that " +
+    "opens .doltlite_db files here, otherwise in a doltlite shell.",
+  disabled_reason: null,
+};
 
 /// What a Browse of this group opens. Whether it can — the group has a
 /// render step, and is in the pipeline — is the server's word, carried
@@ -596,6 +630,7 @@ function menuTarget(row: Row): MenuTarget {
     editBlocked: row.editBlocked,
     revealBlocked: row.reveal_blocked,
     browseBlocked: browseAction(row)?.disabled_reason ?? null,
+    rawStore: row.rawStore !== null,
     stopRequestId: row.stop_request_id,
     turnedOffBy: row.turned_off_by,
     statusFrom: row.status_from,
@@ -1258,15 +1293,27 @@ async function deleteRows(targets: Row[]) {
 }
 
 /// Leave the Manage screen for this row's data: one card, the grid,
-/// already filtered to the source and carrying its type's columns.
+/// already filtered to the source and carrying its type's columns — or,
+/// for a download step in the app, its raw store in another program.
 ///
 /// A card stack IS the URL (see router/columns.ts), so this is an
 /// ordinary navigation — the card is bookmarkable, shareable, and the
 /// back button returns here.
 function openBrowse(row: Row) {
+  if (row.rawStore) {
+    void browseRawStore(row.rawStore);
+    return;
+  }
   if (!row.browseSource) return;
   // Beside this card, in whatever layout is showing it.
   props.ctx.host.openCards(row.browseSource);
+}
+
+async function browseRawStore(path: string) {
+  const res = await openRawStore(path);
+  banner.value = res.ok
+    ? { ok: true, text: `Opened ${path} read-only in ${res.openedIn}.` }
+    : { ok: false, text: `Could not open ${path}: ${res.reason}` };
 }
 
 async function reveal(key: string) {

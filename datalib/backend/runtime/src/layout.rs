@@ -23,6 +23,13 @@ pub const GRID_DB: &str = "db.doltlite_db";
 /// `crate::qmd::qmd_cache_home`.
 pub const QMD_DIR: &str = "qmd_index";
 
+/// A download step's raw store, inside its tree: entity tables,
+/// per-provider CAS edge tables and the shared sync bookkeeping.
+pub const ENTITIES_DB: &str = "entities.doltlite_db";
+/// The content-addressed blob store beside [`ENTITIES_DB`]: one
+/// `cas_objects` table keyed by blake3 hash.
+pub const BLOBS_DB: &str = "blobs.doltlite_db";
+
 /// Directory of server-served attachment bytes, relative to `system/`.
 pub const MEDIA_DIR: &str = "media";
 /// Filed feedback, relative to `system/`. Its own file because it has a

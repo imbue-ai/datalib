@@ -85,6 +85,28 @@ export async function revealInFileManager(path: string): Promise<boolean> {
 }
 
 /**
+ * Open a download step's raw store, read-only: in DB Browser for SQLite
+ * when that is what opens `.doltlite_db` files here, otherwise in the
+ * bundled doltlite shell in a terminal. The shell picks, and says which
+ * (`open_raw_store` in `datalib/tauri/src/main.rs`).
+ *
+ * An app command rather than a plugin one, so there is no package to
+ * own the command name; `capabilities/open-raw-stores.json` grants it.
+ */
+export async function openRawStore(
+  path: string,
+): Promise<{ ok: true; openedIn: string } | { ok: false; reason: string }> {
+  const t = internals();
+  if (!t) return { ok: false, reason: "only the desktop app can open a store" };
+  try {
+    const openedIn = (await t.invoke("open_raw_store", { path })) as string;
+    return { ok: true, openedIn };
+  } catch (e) {
+    return { ok: false, reason: String(e) };
+  }
+}
+
+/**
  * The platform's name for "show this file where it lives", so the menu
  * item reads the way the OS does.
  *

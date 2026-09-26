@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod launcher;
+mod raw_store;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -17,6 +18,9 @@ use tauri_plugin_opener::OpenerExt;
 /// The spawned `datalib-http` child, managed in tauri state so the
 /// exit handler can kill it. `None` until boot succeeds.
 struct HttpChild(Mutex<Option<Child>>);
+
+/// The data root the backend was started on; `None` until boot succeeds.
+struct DataRoot(Mutex<Option<PathBuf>>);
 
 #[tauri::command]
 fn version() -> &'static str {
@@ -96,6 +100,92 @@ fn launcher_quit(app: AppHandle) {
     app.exit(0);
 }
 
+// --- Browse a raw store (src/raw_store.rs) ---------------------------------
+
+/// Returns what the store was opened in, for the page to say.
+#[tauri::command]
+fn open_raw_store(app: AppHandle, path: String) -> Result<String, String> {
+    let root = app
+        .state::<DataRoot>()
+        .0
+        .lock()
+        .expect("data root lock")
+        .clone()
+        .ok_or("No data library is open.")?;
+    let store = raw_store::check_store(&root, Path::new(&path))?;
+    match raw_store::choose(default_handler(&store)) {
+        raw_store::Launch::DbBrowser { app: db_browser } => {
+            spawn_open(&raw_store::db_browser_args(&db_browser, &store))?;
+            Ok("DB Browser for SQLite".into())
+        }
+        raw_store::Launch::Shell => {
+            let doltlite = resolve_bundled(&app, "datalib-doltlite", "DATALIB_DOLTLITE_BIN")
+                .ok_or("The doltlite shell is not bundled with this app.")?;
+            let script = write_shell_script(&raw_store::shell_script(&doltlite, &store))?;
+            spawn_open(&[script.into()])?;
+            Ok("a doltlite shell".into())
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn default_handler(file: &Path) -> Option<raw_store::Handler> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSBundle, NSString, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(file.to_str()?));
+    let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
+    Some(raw_store::Handler {
+        app: PathBuf::from(app.path()?.to_string()),
+        bundle_id: NSBundle::bundleWithURL(&app)
+            .and_then(|b| b.bundleIdentifier())
+            .map(|id| id.to_string()),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_handler(_file: &Path) -> Option<raw_store::Handler> {
+    None
+}
+
+/// A fresh name per click: Terminal may not have read the last script
+/// yet, and each deletes itself once it runs.
+fn write_shell_script(body: &str) -> Result<PathBuf, String> {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "datalib-browse-{}-{}.command",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_open(args: &[std::ffi::OsString]) -> Result<(), String> {
+    let out = Command::new("/usr/bin/open")
+        .args(args)
+        .output()
+        .map_err(|e| format!("open: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "open failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_open(_args: &[std::ffi::OsString]) -> Result<(), String> {
+    Err("Opening a raw store is only built for macOS.".into())
+}
+
 fn home_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().home_dir().ok()
 }
@@ -143,9 +233,11 @@ fn main() {
             launcher_open,
             launcher_pick,
             launcher_create,
-            launcher_quit
+            launcher_quit,
+            open_raw_store
         ])
         .manage(HttpChild(Mutex::new(None)))
+        .manage(DataRoot(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
             // A data root supplied non-interactively (positional arg or
@@ -247,28 +339,22 @@ fn show_launcher(app: &AppHandle) -> tauri::Result<()> {
 /// page's first `invoke` fails with nothing on screen to say why.
 const LAUNCHER_WINDOW: &str = "launcher";
 
-/// Locate the `datalib-http` binary to spawn. Dev override
-/// `$DATALIB_HTTP_BIN` wins (point it at a fresh Bazel build
-/// without rebundling); otherwise the copy bundled under
-/// `Contents/Resources/binaries/` (see `tauri.conf.json`
+/// Locate a bundled binary. The dev override `$<env>` wins (point it at
+/// a fresh Bazel build without rebundling); otherwise the copy bundled
+/// under `Contents/Resources/binaries/` (see `tauri.conf.json`
 /// `bundle.resources`), which `resource_dir()` resolves regardless of
-/// where the bundle lives. The sibling `datalib-step` there is found by
-/// the child's own sibling-of-executable lookup
-/// (`binaries::resolve_binary_dir`), so no pipeline path needs to be
-/// threaded through.
-fn resolve_http_bin(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("DATALIB_HTTP_BIN") {
+/// where the bundle lives. The backend finds its own siblings there
+/// (`binaries::resolve_binary_dir`), so only what the shell itself
+/// runs is looked up here.
+fn resolve_bundled(app: &AppHandle, name: &str, env: &str) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var(env) {
         let p = PathBuf::from(p);
         if p.is_file() {
             return Some(p);
         }
-        eprintln!("$DATALIB_HTTP_BIN={} is not a file", p.display());
+        eprintln!("${env}={} is not a file", p.display());
     }
-    let p = app
-        .path()
-        .resource_dir()
-        .ok()?
-        .join("binaries/datalib-http");
+    let p = app.path().resource_dir().ok()?.join("binaries").join(name);
     p.is_file().then_some(p)
 }
 
@@ -421,7 +507,7 @@ fn leaves_the_app(next: &Url, app_origin: &str) -> bool {
 /// Finder-launched app has no terminal). Blocking: run on a worker
 /// thread, not the event loop.
 fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
-    let http_bin = resolve_http_bin(app).ok_or_else(|| {
+    let http_bin = resolve_bundled(app, "datalib-http", "DATALIB_HTTP_BIN").ok_or_else(|| {
         anyhow::anyhow!(
             "datalib-http binary not found (no bundled copy and \
              $DATALIB_HTTP_BIN not set)"
@@ -500,6 +586,7 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
     let _ = std::fs::remove_file(&url_file);
 
     *app.state::<HttpChild>().0.lock().expect("http child lock") = Some(child);
+    *app.state::<DataRoot>().0.lock().expect("data root lock") = Some(root);
     Ok(url)
 }
 
