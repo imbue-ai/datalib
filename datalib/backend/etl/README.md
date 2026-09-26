@@ -305,7 +305,7 @@ run and returns. A `fetch` that opened its own store while the caller
 held one would now be refused at open rather than failing the caller's
 commit later.
 
-### A reader opens read-only and pinned, and never asks `dolt_status`
+### A reader opens read-only and pinned
 
 `open_reader(path, commit)` is the read path: read-only, so "a reader
 must not write" is the engine's rule (`attempt to write a readonly
@@ -335,26 +335,28 @@ makes it so: a row is keyed by the blake3 of its own bytes.
 
 The two-process test measures what a read-only connection may issue
 beside a live writer — `dolt_hashof`, `sqlite_master`,
-`pragma_module_list`, `CREATE TEMP VIEW`, reads through `dolt_at_`
-views, `dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
-`dolt_diff_summary`, `dolt_diff_stat`, a `COUNT(*)` per table,
-`BEGIN`/`COMMIT` around plain reads (the held read transaction) — and
-that list is the allowlist. **`dolt_status` is not on it**: issued from
-a read-only connection while the writer commits, it fails that commit
-and the rows inserted before it are gone (dolthub/doltlite#2832). The
-same goes for a hand-run `datalib-doltlite -readonly … dolt_status`
-against a store a sync is writing. Any other statement a reader adds is
+`CREATE TEMP VIEW`, reads through `dolt_at_` modules and views,
+`dolt_diff_*`, `dolt_log()`, `dolt_commit_ancestors`,
+`dolt_diff_summary`, `dolt_diff_stat`, `dolt_status`, a `COUNT(*)` per
+table, `BEGIN`/`COMMIT` around plain reads (the held read transaction)
+— and that list is the allowlist. Any other statement a reader adds is
 presumed guilty until `doltlite_two_process_test` has run with it.
+Looking like a read is not enough: `dolt_status` from a read-only
+connection failed the writer's commit and lost its rows until doltlite
+0.50.10 (#400, dolthub/doltlite#2832), and
+`a_reader_asking_dolt_status_never_makes_the_writers_commit_fail` is
+what now says it is safe.
 
-Two traps for a reader that holds its connection across another
-process's commits, both measured in `datalib_pin`'s tests. A scalar
-function answers from the session's last view of the store, so a bare
-`dolt_hashof('HEAD')` keeps reporting the HEAD the connection opened at;
-`datalib_pin::head` reads `sqlite_master` first, which reloads the root.
-And the `dolt_at_<table>` modules are registered when the connection
-opens, from the commits that exist then: a table another process commits
-later has no module on this connection, and never will. Everything that
-opens per pass sees neither. The one long-lived reader, the search
+For a reader that holds its connection across another process's
+commits, both measured in `datalib_pin`'s tests: a scalar function
+answers from the session's last view of the store, so a bare
+`dolt_hashof('HEAD')` keeps reporting the HEAD the connection opened at
+(`datalib_pin::head` reads `sqlite_master` first, which reloads the
+root); and a table committed after the connection opened reads through
+`dolt_at_<table>` without a reopen. Doltlite registers that module the
+first time a statement names it, so `pragma_module_list` is no census of
+what a commit holds: ask by reading through the module, as
+`pin::install_views` does. The one long-lived reader, the search
 applet, reads plain tables inside a read transaction instead, because
 it needs the indexes `dolt_at_` cannot use; a table committed after it
 opened is there at its next transaction (`DoltRepo::pinned`).

@@ -233,6 +233,74 @@ fn a_churning_reader_never_makes_the_writers_commit_fail() {
     assert_committed_throughout(&writer, &reader);
 }
 
+/// The churning reader again, asking `dolt_status` every round from its
+/// read-only connection. The writer must never see an error, and every
+/// commit it reported must be there when it is done.
+#[test]
+fn a_reader_asking_dolt_status_never_makes_the_writers_commit_fail() {
+    let t = Scratch::new();
+    let mut writer = t.spawn(&[
+        "write",
+        "--db",
+        &t.db(),
+        "--seed",
+        "--pin-out",
+        &t.path("pin"),
+        "--max-commits",
+        "2000",
+        "--interval-ms",
+        "0",
+        "--out",
+        &t.path("writer.json"),
+    ]);
+    t.await_file("pin", &mut writer);
+
+    let mut reader = t.spawn(&[
+        "churn",
+        "--db",
+        &t.db(),
+        "--until",
+        &t.path("writer.json"),
+        "--rounds",
+        "100000",
+        "--dolt-status",
+        "--out",
+        &t.path("churn.json"),
+    ]);
+    t.wait("writer", &mut writer);
+    t.wait("reader", &mut reader);
+
+    let writer = t.report("writer.json");
+    if writer["dolt"] == Value::Bool(false) {
+        return;
+    }
+    let reader = t.report("churn.json");
+    let commits = writer["commits"].as_array().map_or(0, Vec::len);
+    assert_eq!(
+        errors(&reader),
+        Vec::<String>::new(),
+        "reader errors (writer commits={commits})"
+    );
+    assert_eq!(
+        errors(&writer),
+        Vec::<String>::new(),
+        "writer errors (writer commits={commits}, reader opened={} pinned={})",
+        reader["opened"],
+        reader["pinned"]
+    );
+    assert!(
+        reader["pinned"].as_u64().unwrap_or(0) > 0,
+        "the reader never pinned anything, so it never read: {reader:?}"
+    );
+    assert_committed_throughout(&writer, &reader);
+    let every_commits_rows = SEED_ROWS + 2 * commits as i64;
+    assert_eq!(
+        t.probe()["committed_rows"].as_i64(),
+        Some(every_commits_rows),
+        "rows the writer committed are missing from HEAD"
+    );
+}
+
 /// The Manage screen's commit-history panel reads `dolt_log`,
 /// `dolt_commit_ancestors`, `dolt_diff_summary`, `dolt_diff_stat` and a
 /// `COUNT(*)` per table, none of which the churning reader above issues.

@@ -176,7 +176,8 @@ async fn read(args: &Args) -> Result<Value> {
 /// What `grid_index` does to a render store on every streaming pass, in a
 /// loop: open read-only, pin HEAD, install the views, diff, read through the
 /// views, close. Every step is a read, so none of it should cost a writer
-/// anything -- this is the role that finds out.
+/// anything -- this is the role that finds out. `--dolt-status` adds a
+/// `SELECT * FROM dolt_status` to every round.
 async fn churn(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let until = args.opt_path("until");
@@ -204,6 +205,14 @@ async fn churn(args: &Args) -> Result<Value> {
             }
         };
         opened += 1;
+        if args.flag("dolt-status") {
+            if let Err(e) = sqlx::query("SELECT * FROM dolt_status")
+                .fetch_all(reader.pool())
+                .await
+            {
+                errors.push(format!("round {round}: dolt_status: {e:#}"));
+            }
+        }
         match one_pinned_pass(&reader, cursor.as_deref()).await {
             Ok(head) => {
                 pinned += 1;
