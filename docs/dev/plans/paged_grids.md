@@ -1,6 +1,6 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 and 2 of "Order of work" are built, the
+*Proposal (2026-09-25); steps 1 to 3 of "Order of work" are built, the
 rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
@@ -128,7 +128,7 @@ them; every render store also has a `grid_rows` and does not pay:
 - `(touched_at_utc, is_document, uuid)` for the unfiltered grid, a
   document ahead of its rows at the same moment;
 - `(col, touched_at_utc, is_document, uuid)` for each key the search
-  bar filters on: `source_id`, `provider`, `source_label`, `kind`,
+  bar filters on: `source_id`, `source_label`, `kind`,
   `channel`, `conversation_uuid`, `author`, `account`, `project`,
   `notion_page_uuid`, `diff_status`, and `(is_document, touched_at_utc,
   uuid)`.
@@ -137,7 +137,9 @@ them; every render store also has a `grid_rows` and does not pay:
 to *search* an index on its own column. Scanning the newest-first index
 and testing every row also avoids a sort, and is the 38 s walk above;
 the test's first version accepted that, and passed with an index
-deleted, before it was tightened. `before:`/`after:` filter on
+deleted, before it was tightened. It also fails on an index no key
+plans with: step 2 shipped one on `provider`, which the search bar has
+no key for, and step 3 dropped it. `before:`/`after:` filter on
 `created_at_utc` and have no index: a `before:` far back still walks.
 
 **Every column stays sortable,** server-side, in one of two ways:
@@ -363,14 +365,18 @@ decision:
 
 ## `qmd_state`, separately
 
-Its cost barely depends on how many rows the grid holds. Every call
-runs `summary()`, an aggregate over the whole `content_vectors` table,
-and each chunk of 400 hashes repeats the same `GROUP BY`. It also opens
-a new pool per request and hashes every `.md` file it is sent, and past
-2000 documents it truncates and toasts on every call. The fix: send the
-loaded rows' uuids, cache `summary()` against the qmd index's mtime,
-and compute the per-hash aggregate once per call. It is its own PR,
-and it can land first.
+The endpoint behind the Indexed / Embedded columns. Measured on the
+same root's qmd index (18,711 documents, 46,475 vectors, a copy):
+
+| cost, per call | before | after (step 3) |
+|---|---|---|
+| `summary()`, the "N of M documents searchable" totals | 0.41 s, on every call, columns shown or not | once per change to the index files (`SummaryCache`, keyed on the size and time of `index.sqlite` and its `-wal`) |
+| vector counts, per batch of 400 hashes | 0.04 s: every vector in the index grouped, once per batch | 0.01 s: only the batch's own vectors |
+| documents asked about | every one behind the result set, up to the 2,000 cap and a toast past it; 2,000 files read and hashed is about 0.35 s | the ones behind the rows on screen and 50 either side, asked again as the grid scrolls (`ui/src/grid/qmdAsk.ts`) |
+
+The 1.5–5 s calls in the logs overlapped 4–12 s searches, and waited
+behind them on the applet's one connection to the grid index; step 2
+made those searches fast.
 
 ## Every branch earns its keep
 
@@ -401,7 +407,8 @@ Each step is one PR, useful on its own:
    reading in a read transaction.** Default order newest first. The UI
    is unchanged, so it still asks for everything, but the query stops
    scanning to sort.
-3. **`qmd_state` fixes** (independent of the others).
+3. **Done: `qmd_state` fixes**, and the unused `provider` index
+   dropped.
 4. **The page contract, the result cache and `pagedWindow.ts`, and
    `GridCard` on them,** with server-side sorting.
 5. **Server-side drag-to-group** in `GridCard`: the group list, a

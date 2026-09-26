@@ -512,7 +512,8 @@ fn query_for(field: &Field) -> Option<&'static str> {
 /// order the grid sorts by. Without one, a filter that matches few rows
 /// walks the whole newest-first index row by row: 38 s for one row among
 /// 74k (`docs/dev/plans/paged_grids.md`). Fails naming the query whose
-/// plan scans the table or sorts it in a temporary B-tree.
+/// plan scans the table or sorts it in a temporary B-tree, and naming an
+/// index no query uses.
 #[tokio::test]
 async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
@@ -544,6 +545,7 @@ async fn every_filter_key_is_served_by_an_index() {
         // The unfiltered grid, its inverse, and what a Browse card asks.
         .chain(["", "-is:document", "source_id:slack is:document"]);
     let mut unserved: Vec<String> = Vec::new();
+    let mut used: std::collections::BTreeSet<String> = Default::default();
     for q in queries {
         let (sql, params) = search_sql(&parse_query(q));
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
@@ -576,7 +578,23 @@ async fn every_filter_key_is_served_by_an_index() {
         if !served || sorts {
             unserved.push(format!("{q:?}: {plan:?}"));
         }
+        for detail in &plan {
+            if let Some(rest) = detail.split("INDEX ").nth(1) {
+                used.insert(rest.split_whitespace().next().unwrap_or("").to_string());
+            }
+        }
     }
+    // The other direction: an index no query plans with is a cost every
+    // write pays for nothing.
+    let unused: Vec<&str> = GRID_INDEXES
+        .iter()
+        .filter_map(|(_t, ddl)| ddl.split_whitespace().nth(5))
+        .filter(|name| !used.contains(*name))
+        .collect();
+    assert!(
+        unused.is_empty(),
+        "no filter key plans with these: {unused:?}"
+    );
     assert!(
         unserved.is_empty(),
         "no index serves these in newest-first order:\n{}",

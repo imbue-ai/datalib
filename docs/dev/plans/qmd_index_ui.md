@@ -154,8 +154,12 @@ visible and is how a user finds out the columns exist.
 Visibility also gates the cost, which is the part worth knowing before
 changing it: a `/qmd_state` call reads and hashes one file per document,
 so while both columns are hidden the client sends an **empty** uuid list
-— two SQL queries, no file I/O — and asks for per-document answers only
-once a column is on. That makes un-hiding a fetch trigger in its own
+— the totals, cached in the applet until the index files change, and no
+file I/O — and asks for per-document answers only once a column is on.
+Even then it asks only about the documents behind the rows on screen,
+and a margin around them, and asks again as the grid scrolls
+(`ui/src/grid/qmdAsk.ts`), so a request is about a screenful however
+many rows the grid holds. That makes un-hiding a fetch trigger in its own
 right, and a version that gated the request but never re-ran it on
 un-hide would leave the columns permanently blank while passing every
 assertion that only looked at the default state. The e2e spec pins both
@@ -235,9 +239,9 @@ Both look plausible on screen. The test drives
 it cannot pass while the shipped path is broken; the handler is left as
 request shaping (dedupe, cap, error mapping).
 
-Cost: one file read + hash per document in the current result set. The
-grid's default limit is 200 rows, which collapse to far fewer documents,
-and the endpoint caps a request at 2,000. `markdowns.md_sha256` (below)
+Cost: one file read + hash per document asked about, which is the rows
+on screen and a margin, not the whole result set; the endpoint caps a
+request at 2,000. `markdowns.md_sha256` (below)
 remains the way to remove the reads if that ever matters.
 
 One consequence worth naming: two rendered files with byte-identical
@@ -277,8 +281,7 @@ POST /applet/unified_index/qmd_state
     "errors": [] }
 ```
 
-POST rather than GET because the uuid list is as long as the grid's
-result set. Not folded into `/search` because the two change on
+POST rather than GET because the uuid list can be long. Not folded into `/search` because the two change on
 different clocks: search results change when the user types, index state
 changes while a run is in flight, and the grid wants to refresh the
 badges without re-running the query.

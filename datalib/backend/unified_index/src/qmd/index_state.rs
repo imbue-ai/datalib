@@ -11,9 +11,8 @@ use sqlx::Row;
 use crate::qmd::qmd_index_path;
 use crate::repo::IndexRepo;
 
-/// Max hashes per `IN (…)` batch. SQLite's default
-/// `SQLITE_MAX_VARIABLE_NUMBER` is 999 on older builds; 400 leaves
-/// room for the query's own binds and costs nothing at our sizes.
+/// Max hashes per batch. Each is bound twice, and SQLite's default
+/// `SQLITE_MAX_VARIABLE_NUMBER` is 999 on older builds.
 const HASH_BATCH: usize = 400;
 
 /// What the qmd index holds for one content hash.
@@ -91,6 +90,9 @@ impl QmdIndexReader {
         let mut out = HashMap::with_capacity(hashes.len());
         for chunk in hashes.chunks(HASH_BATCH) {
             let placeholders = vec!["?"; chunk.len()].join(",");
+            // The vectors are counted for this batch's hashes only: left
+            // unnarrowed, the subquery groups every vector in the index
+            // once per batch.
             // The inner GROUP BY is per (hash, model): a hash embedded
             // under two models would otherwise have its chunk count
             // double-counted against a single model's `total_chunks`.
@@ -101,16 +103,17 @@ impl QmdIndexReader {
                    FROM documents d \
                    LEFT JOIN (SELECT hash, model, COUNT(*) AS chunks, \
                                      MAX(total_chunks) AS expected \
-                                FROM content_vectors GROUP BY hash, model) v \
+                                FROM content_vectors WHERE hash IN ({placeholders}) \
+                               GROUP BY hash, model) v \
                      ON v.hash = d.hash \
                   WHERE d.active = 1 AND d.hash IN ({placeholders}) \
                   GROUP BY d.hash"
             );
             // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the only
             // interpolation is `placeholders`, a `?,?,?` run built from
-            // `chunk.len()`. The hashes are bound.
+            // `chunk.len()`. The hashes are bound, once for each run.
             let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for h in chunk {
+            for h in chunk.iter().chain(chunk) {
                 q = q.bind(h);
             }
             for row in q.fetch_all(&self.pool).await? {
@@ -149,6 +152,55 @@ impl QmdIndexReader {
             embedded: row.try_get::<i64, _>("embedded")? as u64,
         })
     }
+}
+
+/// What the qmd index files look like on disk: the size and modification
+/// time of `index.sqlite` and of its write-ahead log. qmd writes in WAL
+/// mode, so a commit grows the log and a checkpoint rewrites the main
+/// file; either moves this. A missing file reads as `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStamp([Option<(u64, std::time::SystemTime)>; 2]);
+
+impl IndexStamp {
+    pub fn of(index: &Path) -> Self {
+        let stamp = |p: &Path| {
+            let m = std::fs::metadata(p).ok()?;
+            Some((m.len(), m.modified().ok()?))
+        };
+        let mut wal = index.as_os_str().to_owned();
+        wal.push("-wal");
+        Self([stamp(index), stamp(Path::new(&wal))])
+    }
+}
+
+/// The index-wide totals, recomputed only when the index files move.
+/// They are an aggregate over every vector, a few hundred milliseconds
+/// on a real index, and the grid asks for them with every result set.
+#[derive(Default)]
+pub struct SummaryCache(tokio::sync::Mutex<Option<(IndexStamp, QmdIndexSummary)>>);
+
+impl SummaryCache {
+    pub async fn summary(
+        &self,
+        root: &Path,
+        reader: &QmdIndexReader,
+    ) -> Result<QmdIndexSummary, sqlx::Error> {
+        let now = IndexStamp::of(&qmd_index_path(root));
+        let mut last = self.0.lock().await;
+        if let Some(summary) = cached(last.as_ref(), &now) {
+            return Ok(summary);
+        }
+        let summary = reader.summary().await?;
+        *last = Some((now, summary));
+        Ok(summary)
+    }
+}
+
+fn cached(
+    last: Option<&(IndexStamp, QmdIndexSummary)>,
+    now: &IndexStamp,
+) -> Option<QmdIndexSummary> {
+    last.filter(|(stamp, _)| stamp == now).map(|(_, s)| *s)
 }
 
 pub fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
@@ -453,6 +505,40 @@ mod tests {
         let r = QmdIndexReader::from_pool(pool);
         let st = r.states_for_hashes(&hashes).await.unwrap();
         assert_eq!(st.len(), hashes.len());
+    }
+
+    /// The totals come from the cache while the index files hold still:
+    /// asked again with a reader over a different, empty database, the
+    /// cache must answer without touching it. And a write moves the
+    /// files, so the next ask recounts.
+    #[tokio::test]
+    async fn the_summary_is_recounted_only_when_the_index_moves() {
+        let root = tempfile::tempdir().unwrap();
+        let index = qmd_index_path(root.path());
+        std::fs::create_dir_all(index.parent().unwrap()).unwrap();
+        let pool = qmd_shaped_db(index.parent().unwrap()).await;
+        add_doc(&pool, "mirror", "a.md", "h1", 1).await;
+        let reader = QmdIndexReader::from_pool(pool.clone());
+        let cache = SummaryCache::default();
+        assert_eq!(
+            cache.summary(root.path(), &reader).await.unwrap().documents,
+            1
+        );
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        let empty = QmdIndexReader::from_pool(qmd_shaped_db(elsewhere.path()).await);
+        assert_eq!(
+            cache.summary(root.path(), &empty).await.unwrap().documents,
+            1,
+            "an unchanged index is answered from the cache"
+        );
+
+        add_doc(&pool, "mirror", "b.md", "h2", 1).await;
+        assert_eq!(
+            cache.summary(root.path(), &reader).await.unwrap().documents,
+            2,
+            "a write to the index must be counted"
+        );
     }
 
     #[test]
