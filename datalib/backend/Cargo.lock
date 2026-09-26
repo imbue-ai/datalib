@@ -2057,6 +2057,7 @@ dependencies = [
  "datalib-schema",
  "datalib-table",
  "datalib-time",
+ "futures",
  "serde",
  "serde_json",
  "similar",
