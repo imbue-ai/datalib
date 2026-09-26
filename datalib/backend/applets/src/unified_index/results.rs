@@ -51,6 +51,18 @@ impl ResultCache {
     }
 }
 
+/// The most rows one page carries.
+pub const MAX_PAGE: usize = 100_000;
+
+/// A page's size once it also reaches the row `through` names, wherever
+/// that row is past `offset`: a grid re-reading the rows it holds, or
+/// seeking a selected row, asks for them in one request.
+pub fn reaching(list: &[Entry], offset: usize, limit: usize, through: Option<&str>) -> usize {
+    let target = through.and_then(|uuid| list.iter().position(|e| e.uuid == uuid));
+    let needed = target.map_or(0, |i| (i + 1).saturating_sub(offset));
+    limit.max(needed).min(MAX_PAGE)
+}
+
 /// The `limit` entries from `offset`, and the offset of the next page, or
 /// `None` when these reach the end.
 pub fn page(list: &[Entry], offset: usize, limit: usize) -> (&[Entry], Option<usize>) {
@@ -93,6 +105,22 @@ mod tests {
         let (exact, next) = page(&l, 3, 2);
         assert_eq!(exact.len(), 2);
         assert_eq!(next, None, "a page ending on the last row is the last");
+    }
+
+    #[test]
+    fn a_page_stretches_to_reach_the_row_it_is_asked_through() {
+        let l = list(10);
+        assert_eq!(reaching(&l, 0, 2, Some("u6")), 7);
+        assert_eq!(reaching(&l, 4, 2, Some("u6")), 3, "counted from the offset");
+        assert_eq!(
+            reaching(&l, 0, 5, Some("u1")),
+            5,
+            "never shorter than asked"
+        );
+        assert_eq!(reaching(&l, 8, 2, Some("u1")), 2, "a row already passed");
+        assert_eq!(reaching(&l, 0, 2, Some("gone")), 2, "a row the list lacks");
+        assert_eq!(reaching(&l, 0, 2, None), 2);
+        assert_eq!(reaching(&l, 0, MAX_PAGE + 1, None), MAX_PAGE);
     }
 
     /// An offset past the end is an empty last page, not a panic: the list

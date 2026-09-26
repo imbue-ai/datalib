@@ -1,7 +1,7 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 to 3 of "Order of work" are built, and
-the server half of step 4; the rest is not. Every number was measured
+*Proposal (2026-09-25); steps 1 to 4 of "Order of work" are built; the
+rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
 `datalib-doltlite` shell; each measurement includes about 0.1 s of
@@ -51,11 +51,12 @@ grow in both directions:
 
 | | opens at | scrolling away from newest | a live frame |
 |---|---|---|---|
-| search grid | newest row at the **top** | fetch older rows, below | fetch rows newer than the top |
+| search grid, default order | newest row at the **bottom** | fetch older rows, above | read again through the oldest row held |
+| search grid, sorted or ranked | first row at the **top** | fetch later rows, below | the same |
 | log card | newest line at the **bottom** | fetch older lines, above | fetch lines newer than the bottom (the tail, today) |
 
-They are the same machine with the display flipped. That is the
-shared code path.
+They are the same machine; which way up a grid shows it is the card's
+choice. That is the shared code path.
 
 **The contract.** A paged endpoint takes the query and a cursor, and
 returns rows plus the cursor of the next page and what the page was
@@ -360,19 +361,35 @@ ever matters.
 
 ## What the grid does in the browser today, and where each goes
 
-Everything below assumes the full row set is loaded, so each needs a
-decision:
+Everything below assumed the full row set was loaded. What step 4 did
+with each, and what is left:
 
-| today, in the browser | proposal |
+| in the browser | now |
 |---|---|
-| sort by any column header | server-side, every column: off an index when one gives the order, otherwise sorted once into the result cache and paged from there |
-| drag a column to group, with counts | server-side: the group list with true counts, then each expanded group as its own paged window (above) |
-| the header filter row (per-column text boxes) | becomes query tokens, as keep/exclude already are |
+| sort by any column header | on the server: a header click asks again with `sort=`, and every column's comparer keeps the order the server sent |
+| drag a column to group, with counts | while grouped, the grid loads the whole search; step 5 moves it to the server |
+| the header filter row (per-column text boxes) | the same: while one is set, the grid loads the whole search. Turning them into query tokens is left, and needs their operators mapped onto the search bar's |
 | adaptive column hiding | computed from the first page |
-| restore the selected row from the URL | seek to it: a page on each side of its key, the same cursor machinery |
-| refetch everything on `index_changed` and diff | re-read the key range the window holds (the sort key `BETWEEN` the oldest and newest held) plus anything newer, and patch that |
-| `qmd_state` for every row in the result | only the loaded rows (see below) |
-| `__fwGridApi.rows()` in e2e | means loaded rows; specs that count everything use the count endpoint |
+| restore the selected row from the URL | the first request asks `through=` the selected row, so the page reaches it |
+| refetch everything on `index_changed` and diff | read the search again `through=` the last row held, and patch that in place |
+| `qmd_state` for every row in the result | only the rows on screen (step 3) |
+| `__fwGridApi.rows()` in e2e | means the rows held; `seek(uuid)` loads through a row, and the row helpers call it |
+
+**The default order is shown the other way up.** Newest first is what
+the server lists, and the grid shows it with the newest row at the
+bottom, where it opens, loading older rows above as it is scrolled up:
+the log card's shape. Shown newest at the top, every row a sync adds
+lands above the ones on screen and renumbers them, and the grid, which
+keeps a row's element by its index, redraws them all; a click aimed at
+one is lost (`data-sources-streaming` guards this). Upside down, a
+sync's rows land below. A sort, or free text's rank, is shown top-down
+and loads below.
+
+**`through=<uuid>` stretches a page to reach a row.** A refresh asks
+through the last row held rather than for as many rows as it holds:
+counting would drop the oldest rows as new ones arrive, or add older
+ones, and either renumbers the rows on screen. The same parameter
+loads a restored selection in one request.
 
 ## `qmd_state`, separately
 
@@ -425,9 +442,10 @@ Each step is one PR, useful on its own:
      `next_offset` and `at` on `/search`, the result cache, and qmd's
      ranking filtered by the structured terms. The UI still asks for
      everything in one page.
-   - **4b: `pagedWindow.ts` and `GridCard` on it,** with header clicks
-     sorting on the server and the header filter row becoming query
-     terms. While grouped, the grid loads everything, until step 5.
+   - **4b, done: `pagedWindow.ts` and `GridCard` on it,** with header
+     clicks sorting on the server and `through=` on `/search`. While
+     grouped or filtered, the grid loads everything, until step 5; the
+     header filter row as query terms is left.
 5. **Server-side drag-to-group** in `GridCard`: the group list, a
    paged window per expanded group, and nesting.
 6. **`/api/log` newest-first, and `RunLogPanel` on the same module.**
