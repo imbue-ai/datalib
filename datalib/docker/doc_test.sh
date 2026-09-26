@@ -76,7 +76,7 @@ wait_healthy() {
     return 1
 }
 
-# Prints "<total_estimated> <space-separated distinct sources>" for a
+# Prints "<total> <space-separated distinct sources>" for a
 # query (`source` is the row's display label: "Claude", "Mail", "PDF"),
 # retrying while the applet behind the grid is still starting.
 rows() {
@@ -85,7 +85,7 @@ rows() {
         if out="$(api "/applet/unified_index/search?q=${q}&limit=200" 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-print(d["total_estimated"], " ".join(sorted({r["source"] for r in d["rows"]})))
+print(d["total"], " ".join(sorted({r["source"] for r in d["rows"]})))
 ')"; then echo "$out"; return 0; fi
         sleep 1
     done

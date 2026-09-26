@@ -9,3 +9,4 @@ pub mod qmd;
 pub mod query;
 pub mod repo;
 pub mod search;
+pub mod sort;

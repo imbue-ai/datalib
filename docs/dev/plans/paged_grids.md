@@ -1,7 +1,7 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 to 3 of "Order of work" are built, the
-rest is not. Every number was measured
+*Proposal (2026-09-25); steps 1 to 3 of "Order of work" are built, and
+the server half of step 4; the rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
 `datalib-doltlite` shell; each measurement includes about 0.1 s of
@@ -57,24 +57,24 @@ grow in both directions:
 They are the same machine with the display flipped. That is the
 shared code path.
 
-**The contract.** A paged endpoint takes the query, a direction and a
-cursor, and returns rows plus cursors:
+**The contract.** A paged endpoint takes the query and a cursor, and
+returns rows plus the cursor of the next page and what the page was
+read at:
 
 ```
-request:  q, limit, and at most one of  before=<cursor>  after=<cursor>
-          (neither = the newest page)
-response: rows (newest first), older: <cursor>|null, newer: <cursor>|null,
-          at: <commit or seq the page was read at>
+search grid:  q, sort, limit, offset          (no offset = the first page)
+              -> rows, total, next_offset|null, at: <commit>
+log card:     q, limit, before=<seq>|after=<seq>  (neither = the newest page)
+              -> rows (newest first), older|null, newer|null, at: <seq>
 ```
 
-A cursor is the last row's sort key plus its tiebreak, encoded as an
-opaque string: `(touched_at_utc, is_document, uuid)` by default for the grid (the
-sort column's value when someone sorts by another), and `seq` for the
-log. This is *keyset* paging (`WHERE key < ? ORDER BY key DESC LIMIT n`),
-not `OFFSET`, so a page does not shift when rows land at the newest end
-while someone is scrolling. `OFFSET 20000` measured 0.46 s, so offset is
-affordable if a "jump to row N" is ever wanted. It is just not the
-default.
+The two cursors differ because the two lists do. A search's list is
+built once per commit and held (below), so a position in it is stable:
+rows landing at the newest end make a new commit, a new `at` and a new
+list, never a shifted page. The log has no commit to hold, so its
+cursor is the last line's `seq`, *keyset* paging (`WHERE seq < ? ORDER
+BY seq DESC LIMIT n`), which does not shift when lines are appended
+while someone scrolls.
 
 **The UI half** is one module, `ui/src/grid/pagedWindow.ts`, split the
 way `docs/dev/style.md` asks:
@@ -142,29 +142,36 @@ plans with: step 2 shipped one on `provider`, which the search bar has
 no key for, and step 3 dropped it. `before:`/`after:` filter on
 `created_at_utc` and have no index: a `before:` far back still walks.
 
-**Every column stays sortable,** server-side, in one of two ways:
+**Every column stays sortable, and every page takes one path.** The
+first page of a search lists every row it holds, as uuids in order:
+`SELECT uuid … WHERE <filter> ORDER BY <sort>, uuid`. The list goes in
+the result cache, and every page, the first included, is a slice of it
+plus a lookup of those rows by uuid. The cursor is a position in the
+list, and the commit it was listed at.
 
-- **When an index gives the order**, pages are keyset SQL straight off
-  that index. That covers the default newest-first sort, and any
-  filter plus the default sort. The cursor is the sort key plus `uuid`.
-- **Any other sort goes through the result cache.** The first page
-  runs the sort once, `SELECT uuid … WHERE <filter> ORDER BY <col>, uuid`
-  (about 5 s unfiltered at this size, quick once an indexed filter has
-  narrowed the set), and keeps the ordered uuid list. Every later page
-  is a slice of that list plus a primary-key lookup of those 200 rows,
-  so scrolling does not pay the sort again. The cursor is a position in
-  the list plus the commit it was computed at. The status line says
-  "sorting N rows…" while the first page waits, so the wait reads as
-  expected rather than broken.
+A second path was planned: keyset pages straight off an index when the
+index gives the order, with the cursor the sort key plus `uuid`. Timed
+at full size (74,163 rows, net of about 0.15 s of process start, in a
+read transaction, 2026-09-26), listing is too cheap to be worth it:
 
-**The result cache** lives in the applet. It is keyed by
-`(q, sort, grouping, commit)` and holds ordered uuid lists, group
-lists and counts: whatever took a scan to compute. Everything that
-would otherwise redo a scan per page goes through it: an unindexed
-sort, qmd's ranked hits, the group list below, and the total. It
-evicts least-recently-used entries under a byte budget. A uuid list
-for all 74k rows is about 3 MB. An entry for an old commit is simply
-never asked for again once the UI moves to the new one.
+| listing every uuid | time |
+|---|---|
+| newest first, no filter (the index's order) | about 0.05 s |
+| newest first, the largest source (46,661 rows) | about 0.03 s |
+| by `author`, which no index orders | about 0.5 s |
+| then one 200-row page, by uuid | under 0.01 s |
+
+One path means one cursor, a `total` that is simply the list's length,
+and no second set of tests. (The 5 s once quoted for an unindexed sort
+was read through `dolt_at_`, which uses no index at all.)
+
+**The result cache** lives in the applet
+(`applets/src/unified_index/results.rs`). It is keyed by
+`(q, sort, commit)` and holds the last 16 ordered uuid lists, each with
+qmd's score and matched words for a free-text search. A list for all
+74k rows is about 3 MB. An entry for an old commit is simply never
+asked for again once the UI moves to the new one. Grouping (step 5)
+adds its group lists and counts to the same cache.
 
 **Drag-to-group stays, and moves to the server.** Grouping by a column
 is two kinds of request:
@@ -317,25 +324,29 @@ Worth filing upstream anyway (dolthub/doltlite): `dolt_at_` seeking on
 a non-integer primary key, which would at least make pinned lookups by
 uuid cheap.
 
-**The search endpoint** gains `before`/`after` and returns cursors, with
-a default `limit` of 200. The order is already newest first
-(`ORDER BY touched_at_utc DESC, is_document DESC, uuid DESC`, step 2),
-and rows no longer carry whole bodies: #792 replaced `text` with a
-240-character `preview`. The other `/search` callers (dactal's 2000,
-perseus's 200000, `bridge.js`, the e2e specs) keep working unchanged:
-no cursor means the newest page of `limit` rows.
+**The search endpoint** takes `offset` and `sort` (`created_at:desc`;
+a column the grid shows, or `score`), with a default `limit` of 200.
+It answers with `total` (every row the search holds; this replaced
+`total_estimated`), `next_offset` (null on the last page) and `at`. The
+cursor and `at` are in the body because the gateway drops a response's
+headers. The other `/search` callers (dactal's 2000, perseus's 200000,
+`bridge.js`, the e2e specs) keep working unchanged: no offset is the
+first page of `limit` rows.
 
-**Counting** is a separate request (`/search/count`), sent after the
-first page lands and cancelled with it. The status line reads "200
-loaded" until the count arrives, then "200 of 46,566". An indexed
-filter counts in about 0.1 s. Free text is qmd's alone since #792, so its
-count is the number of ranked hits.
+**Counting** needs no request of its own: the list is already built for
+the first page, and `total` is its length.
 
-**Free text via qmd** is already capped at about 1000 ranked hits.
-Those are paged by rank out of the result cache, rather than asking
-qmd again per page. Separately, every
-free-text search loads all of `grid_rows` through `grid_row_refs()` to
-map hits to rows. That becomes a lookup by `qmd_path` over an index.
+**Free text via qmd** ranks up to 1,000 hits once per search. The
+structured terms then filter that ranking in one statement
+(`filter_uuids`), which keeps qmd's order unless a sort replaces it;
+`score:asc` reads the ranking from the bottom. The list is paged out
+of the result cache like any other, rather than asking qmd again per
+page. The old path cut qmd's hits to the page size *before* the
+structured filter, so a filtered free-text search could come back short
+while matching rows sat further down the ranking. Separately, every
+free-text search still loads all of `grid_rows` through
+`grid_row_refs()` to map hits to rows; that becomes a lookup by
+`qmd_path` over an index.
 
 ## Server: the log
 
@@ -409,12 +420,18 @@ Each step is one PR, useful on its own:
    scanning to sort.
 3. **Done: `qmd_state` fixes**, and the unused `provider` index
    dropped.
-4. **The page contract, the result cache and `pagedWindow.ts`, and
-   `GridCard` on them,** with server-side sorting.
+4. **The page contract.**
+   - **4a, done: the server.** `offset`, `sort`, `total`,
+     `next_offset` and `at` on `/search`, the result cache, and qmd's
+     ranking filtered by the structured terms. The UI still asks for
+     everything in one page.
+   - **4b: `pagedWindow.ts` and `GridCard` on it,** with header clicks
+     sorting on the server and the header filter row becoming query
+     terms. While grouped, the grid loads everything, until step 5.
 5. **Server-side drag-to-group** in `GridCard`: the group list, a
    paged window per expanded group, and nesting.
-5. **`/api/log` newest-first, and `RunLogPanel` on the same module.**
-6. **Problems** (`TableGrid`), only if it grows large enough to need it.
+6. **`/api/log` newest-first, and `RunLogPanel` on the same module.**
+7. **Problems** (`TableGrid`), only if it grows large enough to need it.
 
 ## When the snapshot moves
 

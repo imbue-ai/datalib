@@ -83,8 +83,8 @@ index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.
 
 Free text never reaches SQL: the applet sends it to qmd, maps the hits
-to rows by `qmd_path` (below), fetches them with `search_by_uuids`, and
-shows each hit's own matched lines as its Contents cell. With no qmd
+to rows by `qmd_path` (below), keeps the ones the query's structured
+terms also match (`filter_uuids`), and shows each hit's own matched lines as its Contents cell. With no qmd
 index, a free-text search answers with an error, not a weaker search.
 
 ## Adding a column

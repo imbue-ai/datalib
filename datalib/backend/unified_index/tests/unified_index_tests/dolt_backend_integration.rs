@@ -7,9 +7,10 @@ use datalib_schema::problems::{
 };
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
-use datalib_unified_index::dolt_repo::{search_sql, DoltRepo};
+use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_index::query::{parse_query, Field};
 use datalib_unified_index::repo::IndexRepo;
+use datalib_unified_index::sort::Sort;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -67,13 +68,17 @@ async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
 
 /// A document row: a chat, filed under the path's first segment.
 fn chat_row(uuid: &str, qmd_path: &str) -> GridRow {
+    chat_row_at(uuid, qmd_path, "2026-04-01T10:00:00+00:00")
+}
+
+fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
     GridRow::builder()
         .uuid(uuid)
         .provider(Provider::Claude)
         .kind("Chat")
         .source_label("Claude")
         .is_document(true)
-        .created_at(Some("2026-04-01T10:00:00+00:00".to_string()))
+        .created_at(Some(created_at.to_string()))
         .account(Some("acct-a".to_string()))
         .conversation_name(Some("Test conv".to_string()))
         .conversation_uuid(uuid)
@@ -109,11 +114,19 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     // No GRID_DDL / MARKDOWNS_DDL: this is the pre-first-sync state.
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
-    let rows = repo
-        .search_by_uuids(&parse_query(""), &["c-1".into()], 100)
+    let listing = repo
+        .filter_uuids(&parse_query(""), &["c-1".into()], None)
         .await
         .unwrap();
-    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    assert!(
+        listing.uuids.is_empty(),
+        "expected no rows, got {listing:?}"
+    );
+    assert!(repo
+        .rows_by_uuids(&["c-1".into()])
+        .await
+        .unwrap()
+        .is_empty());
     assert!(repo.grid_row_refs().await.unwrap().is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
     assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
@@ -238,6 +251,81 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap();
     assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
     assert_eq!(batch.get("c-1"), Some(&qmd));
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// A search's rows are listed once, as uuids, and every page is read by
+/// uuid: the listing is in the order asked for, a qmd ranking keeps its
+/// own order unless a sort replaces it, and the rows come back in the
+/// order they were asked for, whatever order the table holds them in.
+#[tokio::test]
+async fn a_listing_orders_filters_and_reads_back_by_uuid() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    create_grid_tables(&writer).await;
+    insert_rows(
+        &writer,
+        &[
+            chat_row_at("c-old", "enterprise/a.md", "2026-01-01T09:00:00+00:00"),
+            chat_row_at("c-new", "enterprise/b.md", "2026-03-01T09:00:00+00:00"),
+            chat_row_at("c-mid", "enterprise/c.md", "2026-02-01T09:00:00+00:00"),
+            chat_row_at("v-1", "voyager/d.md", "2026-02-15T09:00:00+00:00"),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let head = repo
+        .head()
+        .await
+        .unwrap()
+        .expect("a committed index has a head");
+
+    let newest_first = repo.ordered_uuids(&parse_query(""), None).await.unwrap();
+    assert_eq!(newest_first.uuids, ["c-new", "v-1", "c-mid", "c-old"]);
+    assert_eq!(newest_first.at.as_deref(), Some(head.as_str()));
+
+    let enterprise = parse_query("source_id:enterprise");
+    let oldest_first = repo
+        .ordered_uuids(&enterprise, Sort::parse("created_at:asc"))
+        .await
+        .unwrap();
+    assert_eq!(oldest_first.uuids, ["c-old", "c-mid", "c-new"]);
+
+    // A qmd ranking, with a row from another source and one the index
+    // does not have.
+    let ranked: Vec<String> = ["c-mid", "v-1", "gone", "c-old", "c-new"]
+        .map(String::from)
+        .into();
+    let in_rank_order = repo.filter_uuids(&enterprise, &ranked, None).await.unwrap();
+    assert_eq!(in_rank_order.uuids, ["c-mid", "c-old", "c-new"]);
+    let by_score = |s| repo.filter_uuids(&enterprise, &ranked, Sort::parse(s));
+    assert_eq!(by_score("score:desc").await.unwrap(), in_rank_order);
+    assert_eq!(
+        by_score("score:asc").await.unwrap().uuids,
+        ["c-new", "c-old", "c-mid"]
+    );
+    let resorted = repo
+        .filter_uuids(&enterprise, &ranked, Sort::parse("created_at:desc"))
+        .await
+        .unwrap();
+    assert_eq!(resorted.uuids, ["c-new", "c-mid", "c-old"]);
+
+    let asked: Vec<String> = ["c-old", "gone", "v-1"].map(String::from).into();
+    let rows = repo.rows_by_uuids(&asked).await.unwrap();
+    let got: Vec<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
+    assert_eq!(got, ["c-old", "v-1"]);
+
+    insert_rows(&writer, &[chat_row("c-later", "enterprise/e.md")]).await;
+    commit(&writer, "more rows").await;
+    assert_ne!(
+        repo.head().await.unwrap().as_deref(),
+        Some(head.as_str()),
+        "a seal moves the head, so a cached listing is not reused past it"
+    );
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
@@ -547,14 +635,13 @@ async fn every_filter_key_is_served_by_an_index() {
     let mut unserved: Vec<String> = Vec::new();
     let mut used: std::collections::BTreeSet<String> = Default::default();
     for q in queries {
-        let (sql, params) = search_sql(&parse_query(q));
+        let (sql, params) = listing_sql(&parse_query(q), None);
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
         let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
         for p in &params {
             query = query.bind(p.clone());
         }
         let plan: Vec<String> = query
-            .bind(200_i64)
             .fetch_all(&writer)
             .await
             .expect("explain")

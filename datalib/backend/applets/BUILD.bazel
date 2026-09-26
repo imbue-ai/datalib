@@ -46,6 +46,7 @@ rust_test(
     crate = ":datalib_applet",
     edition = "2021",
     deps = [
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:tempfile",

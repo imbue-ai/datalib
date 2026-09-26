@@ -105,8 +105,14 @@ export type SearchResponse = {
   query_echo: QueryEcho;
   // The columns the rows carry, typed — see `ColumnSpec`.
   columns: ColumnSpec[];
+  // One page of the search's rows, from `offset`.
   rows: SearchRow[];
-  total_estimated: number;
+  // Every row the search holds, not just this page's.
+  total: number;
+  // Where the next page starts; null when this one reaches the end.
+  next_offset: number | null;
+  // The index commit the search was read at; null with no index yet.
+  at: string | null;
   // Backend-side errors that don't fail the response — e.g. the
   // structured-search SQL errored and we returned zero rows rather than
   // surface a 500. `api.ts` raises each as a toast so the user sees

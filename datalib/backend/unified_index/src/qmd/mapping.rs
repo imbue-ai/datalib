@@ -578,11 +578,11 @@ mod tests {
         assert_eq!(got.len(), 1);
     }
 
-    /// Replay of `http::run_qmd_search`'s fanout: walk hits in rank order,
+    /// Replay of the applet's `qmd_ranking` fanout: walk hits in rank order,
     /// stamp each hit's score onto every row it resolves to, first-score-wins.
     /// Returns `(uuid, score)` in the order rows are discovered. Kept in the
     /// test so this regression is self-contained (the real loop is inline in
-    /// the http crate).
+    /// the applet crate).
     fn fanout(idx: &GridIndex, hits: &[QmdHit]) -> Vec<(String, f64)> {
         let mut seen: HashMap<String, f64> = HashMap::new();
         let mut out: Vec<(String, f64)> = Vec::new();
