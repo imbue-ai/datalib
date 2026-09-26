@@ -2,66 +2,14 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
+use datalib_qmd_fixture::{materialize_root, materialize_root_with_grid};
 use datalib_unified_index::dolt_repo::DoltRepo;
 use datalib_unified_index::qmd::index_state::{file_sha256_hex, resolve_markdown_states};
 use datalib_unified_index::qmd::QmdIndexReader;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
-
-/// Resolve a fixture, runfiles first (bazel test) then the `bazel-bin`
-/// convenience symlink (plain `cargo test`) — same two-path resolution
-/// as `fixture_db_snapshot.rs`, and the same loud panic rather than a
-/// silent skip.
-fn fixture(rel: &str) -> PathBuf {
-    if let Ok(r) = runfiles::Runfiles::create() {
-        if let Some(c) = r.rlocation(format!("_main/tests/fixtures/{rel}")) {
-            if c.exists() {
-                return c;
-            }
-        }
-    }
-    let cargo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    cargo_root
-        .join(format!("../../../bazel-bin/tests/fixtures/{rel}"))
-        .canonicalize()
-        .unwrap_or_else(|_| {
-            panic!(
-                "fixture {rel} not found. Run `bazelisk build \
-                 //tests/fixtures:ingested_tng //tests/fixtures:ingested_tng_qmd` first."
-            )
-        })
-}
-
-pub(crate) fn materialize_root(dst: &Path) {
-    for tar in ["ingested/qmd.tar", "ingested/qmd-index.tar"] {
-        let status = Command::new("tar")
-            .arg("-xf")
-            .arg(fixture(tar))
-            .arg("-C")
-            .arg(dst)
-            .arg("--strip-components=1")
-            .status()
-            .expect("spawn tar");
-        assert!(status.success(), "extracting {tar} failed: {status}");
-    }
-}
-
-pub(crate) fn materialize_root_with_grid(dst: &Path) {
-    materialize_root(dst);
-    let grid_dir = datalib_core::layout::grid_index_dir(dst);
-    std::fs::create_dir_all(&grid_dir).expect("create grid dir");
-    let db = grid_dir.join("db.doltlite_db");
-    std::fs::copy(fixture("ingested/backend_index.doltlite_db"), &db).expect("copy grid index");
-    // The fixture output is read-only in the runfiles tree; doltlite
-    // wants to open it writable even though we only read.
-    let mut perms = std::fs::metadata(&db).expect("stat").permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
-    perms.set_readonly(false);
-    std::fs::set_permissions(&db, perms).expect("chmod");
-}
 
 fn rendered_markdowns(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();

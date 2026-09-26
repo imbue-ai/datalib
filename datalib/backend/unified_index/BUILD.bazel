@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
+load(":qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 
 exports_files(["Cargo.toml"])
 
@@ -49,6 +50,21 @@ rust_test(
     ],
 )
 
+# The TNG fixture's data root and a Bazel-staged qmd to search it with,
+# for tests here and in the applet that run a real `qmd mcp`.
+rust_library(
+    name = "qmd_fixture",
+    testonly = True,
+    srcs = ["tests/qmd_fixture/lib.rs"],
+    crate_name = "datalib_qmd_fixture",
+    edition = "2021",
+    visibility = ["//datalib/backend/applets:__pkg__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
 # Every hermetic unified-index test in one binary; the modules are listed in
 # its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
 # link of the provider stack and that is most of what a test here costs.
@@ -56,26 +72,15 @@ rust_test(
     name = "unified_index_tests",
     srcs = glob(["tests/unified_index_tests/*.rs"]),
     crate_root = "tests/unified_index_tests/main.rs",
-    data = glob(["tests/unified_index_tests/snapshots/*.snap"], allow_empty = True) + [
-        "//tests/fixtures:ingested/backend_index.doltlite_db",
-        "//tests/fixtures:ingested/qmd.tar",
-        "//tests/fixtures:ingested/qmd-index.tar",
-        "@nodejs_host//:node_bin",
-        "//third-party/qmd/runtime:qmd_package_dir",
-        "//third-party/qmd/runtime:qmd_tree",
-        "//third-party/qmd_models:embeddinggemma",
-    ],
+    data = glob(["tests/unified_index_tests/snapshots/*.snap"], allow_empty = True) + QMD_FIXTURE_DATA,
     edition = "2021",
-    env = {
+    env = QMD_FIXTURE_ENV | {
         "INSTA_WORKSPACE_ROOT": ".",
-        "QMD_DAEMON_TEST_EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
-        "QMD_DAEMON_TEST_NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-        "QMD_DAEMON_TEST_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
         "RUST_TEST_THREADS": "1",
     },
     deps = [
+        ":qmd_fixture",
         "//datalib/backend/core:datalib_core",
-        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         ":datalib_unified_index",

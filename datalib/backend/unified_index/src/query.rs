@@ -174,7 +174,7 @@ pub fn parse_query(s: &str) -> ParsedQuery {
                 } else {
                     FreeTextMode::Hybrid
                 };
-                // Re-quote multi-word values so the runner can route
+                // Re-quote multi-word values so the daemon can route
                 // them as a single lex phrase. `qmd:"earl grey"` and
                 // `qmd:earl` both work; quotes survive into free_text
                 // only when the user actually typed a phrase.
@@ -200,10 +200,10 @@ pub fn parse_query(s: &str) -> ParsedQuery {
                 });
             }
             // Bare term: surrounding quotes and a leading `-` stay
-            // verbatim so the runner can forward lex-meaningful syntax to
+            // verbatim so the daemon can forward lex-meaningful syntax to
             // qmd. `"earl grey"` → qmd exact-phrase match; `-foo` → qmd
             // term exclusion; `-"earl grey"` → qmd phrase exclusion. See
-            // `qmd::runner::build_qmd_query`. Plain words pass through too.
+            // `qmd::lex`. Plain words pass through too.
             datalib_query::Token::Free(raw) => free_terms.push(raw),
         }
     }
@@ -274,8 +274,8 @@ mod tests {
 
     #[test]
     fn quoted_free_text_preserves_quotes() {
-        // Quotes survive into free_text so the runner can build a
-        // qmd `lex: "..."` line for exact-phrase matching.
+        // Quotes survive into free_text so the daemon can send qmd a
+        // lex sub-query for exact-phrase matching.
         let q = parse_query("\"hello world\" author:thad");
         assert_eq!(q.free_text, "\"hello world\"");
         assert_eq!(q.filters[&Field::Author], vec!["thad".to_string()]);
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn qmd_predicate_recognized_as_hybrid() {
         let q = parse_query("qmd:\"earl grey\"");
-        // Multi-word qmd: value is re-quoted so the runner can route
+        // Multi-word qmd: value is re-quoted so the daemon can route
         // it as a single lex phrase.
         assert_eq!(q.free_text, "\"earl grey\"");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);

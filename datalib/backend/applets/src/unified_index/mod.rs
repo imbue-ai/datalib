@@ -18,20 +18,28 @@ use axum::{
 mod columns;
 mod map;
 mod problems;
+#[cfg(test)]
+mod qmd_search_tests;
 mod results;
+#[cfg(test)]
+mod serve_tests;
 
 use datalib_columns::Identity;
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport, SummaryCache};
 use datalib_unified_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader,
-    QmdIndexSummary, QmdRunner, QmdRunnerConfig, QueryMode,
+    QmdIndexSummary, QueryMode,
 };
 use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::sort::Sort;
 use serde::{Deserialize, Serialize};
+
+/// The step protocol's data-root variable, which the gateway sets for every
+/// applet it starts.
+const DATA_ROOT_ENV: &str = "DATALIB_DAG_DATA_ROOT";
 
 /// Everything the handlers need, cloned per request.
 #[derive(Clone)]
@@ -42,24 +50,23 @@ struct Index {
     /// writer, so holding it open across a sync is safe.
     repo: DynIndexRepo,
     /// Long-lived `qmd mcp` child for sub-second searches. Resolves its
-    /// index lazily per query, so a root with no index yet (or one being
-    /// rebuilt mid-sync) degrades to the SQL fallback and upgrades again
-    /// with no restart.
+    /// index per query, so a root with no index yet answers free text with
+    /// an error, and searches once the first sync builds one, with no
+    /// restart.
     qmd: Arc<QmdDaemon>,
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
 }
 
-pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
-    let root = match params.get("data_root").and_then(|v| v.as_str()) {
-        Some(p) => PathBuf::from(p),
-        // The gateway sets the step protocol's data-root variable and
-        // runs us with the data root as cwd; `params.data_root` is the
-        // override for running this by hand.
-        None => std::env::var_os("DATALIB_DAG_DATA_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(".")),
-    };
+pub fn serve(port: u16) -> Result<()> {
+    let root = std::env::var_os(DATA_ROOT_ENV)
+        .map(PathBuf::from)
+        .with_context(|| {
+            format!(
+                "{DATA_ROOT_ENV} is not set. The gateway sets it to the data root; \
+                 to run this by hand, set it yourself"
+            )
+        })?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -362,12 +369,8 @@ async fn search_page(
         .filter_map(|e| Some((e.uuid.as_str(), e.hit.as_ref()?)))
         .collect();
     for row in &mut rows {
-        if let Some((score, context)) = hits.get(row.uuid.as_str()) {
-            row.score = Some(*score);
-            // The words the hit matched, rather than the row's opening words.
-            if !context.is_empty() {
-                row.snippet = context.clone();
-            }
+        if let Some(hit) = hits.get(row.uuid.as_str()) {
+            show_hit(row, hit);
         }
     }
     Ok(Page {
@@ -376,6 +379,15 @@ async fn search_page(
         next_offset,
         at,
     })
+}
+
+/// qmd's score, and the words the hit matched in place of the row's
+/// opening words. A hit that showed nothing readable keeps the preview.
+fn show_hit(row: &mut SearchRow, (score, context): &(f64, String)) {
+    row.score = Some(*score);
+    if !context.is_empty() {
+        row.snippet = context.clone();
+    }
 }
 
 /// The search's rows in order, from the cache when this query and sort
@@ -443,8 +455,8 @@ const QMD_DEPTH: usize = 1_000;
 
 /// qmd's ranked answer to `parsed`'s free text, as grid rows: one row per
 /// document, at its best-ranked hit, with the hit's score and the words it
-/// matched. qmd itself runs on a blocking thread, on the long-lived daemon
-/// or, failing that, a fresh shell-out.
+/// matched. qmd runs on the long-lived daemon, on a blocking thread; a
+/// failed search is the answer, and the daemon starts afresh for the next.
 async fn qmd_ranking(
     root: &std::sync::Arc<PathBuf>,
     repo: &DynIndexRepo,
@@ -452,7 +464,6 @@ async fn qmd_ranking(
     parsed: &ParsedQuery,
     depth: usize,
 ) -> anyhow::Result<Vec<(String, (f64, String))>> {
-    let root_owned = root.as_ref().clone();
     let parsed_for_qmd = parsed.clone();
     let daemon = daemon.clone();
     let scope = collection_scope(parsed);
@@ -461,19 +472,7 @@ async fn qmd_ranking(
             FreeTextMode::Hybrid => QueryMode::Hybrid,
             FreeTextMode::Vsearch => QueryMode::Vsearch,
         };
-        // Prefer the long-lived MCP daemon (sub-second). On any error —
-        // including a not-yet-built index — we drop down to a fresh
-        // `npx … query` shell-out so a missing or misbehaving daemon
-        // doesn't kill search entirely.
-        match daemon.search(mode, &parsed_for_qmd.free_text, depth, &scope) {
-            Ok(hits) => return Ok(hits),
-            Err(e) => {
-                eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
-            }
-        }
-        let cfg = QmdRunnerConfig::new(root_owned);
-        let runner = QmdRunner::new(cfg)?;
-        runner.search(mode, &parsed_for_qmd.free_text, depth, &scope)
+        daemon.search(mode, &parsed_for_qmd.free_text, depth, &scope)
     })
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
@@ -875,7 +874,7 @@ mod tests {
         pool.close().await;
     }
 
-    async fn index_over(root: &std::path::Path) -> Index {
+    pub(super) async fn index_over(root: &std::path::Path) -> Index {
         let root = Arc::new(root.to_path_buf());
         Index {
             repo: Arc::new(
@@ -890,14 +889,15 @@ mod tests {
         }
     }
 
-    async fn search(
+    pub(super) async fn search(
         s: &Index,
+        q: &str,
         offset: Option<usize>,
         limit: usize,
         sort: Option<&str>,
     ) -> SearchResponse {
         let params = SearchParams {
-            q: None,
+            q: Some(q.to_string()),
             limit: Some(limit),
             offset,
             sort: sort.map(String::from),
@@ -905,7 +905,7 @@ mod tests {
         search_handler(State(s.clone()), Query(params)).await.0
     }
 
-    fn uuids(r: &SearchResponse) -> Vec<&str> {
+    pub(super) fn uuids(r: &SearchResponse) -> Vec<&str> {
         r.rows.iter().map(|row| row.uuid.as_str()).collect()
     }
 
@@ -929,7 +929,7 @@ mod tests {
         .await;
         let s = index_over(tmp.path()).await;
 
-        let first = search(&s, None, 2, None).await;
+        let first = search(&s, "", None, 2, None).await;
         assert_eq!(uuids(&first), ["c-5", "c-4"]);
         assert_eq!((first.total, first.next_offset), (5, Some(2)));
         let at = first
@@ -946,15 +946,15 @@ mod tests {
             "the list is kept for the next page"
         );
 
-        let second = search(&s, first.next_offset, 2, None).await;
+        let second = search(&s, "", first.next_offset, 2, None).await;
         assert_eq!(uuids(&second), ["c-3", "c-2"]);
-        let last = search(&s, second.next_offset, 2, None).await;
+        let last = search(&s, "", second.next_offset, 2, None).await;
         assert_eq!(uuids(&last), ["c-1"]);
         assert_eq!(last.next_offset, None);
         assert_eq!([&second.at, &last.at], [&first.at, &first.at]);
 
         index_chats(tmp.path(), &[("c-6", "2026-01-06T09:00:00+00:00")]).await;
-        let after = search(&s, Some(2), 2, None).await;
+        let after = search(&s, "", Some(2), 2, None).await;
         assert_ne!(after.at.as_deref(), Some(at.as_str()));
         assert_eq!(after.total, 6);
         assert_eq!(uuids(&after), ["c-4", "c-3"]);
@@ -982,11 +982,41 @@ mod tests {
         pool.close().await;
         let s = index_over(tmp.path()).await;
 
-        let r = search(&s, None, 10, None).await;
+        let r = search(&s, "", None, 10, None).await;
         assert!(r.rows.is_empty());
         assert_eq!(r.total, 0);
         assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
         assert!(r.errors[0].contains("no such column"), "{:?}", r.errors);
+
+        let params = map::MatchParams {
+            q: Some("source_id:enterprise".to_string()),
+        };
+        let matched = map::matches_handler(State(s), Query(params)).await.0;
+        assert!(matched.markdown_uuids.is_empty());
+        assert_eq!(matched.errors.len(), 1, "{:?}", matched.errors);
+    }
+
+    fn row(snippet: &str) -> SearchRow {
+        SearchRow {
+            snippet: snippet.into(),
+            ..SearchRow::default()
+        }
+    }
+
+    /// A hit shows the words it matched; one that matched nothing readable
+    /// (front matter, markup) keeps the row's own opening words rather
+    /// than blanking the Contents cell.
+    #[test]
+    fn a_hit_shows_its_words_unless_it_has_none() {
+        let mut matched = row("opening words");
+        show_hit(&mut matched, &(0.9, "the words it matched".into()));
+        assert_eq!(matched.score, Some(0.9));
+        assert_eq!(matched.snippet, "the words it matched");
+
+        let mut unreadable = row("opening words");
+        show_hit(&mut unreadable, &(0.5, String::new()));
+        assert_eq!(unreadable.score, Some(0.5));
+        assert_eq!(unreadable.snippet, "opening words");
     }
 
     /// A sort the grid names reorders the whole search, not the page; one
@@ -1005,11 +1035,11 @@ mod tests {
         .await;
         let s = index_over(tmp.path()).await;
 
-        let oldest = search(&s, None, 2, Some("created_at:asc")).await;
+        let oldest = search(&s, "", None, 2, Some("created_at:asc")).await;
         assert_eq!(uuids(&oldest), ["c-1", "c-2"]);
         assert!(oldest.errors.is_empty(), "{:?}", oldest.errors);
 
-        let unknown = search(&s, None, 2, Some("warp_factor")).await;
+        let unknown = search(&s, "", None, 2, Some("warp_factor")).await;
         assert_eq!(uuids(&unknown), ["c-3", "c-2"]);
         assert_eq!(unknown.errors.len(), 1, "{:?}", unknown.errors);
     }

@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//datalib/backend/unified_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
 
 exports_files(["Cargo.toml"])
 
@@ -40,12 +41,22 @@ rust_binary(
     ],
 )
 
+# The unified_index applet's searches run a real `qmd mcp` over the TNG
+# fixture, so this carries the fixture and a staged qmd; and the applet
+# binary itself, which serve_tests.rs starts the way the gateway does.
 rust_test(
     name = "applet_unittests",
-    size = "small",
+    size = "medium",
     crate = ":datalib_applet",
+    data = QMD_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
+    env = QMD_FIXTURE_ENV | {
+        "APPLET_BIN": "$(rootpath :datalib_applet)",
+        # The qmd tests share `DATALIB_RUNTIME_DIR` (qmd_search_tests.rs).
+        "RUST_TEST_THREADS": "1",
+    },
     deps = [
+        "//datalib/backend/unified_index:qmd_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
