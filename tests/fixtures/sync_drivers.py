@@ -74,7 +74,9 @@ class HttpDriver:
         url_file = workspace.parent / f"{workspace.name}.url"
         url_file.unlink(missing_ok=True)
         self.log_path = workspace.parent / f"{workspace.name}.server.log"
-        self._log = self.log_path.open("w")
+        # Appended to: a server started again on the same root keeps
+        # the dead one's lines.
+        self._log = self.log_path.open("a")
         argv = [
             str(http_bin),
             "--no-open",
@@ -184,6 +186,15 @@ class HttpDriver:
         )
 
     def call(self, method: str, path: str, body: object | None = None) -> Any:
+        status, answer = self.request(method, path, body)
+        if status >= 400:
+            raise SystemExit(f"{method} {path} → {status}: {answer}")
+        return answer
+
+    def request(
+        self, method: str, path: str, body: object | None = None
+    ) -> tuple[int, Any]:
+        """The status and the parsed answer, whatever the status."""
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(self.origin + path, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -191,12 +202,13 @@ class HttpDriver:
             req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                text = resp.read().decode()
+                status, text = resp.status, resp.read().decode()
         except urllib.error.HTTPError as e:
-            raise SystemExit(
-                f"{method} {path} → {e.code}: {e.read().decode(errors='replace')}"
-            )
-        return json.loads(text) if text else None
+            status, text = e.code, e.read().decode(errors="replace")
+        try:
+            return status, json.loads(text) if text else None
+        except json.JSONDecodeError:
+            return status, text
 
     # ── startup ─────────────────────────────────────────────────────
 

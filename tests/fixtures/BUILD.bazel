@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
@@ -276,6 +277,43 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
+# `run_sync_pipeline.py`'s arguments 7–29, as a test passes them: the
+# fixture trees, and the YoLink maker among them (see its docstring for
+# why the numbering runs as it does).
+_TNG_FIXTURE_ARGS = [
+    "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
+    "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+    "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
+    "datalib/backend/etl/providers/github/tests/fixtures/github_api",
+    "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
+    "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
+    "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+    "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
+    "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+    "datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
+    "datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
+    "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
+    "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
+    "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+    # YoLink (args 21-22, appended — see run_sync_pipeline.py).
+    "$(rootpath //datalib/backend/etl/providers/yolink:yolink_make_fixture)",
+    "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
+    # PDF corpus (arg 23, appended for the same reason as 21-22).
+    "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
+    # Garmin (arg 24): the JSON spec the synthesizer expands.
+    "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
+    # AirVisual (arg 25, appended likewise).
+    "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
+    # Facebook (arg 26, appended likewise).
+    "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
+    # Claude Code (arg 27, appended likewise).
+    "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
+    # Codex (arg 28, appended likewise).
+    "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
+    # Calendar (arg 29, appended likewise).
+    "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
+]
+
 # py_test that drives the same `run_sync_pipeline.py` invocation as
 # :ingested_tng. Three reasons it exists:
 #
@@ -305,38 +343,7 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
-        "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-        "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
-        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
-        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
-        "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
-        "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
-        "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
-        "datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
-        "datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
-        "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
-        "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
-        "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
-        # YoLink (args 21-22, appended — see run_sync_pipeline.py).
-        "$(rootpath //datalib/backend/etl/providers/yolink:yolink_make_fixture)",
-        "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
-        # PDF corpus (arg 23, appended for the same reason as 21-22).
-        "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
-        # Garmin (arg 24): the JSON spec the synthesizer expands.
-        "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
-        # AirVisual (arg 25, appended likewise).
-        "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
-        # Facebook (arg 26, appended likewise).
-        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
-        # Claude Code (arg 27, appended likewise).
-        "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
-        # Codex (arg 28, appended likewise).
-        "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
-        # Calendar (arg 29, appended likewise).
-        "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
-    ],
+    ] + _TNG_FIXTURE_ARGS,
     data = [
         "run_sync_pipeline.py",
         "sync_drivers.py",
@@ -373,38 +380,7 @@ py_test(
         # is not sqlite-file-compatible.
         "$(rootpath //third-party/doltlite:doltlite)",
         "2369-04-15T00:00:00+00:00",
-        "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
-        "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-        "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-        "datalib/backend/etl/providers/github/tests/fixtures/github_api",
-        "datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api",
-        "datalib/backend/etl/providers/notion/tests/fixtures/notion_web",
-        "datalib/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
-        "datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
-        "datalib/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
-        "datalib/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
-        "datalib/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
-        "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
-        "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
-        "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
-        # YoLink (args 21-22, appended — see run_sync_pipeline.py).
-        "$(rootpath //datalib/backend/etl/providers/yolink:yolink_make_fixture)",
-        "datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json",
-        # PDF corpus (arg 23, appended for the same reason as 21-22).
-        "datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng",
-        # Garmin (arg 24): the JSON spec the synthesizer expands.
-        "datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
-        # AirVisual (arg 25, appended likewise).
-        "datalib/backend/etl/providers/airvisual/tests/fixtures/airvisual_tng",
-        # Facebook (arg 26, appended likewise).
-        "datalib/backend/etl/providers/facebook/tests/fixtures/facebook_tng",
-        # Claude Code (arg 27, appended likewise).
-        "datalib/backend/etl/providers/claude_code/tests/fixtures/claude_code_tng",
-        # Codex (arg 28, appended likewise).
-        "datalib/backend/etl/providers/codex/tests/fixtures/codex_tng",
-        # Calendar (arg 29, appended likewise).
-        "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
-    ],
+    ] + _TNG_FIXTURE_ARGS,
     data = [
         "run_sync_pipeline.py",
         "sync_drivers.py",
@@ -538,4 +514,49 @@ py_test(
     srcs = ["runs_store_e2e_test.py"],
     args = ["$(rootpath //datalib/backend/dag:datalib_dag_bin)"],
     data = ["//datalib/backend/dag:datalib_dag_bin"],
+)
+
+# The sync state machine under a storm (docs/dev/plans/http_driven_e2e.md
+# § 2): seeded clicks on the server's buttons and SIGKILLs of its steps,
+# then a full sync compared with a reset and a sync from nothing. One
+# case per shard; `TNG_FUZZ_SEED=<n>` replays one. `manual` until the
+# Manage screen can start and stop single steps: its events join the
+# storm then, and the target joins CI.
+py_test(
+    name = "tng_fuzz_test",
+    size = "large",
+    tags = ["manual"],
+    srcs = ["tng_fuzz_test.py"],
+    args = [
+        "$(rootpath //third-party/doltlite:doltlite)",
+        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/datalib_step:datalib_step)",
+        "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
+        "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
+        "2369-04-15T00:00:00+00:00",
+        # The data root: each case takes a temporary one.
+        "-",
+    ] + _TNG_FIXTURE_ARGS + [
+        "$(rootpath //datalib/backend/http:datalib_http_bin)",
+    ],
+    data = [
+        "run_sync_pipeline.py",
+        "sync_drivers.py",
+        ":source_json",
+        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/http:datalib_http_bin",
+        "//datalib/backend/signal-backup:signal_make_fixture",
+        "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
+        "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
+        "//third-party/doltlite:doltlite",
+    ],
+    shard_count = 4,
+)
+
+# `manual` keeps `tng_fuzz_test` out of `bazel test //...`; this keeps
+# it built there, so it cannot rot unnoticed (scripts/lint_repo.py).
+build_test(
+    name = "manual_targets_build",
+    targets = [":tng_fuzz_test"],
 )

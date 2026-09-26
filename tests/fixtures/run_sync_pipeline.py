@@ -121,6 +121,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 # A py_test's interpreter runs with safe-path on, which leaves this
@@ -162,13 +164,37 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 PRESEEDED_RAW = {"yolink"}
 
 
-def main() -> int:
-    dag_bin = Path(sys.argv[1]).resolve()
-    step_bin = Path(sys.argv[2]).resolve()
-    signal_make_fixture_bin = Path(sys.argv[3]).resolve()
-    whatsapp_make_fixture_bin = Path(sys.argv[4]).resolve()
-    now = sys.argv[5]
-    data_root = Path(sys.argv[6]).resolve()
+@dataclass
+class Prepared:
+    """A workspace ready to sync, and what a driver needs to sync it."""
+
+    workspace: Path
+    dag_bin: Path
+    http_bin: Path | None
+    bindir: Path
+    now: str
+    env: dict[str, str]
+    sources: list[str]
+    ingest_ids: list[str]
+    # `(diffs, count)` → the DAG's config text and a materialized root's.
+    config_texts: Callable[..., tuple[str, str]]
+    reset: bool
+    carddav_work: Path
+    carddav_v2: Path
+    playback_live: Path
+    playback_v2: Path
+
+
+def prepare(argv: list[str]) -> Prepared:
+    """Everything a person has before they open the app: the export
+    trees, the playback tapes that stand in for the services, the step
+    binary, and the config texts they would build in the wizard."""
+    dag_bin = Path(argv[1]).resolve()
+    step_bin = Path(argv[2]).resolve()
+    signal_make_fixture_bin = Path(argv[3]).resolve()
+    whatsapp_make_fixture_bin = Path(argv[4]).resolve()
+    now = argv[5]
+    data_root = Path(argv[6]).resolve()
     (
         anth_fx,
         cgpt_fx,
@@ -184,17 +210,17 @@ def main() -> int:
         gtk_fx,
         linkedin_fx,
         sms_fx,
-    ) = (Path(p).resolve() for p in sys.argv[7:21])
-    yolink_make_fixture_bin = Path(sys.argv[21]).resolve()
-    yolink_spec = Path(sys.argv[22]).resolve()
-    pdf_fx = Path(sys.argv[23]).resolve()
-    garmin_spec = Path(sys.argv[24]).resolve()
-    airvisual_fx = Path(sys.argv[25]).resolve()
-    facebook_fx = Path(sys.argv[26]).resolve()
-    claude_code_fx = Path(sys.argv[27]).resolve()
-    codex_fx = Path(sys.argv[28]).resolve()
-    calendar_fx = Path(sys.argv[29]).resolve()
-    http_bin = Path(sys.argv[30]).resolve() if len(sys.argv) > 30 else None
+    ) = (Path(p).resolve() for p in argv[7:21])
+    yolink_make_fixture_bin = Path(argv[21]).resolve()
+    yolink_spec = Path(argv[22]).resolve()
+    pdf_fx = Path(argv[23]).resolve()
+    garmin_spec = Path(argv[24]).resolve()
+    airvisual_fx = Path(argv[25]).resolve()
+    facebook_fx = Path(argv[26]).resolve()
+    claude_code_fx = Path(argv[27]).resolve()
+    codex_fx = Path(argv[28]).resolve()
+    calendar_fx = Path(argv[29]).resolve()
+    http_bin = Path(argv[30]).resolve() if len(argv) > 30 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -528,11 +554,6 @@ inputs = [{rendered_list}]"""
             )
         return dag_text, "\n\n".join(root_blocks) + "\n"
 
-    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
-        dag_text, root_text = config_texts(diffs)
-        driver.build_config([dag_text])
-        (workspace / "config_body.toml").write_text(root_text)
-
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
     # it to the runner as --binary-dir.
@@ -579,10 +600,38 @@ inputs = [{rendered_list}]"""
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }
+    return Prepared(
+        workspace=workspace,
+        dag_bin=dag_bin,
+        http_bin=http_bin,
+        bindir=bindir,
+        now=now,
+        env=pipeline_env,
+        sources=list(sources),
+        ingest_ids=ingest_ids,
+        config_texts=config_texts,
+        reset=reset,
+        carddav_work=carddav_work,
+        carddav_v2=carddav_v2,
+        playback_live=playback_live,
+        playback_v2=playback_v2,
+    )
+
+
+def main() -> int:
+    fx = prepare(sys.argv)
+    workspace = fx.workspace
+    config_texts = fx.config_texts
+
+    def write_config(diffs: dict[str, tuple[str, str]]) -> None:
+        dag_text, root_text = config_texts(diffs)
+        driver.build_config([dag_text])
+        (workspace / "config_body.toml").write_text(root_text)
+
     driver = (
-        HttpDriver(http_bin, workspace, bindir, now, pipeline_env)
-        if http_bin
-        else CliDriver(dag_bin, workspace, bindir, now, pipeline_env)
+        HttpDriver(fx.http_bin, workspace, fx.bindir, fx.now, fx.env)
+        if fx.http_bin
+        else CliDriver(fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
     )
     try:
         # One save per source added, as the app's wizard does it; the last
@@ -591,7 +640,7 @@ inputs = [{rendered_list}]"""
         # them, or the index drops their rows.
         diffs = _load_diff_pairs(workspace)
         driver.build_config(
-            [config_texts({}, k)[0] for k in range(1, len(sources))]
+            [config_texts({}, k)[0] for k in range(1, len(fx.sources))]
             + [config_texts(diffs)[0]]
         )
         (workspace / "config_body.toml").write_text(config_texts(diffs)[1])
@@ -599,16 +648,16 @@ inputs = [{rendered_list}]"""
         # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
         # ingested_tng_test's multi-run case: empty every raw store, then
         # run the pipeline as usual.
-        if reset:
-            driver.reset(ingest_ids)
+        if fx.reset:
+            driver.reset(fx.ingest_ids)
         driver.sync()
 
         _run_pipeline_twice_and_diff(
             workspace,
-            carddav_work,
-            carddav_v2,
-            playback_live,
-            playback_v2,
+            fx.carddav_work,
+            fx.carddav_v2,
+            fx.playback_live,
+            fx.playback_v2,
             driver,
             write_config,
         )
