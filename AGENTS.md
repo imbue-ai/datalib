@@ -493,6 +493,15 @@ Three neighbours of the same mistake:
   flaked; a target it lists twice needs one of those two fixes, not a
   re-run.
 
+## Real data stays out of the repo
+
+**Nothing from a person's mirror goes into the tree or onto GitHub**: not
+a fixture, snapshot, test string or comment, and not a commit message, PR
+description or issue. The repo is public, and a force-pushed commit stays
+reachable by its hash. Learn a shape from a real root, then write the test
+in made-up TNG data; counts, sizes and timings are fine to quote, what the
+records say is not.
+
 ## Common commands
 
 ```bash
