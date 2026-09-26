@@ -15,12 +15,12 @@ const N: usize = 150;
 /// Every line the seven announce, by kind: one per write, and one per
 /// store opened.
 fn expected() -> BTreeMap<&'static str, usize> {
-    let pauses = 3 * N.div_ceil(10);
+    let switches = 3 * N.div_ceil(10);
     BTreeMap::from([
         ("store opened", 7),
         ("request opened", 3 * N),
-        ("paused", pauses),
-        ("resumed", pauses),
+        ("turned off", switches),
+        ("turned on", switches),
         ("record saved", 2 * N),
     ])
 }
@@ -98,7 +98,7 @@ async fn seven_processes_share_the_store_and_every_write_lands() {
 
     assert_eq!(store.open_requests().await.unwrap().len(), 3 * N);
     assert_eq!(store.load_record().await.unwrap().steps.len(), 2 * N);
-    assert!(store.paused().await.unwrap().is_empty());
+    assert!(store.turned_off().await.unwrap().is_empty());
     let db = datalib_runtime::layout::supervisor_db(root);
     assert_eq!(journal_mode_bytes(&db), [1, 1], "not rollback-journal");
     assert!(!db.with_extension("sqlite-wal").exists());

@@ -373,10 +373,13 @@ seconds for a small source, low single-digit minutes for a large one
 
 ### Fixture hygiene
 
-**Desired principle**: no real user data, ever, in any checked-in
-fixture or any insta snapshot. TNG is the cover story — Picard,
-Riker, Worf, Enterprise stardates, etc. Live-golden snapshots that
-capture real workspace data must be redacted before they land in git.
+**Desired principle**: no real user data, ever, in anything checked in
+or posted: a fixture, an insta snapshot, a test string, a commit
+message, a PR description. TNG is the cover story — Picard, Riker,
+Worf, Enterprise stardates, etc. A shape learned from a real root is
+rebuilt in TNG data; the capture itself stays out of git. Live-golden
+snapshots that capture real workspace data must be redacted before they
+land in git.
 
 **Open**: how is this enforced? There's a `SKIP_PATH_SEGMENTS`
 convention for the Slack live golden but no project-wide pre-commit

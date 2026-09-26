@@ -18,13 +18,13 @@ async fn main() -> Result<()> {
     let n: usize = n.parse().context("n")?;
     let store = Store::open(&root).await?;
     match role.as_str() {
-        // A person at the controls: a sync, and now and then a pause.
+        // A person at the controls: a sync, and now and then a switch flipped off and on.
         "mailbox" => {
             for k in 0..n {
                 store.open_request(&[format!("{tag}/{k}")], tag).await?;
                 if k % 10 == 0 {
-                    store.pause(&format!("{tag}/{k}"), tag).await?;
-                    store.resume(&format!("{tag}/{k}")).await?;
+                    store.turn_off(&format!("{tag}/{k}"), tag).await?;
+                    store.turn_on(&format!("{tag}/{k}")).await?;
                 }
             }
         }

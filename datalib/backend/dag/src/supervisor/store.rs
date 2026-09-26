@@ -1,6 +1,6 @@
 //! `system/supervisor.sqlite`: the mailbox, and the loop's record. Anyone
-//! writes intent into it — open a request, ask for one to stop, pause or
-//! resume a step — and the one process running the loop reads it and
+//! writes intent into it — open a request, ask for one to stop, turn a
+//! step off or on — and the one process running the loop reads it and
 //! writes back how each request ended, and what each step did
 //! (`record.rs`). Plain SQLite in rollback-journal mode, several writing
 //! processes at once; its schema only grows, because two builds may share
@@ -19,7 +19,17 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
+
+/// Tables and columns this build calls by another name, renamed in place
+/// on open so what a person set carries over: (table, new name), then
+/// (table, column, new name), in the order they apply.
+const RENAMED_TABLES: [(&str, &str); 1] = [("pauses", "turned_off")];
+const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
+    ("turned_off", "paused_by", "turned_off_by"),
+    ("turned_off", "paused_at_utc", "turned_off_at_utc"),
+    ("steps", "paused_by", "turned_off_by"),
+];
 
 const DDL: [&str; 2] = [
     "CREATE TABLE IF NOT EXISTS requests (
@@ -34,10 +44,10 @@ const DDL: [&str; 2] = [
         outcome TEXT,
         failed_step TEXT
     )",
-    "CREATE TABLE IF NOT EXISTS pauses (
+    "CREATE TABLE IF NOT EXISTS turned_off (
         step TEXT PRIMARY KEY,
-        paused_by TEXT NOT NULL,
-        paused_at_utc TEXT NOT NULL,
+        turned_off_by TEXT NOT NULL,
+        turned_off_at_utc TEXT NOT NULL,
         tz_offset TEXT NOT NULL
     )",
 ];
@@ -129,6 +139,7 @@ impl Store {
             ),
         };
         store.refuse_if_newer(&path).await?;
+        store.rename_retired().await?;
         let ddl = || DDL.into_iter().chain(super::record::DDL);
         for stmt in ddl() {
             sqlx::query(stmt).execute(&store.pool).await?;
@@ -143,6 +154,44 @@ impl Store {
         .await?;
         store.announce("store opened");
         Ok(store)
+    }
+
+    /// Before the DDL runs, so `CREATE TABLE IF NOT EXISTS` finds the
+    /// renamed table rather than making an empty one beside it. One
+    /// transaction, taken for writing first, so two processes opening at
+    /// once do not both rename.
+    async fn rename_retired(&self) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(&mut *tx)
+                .await?;
+        for (old, new) in RENAMED_TABLES {
+            if tables.iter().any(|t| t == old) && !tables.iter().any(|t| t == new) {
+                // Safe: both names are literals from `RENAMED_TABLES`.
+                let rename = sqlx::AssertSqlSafe(format!("ALTER TABLE {old} RENAME TO {new}"));
+                sqlx::query(rename).execute(&mut *tx).await?;
+            }
+        }
+        for (table, old, new) in RENAMED_COLUMNS {
+            // Safe: `table` is a literal from `RENAMED_COLUMNS`.
+            let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
+            let have: Vec<String> = sqlx::query(pragma)
+                .fetch_all(&mut *tx)
+                .await?
+                .iter()
+                .map(|r| r.try_get("name"))
+                .collect::<Result<_, _>>()?;
+            if have.iter().any(|c| c == old) && !have.iter().any(|c| c == new) {
+                // Safe: every name here is a literal from `RENAMED_COLUMNS`.
+                let rename = sqlx::AssertSqlSafe(format!(
+                    "ALTER TABLE {table} RENAME COLUMN {old} TO {new}"
+                ));
+                sqlx::query(rename).execute(&mut *tx).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// `CREATE TABLE IF NOT EXISTS` leaves a table an older build made as
@@ -282,10 +331,10 @@ impl Store {
         rows.iter().map(request_of).collect()
     }
 
-    /// The open requests and the pauses (step id → who), as one commit
-    /// left them. Read apart, a stop and then a resume landing between the
-    /// two reads looked like a request still open for a step no longer
-    /// paused, and the loop ran a stopped sync's step again.
+    /// The open requests and the switches (step id → who turned it off),
+    /// as one commit left them. Read apart, a stop and then a turn-on
+    /// landing between the two reads looked like a request still open for
+    /// a step turned back on, and the loop ran a stopped sync's step again.
     pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query(
@@ -294,16 +343,16 @@ impl Store {
         )
         .fetch_all(&mut *tx)
         .await?;
-        let paused = sqlx::query("SELECT step, paused_by FROM pauses")
+        let turned_off = sqlx::query("SELECT step, turned_off_by FROM turned_off")
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
         let requests = rows.iter().map(request_of).collect::<Result<_>>()?;
-        let paused = paused
+        let turned_off = turned_off
             .iter()
-            .map(|r| Ok((r.try_get("step")?, r.try_get("paused_by")?)))
+            .map(|r| Ok((r.try_get("step")?, r.try_get("turned_off_by")?)))
             .collect::<Result<_>>()?;
-        Ok((requests, paused))
+        Ok((requests, turned_off))
     }
 
     /// The open requests and then the newest closed ones, up to `limit`
@@ -331,10 +380,10 @@ impl Store {
         row.as_ref().map(request_of).transpose()
     }
 
-    pub async fn pause(&self, step: &str, by: &str) -> Result<()> {
+    pub async fn turn_off(&self, step: &str, by: &str) -> Result<()> {
         let (now, tz_offset) = now_split();
         sqlx::query(
-            "INSERT INTO pauses (step, paused_by, paused_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
+            "INSERT INTO turned_off (step, turned_off_by, turned_off_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
              ON CONFLICT(step) DO NOTHING",
         )
         .bind(step)
@@ -343,26 +392,26 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        self.announce(&format!("paused {step}"));
+        self.announce(&format!("turned off {step}"));
         Ok(())
     }
 
-    pub async fn resume(&self, step: &str) -> Result<()> {
-        sqlx::query("DELETE FROM pauses WHERE step = ?")
+    pub async fn turn_on(&self, step: &str) -> Result<()> {
+        sqlx::query("DELETE FROM turned_off WHERE step = ?")
             .bind(step)
             .execute(&self.pool)
             .await?;
-        self.announce(&format!("resumed {step}"));
+        self.announce(&format!("turned on {step}"));
         Ok(())
     }
 
-    /// Step id → who paused it.
-    pub async fn paused(&self) -> Result<BTreeMap<String, String>> {
-        let rows = sqlx::query("SELECT step, paused_by FROM pauses")
+    /// Step id → who turned it off.
+    pub async fn turned_off(&self) -> Result<BTreeMap<String, String>> {
+        let rows = sqlx::query("SELECT step, turned_off_by FROM turned_off")
             .fetch_all(&self.pool)
             .await?;
         rows.iter()
-            .map(|r| Ok((r.try_get("step")?, r.try_get("paused_by")?)))
+            .map(|r| Ok((r.try_get("step")?, r.try_get("turned_off_by")?)))
             .collect()
     }
 }
@@ -427,7 +476,7 @@ mod tests {
         use crate::supervisor::record::ADDED_COLUMNS;
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.pause("a/ingest", "test").await.unwrap();
+        store.turn_off("a/ingest", "test").await.unwrap();
         for (table, column, _) in ADDED_COLUMNS {
             // Safe: every name here is a literal from `ADDED_COLUMNS`.
             let drop = sqlx::AssertSqlSafe(format!("ALTER TABLE {table} DROP COLUMN {column}"));
@@ -444,7 +493,45 @@ mod tests {
             );
         }
         store.load_record().await.unwrap();
-        assert_eq!(store.paused().await.unwrap().len(), 1);
+        assert_eq!(store.turned_off().await.unwrap().len(), 1);
+        store.close().await;
+    }
+
+    /// A step someone turned off under the old `pauses` table stays off
+    /// after the rename, rather than silently running in the next sync.
+    #[tokio::test]
+    async fn a_store_from_before_the_rename_keeps_what_was_turned_off() {
+        let root = tempfile::tempdir().unwrap();
+        let path = datalib_runtime::layout::supervisor_db(root.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(options(&path))
+            .await
+            .unwrap();
+        for stmt in [
+            "CREATE TABLE pauses (step TEXT PRIMARY KEY, paused_by TEXT NOT NULL, \
+             paused_at_utc TEXT NOT NULL, tz_offset TEXT NOT NULL)",
+            "INSERT INTO pauses VALUES ('a/ingest', 'claude', '2026-09-01T00:00:00Z', '+00:00')",
+            "CREATE TABLE steps (step TEXT PRIMARY KEY, succeeded INTEGER NOT NULL, \
+             fingerprint TEXT NOT NULL, reads TEXT NOT NULL, paused_by TEXT)",
+        ] {
+            sqlx::query(stmt).execute(&old).await.unwrap();
+        }
+        old.close().await;
+
+        let store = Store::open(root.path()).await.unwrap();
+        assert_eq!(
+            store.turned_off().await.unwrap(),
+            BTreeMap::from([("a/ingest".to_string(), "claude".to_string())])
+        );
+        assert!(columns(&store, "steps")
+            .await
+            .iter()
+            .any(|c| c == "turned_off_by"));
+        store.load_record().await.unwrap();
         store.close().await;
     }
 
@@ -494,17 +581,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pause_remembers_who_and_a_resume_lifts_it() {
+    async fn a_turn_off_remembers_who_and_a_turn_on_lifts_it() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.pause("a/ingest", "ui").await.unwrap();
-        store.pause("a/ingest", "claude").await.unwrap();
+        store.turn_off("a/ingest", "ui").await.unwrap();
+        store.turn_off("a/ingest", "claude").await.unwrap();
         assert_eq!(
-            store.paused().await.unwrap(),
+            store.turned_off().await.unwrap(),
             BTreeMap::from([("a/ingest".to_string(), "ui".to_string())])
         );
-        store.resume("a/ingest").await.unwrap();
-        assert!(store.paused().await.unwrap().is_empty());
+        store.turn_on("a/ingest").await.unwrap();
+        assert!(store.turned_off().await.unwrap().is_empty());
     }
 
     /// The loop's cue: a row another process writes moves this
@@ -515,7 +602,7 @@ mod tests {
         let loop_side = Store::open(root.path()).await.unwrap();
         let other = Store::open(root.path()).await.unwrap();
         let before = loop_side.data_version().await.unwrap();
-        loop_side.pause("x/ingest", "loop").await.unwrap();
+        loop_side.turn_off("x/ingest", "loop").await.unwrap();
         assert_eq!(loop_side.data_version().await.unwrap(), before);
         other
             .open_request(&["a/ingest".into()], "ui")

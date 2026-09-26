@@ -186,8 +186,8 @@ pub struct ManageRow {
     /// The open request this row is being run for, when there is one:
     /// what the Stop action stops.
     pub stop_request_id: Option<String>,
-    /// Who paused this step, while it is paused.
-    pub paused_by: Option<String>,
+    /// Who turned this step off, while it is off.
+    pub turned_off_by: Option<String>,
     /// The run the step's `last_run` happened in — where its log is.
     /// Empty when it has never run, or ran before runs had ids.
     pub last_run_id: String,
@@ -540,7 +540,7 @@ impl Snapshot<'_> {
                 .is_none()
                 .then(|| "Nothing on disk yet.".to_string()),
             stop_request_id: None,
-            paused_by: None,
+            turned_off_by: None,
             last_run_id: String::new(),
             live_run_id: None,
             reveal_path: on_disk.map(|t| t.abs.clone()),
@@ -742,7 +742,7 @@ impl RowCtx<'_> {
             );
         }
         // Running for no open request: its request was stopped, or it was
-        // paused, and it is checkpointing on its way out.
+        // turned off, and it is checkpointing on its way out.
         if step.is_some_and(|s| s.state == Some(StateKind::Running)) {
             return (stop("Stopping the sync".into(), true), None);
         }
@@ -966,13 +966,13 @@ impl RowCtx<'_> {
             }),
         );
         let (sync, stop_request_id) = self.sync_action(&id, sync_offer);
-        let paused_by = self.step(&id).and_then(|st| st.paused_by.clone());
+        let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
             Entry::Step(_) => Some(buttons::switch(
                 false,
-                usize::from(paused_by.is_some()),
+                usize::from(turned_off_by.is_some()),
                 1,
-                paused_by.as_deref(),
+                turned_off_by.as_deref(),
                 dropped_why.clone(),
             )),
             Entry::Applet(_) => None,
@@ -1008,7 +1008,7 @@ impl RowCtx<'_> {
             seeds,
             reveal_blocked,
             stop_request_id,
-            paused_by,
+            turned_off_by,
             last_run_id,
             live_run_id,
             reveal_path: on_disk.map(|o| o.abs.clone()),
@@ -1186,19 +1186,19 @@ impl RowCtx<'_> {
             })
             .unwrap_or_else(|| self.sync_action(&g.id, sync_offer));
         // A group is off when every step under it is.
-        let paused: Vec<Option<String>> = steps
+        let turned_off: Vec<Option<String>> = steps
             .iter()
-            .map(|c| row_of(c.id()).paused_by.clone())
+            .map(|c| row_of(c.id()).turned_off_by.clone())
             .collect();
-        let paused_by = match paused.first() {
-            Some(first) if paused.iter().all(Option::is_some) => first.clone(),
+        let turned_off_by = match turned_off.first() {
+            Some(first) if turned_off.iter().all(Option::is_some) => first.clone(),
             _ => None,
         };
         let switch = buttons::switch(
             true,
-            paused.iter().filter(|p| p.is_some()).count(),
-            paused.len(),
-            paused_by.as_deref(),
+            turned_off.iter().filter(|p| p.is_some()).count(),
+            turned_off.len(),
+            turned_off_by.as_deref(),
             dropped_why.clone().or_else(|| {
                 steps
                     .is_empty()
@@ -1274,7 +1274,7 @@ impl RowCtx<'_> {
                 "Nothing on disk yet \u{2014} this group hasn't produced anything.".to_string()
             }),
             stop_request_id,
-            paused_by,
+            turned_off_by,
             // A group's log is a child's; `status_from` names which.
             last_run_id: String::new(),
             live_run_id: None,

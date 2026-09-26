@@ -28,7 +28,7 @@ export type MenuTarget = {
   /// Sync reads as Stop.
   stopRequestId: string | null;
   /// Who turned it off; for a group, who turned off every step under it.
-  pausedBy: string | null;
+  turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
   revealPath: string | null;
@@ -53,8 +53,8 @@ export type MenuAction =
   | "browse"
   | "sync"
   | "stop"
-  | "pause"
-  | "resume"
+  | "turn_off"
+  | "turn_on"
   | "edit"
   | "compare"
   | "rename"
@@ -126,7 +126,7 @@ export function notResettableReason(t: MenuTarget): string | null {
 }
 
 /// Why "Turn off" does not apply: only the loop's steps are scheduled.
-export function notPausableReason(t: MenuTarget): string | null {
+export function notSwitchableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet is not scheduled";
   return null;
@@ -209,11 +209,11 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
           : firstBlocked(targets, (t) => t.runBlocked),
     });
   }
-  const paused = targets.filter((t) => t.pausedBy).length;
+  const off = targets.filter((t) => t.turnedOffBy).length;
   entries.push({
-    action: paused === targets.length ? "resume" : "pause",
-    name: paused === targets.length ? "Turn on" : "Turn off",
-    disabled: firstBlocked(targets, notPausableReason),
+    action: off === targets.length ? "turn_on" : "turn_off",
+    name: off === targets.length ? "Turn on" : "Turn off",
+    disabled: firstBlocked(targets, notSwitchableReason),
   });
   entries.push({
     action: "edit",

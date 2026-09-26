@@ -40,7 +40,7 @@ index). A step's function is the directory it writes:
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   └── qmd_index/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
-    ├── supervisor.sqlite           # sync requests, pauses, and the loop's record (plain SQLite)
+    ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
     └── usage.doltlite_db           # bytes-on-disk timeseries
@@ -158,34 +158,35 @@ a shell with no server needed, or over HTTP while the app is up.
 |---|---|---|
 | sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source) |
 | stop a sync | `datalib-dag stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
-| pause a step | `datalib-dag pause <config> <step> --by claude` | `POST /api/steps/<step>/pause {"by": "claude"}` (`/` in the id as `%2F`) |
-| resume it | `datalib-dag resume <config> <step>` | `POST /api/steps/<step>/resume` |
+| turn a step off | `datalib-dag turn-off <config> <step> --by claude` | `POST /api/steps/<step>/turn_off {"by": "claude"}` (`/` in the id as `%2F`) |
+| turn it on | `datalib-dag turn-on <config> <step>` | `POST /api/steps/<step>/turn_on` |
 
-`<config>` is `<data_root>/config.toml`. A stop, a pause and a resume
-take effect within a second. A pause stops a step that is running,
-keeps it from starting until it is resumed, and makes whatever reads it
-wait. It does not hold a sync open: a sync whose only work is a paused
-step closes without running it. `POST /api/requests` answers once the
+`<config>` is `<data_root>/config.toml`. A stop, a turn-off and a
+turn-on take effect within a second. Turning a step off (the switch on
+its Manage row) stops it if it is running, skips it in every sync until
+it is turned on, and makes whatever reads it wait. It does not hold a
+sync open: a sync whose only work is a step turned off closes without
+running it. Turning it on starts nothing by itself. `POST /api/requests` answers once the
 loop has taken the request on, with the request's `id`.
 
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
-<config>` prints the same from the shell, with the pauses and the steps
+<config>` prints the same from the shell, with the steps turned off and the steps
 running now. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, paused_by, request from steps'
+  'select step, state, state_detail, turned_off_by, request from steps'
 ```
 
-`state` is `running`, `waiting` (on what: `state_detail`), `paused`,
+`state` is `running`, `waiting` (on what: `state_detail`), `off`,
 `blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `request` is
-the open request it is being run for. Each request and pause records
-who made it, so the screen shows "paused by claude" or "Stop the sync of
-Work Slack, started by claude". **Don't resume or stop what a person
-started without saying so.**
+the open request it is being run for. Each request and each step turned
+off records who did it, so the screen shows "turned off by claude" or
+"Stop the sync of Work Slack, started by claude". **Don't turn on or stop
+what a person started without saying so.**
 
 **Resetting** empties what a source downloaded: every row of its store
 goes (with `+blobs`, its attachments too), and the doltlite history

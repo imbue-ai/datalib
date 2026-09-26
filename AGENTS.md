@@ -248,8 +248,8 @@ config entry the loader cannot use costs that entry and nothing else;
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
 the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
-`runner-lock` for its life; a sync, a stop, a pause is a row it writes
-there (`POST /api/requests`, `/api/steps/<id>/pause`); the Manage tab
+`runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a
 root with no config gets the launcher and the first-run screen. See
 `docs/dev/step_protocol.md` for writing a step and `docs/dev/applets.md`
@@ -493,6 +493,15 @@ Three neighbours of the same mistake:
   say why. `scripts/flaky_tests.py` names the ones that have already
   flaked; a target it lists twice needs one of those two fixes, not a
   re-run.
+
+## Real data stays out of the repo
+
+**Nothing from a person's mirror goes into the tree or onto GitHub**: not
+a fixture, snapshot, test string or comment, and not a commit message, PR
+description or issue. The repo is public, and a force-pushed commit stays
+reachable by its hash. Learn a shape from a real root, then write the test
+in made-up TNG data; counts, sizes and timings are fine to quote, what the
+records say is not.
 
 ## Common commands
 

@@ -12,7 +12,7 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   revealBlocked: null,
   browseBlocked: null,
   stopRequestId: null,
-  pausedBy: null,
+  turnedOffBy: null,
   statusFrom: "slack/render_markdown",
   revealPath: "/data/slack",
   ...over,
@@ -33,7 +33,7 @@ describe("rowMenu", () => {
     expect(actions).toEqual([
       "browse",
       "sync",
-      "pause",
+      "turn_off",
       "edit",
       "compare",
       "log",
@@ -162,10 +162,12 @@ describe("rowMenu", () => {
   });
 
   it("offers Turn on only when every target is off, and Turn off on nothing unscheduled", () => {
-    expect(entry(rowMenu([target({ pausedBy: "claude" })], opts), "resume").disabled).toBeNull();
-    const mixed = rowMenu([target({ pausedBy: "ui" }), target({ id: "mail" })], opts);
-    expect(entry(mixed, "pause").disabled).toBeNull();
-    expect(entry(rowMenu([target({ kind: "applet" })], opts), "pause").disabled).toBe(
+    expect(
+      entry(rowMenu([target({ turnedOffBy: "claude" })], opts), "turn_on").disabled,
+    ).toBeNull();
+    const mixed = rowMenu([target({ turnedOffBy: "ui" }), target({ id: "mail" })], opts);
+    expect(entry(mixed, "turn_off").disabled).toBeNull();
+    expect(entry(rowMenu([target({ kind: "applet" })], opts), "turn_off").disabled).toBe(
       "An applet is not scheduled",
     );
   });
