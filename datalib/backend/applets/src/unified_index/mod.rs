@@ -203,6 +203,9 @@ pub struct SearchParams {
     /// `datalib_unified_index::sort`). None is newest first, or qmd's rank
     /// for free text.
     pub sort: Option<String>,
+    /// A row's uuid the page must reach, however far past `offset` it is:
+    /// see `results::reaching`.
+    pub through: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -268,7 +271,7 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
-    let limit = p.limit.unwrap_or(200).min(100_000);
+    let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
     let sort = p.sort.as_deref().and_then(|spelled| {
         let sort = Sort::parse(spelled);
@@ -284,7 +287,8 @@ async fn search_handler(
     // `query_echo.qmd_error`, no rows — not a quieter search in its place.
     let mut qmd_error: Option<String> = None;
     let offset = p.offset.unwrap_or(0);
-    let page = match search_page(&s, &q, &parsed, sort, offset, limit).await {
+    let through = p.through.as_deref();
+    let page = match search_page(&s, &q, &parsed, sort, offset, limit, through).await {
         Ok(page) => page,
         Err(SearchFailure::Qmd(e)) => {
             qmd_error = Some(e);
@@ -352,8 +356,10 @@ async fn search_page(
     sort: Option<Sort>,
     offset: usize,
     limit: usize,
+    through: Option<&str>,
 ) -> Result<Page, SearchFailure> {
     let (list, at) = search_results(s, q, parsed, sort).await?;
+    let limit = results::reaching(&list, offset, limit, through);
     let (entries, next_offset) = results::page(&list, offset, limit);
     let uuids: Vec<String> = entries.iter().map(|e| e.uuid.clone()).collect();
     let mut rows = s.repo.rows_by_uuids(&uuids).await.map_err(index)?;
@@ -901,6 +907,7 @@ mod tests {
             limit: Some(limit),
             offset,
             sort: sort.map(String::from),
+            through: None,
         };
         search_handler(State(s.clone()), Query(params)).await.0
     }

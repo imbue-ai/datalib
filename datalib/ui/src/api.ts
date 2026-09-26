@@ -465,13 +465,23 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   return h;
 }
 
+/// Which page of a search, and in what order: `sort` is a column id and
+/// a direction (`created_at:desc`), or none for newest first (qmd's rank
+/// for free text). `through` names a row the page must reach, however
+/// far past `offset` it is.
+export type SearchPageSpec = { offset?: number; sort?: string | null; through?: string | null };
+
 export async function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
   options: GetOptions = {},
+  spec: SearchPageSpec = {},
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
+  if (spec.offset) params.set("offset", String(spec.offset));
+  if (spec.sort) params.set("sort", spec.sort);
+  if (spec.through) params.set("through", spec.through);
   const r = await getJson<SearchResponse>(
     `${UNIFIED_INDEX}/search?${params.toString()}`,
     signal,

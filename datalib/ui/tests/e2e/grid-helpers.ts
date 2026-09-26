@@ -2,7 +2,8 @@
 // locators pierce that). The search grid's rows carry `data-row` — the
 // index the grid renders them at — and nothing naming the record, so a
 // row is found by asking the card's grid api (`window.__fwGridApi`,
-// see cards/GridCard.ce.vue) where a uuid's row is. The typed table
+// see cards/GridCard.ce.vue) where a uuid's row is. The grid loads a
+// search a page at a time, so a row further down is sought first. The typed table
 // viewer's rows (the Manage tree, the commit history) carry their key
 // as `data-key`; those helpers are further down.
 
@@ -25,6 +26,8 @@ export const searchMenuItem = (page: Page, name: string | RegExp) =>
 /// The card's grid api on `window.__fwGridApi`, for `page.evaluate`.
 export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
+  /// Load pages until the row is held; its index, or null.
+  seek: (uuid: string) => Promise<number | null>;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
   filteredRows: () => Record<string, unknown>[];
@@ -37,6 +40,21 @@ export type GridApi = {
   showColumns: (ids: string[]) => void;
   groupBy: (ids: string[]) => void;
 };
+
+/// Wait until the search grid holds every row of its search: what it
+/// loads while grouped or filtered, a page at a time otherwise.
+export async function everyRowLoaded(page: Page) {
+  await expect
+    .poll(
+      async () => {
+        const status = await page.locator(".grid-column .status").first().textContent();
+        const m = status?.match(/(\d+) rows \(of (\d+)\)/);
+        return m !== null && m !== undefined && m[1] === m[2];
+      },
+      { timeout: 15_000, message: "the grid never held every row of its search" },
+    )
+    .toBe(true);
+}
 
 /// The uuid of the first row the grid has, whatever is at the top of
 /// the viewport — a stable handle for a row that a scroll or a sort
@@ -63,9 +81,9 @@ const rowLocator = (page: Page, rowIndex: number): Locator =>
 // column — otherwise the row is there and the cell it came for is not.
 const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<number | null> =>
   page.evaluate(
-    ({ uuid, colId }) => {
+    async ({ uuid, colId }) => {
       const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-      const row = a.rowIndexOf(uuid);
+      const row = a.rowIndexOf(uuid) ?? (await a.seek(uuid));
       if (row != null) a.scrollToRow(row);
       if (colId) a.scrollToColumn(colId);
       return row;
@@ -84,22 +102,23 @@ const nudgeRowIntoView = (page: Page, uuid: string, colId?: string): Promise<num
 // that has just been resized), waiting alone never converges. So the
 // nudge is inside the poll, and gets repeated until the row is there.
 async function scrollRowIntoView(page: Page, uuid: string, colId?: string): Promise<number> {
-  const rowIndex = await nudgeRowIntoView(page, uuid, colId);
-  expect(rowIndex, `row for uuid=${uuid} found in grid`).not.toBeNull();
+  // The index is read afresh on every try: rows loading above this one,
+  // as they do when the grid is scrolled towards its older end, move it.
+  let rowIndex: number | null = null;
   await expect
     .poll(
       async () => {
-        await nudgeRowIntoView(page, uuid, colId);
-        return rowLocator(page, rowIndex as number).count();
+        rowIndex = await nudgeRowIntoView(page, uuid, colId);
+        return rowIndex == null ? -1 : rowLocator(page, rowIndex).count();
       },
       {
         timeout: 15_000,
         intervals: [100, 250, 250, 500],
-        message: `row ${rowIndex} (uuid=${uuid}) never rendered after being scrolled to`,
+        message: `row uuid=${uuid} was not found, or never rendered after being scrolled to`,
       },
     )
     .toBeGreaterThan(0);
-  return rowIndex as number;
+  return rowIndex as unknown as number;
 }
 
 // Scroll a row into view and act on it, retrying the *pair*.

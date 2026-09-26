@@ -8,7 +8,7 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import { everyRowLoaded, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -79,11 +79,14 @@ test("the filter row narrows the rows to the typed value", async ({ page }) => {
 
 test("clicking a group header folds the group and opens nothing", async ({ page }) => {
   await openGrid(page);
-  await page.evaluate(() => {
-    const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
-    api.groupBy(["kind"]);
-    api.scrollToRow(0);
-  });
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(["kind"]),
+  );
+  // Grouped, the grid loads the whole search; the groups settle once it has.
+  await everyRowLoaded(page);
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
+  );
   const group = page.locator(".grid-box .slick-row.slick-group").first();
   await expect(group).toBeVisible();
   const title = (await group.textContent())!.trim();

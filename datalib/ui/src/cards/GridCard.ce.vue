@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Search-grid card: a search bar + a slickgrid over the unified_index
-// applet's /search results.
+// applet's /search results, a page at a time (grid/pagedWindow.ts). The
+// server orders the rows: a header click asks it again in the new order.
 //
 // Selecting a row opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus.
@@ -46,6 +47,18 @@ import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
+import {
+  asking,
+  firstWindow,
+  MARGIN,
+  MAX_LIMIT,
+  nextFetch,
+  PAGE,
+  refreshLimit,
+  withoutPage,
+  withPage,
+  type PagedWindow,
+} from "@/grid/pagedWindow";
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import type { CardCtx } from "./types";
 
@@ -173,6 +186,7 @@ async function askQmdState(uuids: string[]) {
 // settles.
 let qmdScrollTimer: ReturnType<typeof setTimeout> | null = null;
 function onViewportChanged() {
+  loadWanted();
   if (qmdScrollTimer) clearTimeout(qmdScrollTimer);
   qmdScrollTimer = setTimeout(() => {
     qmdScrollTimer = null;
@@ -273,11 +287,6 @@ const boxEl = ref<HTMLDivElement | null>(null);
 // restoring a selection would open a duplicate document column.
 let restoring = false;
 
-// True once the user has manually clicked a column header (or the URL
-// restored an explicit column state). Once set, we stop forcing the
-// score-vs-time default on subsequent query result loads.
-let userSortedManually = false;
-
 /// What the URL keeps of the grid's shape: every column in order with
 /// whether it is hidden and how wide it is, the sort, the grouping.
 type Layout = {
@@ -371,25 +380,28 @@ function setHidden(hidden: Record<string, boolean>) {
   );
 }
 
+/// Show a sort on the headers. The rows are already in its order: the
+/// server sorted them, and every column's comparer keeps what it sent.
 function applySort(sorters: CurrentSorter[]) {
   if (!vueGrid) return;
   restoring = true;
-  if (sorters.length === 0) vueGrid.sortService.clearSorting(false);
-  else {
-    vueGrid.sortService.updateSorting(sorters, false, false);
-    // `updateSorting` sorts a tick later (its local path awaits an event
-    // first). Sort now as well, with its comparer, so a row looked up
-    // next — a restored selection scrolling to itself — is already where
-    // it will stay.
-    const sortService = vueGrid.sortService;
-    const columns = vueGrid.slickGrid.getColumns();
-    const sortCols = sorters.flatMap((s) => {
-      const col = columns.find((c) => c.id === s.columnId);
-      return col ? [{ columnId: col.id, sortAsc: s.direction === "ASC", sortCol: col }] : [];
-    });
-    vueGrid.dataView.sort((a, b) => sortService.sortComparers(sortCols, a, b));
-  }
+  vueGrid.sortService.updateSorting(sorters, false, false);
   restoring = false;
+}
+
+/// Leaves rows where the server put them, so a header click only says
+/// which order to ask for.
+const serverOrder = () => 0;
+
+/// The sort the rows are asked for in, as `/search` spells it: the
+/// headers' once the grid exists, the persisted layout's before.
+function currentSort(): string | null {
+  const layout = colsEncoded ? decodeLayout(colsEncoded) : null;
+  const sorters: CurrentSorter[] = vueGrid
+    ? vueGrid.sortService.getCurrentLocalSorters()
+    : (layout?.sort ?? []).map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" }));
+  const first = sorters[0];
+  return first ? `${first.columnId}:${String(first.direction).toLowerCase()}` : null;
 }
 
 function rowKey(row: SearchRow): string {
@@ -543,83 +555,145 @@ function accountLabel(uuid: string): string {
 let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Per-query LRU cache so re-typing a recent query feels instant.
-// Keyed by the exact search string. Bounded — older entries evicted on insert.
-// Lives in module scope but is intentionally not exported: cache invalidates
-// naturally on page reload.
-const SEARCH_CACHE_MAX = 16;
-// Backend's hard ceiling — anything lower surfaces as silently-missing
-// rows for the user. Memory/render cost is fine at this size thanks to
-// the grid's row virtualization.
-const SEARCH_LIMIT = 100_000;
-type SearchCacheEntry = {
-  rows: SearchRow[];
-  total: number;
-  qmdError: string | null;
-};
-const searchCache = new Map<string, SearchCacheEntry>();
+/// The rows the grid holds, a prefix of the search's.
+let win: PagedWindow<SearchRow> | null = null;
+/// The search they answer. Replaced, never mutated, so a page that comes
+/// back for a search since replaced can tell. `tail` is the default
+/// order, newest first, which the grid shows the other way up: newest at
+/// the bottom, where it opens, with older rows loading above. Rows a
+/// sync adds then land below the ones on screen instead of moving them.
+let shown: { q: string; sort: string | null; tail: boolean } | null = null;
+/// A selection restored from the URL may be further down the list than
+/// the first page; the grid loads through it. Typing a new search gives
+/// up on it.
+let seekingSelection = sel.value !== null;
 
-function cacheGet(key: string): SearchCacheEntry | undefined {
-  const hit = searchCache.get(key);
-  if (!hit) return undefined;
-  // LRU touch: re-insert to move to the end of the iteration order.
-  searchCache.delete(key);
-  searchCache.set(key, hit);
-  return hit;
+/// The rows in the order the grid shows them.
+function display(rows: SearchRow[]): SearchRow[] {
+  return shown?.tail ? [...rows].reverse() : rows;
 }
 
-function cachePut(key: string, entry: SearchCacheEntry) {
-  searchCache.delete(key);
-  searchCache.set(key, entry);
-  while (searchCache.size > SEARCH_CACHE_MAX) {
-    const oldest = searchCache.keys().next().value;
-    if (oldest === undefined) break;
-    searchCache.delete(oldest);
-  }
+/// Grouping and the header filters work over every row the grid holds,
+/// so while either is on the grid holds every row.
+function wantsEverything(): boolean {
+  if (!vueGrid) return false;
+  const grouped = (groupingPlugin?.columnsGroupBy.length ?? 0) > 0;
+  return grouped || Object.keys(vueGrid.filterService.getColumnFilters()).length > 0;
 }
 
-async function runSearch(q: string) {
+/// Ask for the first page of `q`, or, for a refresh of the search on
+/// screen, for every row through the last one held, so nobody scrolled
+/// along the list loses their place.
+async function runSearch(q: string, refresh = false) {
   inflight?.abort();
-  const cached = cacheGet(q);
-  if (cached) {
-    rows.value = cached.rows;
-    total.value = cached.total;
-    loading.value = false;
-    error.value = null;
-    qmdError.value = cached.qmdError;
-    shownQuery.value = q;
-    return;
-  }
-  inflight = new AbortController();
+  const ctrl = (inflight = new AbortController());
+  const sort = currentSort();
+  const again = refresh && win !== null && shown?.q === q && shown.sort === sort;
+  const limit = wantsEverything() ? MAX_LIMIT : again ? refreshLimit(win!) : PAGE;
+  const through = again
+    ? win!.rows[win!.rows.length - 1]?.uuid
+    : seekingSelection
+      ? sel.value
+      : null;
   loading.value = true;
   error.value = null;
   qmdError.value = null;
   try {
     // The card shows a failure itself, beside the rows it concerns.
-    const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal, { toast: false });
+    const r = await fetchSearch(q, limit, ctrl.signal, { toast: false }, { sort, through });
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
-    rows.value = r.rows;
-    total.value = r.total;
-    const qe = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
-    qmdError.value = qe;
-    cachePut(q, { rows: r.rows, total: r.total, qmdError: qe });
+    win = firstWindow(r);
+    if (!again) shown = { q, sort, tail: sort === null && !r.query_echo?.free_text };
+    rows.value = win.rows;
+    total.value = win.total;
+    qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     shownQuery.value = q;
+    if (again) showChanged(true);
+    else showNew();
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = searchFailure(e);
   } finally {
-    loading.value = false;
+    if (inflight === ctrl) loading.value = false;
   }
+}
+
+/// The page load on its way, for anything that has to wait for it.
+let loadingMore: Promise<void> | null = null;
+
+/// Load rows until index `through` of the search is held, and the row
+/// `uuid` names if given, or until the search runs out.
+async function loadThrough(through: number, uuid: string | null = null) {
+  if (!win || !shown) return;
+  const fetch = nextFetch(win, through);
+  if (!fetch) return;
+  const search = shown;
+  win = asking(win, fetch);
+  const load = (async () => {
+    try {
+      const r = await fetchSearch(
+        search.q,
+        fetch.limit,
+        undefined,
+        { toast: false },
+        { offset: fetch.offset, sort: search.sort, through: uuid },
+      );
+      if (search !== shown || !win) return;
+      const next = withPage(win, fetch.offset, r);
+      if (next === "moved") {
+        void runSearch(search.q, true);
+        return;
+      }
+      win = next;
+      rows.value = win.rows;
+      total.value = win.total;
+      showChanged(false);
+    } catch (e) {
+      if (search !== shown || !win) return;
+      win = withoutPage(win, fetch.offset);
+      error.value = searchFailure(e);
+    }
+  })();
+  loadingMore = load;
+  await load;
+  if (loadingMore === load) loadingMore = null;
+}
+
+/// Load whatever the grid needs now: the rest of the search while it is
+/// grouped or filtered, else the rows the viewport is nearing, and a
+/// restored selection that has not turned up.
+function loadWanted() {
+  if (!vueGrid || !win) return;
+  if (wantsEverything()) {
+    void loadThrough(Infinity);
+    return;
+  }
+  const { top, bottom } = vueGrid.slickGrid.getViewport();
+  // Shown the other way up, the search's far end is the grid's top.
+  const nearing = shown?.tail ? win.rows.length - 1 - top : bottom;
+  const seeking = seekingSelection ? sel.value : null;
+  void loadThrough(seeking ? win.rows.length : nearing + MARGIN, seeking);
+}
+
+/// Load pages until `uuid`'s row is held, and say where it is: null when
+/// the search does not have it.
+async function seek(uuid: string): Promise<number | null> {
+  while (vueGrid && win && vueGrid.dataView.getRowById(uuid) == null) {
+    if (loadingMore) await loadingMore;
+    else if (win.nextOffset === null) break;
+    else await loadThrough(win.rows.length, uuid);
+  }
+  return vueGrid?.dataView.getRowById(uuid) ?? null;
 }
 
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);
-  // Show the spinner immediately on input change (unless we'll serve from
-  // cache) — otherwise the 150ms debounce + multi-second backend latency
-  // leaves the user staring at stale rows with no feedback.
-  if (!searchCache.has(q)) loading.value = true;
+  seekingSelection = false;
+  // Show the spinner immediately on input change — otherwise the 150ms
+  // debounce leaves the user staring at the old rows with no feedback.
+  loading.value = true;
   debounceTimer = setTimeout(() => runSearch(q), 150);
   saveState();
 });
@@ -634,7 +708,11 @@ function tryRestoreSelection() {
   if (!target_sel || !vueGrid || rows.value.length === 0) return;
   if (selectedRow.value && rowKey(selectedRow.value) === target_sel) return;
   const target = rows.value.find((r) => rowKey(r) === target_sel);
-  if (!target) return;
+  if (!target) {
+    if (win?.nextOffset === null) seekingSelection = false;
+    return;
+  }
+  seekingSelection = false;
   const row = vueGrid.dataView.getRowById(target_sel);
   if (row == null) return;
   restoring = true;
@@ -642,35 +720,6 @@ function tryRestoreSelection() {
   vueGrid.slickGrid.scrollRowIntoView(row);
   selectedRow.value = target;
   restoring = false;
-}
-
-// Apply the default sort whenever results change, unless the user has
-// taken sort into their own hands.
-//   - qmd-scored results → score desc, scroll to top.
-//   - everything else    → time ascending, scroll to bottom so the most
-//                          recent rows are what the user lands on.
-function applyDefaultSort() {
-  if (!vueGrid) return;
-  if (userSortedManually) {
-    // Fresh rows arrive in the server's order: put them in the one
-    // chosen before anything looks up where a row is.
-    applySort(vueGrid.sortService.getCurrentLocalSorters());
-    return;
-  }
-  const hasScores = rows.value.some((r) => typeof r.score === "number");
-  applySort(
-    hasScores
-      ? [{ columnId: "score", direction: "DESC" }]
-      : [{ columnId: "created_at", direction: "ASC" }],
-  );
-  if (sel.value) {
-    // tryRestoreSelection will scroll to the pinned row; don't fight it.
-    return;
-  }
-  const grid = vueGrid.slickGrid;
-  const last = grid.getDataLength() - 1;
-  if (last < 0) return;
-  grid.scrollRowIntoView(hasScores ? 0 : last);
 }
 
 // Adaptive column visibility: on every results load, columns whose
@@ -757,51 +806,57 @@ function applyPresetColumns() {
   applyColumns([...ordered, ...rest]);
 }
 
-/// The rows last handed to the grid, and the query they answer. A new
-/// answer to the same query is a refresh: the index moved under a view
-/// the person is still looking at.
+/// The rows last handed to the grid.
 let handed: Handed = new Map();
-let handedQuery: string | null = null;
 
-// A new query replaces the rows and shapes the columns, the sort and
-// the scroll around them. A refresh of the one shown changes only the
-// rows that changed, and leaves the rest to the person.
-watch(rows, (r) => {
-  if (!vueGrid) return;
-  const refresh = handedQuery !== null && handedQuery === shownQuery.value;
-  handedQuery = shownQuery.value;
-  if (refresh) {
-    const next = patchRows(handed, r, rowKey);
-    handed = next.handed;
-    applyPatch(next.patch);
-  } else {
-    handed = handedOf(r, rowKey);
-    vueGrid.dataset = r;
-    applyAdaptiveVisibility();
-    applyDefaultSort();
-  }
+/// A new search: its rows replace the grid's and shape the columns
+/// around them.
+function showNew() {
+  if (!vueGrid || !win) return;
+  handed = handedOf(win.rows, rowKey);
+  const shownRows = display(win.rows);
+  vueGrid.dataset = shownRows;
+  applyAdaptiveVisibility();
+  // Newest at the bottom for the default order, the top row otherwise.
+  if (shownRows.length > 0)
+    vueGrid.slickGrid.scrollRowIntoView(shown?.tail ? shownRows.length - 1 : 0);
   tryRestoreSelection();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
   refreshQmdState();
-});
+  loadWanted();
+}
 
-/// Apply a refresh in place. Rows inserted above the viewport would
-/// push what the person is reading down, so the row at the top is held
-/// at the top.
-function applyPatch(patch: RowPatch<SearchRow>) {
+/// More rows of the search on screen, or the same search read again
+/// after the index moved: only the rows that changed are touched, and
+/// the rest is left to the person.
+function showChanged(indexMoved: boolean) {
+  if (!vueGrid || !win) return;
+  const next = patchRows(handed, win.rows, rowKey);
+  handed = next.handed;
+  applyPatch(next.patch, display(win.rows));
+  tryRestoreSelection();
+  if (indexMoved) refreshQmdState();
+  else askAboutVisibleRows();
+  loadWanted();
+}
+
+/// Apply a patch in place, leaving the rows in `order`, the server's.
+/// Rows inserted above the viewport would push what the person is
+/// reading down, so the row at the top is held at the top.
+function applyPatch(patch: RowPatch<SearchRow>, order: SearchRow[]) {
   if (!vueGrid || isEmpty(patch)) return;
   const { dataView, slickGrid: grid } = vueGrid;
   const top = grid.getViewport().top;
   const anchor = rowData(top)?.uuid ?? null;
+  const position = new Map(order.map((r, i) => [r.uuid, i]));
   keepActiveOnRecord(grid, dataView, () => {
     redrawChanged(grid, dataView, () => {
       dataView.beginUpdate();
       for (const id of patch.removed) dataView.deleteItem(id);
       for (const row of patch.changed) dataView.updateItem(row.uuid, row);
       for (const row of patch.added) dataView.addItem(row);
-      // A new or changed row takes its place in whatever order is showing.
-      dataView.reSort();
+      dataView.sort((a, b) => position.get(a.uuid)! - position.get(b.uuid)!);
       dataView.endUpdate();
     });
     const moved = anchor ? dataView.getRowById(anchor) : undefined;
@@ -820,8 +875,8 @@ onMounted(async () => {
 
 // The index moved under us — a `grid_index` pass committed, which under
 // streaming happens many times per sync, as each source's rows arrive.
-// Every cached answer is stale, so drop them all and ask the shown query
-// again; the row set updates in place while the download is still going.
+// Ask the shown search again; the rows update in place while the
+// download is still going.
 const cardEl = ref<HTMLElement | null>(null);
 let unsubscribeLive: (() => void) | null = null;
 onMounted(() => {
@@ -829,8 +884,7 @@ onMounted(() => {
     {
       root: (e) => {
         if (e.kind !== "index_changed") return;
-        searchCache.clear();
-        void runSearch(query.value);
+        void runSearch(query.value, true);
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -864,9 +918,6 @@ const accountFormatter: Formatter<SearchRow> = (_r, _c, value) => {
 /// author/account cells (the accounts map is the browser's), and the
 /// two-line clamp on the text.
 const columnOverrides: Record<string, Partial<Column<SearchRow>>> = {
-  // Default sort is applied programmatically on row updates (see
-  // applyDefaultSort) — not baked into the definition so a user re-sort
-  // sticks across query changes.
   source_ref: { width: 150 },
   kind: { width: 110 },
   conversation_name: { width: 200 },
@@ -963,9 +1014,6 @@ function applyInitialLayout() {
   applyColumns(layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })));
   if (layout.sort?.length) {
     applySort(layout.sort.map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" })));
-    // An explicit persisted layout carries the user's sort choice —
-    // don't clobber it with our default.
-    userSortedManually = true;
   }
   if (layout.group?.length && groupingPlugin) {
     restoring = true;
@@ -993,7 +1041,10 @@ watch(
       filterable: true,
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
-    gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)];
+    gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)].map((c) => ({
+      ...c,
+      sortComparer: serverOrder,
+    }));
     createGrid();
   },
   { immediate: true },
@@ -1298,7 +1349,10 @@ function gridOptions(): GridOption {
       deleteIconCssClass: "mdi mdi-close",
       sortAscIconCssClass: "mdi mdi-arrow-up",
       sortDescIconCssClass: "mdi mdi-arrow-down",
-      onGroupChanged: () => updateCols(),
+      onGroupChanged: () => {
+        updateCols();
+        loadWanted();
+      },
       onExtensionRegistered: (plugin) => {
         groupingPlugin = plugin;
       },
@@ -1377,6 +1431,8 @@ function createGrid() {
   // for tests, which drive a single grid.
   (window as unknown as { __fwGridApi?: unknown }).__fwGridApi = {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
+    // Load pages until the row is held, as scrolling to it would.
+    seek,
     uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
     rows: () => bundle.dataView.getItems() as SearchRow[],
     filteredRows: () => bundle.dataView.getFilteredItems() as SearchRow[],
@@ -1403,15 +1459,9 @@ function createGrid() {
     groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
   };
   applyInitialLayout();
-  // The rows may already be loaded by the time the grid exists — the
-  // columns arrive with the first results — so this is the moment the
-  // `rows` watcher would otherwise have.
-  handed = handedOf(rows.value, rowKey);
-  handedQuery = shownQuery.value;
-  applyAdaptiveVisibility();
-  applyDefaultSort();
-  tryRestoreSelection();
-  refreshQmdState();
+  // The rows are already loaded by the time the grid exists — the
+  // columns arrive with the first results.
+  showNew();
 }
 
 /// The records selected as of the last change the grid reported.
@@ -1459,9 +1509,11 @@ function onDblClick(_e: SlickEventData, args: OnDblClickEventArgs) {
 // width, the adaptive visibility above) never does.
 function onGridStateChanged(change: GridStateChange) {
   if (restoring) return;
-  if (change.change?.type === "sorter") userSortedManually = true;
   updateCols();
-  if (change.change?.type === "columns") onColumnsShown();
+  const type = change.change?.type;
+  if (type === "sorter") void runSearch(query.value);
+  if (type === "filter") loadWanted();
+  if (type === "columns") onColumnsShown();
 }
 
 // Turning an index-state column on is the first moment we owe the user
