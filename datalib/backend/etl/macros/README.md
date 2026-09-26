@@ -125,6 +125,9 @@ as the single source of truth the same way `schema_raw.rs` is.
 
 - `#[portable_table(table = "grid_rows", primary_key = "uuid")]` — both keys
   required; `primary_key` accepts a comma-separated list for composite keys.
+- `index = "name:col1,col2"` inside it — repeatable; emitted as `INDEXES`,
+  separate from `DDL`, so each store decides whether to create them. A
+  column the table does not have is a compile error.
 - `#[col(sql = "VARCHAR(96)")]` — required on every field. Nullability is
   inferred from the Rust type: `Option<T>` is nullable, anything else gets
   `NOT NULL`.
@@ -137,7 +140,7 @@ as the single source of truth the same way `schema_raw.rs` is.
   the column it follows. Declares a column that lives in the DB but is
   computed at load time and so is absent from the struct.
 
-Emits module-level `TABLES`, `DDL` and `COLUMNS`.
+Emits module-level `TABLES`, `DDL`, `COLUMNS` and `INDEXES`.
 
 The `BulkUpsertable` impl is **skipped for a composite primary key, and
 for an integer one**: `BulkUpsertable` keys on one column by contract

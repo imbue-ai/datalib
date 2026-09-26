@@ -39,8 +39,9 @@ pub struct ChatMeta {
 fn column_for_field(f: &Field) -> Option<&'static str> {
     match f {
         Field::Source => Some("source_label"),
-        // Not a column: see the `Field::SourceId` arm in `build_where`.
-        Field::SourceId => None,
+        // Derived at index time: the path's first segment, or `datalib`
+        // for a storage row (`GridRow::derived_source_id`).
+        Field::SourceId => Some("source_id"),
         Field::Kind => Some("kind"),
         Field::Channel => Some("channel"),
         Field::Convo => Some("conversation_uuid"),
@@ -69,42 +70,6 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     for term in &q.terms {
-        // `source_id` is the one filter with no column behind it: the
-        // configured source is the first segment of `qmd_path`, so this
-        // is a prefix test. `INSTR(x, ?) = 1` rather than `LIKE 'x/%'`
-        // because a source id may legally contain `_`, which LIKE
-        // reads as a wildcard — `source_id:slack_work` would then also
-        // match a `slackXwork` stanza. INSTR takes the needle verbatim
-        // and exists in both SQLite and MySQL with this argument order.
-        //
-        // The storage rows are where the path stops answering: they sit
-        // under the source they measure and are filed under datalib
-        // anyway, so they match `source_id:datalib` and no source's own
-        // id. `provider` is where that already holds, so it is what
-        // both branches test — `source_id_for` in `dolt_repo` is the
-        // half of the pair that decides what the column shows.
-        if term.field == Field::SourceId {
-            let datalib = datalib_source_id();
-            if term.value == datalib {
-                let clause = if term.negate {
-                    "(provider IS NULL OR provider != ?)"
-                } else {
-                    "provider = ?"
-                };
-                clauses.push(clause.into());
-                params.push(datalib.to_string());
-                continue;
-            }
-            let clause = if term.negate {
-                "(qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
-            } else {
-                "INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
-            };
-            clauses.push(clause.into());
-            params.push(format!("{}/", term.value));
-            params.push(datalib.to_string());
-            continue;
-        }
         let Some(col) = column_for_field(&term.field) else {
             continue;
         };
@@ -185,65 +150,21 @@ mod tests {
         assert_eq!(params, vec!["Claude"]);
     }
 
-    /// `source:` and `source_id:` answer different questions:
-    /// the provider label vs. the configured source. Two Slack
-    /// workspaces are one `source` and two `source_id`s.
+    /// `source:` and `source_id:` answer different questions: the
+    /// provider label vs. the configured source. Two Slack workspaces are
+    /// one `source` and two `source_id`s. What a row's `source_id` is,
+    /// storage rows filed under datalib included, is decided once at index
+    /// time (`GridRow::derived_source_id`); the filter only compares, so
+    /// the `(source_id, …)` index can serve it.
     #[test]
-    fn source_id_filter_matches_the_qmd_path_prefix() {
-        let (sql, params) = build_where(&parse_query("source_id:slack"));
-        assert_eq!(
-            sql,
-            " WHERE INSTR(qmd_path, ?) = 1 AND (provider IS NULL OR provider != ?)"
-        );
-        assert_eq!(params, vec!["slack/", "datalib"]);
-
-        let (sql, params) = build_where(&parse_query("-source_id:slack"));
-        assert_eq!(
-            sql,
-            " WHERE (qmd_path IS NULL OR INSTR(qmd_path, ?) != 1 OR provider = ?)"
-        );
-        assert_eq!(params, vec!["slack/", "datalib"]);
-    }
-
-    /// The storage rows live under the source they measure, so a plain
-    /// prefix test would file every one of them under that source. They
-    /// belong to datalib, and `source_id:` has to say so in both
-    /// directions: `datalib` selects them by their provider tag, and a
-    /// real source's id has to exclude them despite the path.
-    #[test]
-    fn source_id_filter_files_measurements_under_datalib() {
-        let (sql, params) = build_where(&parse_query("source_id:datalib"));
-        assert_eq!(sql, " WHERE provider = ?");
-        assert_eq!(params, vec!["datalib"]);
+    fn source_id_filter_is_equality_on_the_derived_column() {
+        let (sql, params) = build_where(&parse_query("source_id:slack_work"));
+        assert_eq!(sql, " WHERE source_id = ?");
+        assert_eq!(params, vec!["slack_work"]);
 
         let (sql, params) = build_where(&parse_query("-source_id:datalib"));
-        assert_eq!(sql, " WHERE (provider IS NULL OR provider != ?)");
+        assert_eq!(sql, " WHERE (source_id IS NULL OR source_id != ?)");
         assert_eq!(params, vec!["datalib"]);
-
-        // The other direction: `slack`'s own rows, not what slack weighs.
-        let (sql, _) = build_where(&parse_query("source_id:slack"));
-        assert!(sql.contains("provider != ?"), "{sql}");
-    }
-
-    /// A source id may legally contain `_`, which LIKE reads as
-    /// "any one character". Under a `LIKE 'slack_work/%'` clause,
-    /// `source_id:slack_work` would also return every row from a
-    /// `slackXwork` stanza. INSTR takes its needle verbatim.
-    #[test]
-    fn source_id_filter_does_not_go_through_like() {
-        let (sql, params) = build_where(&parse_query("source_id:slack_work"));
-        assert!(!sql.contains("LIKE"), "{sql}");
-        assert_eq!(params, vec!["slack_work/", "datalib"]);
-    }
-
-    /// The trailing separator is what keeps the prefix a whole path
-    /// segment: without it, `source_id:slack` would also match a
-    /// separate `slack-personal` stanza.
-    #[test]
-    fn source_id_filter_matches_whole_segments_only() {
-        let (_, params) = build_where(&parse_query("source_id:slack"));
-        assert_eq!(params, vec!["slack/", "datalib"]);
-        assert!(!"slack-personal/render_markdown/x.md".starts_with("slack/"));
     }
 
     /// The old spelling has to reach the same SQL, not merely the same

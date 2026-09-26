@@ -1,6 +1,7 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); nothing here is built. Every number was measured
+*Proposal (2026-09-25); steps 1 and 2 of "Order of work" are built, the
+rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
 `datalib-doltlite` shell; each measurement includes about 0.1 s of
@@ -67,7 +68,7 @@ response: rows (newest first), older: <cursor>|null, newer: <cursor>|null,
 ```
 
 A cursor is the last row's sort key plus its tiebreak, encoded as an
-opaque string: `(modified_at_utc, uuid)` by default for the grid (the
+opaque string: `(touched_at_utc, is_document, uuid)` by default for the grid (the
 sort column's value when someone sorts by another), and `seq` for the
 log. This is *keyset* paging (`WHERE key < ? ORDER BY key DESC LIMIT n`),
 not `OFFSET`, so a page does not shift when rows land at the newest end
@@ -99,34 +100,50 @@ Check that before writing it, because I did not read its source.
 
 ## Server: the search grid
 
-**The default order is `modified_at` newest first, so every row gets
-one.** Only 20,776 of the 74,023 rows have a `modified_at`. The
-`GridRow` builder's `build()` sets `modified_at` to `created_at` when the
-source gave none, so a record never touched after it was made counts as
-modified when it was made. The UTC twin `modified_at_utc` follows,
-because it is derived from `modified_at`. Doing it in the one builder
-every render goes through means no provider changes, and the sort and
-its index are one plain column rather than a `coalesce`. (An expression
-index is used only when every query repeats the expression exactly.)
-The cost is that the Modified column shows the creation time on those
-rows. On the measured root, one row has neither stamp; it sorts last.
+**The default order is newest first by a new `touched_at` column:**
+when the record last changed at its source. The builder sets it to
+`modified_at`, else `created_at`, and a provider sets it itself only
+when the record's last change is neither. Filling `modified_at` from
+`created_at` instead was the first idea, and it would have broken two
+things. `modified_at`'s documented null means "never known to have
+changed", and a calendar event's `created_at` is when it *happens*. On
+the measured root 936 events are dated in the future, up to 2031, so
+newest-first by modified-else-created would have opened the grid on
+several pages of 2031 holidays. A calendar row's `touched_at` is the
+event's edit stamp instead. `touched_at_utc`, like the other `_utc`
+twins, is derived at index time, so the sort and its index are one
+plain column. (An expression index is used only when every query
+repeats the expression exactly.)
 
-**A new `source_id` column** holds the group id. The `source_id:`
-filter is `INSTR(qmd_path, 'gmail/') = 1` today, which no index can
-serve, and it is the filter every Browse card uses.
+**`source_id` is a derived column** holding the group id: the path's
+first segment, or `datalib` for a storage row
+(`GridRow::derived_source_id`). The `source_id:` filter was
+`INSTR(qmd_path, 'gmail/') = 1`, which no index can serve, and it is
+the filter every Browse card uses. It is now `source_id = ?`.
 
-**Indexes,** through `PortableTable`'s existing `index = "name:cols"`:
+**Indexes** go through a new `index = "name:cols"` on `PortableTable`,
+emitted apart from the table DDL so only the unified index creates
+them; every render store also has a `grid_rows` and does not pay:
 
-- `(modified_at_utc, uuid)` for the unfiltered grid;
-- `(col, modified_at_utc, uuid)` for each key the search bar filters
-  on: `source_id`, `provider`, `source_label`, `kind`, `channel`,
-  `conversation_uuid`, `author`, `account`, `project`,
-  `notion_page_uuid`, `diff_status`, `is_document`.
+- `(touched_at_utc, is_document, uuid)` for the unfiltered grid, a
+  document ahead of its rows at the same moment;
+- `(col, touched_at_utc, is_document, uuid)` for each key the search
+  bar filters on: `source_id`, `provider`, `source_label`, `kind`,
+  `channel`, `conversation_uuid`, `author`, `account`, `project`,
+  `notion_page_uuid`, `diff_status`, and `(is_document, touched_at_utc,
+  uuid)`.
+
+`every_filter_key_is_served_by_an_index` requires each key's query plan
+to *search* an index on its own column. Scanning the newest-first index
+and testing every row also avoids a sort, and is the 38 s walk above;
+the test's first version accepted that, and passed with an index
+deleted, before it was tightened. `before:`/`after:` filter on
+`created_at_utc` and have no index: a `before:` far back still walks.
 
 **Every column stays sortable,** server-side, in one of two ways:
 
 - **When an index gives the order**, pages are keyset SQL straight off
-  that index. That covers the default `modified_at` sort, and any
+  that index. That covers the default newest-first sort, and any
   filter plus the default sort. The cursor is the sort key plus `uuid`.
 - **Any other sort goes through the result cache.** The first page
   runs the sort once, `SELECT uuid … WHERE <filter> ORDER BY <col>, uuid`
@@ -151,7 +168,7 @@ never asked for again once the UI moves to the new one.
 is two kinds of request:
 
 - **The group list:** `SELECT <col>, count(*) … WHERE <filter> GROUP BY
-  <col>`. Every filterable column has a `(col, modified_at_utc, uuid)`
+  <col>`. Every filterable column has a `(col, touched_at_utc, …)`
   index, so this is an index-only scan: the equivalent `count(*)` for
   one provider took 0.08 s. A column without an index scans once and
   lands in the result cache. The counts in the group headers are true
@@ -194,19 +211,17 @@ from nothing over 74k rows took 8.5 s, which bounds what a full
 re-index pays.
 
 So paying later costs more than paying now, and the grid would lag
-each seal by ~10 s. Step 2 times a real sync's seals before and after
-the indexes. If seals turn out to hurt, moving the indexes to the read
-branch is the fallback, and it is known to work: the merge kept every
-index correct (`INDEXED BY` counts matched the table,
-`integrity_check` ok). A test
-asserts, per filter key, that `EXPLAIN QUERY PLAN` says
-`USING INDEX`. It runs against a store of a few thousand synthetic rows,
-so it is deterministic and fast, and it catches the next key someone
-adds without an index.
+each seal by ~10 s. And keeping indexes on a branch of the reader's own
+needs that reader to write the branch, which a read transaction does
+not (below). A real sync's seals have not been timed with the indexes
+yet; the next full sync of a real root will say, since `runs.sqlite`
+keeps every `grid_index` run's duration and the rebuilds from before
+this change are there to compare with.
 
-This is a store shape change: a minor version bump, and a ladder rung
-or a reset of `grid_index`. It is derived data, so the cost is a
-re-index. The commit message says so.
+It is a shape change to derived stores only, so nothing has to migrate
+by hand: every source's render store sees its `grid_rows` DDL change
+and re-renders once, and the unified index drops and rebuilds on the
+drift (`init_schema`).
 
 **Pinned and indexed: a read transaction is the snapshot.** The
 applet has to read one commit and use the indexes. `dolt_at_` cannot do
@@ -301,19 +316,18 @@ a non-integer primary key, which would at least make pinned lookups by
 uuid cheap.
 
 **The search endpoint** gains `before`/`after` and returns cursors, with
-a default `limit` of 200. `ORDER BY modified_at_utc DESC, uuid DESC`
-replaces `created_at_utc ASC, is_document DESC, uuid`. A page stops
-carrying `text`. The 240-character snippet is still computed on the
-server; today a `Chat` row ships its whole `text` as the snippet, which
-alone can be megabytes. The other `/search` callers (dactal's 2000,
+a default `limit` of 200. The order is already newest first
+(`ORDER BY touched_at_utc DESC, is_document DESC, uuid DESC`, step 2),
+and rows no longer carry whole bodies: #792 replaced `text` with a
+240-character `preview`. The other `/search` callers (dactal's 2000,
 perseus's 200000, `bridge.js`, the e2e specs) keep working unchanged:
 no cursor means the newest page of `limit` rows.
 
 **Counting** is a separate request (`/search/count`), sent after the
 first page lands and cancelled with it. The status line reads "200
 loaded" until the count arrives, then "200 of 46,566". An indexed
-filter counts in about 0.1 s. A free-text `LIKE` count scans, so it is
-skipped and the line says "200+".
+filter counts in about 0.1 s. Free text is qmd's alone since #792, so its
+count is the number of ranked hits.
 
 **Free text via qmd** is already capped at about 1000 ranked hits.
 Those are paged by rank out of the result cache, rather than asking
@@ -383,11 +397,10 @@ Each step is one PR, useful on its own:
 1. **Done: the read transaction, at full size.** The held-transaction
    scenario in `doltlite_two_process_test`, the full-size harness, and
    the measurements above. The read branch was rejected.
-2. **`grid_rows` columns and indexes, and the applet's snapshot
-   connection** in the search path. Default order newest-first. The UI
+2. **Done: `touched_at`, `source_id` and the indexes, and the applet
+   reading in a read transaction.** Default order newest first. The UI
    is unchanged, so it still asks for everything, but the query stops
-   scanning to sort. Includes the index-per-filter-key test, and times
-   a real sync's `grid_index` seals before and after the indexes.
+   scanning to sort.
 3. **`qmd_state` fixes** (independent of the others).
 4. **The page contract, the result cache and `pagedWindow.ts`, and
    `GridCard` on them,** with server-side sorting.

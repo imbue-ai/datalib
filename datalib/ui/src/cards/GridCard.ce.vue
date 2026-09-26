@@ -357,7 +357,20 @@ function applySort(sorters: CurrentSorter[]) {
   if (!vueGrid) return;
   restoring = true;
   if (sorters.length === 0) vueGrid.sortService.clearSorting(false);
-  else vueGrid.sortService.updateSorting(sorters, false, false);
+  else {
+    vueGrid.sortService.updateSorting(sorters, false, false);
+    // `updateSorting` sorts a tick later (its local path awaits an event
+    // first). Sort now as well, with its comparer, so a row looked up
+    // next — a restored selection scrolling to itself — is already where
+    // it will stay.
+    const sortService = vueGrid.sortService;
+    const columns = vueGrid.slickGrid.getColumns();
+    const sortCols = sorters.flatMap((s) => {
+      const col = columns.find((c) => c.id === s.columnId);
+      return col ? [{ columnId: col.id, sortAsc: s.direction === "ASC", sortCol: col }] : [];
+    });
+    vueGrid.dataView.sort((a, b) => sortService.sortComparers(sortCols, a, b));
+  }
   restoring = false;
 }
 
@@ -619,7 +632,13 @@ function tryRestoreSelection() {
 //   - everything else    → time ascending, scroll to bottom so the most
 //                          recent rows are what the user lands on.
 function applyDefaultSort() {
-  if (!vueGrid || userSortedManually) return;
+  if (!vueGrid) return;
+  if (userSortedManually) {
+    // Fresh rows arrive in the server's order: put them in the one
+    // chosen before anything looks up where a row is.
+    applySort(vueGrid.sortService.getCurrentLocalSorters());
+    return;
+  }
   const hasScores = rows.value.some((r) => typeof r.score === "number");
   applySort(
     hasScores

@@ -22,7 +22,7 @@ use anyhow::{bail, Context, Result};
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
-use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
+use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, DDL as PROBLEMS_DDL};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
@@ -354,7 +354,9 @@ async fn record_unreadable_store(
 }
 
 pub fn schema_hash() -> String {
-    datalib_store_meta::schema_hash(index_ddl())
+    datalib_store_meta::schema_hash(
+        index_ddl().chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl)),
+    )
 }
 
 /// Every `CREATE TABLE` in the grid index, in creation order. One list, so
@@ -393,7 +395,17 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .await
             .with_context(|| format!("create {}", table_of(ddl)))?;
     }
-    reconcile_index_schema(pool).await
+    reconcile_index_schema(pool).await?;
+    // After the reconcile, which drops the tables and their indexes with
+    // them. Only here: every render store has a `grid_rows` too, and only
+    // the index the grid reads wants to pay for these on every write.
+    for (_table, ddl) in GRID_ROWS_INDEXES {
+        sqlx::query(*ddl)
+            .execute(pool)
+            .await
+            .with_context(|| format!("create index: {ddl}"))?;
+    }
+    Ok(())
 }
 
 /// The `grid_index` step's handle on the index: the one way to open it
@@ -1299,6 +1311,7 @@ mod insert_round_trip_tests {
             // are non-NULL too.
             created_at: Some("2026-06-02T13:00:00-07:00".into()),
             modified_at: Some("2026-06-03T09:30:00-07:00".into()),
+            touched_at: Some("2026-06-03T09:30:00-07:00".into()),
             is_document: true,
             author: Some("Jean-Luc Picard".into()),
             account: Some("acct-1701".into()),
@@ -1421,6 +1434,7 @@ mod write_lock_tests {
             source_label: "Claude".into(),
             created_at: Some("2026-06-02T20:00:00+00:00".into()),
             modified_at: None,
+            touched_at: None,
             is_document: true,
             author: None,
             account: Some("acct-test".into()),

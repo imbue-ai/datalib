@@ -159,6 +159,8 @@ pub fn rows_for_document(
         is_document: true,
         created_at: when.map(str::to_string),
         modified_at: meta.modified_at.map(str::to_string),
+        // The builder's rule, by hand: this file builds its rows directly.
+        touched_at: meta.modified_at.or(when).map(str::to_string),
         author: meta.author.map(str::to_string),
         account: None,
         project: None,
@@ -200,6 +202,7 @@ pub fn rows_for_document(
             // A page has no stamp of its own; the document's modification
             // is the document's to carry.
             modified_at: None,
+            touched_at: when.map(str::to_string),
             // Denormalized onto the page rows too, matching how every
             // chat provider stamps the author on each message row so
             // the grid can filter without a join.

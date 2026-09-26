@@ -1410,11 +1410,11 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 pub const BUILTIN_STORE_SHAPES: &[(&str, &str)] = &[
     (
         "render_markdown",
-        "aa9e17f258659ee150edd64d67dd9770aa3e8a73fa04df6829f595a3d34ed8b2",
+        "94ce64e9de6a72547840782662f06815e01d6da29bbb17c01940c0c1060ff9d3",
     ),
     (
         "grid_index",
-        "3c8765bda92c931c46fd682f3abe75db4e66da9a2cbd5a682c1bd62db3cc77be",
+        "d76e48b559a41c2f1a542cae15e20c065a0824c8033108369beee974b2463a94",
     ),
 ];
 

@@ -18,6 +18,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         source_label: provider.into(),
         created_at: Some("2369-04-14T10:00:00+00:00".into()),
         modified_at: None,
+        touched_at: None,
         is_document: false,
         author: None,
         account: None,

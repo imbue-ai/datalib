@@ -336,7 +336,12 @@ The rules, none optional; the reasons and measurements are in
   the error path too — dropping the handle only schedules the close.
 - **A reader opens read-only and pins a commit** (`open_reader`, then
   `pin`, then `pinned_<t>` views). Render reads its raw store that way and
-  `grid_index` reads every render store that way.
+  `grid_index` reads every render store that way. `dolt_at_` uses no
+  secondary index, so a reader that needs one — the search applet —
+  pins with a read transaction on its read-only connection instead
+  (`DoltRepo::pinned`); it costs the writer nothing, measured at full
+  size. A second process that *moves a ref* is a writer, and refuses
+  the real one's seals (`etl/README.md`).
 - **A reader never runs `dolt_status`.** From a read-only connection it
   fails the writer's commit and loses the rows behind it (#400). Any
   other statement a reader adds is presumed guilty until
