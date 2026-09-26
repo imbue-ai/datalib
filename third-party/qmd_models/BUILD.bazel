@@ -17,15 +17,15 @@
 #   embeddinggemma        `qmd embed` (the fixture index genrule) and
 #                         every search — the applet's daemon embeds the
 #                         query text.
-#   query-expansion 1.7B  only the applet's CLI FALLBACK, which shells
-#                         out to `qmd query` (auto-expanding) when the
-#                         long-lived `qmd mcp` daemon fails.
-#   qwen3-reranker        nothing, today. Both query paths disable
-#                         reranking (`"rerank": false` in daemon.rs,
-#                         `--no-rerank` in runner.rs). It is here so the
-#                         `dev_tng` root holds what a real one does, and
-#                         so flipping that flag is a code change rather
-#                         than a surprise download.
+#   query-expansion 1.7B  nothing, today. Only a plain-text `qmd query`
+#                         expands; the applet's daemon sends typed
+#                         sub-queries (`build_daemon_searches`).
+#   qwen3-reranker        nothing, today. The daemon disables reranking
+#                         (`"rerank": false` in daemon.rs).
+#
+# The two unused ones are here so the `dev_tng` root holds what a real
+# one does, and so turning either on is a code change rather than a
+# surprise download.
 #
 # Pinned to repo REVISIONS rather than `main`: HuggingFace serves
 # `resolve/main/...` as a moving pointer, so a re-quantized re-upload

@@ -147,7 +147,7 @@ mod tests {
         );
     }
 
-    /// The CLI fallback sends the same lines without numbers, and a quoted
+    /// qmd's CLI prints the same lines without numbers, and a quoted
     /// title loses its quotes but keeps its own colon.
     #[test]
     fn a_front_matter_hit_from_the_cli_is_its_title() {

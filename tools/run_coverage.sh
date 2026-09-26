@@ -96,6 +96,10 @@ LCOV_OUT="${LCOV_OUT:-/tmp/datalib_coverage.lcov}"
 # the pipeline test, useful to nobody else — so this invocation uploads
 # nothing; the disk cache still keeps the instrumented build.
 #
+# --nocache_test_results because a cached result neither writes this
+# run's profraws nor puts the test binary in bazel-bin, and the export
+# then fails on the missing binary.
+#
 # --instrument_test_targets because an async fn's body is compiled into
 # the crate that awaits it. A rust_test that drives a library's async
 # code runs the body from the test crate, which bazel otherwise leaves
@@ -105,6 +109,7 @@ bazelisk coverage \
     "${TARGETS[@]}" \
     --instrumentation_filter="$INSTRUMENT" \
     --instrument_test_targets \
+    --nocache_test_results \
     --experimental_split_coverage_postprocessing \
     --experimental_fetch_all_coverage_outputs \
     --noremote_upload_local_results \
