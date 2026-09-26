@@ -109,7 +109,9 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_index") return "The QMD index keeps no doltlite store";
+  if (t.func === "qmd_index" || t.func === "keyword_index" || t.func === "embed") {
+    return "The QMD index keeps no doltlite store";
+  }
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
   return null;
 }
@@ -125,7 +127,13 @@ export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.stopRequestId) return "Busy — stop the sync first";
   if (t.kind === "step" && t.func === "embedding_map") return null;
-  if (!t.type || t.func === "grid_index" || t.func === "qmd_index") {
+  if (
+    !t.type ||
+    t.func === "grid_index" ||
+    t.func === "qmd_index" ||
+    t.func === "keyword_index" ||
+    t.func === "embed"
+  ) {
     return "Reset a source; the index follows it";
   }
   return null;

@@ -5,6 +5,9 @@ load("//tools:test_slice.bzl", "rust_test_slice", "skip_slices")
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
     "Cargo.toml",
+    # Its TOML example is loaded like the example configs, by
+    # //datalib/backend/datalib_step:datalib_step_unittests.
+    "src/agent_config_guide.md",
 ])
 
 # The embedded UI bundle, pinned to the HOST platform. The Vite build

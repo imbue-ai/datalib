@@ -70,7 +70,11 @@ impl Phase {
         match function {
             Some("ingest") => Phase::Ingest,
             Some("render_markdown") => Phase::Render,
-            Some("grid_index") | Some("qmd_index") | Some("embedding_map") => Phase::Index,
+            Some("grid_index")
+            | Some("qmd_index")
+            | Some("keyword_index")
+            | Some("embed")
+            | Some("embedding_map") => Phase::Index,
             _ => Phase::Other,
         }
     }
@@ -418,6 +422,8 @@ fn child_label(step: &WrittenStep) -> String {
         Some("render_markdown") => "Render markdown",
         Some("grid_index") => "Grid index",
         Some("qmd_index") => "QMD index",
+        Some("keyword_index") => "Keyword index",
+        Some("embed") => "Embeddings",
         Some("embedding_map") => "Embedding map",
         Some(other) => other,
         None => "Step",

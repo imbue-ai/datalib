@@ -16,9 +16,11 @@
 # one: it runs `datalib-step`, which reads the function and the group's
 # `type` from that environment. The built-in functions are `ingest`
 # (bring the data in), `render_markdown` (turn the raw store into
-# markdown), the two fan-ins `grid_index` and `qmd_index` over every
-# render_markdown tree, and `embedding_map`, which lays out what
-# `qmd_index` embedded. `params` is per-function — the ingest
+# markdown), `keyword_index` and `embed` (fill the source's part of the
+# qmd search index: its keyword index, then its embeddings), the two
+# fan-ins `grid_index` and `qmd_index` over every render_markdown tree,
+# and `embedding_map`, which lays out what the `embed` steps embedded.
+# `params` is per-function — the ingest
 # step carries the provider's config, with where the data comes from
 # as one table whose name is read under the group's type (`api` is
 # the product's own API; `export`, `backup` and the like read files
@@ -103,6 +105,21 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+# A source's own part of free-text search. `keyword_index` keeps its
+# collection in `unified_index/qmd_index` in line with its render; `embed`
+# then embeds what changed, and is the slow one. Either can be
+# turned off on the Manage screen and synced by hand; leave both out and
+# drop the source from `qmd_index`'s inputs to keep it out of search.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
+
 # ── claude ─────────────────────────────────────────────────────────
 # Prerequisite (one-time): register claude.ai with latchkey and
 # supply your sessionKey cookie (DevTools → Application → Cookies):
@@ -124,6 +141,16 @@ conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
+
+[[steps]]
+group = "claude"
+function = "keyword_index"
+inputs = ["claude/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+inputs = ["claude/keyword_index"]
 
 # ── a diff group ───────────────────────────────────────────────────
 # What changed in a source between two of its raw store's commits, as
@@ -151,12 +178,25 @@ to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
 # a diff a person expected to be small and is not. Default 1000.
 max_documents = 200
 
+[[steps]]
+group = "slack-diff"
+function = "keyword_index"
+inputs = ["slack-diff/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "slack-diff"
+function = "embed"
+inputs = ["slack-diff/keyword_index"]
+
 # ── locks ──────────────────────────────────────────────────────────
 # What keeps steps apart beyond the trees they write and read. Every
-# config has three, `network` (4 slots), `cpu` (4) and `index` (2), and a
-# step that names none holds one of them by its shape: a download
-# `network`, a render `cpu`, an index `index`. Declare one to resize it,
-# or add your own and name it on the steps that hold it:
+# config has three budgets, `network` (4 slots), `cpu` (4) and `index`
+# (2), and a step that names none holds one of them by its shape: a
+# download `network`, a render `cpu`, an index `index`. The qmd steps
+# hold one of two locks of one slot instead, since they all write one
+# index file: `qmd_keyword` (`qmd_index`, every `keyword_index`) and
+# `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
+# own and name it on the steps that hold it:
 #
 #   [[locks]]
 #   name = "slack-api"   # two sources on one workspace's rate limit
@@ -176,7 +216,9 @@ max_documents = 200
 # above means adding its render step's id here too — the wizard does
 # that for you; a hand-edit has to remember, and the Pipeline table
 # flags a render step nothing consumes. The group has no `type`: it
-# mirrors nothing, it indexes what the others mirrored.
+# mirrors nothing, it indexes what the others mirrored. `qmd_index`
+# registers one qmd collection per source it names, and each source's
+# own `keyword_index` and `embed` fill it.
 [[groups]]
 id = "unified_index"
 
@@ -191,13 +233,14 @@ function = "qmd_index"
 inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 # qmd's document embeddings laid out on a plane by UMAP, for the map
-# card (`umapView()`). It reads only the qmd index, so it names that one
-# step. Each run starts from the last map, so documents stay put as more
-# arrive; resetting the step lays the map out afresh.
+# card (`umapView()`). It reads the vectors each source's `embed` wrote,
+# so it names those steps. Each run starts from the last map, so
+# documents stay put as more arrive; resetting the step lays the map out
+# afresh.
 [[steps]]
 group = "unified_index"
 function = "embedding_map"
-inputs = ["unified_index/qmd_index"]
+inputs = ["slack/embed", "claude/embed", "slack-diff/embed"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the

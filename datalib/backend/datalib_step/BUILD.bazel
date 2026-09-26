@@ -143,6 +143,7 @@ rust_test(
         "//docs/user/config_examples:all_sources.toml",
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",
+        "//datalib/backend/http:src/agent_config_guide.md",
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",

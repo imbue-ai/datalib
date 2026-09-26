@@ -32,8 +32,8 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `function` it performs there and the `inputs` it reads; its id is
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. A step with no `command` is a built-in one (the
-functions `ingest`, `render_markdown`, `grid_index` and `qmd_index`,
-run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
+functions `ingest`, `render_markdown`, `keyword_index`, `embed`,
+`grid_index`, `qmd_index` and `embedding_map`, run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
@@ -59,13 +59,27 @@ group = "slack"
 function = "ingest"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
-[steps.params]
-sync = {}
+# The one table under it names how the data is reached: `api` is the
+# product's own API, and an empty one takes the provider's defaults.
+[steps.params.api]
 
 [[steps]]
 group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
+
+# The source's own part of free-text search: its keyword index, then
+# its embeddings (the slow one). Leave both out, and the source out of
+# `qmd_index` below, to keep it out of search.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
 
 # The shared fan-in steps every source's rendered markdown feeds. Add a
 # source's render step id to both `inputs` lists.

@@ -42,7 +42,7 @@ environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
 step with no `command` runs `datalib-step`, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_index`), and why the loader requires such a step to
+`grid_index`, `qmd_index`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived

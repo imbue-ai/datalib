@@ -6,9 +6,9 @@ rust_library(
     name = "datalib_qmd_indexer",
     srcs = ["src/lib.rs"],
     # `include_str!`'d into the crate: the script that drives qmd's
-    # embedding SDK. Not a `srcs` entry — it is data the compiler reads,
+    # SDK. Not a `srcs` entry — it is data the compiler reads,
     # not Rust to compile.
-    compile_data = ["src/js/embed_ndjson.mjs"],
+    compile_data = ["src/js/qmd_sdk.mjs"],
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],

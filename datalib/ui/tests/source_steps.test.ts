@@ -25,6 +25,8 @@ import {
   sourceStepsOf,
   stepIdFor,
   fanInNames,
+  readersOf,
+  setQmdSteps,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
@@ -90,12 +92,16 @@ describe("listSteps", () => {
     expect(by.get("slack/render_markdown")).toBe("render");
     expect(by.get("unified_index/grid_index")).toBe("index");
     expect(by.get("unified_index/qmd_index")).toBe("index");
+    const qmd = new Map(listSteps(setQmdSteps(PAIR, "slack", true)).map((s) => [s.id, s]));
+    expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
+    expect(qmd.get("slack/embed")!.phase).toBe("index");
+    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (embeddings)");
     // A custom function under a group, and a step outside any group,
     // are steps and nothing more — whatever their ids look like.
     const custom = listSteps(`[[steps]]
 group = "slack"
-function = "embed"
-command = "my-embedder"
+function = "summarize"
+command = "my-summarizer"
 
 [[steps]]
 id = "exports/render_markdown"
@@ -896,5 +902,75 @@ describe("the ChatGPT descriptor", () => {
     });
     const [ingest] = listSteps(stepsBody);
     expect(paramsAreRepresentable(ingest, CHATGPT)).toEqual({ ok: true });
+  });
+});
+
+describe("a source's qmd steps", () => {
+  const MAPPED = `${PAIR}
+[[steps]]
+group = "unified_index"
+function = "embedding_map"
+inputs = []
+`;
+  const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
+
+  /// The keyword index reads the source's render and the collection the
+  /// qmd index registers for it; the embed reads the keyword index; the
+  /// map reads the embed.
+  it("adds the two steps, each reading what it follows", () => {
+    const next = setQmdSteps(MAPPED, "slack", true);
+    expect(inputsOf(next, "slack/keyword_index")).toEqual([
+      "slack/render_markdown",
+      "unified_index/qmd_index",
+    ]);
+    expect(inputsOf(next, "slack/embed")).toEqual(["slack/keyword_index"]);
+    expect(inputsOf(next, "unified_index/embedding_map")).toEqual(["slack/embed"]);
+    expect(setQmdSteps(next, "slack", true)).toBe(next);
+  });
+
+  /// Turning search off for a source takes its steps, the map's edge to
+  /// them, and its render out of the qmd index — the grid keeps it.
+  it("takes both steps and every edge to them back out", () => {
+    const off = setQmdSteps(setQmdSteps(MAPPED, "slack", true), "slack", false);
+    expect(inputsOf(off, "slack/keyword_index")).toBeUndefined();
+    expect(inputsOf(off, "slack/embed")).toBeUndefined();
+    expect(inputsOf(off, "unified_index/embedding_map")).toEqual([]);
+    expect(inputsOf(off, "unified_index/qmd_index")).toEqual([]);
+    expect(inputsOf(off, "unified_index/grid_index")).toEqual(["slack/render_markdown"]);
+  });
+
+  /// With no qmd index to read, the steps would only be dropped by the
+  /// loader, so none are written.
+  it("writes nothing where the config has no qmd index", () => {
+    const noQmd = removeSteps(
+      PAIR,
+      listSteps(PAIR).filter((s) => s.id === "unified_index/qmd_index"),
+    );
+    expect(inputsOf(setQmdSteps(noQmd, "slack", true), "slack/keyword_index")).toBeUndefined();
+  });
+
+  /// A render is wired into the two fan-ins that read markdown and never
+  /// into the map, whose inputs are embed steps.
+  it("wires a render into the markdown fan-ins only", () => {
+    const wired = wireIntoFanIns(MAPPED, "email/render_markdown");
+    expect(inputsOf(wired, "unified_index/embedding_map")).toEqual([]);
+    expect(inputsOf(wired, "unified_index/grid_index")).toContain("email/render_markdown");
+  });
+
+  /// Removing a source's ingest takes everything that reads it, however
+  /// far down; removing the qmd index takes every source's qmd steps. A
+  /// fan-in only loses the edge.
+  it("finds every step reading a removed one, but no fan-in", () => {
+    const text = setQmdSteps(MAPPED, "slack", true);
+    const all = listSteps(text);
+    expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual([
+      "slack/render_markdown",
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+    expect(readersOf(["unified_index/qmd_index"], all).map((s) => s.id)).toEqual([
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
   });
 });

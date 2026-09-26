@@ -524,10 +524,11 @@ emit({"event": "outcome",
 
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
-learn what to do — `ingest`, `render_markdown`, `grid_index` or
-`qmd_index`; anything else is refused with the list — and
-`DATALIB_DAG_GROUP_TYPE` to learn which provider to run, which the two
-per-source functions require and the two index functions ignore. It
+learn what to do — `ingest`, `render_markdown`, `keyword_index`,
+`embed`, `grid_index`, `qmd_index` or `embedding_map`; anything else is
+refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
+provider to run, which `ingest` and `render_markdown` require and the
+rest ignore. It
 writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
 store from the first entry of `DATALIB_DAG_INPUTS`. It reads the
@@ -540,7 +541,9 @@ providers; beeper/signal `period`, perseus `alignment_pairs`, email
 commits there, and emits versions where it has them (the grid index claims its dolt commit hash). Use it as the
 reference implementation.
 
-The two index functions have one reader, the `unified_index` applet,
+The index functions have one reader, the `unified_index` applet,
 which finds them from the data root alone; so their ids are fixed at
-`unified_index/grid_index` and `unified_index/qmd_index`, and
-`datalib-step` refuses to run them under any other.
+`unified_index/grid_index`, `unified_index/qmd_index` and
+`unified_index/embedding_map`, and `datalib-step` refuses to run them
+under any other. A source's `keyword_index` and `embed` write into
+`qmd_index`'s file, to the collection named for their group.

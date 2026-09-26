@@ -28,12 +28,11 @@ const renderToggle = (page: Page) =>
   wizard(page).locator(
     '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
   );
-/// The Rendering section's second toggle: whether this source's
-/// markdown is named by `unified_index/qmd_index`, and so reachable by
-/// semantic search.
+/// The Rendering section's second toggle: whether this source has its
+/// own qmd steps, and so is reachable by free-text search.
 const qmdToggle = (page: Page) =>
   wizard(page).locator(
-    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for semantic search")) input.wiz-bool',
+    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for free-text search")) input.wiz-bool',
   );
 
 /// The `inputs` one fan-in declares, read out of the config text.
@@ -256,7 +255,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   expect(after).toContain('group = "no-render"');
 });
 
-test("semantic search is a choice, and only the qmd fan-in feels it", async ({ page }) => {
+test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
   // Embedding is the slow part of a sync, so a source can be rendered
   // and gridded without being embedded. The grid index is not a
   // choice — a source missing from it is missing from the table.
@@ -272,6 +271,7 @@ test("semantic search is a choice, and only the qmd fan-in feels it", async ({ p
   const added = await editor.inputValue();
   expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
   expect(fanInInputs(added, "qmd_index")).not.toContain("rows-only/render_markdown");
+  expect(added).not.toContain("rows-only/keyword_index");
 
   // Reopening reads the answer back off the config, not off a default.
   await expandGroup(page, "rows-only");
@@ -289,8 +289,15 @@ test("semantic search is a choice, and only the qmd fan-in feels it", async ({ p
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
   const saved = await editor.inputValue();
   expect(fanInInputs(saved, "qmd_index")).toContain("rows-only/render_markdown");
-  // Added once, however many times the source is saved.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
+  expect(saved).toContain(
+    'group = "rows-only"\nfunction = "keyword_index"\ninputs = ["rows-only/render_markdown", "unified_index/qmd_index"]',
+  );
+  expect(saved).toContain(
+    'group = "rows-only"\nfunction = "embed"\ninputs = ["rows-only/keyword_index"]',
+  );
+  // Added once, however many times the source is saved: in both fan-ins
+  // and as the keyword index's input.
+  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(3);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
@@ -418,10 +425,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the two steps under it.
+  // The confirm says what goes: the group and the four steps under it —
+  // ingest, render, and the source's keyword index and embeddings.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("2 steps");
+    expect(d.message()).toContain("4 steps");
     void d.accept();
   });
   await pickRowMenu(
@@ -433,7 +441,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
   await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
-  // The `[[groups]]` entry, both `[[steps]]`, and any fan-in reference:
+  // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);
 });

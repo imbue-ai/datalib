@@ -471,6 +471,8 @@ async fn run_function(
             writes_the_index_tree(&env, &qmd_index::out_rel())?;
             qmd_index::run(data_root, &env, models_dir, emitter).await
         }
+        Function::KeywordIndex => qmd_index::run_keyword(data_root, &env, emitter).await,
+        Function::Embed => qmd_index::run_embed(data_root, &env, models_dir, emitter).await,
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await

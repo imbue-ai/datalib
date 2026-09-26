@@ -516,6 +516,16 @@ group = "unified_index"
 function = "qmd_index"
 inputs = [{rendered_list}]"""
         )
+        # Each source fills its own qmd collection: a keyword index and
+        # its embeddings. The index arrives pre-built here too.
+        for rendered_id in rendered:
+            group = rendered_id.strip('"').split("/")[0]
+            root_blocks.append(
+                f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
+                f'inputs = ["{group}/render_markdown", "unified_index/qmd_index"]\n\n'
+                f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
+                f'inputs = ["{group}/keyword_index"]'
+            )
         return dag_text, "\n\n".join(root_blocks) + "\n"
 
     def write_config(diffs: dict[str, tuple[str, str]]) -> None:
