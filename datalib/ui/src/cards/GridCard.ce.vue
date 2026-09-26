@@ -20,6 +20,7 @@ import type {
   Formatter,
   GridOption,
   GridStateChange,
+  GroupingFormatterItem,
   MenuCommandItem,
   MenuFromCellCallbackArgs,
   OnClickEventArgs,
@@ -66,10 +67,20 @@ import {
   type Page,
   type PagedWindow,
 } from "@/grid/pagedWindow";
+import {
+  countsByKey,
+  groupItems,
+  groupKey,
+  MORE,
+  unread,
+  type Getter,
+  type GroupWindow,
+  type ServerGroup,
+} from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
 import type { CardCtx } from "./types";
 
-const { fetchAccounts, fetchQmdState, fetchSearch } = useApi();
+const { fetchAccounts, fetchGroups, fetchQmdState, fetchSearch } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -419,8 +430,8 @@ function rowKey(row: SearchRow): string {
 /// or its totals — the data view hands those out as items too.
 function rowData(row: number): SearchRow | null {
   const item = vueGrid?.dataView.getItem(row) as
-    (SearchRow & { __group?: boolean; __groupTotals?: boolean }) | undefined;
-  if (!item || item.__group || item.__groupTotals) return null;
+    (SearchRow & { __group?: boolean; __groupTotals?: boolean; [MORE]?: string }) | undefined;
+  if (!item || item.__group || item.__groupTotals || item[MORE]) return null;
   return item;
 }
 
@@ -575,6 +586,41 @@ let shown: { q: string; sort: string | null; tail: boolean } | null = null;
 /// up on it.
 let seekingSelection = sel.value !== null;
 
+/// While the grid is grouped, the search as the server groups it: every
+/// group with its true count, and each group's rows a window of their own,
+/// read as the group is opened and scrolled (grid/serverGroups.ts). Null
+/// while nothing is grouped, and while a header filter is on: that works
+/// over every row, so the grid holds them all and groups them itself.
+let grouped: {
+  q: string;
+  sort: string | null;
+  by: string[];
+  groups: ServerGroup<SearchRow>[];
+  windows: Map<string, GroupWindow<SearchRow>>;
+  counts: Map<string, number>;
+} | null = null;
+
+/// The columns dragged into the grouping bar, outermost first.
+function groupedBy(): string[] {
+  return groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
+}
+
+function filtered(): boolean {
+  return !!vueGrid && Object.keys(vueGrid.filterService.getColumnFilters()).length > 0;
+}
+
+/// A group's rows as `/search` narrows to them.
+function withinOf(by: string[], values: (string | null)[]): string {
+  return JSON.stringify(by.map((id, i) => [id, values[i]]));
+}
+
+/// How each grouped column reads its group's value off a row.
+function gettersOf(by: string[]): Getter<SearchRow>[] {
+  return by.map(
+    (id) => gridColumns.value.find((c) => c.id === id)!.grouping!.getter as Getter<SearchRow>,
+  );
+}
+
 /// The rows in the order the grid shows them.
 function display(rows: SearchRow[]): SearchRow[] {
   return shown?.tail ? [...rows].reverse() : rows;
@@ -585,18 +631,18 @@ function searchPage(r: SearchResponse): Page<SearchRow, number> {
   return { rows: r.rows, next: r.next_offset, total: r.total, at: r.at };
 }
 
-/// Grouping and the header filters work over every row the grid holds,
-/// so while either is on the grid holds every row.
+/// The header filters work over every row the grid holds, so while one is
+/// on the grid holds every row.
 function wantsEverything(): boolean {
-  if (!vueGrid) return false;
-  const grouped = (groupingPlugin?.columnsGroupBy.length ?? 0) > 0;
-  return grouped || Object.keys(vueGrid.filterService.getColumnFilters()).length > 0;
+  return filtered();
 }
 
 /// Ask for the first page of `q`, or, for a refresh of the search on
 /// screen, for every row through the last one held, so nobody scrolled
 /// along the list loses their place.
 async function runSearch(q: string, refresh = false) {
+  if (groupedBy().length > 0 && !filtered()) return runGrouped(q, refresh);
+  grouped = null;
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
@@ -677,6 +723,10 @@ async function loadThrough(through: number, uuid: string | null = null) {
 /// grouped or filtered, else the rows the viewport is nearing, and a
 /// restored selection that has not turned up.
 function loadWanted() {
+  if (grouped) {
+    loadGroupsInView();
+    return;
+  }
   if (!vueGrid || !win) return;
   if (wantsEverything()) {
     void loadThrough(Infinity);
@@ -698,6 +748,142 @@ async function seek(uuid: string): Promise<number | null> {
     else await loadThrough(win.rows.length, uuid);
   }
   return vueGrid?.dataView.getRowById(uuid) ?? null;
+}
+
+/// Ask for the groups of `q`. A refresh of the grouping on screen reads
+/// each group opened so far again, through the last row it holds.
+async function runGrouped(q: string, refresh: boolean) {
+  inflight?.abort();
+  const ctrl = (inflight = new AbortController());
+  const sort = currentSort();
+  const by = groupedBy();
+  const was = grouped;
+  const again =
+    refresh && was !== null && was.q === q && was.sort === sort && was.by.join() === by.join();
+  loading.value = true;
+  error.value = null;
+  qmdError.value = null;
+  try {
+    const r = await fetchGroups(q, by.join(","), ctrl.signal);
+    const windows = new Map(r.groups.map((g) => [groupKey(g.values), unread(g, r.at)]));
+    if (again) {
+      await Promise.all(
+        r.groups.map(async (g) => {
+          const held = was.windows.get(groupKey(g.values));
+          const last = held?.rows[held.rows.length - 1];
+          if (!last) return;
+          const page = await fetchSearch(
+            q,
+            refreshLimit(held!),
+            ctrl.signal,
+            { toast: false },
+            { sort, within: withinOf(by, g.values), through: last.uuid },
+          );
+          windows.set(groupKey(g.values), firstWindow(searchPage(page)));
+        }),
+      );
+    }
+    grouped = {
+      q,
+      sort,
+      by,
+      groups: r.groups,
+      windows,
+      counts: countsByKey(r.groups, gettersOf(by)),
+    };
+    shown = { q, sort, tail: false };
+    win = null;
+    qmdError.value = r.qmd_error;
+    shownQuery.value = q;
+    showGroups(again ? "refresh" : "new");
+  } catch (e) {
+    if ((e as { name?: string }).name === "AbortError") return;
+    error.value = searchFailure(e);
+  } finally {
+    if (inflight === ctrl) loading.value = false;
+  }
+}
+
+/// Read the next page of the group `key` names.
+async function loadGroupPage(key: string) {
+  const g = grouped;
+  if (!g) return;
+  const held = g.windows.get(key)!;
+  const fetch = nextFetch(held, held.rows.length);
+  if (!fetch) return;
+  g.windows.set(key, asking(held, fetch));
+  const values = JSON.parse(key) as (string | null)[];
+  try {
+    const r = await fetchSearch(
+      g.q,
+      fetch.limit,
+      undefined,
+      { toast: false },
+      { offset: fetch.from, sort: g.sort, within: withinOf(g.by, values) },
+    );
+    if (grouped !== g) return;
+    const next = withPage(g.windows.get(key)!, fetch.from, searchPage(r));
+    if (next === "moved") {
+      void runSearch(g.q, true);
+      return;
+    }
+    g.windows.set(key, next);
+    showGroups("more");
+  } catch (e) {
+    if (grouped !== g) return;
+    g.windows.set(key, withoutPage(g.windows.get(key)!, fetch.from));
+    error.value = searchFailure(e);
+  }
+}
+
+/// Read a page of every group whose placeholder is on screen, or nearly:
+/// an open group shows one until its rows are all read.
+function loadGroupsInView() {
+  if (!vueGrid) return;
+  const { dataView, slickGrid: grid } = vueGrid;
+  const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
+  for (let row = top; row <= bottom; row++) {
+    const key = (dataView.getItem(row) as Record<string, unknown> | undefined)?.[MORE];
+    if (typeof key === "string") void loadGroupPage(key);
+  }
+}
+
+/// The groups on screen: a new grouping replaces the grid's rows; more
+/// rows of a group, or the grouping read again, touch only what changed.
+function showGroups(kind: "new" | "refresh" | "more") {
+  if (!vueGrid || !grouped) return;
+  const items = groupItems(grouped.groups, grouped.windows);
+  rows.value = items.filter((r) => !(MORE in r));
+  total.value = grouped.groups.reduce((n, g) => n + g.count, 0);
+  if (kind === "new") {
+    handed = handedOf(items, rowKey);
+    vueGrid.dataset = items;
+    vueGrid.slickGrid.scrollRowIntoView(0);
+    refreshQmdState();
+  } else {
+    const next = patchRows(handed, items, rowKey);
+    handed = next.handed;
+    applyPatch(next.patch, items);
+    if (kind === "refresh") {
+      // A group's count can change with none of its rows on screen.
+      redrawGroupRows();
+      refreshQmdState();
+    } else askAboutVisibleRows();
+  }
+  tryRestoreSelection();
+  loadGroupsInView();
+}
+
+/// Draw the group rows on screen again, for their counts.
+function redrawGroupRows() {
+  const grid = vueGrid!.slickGrid;
+  const { top, bottom } = grid.getRenderedRange();
+  for (let row = top; row <= bottom; row++) {
+    if ((vueGrid!.dataView.getItem(row) as { __group?: boolean } | undefined)?.__group) {
+      grid.invalidateRow(row);
+    }
+  }
+  grid.render();
 }
 
 watch(query, (q) => {
@@ -1034,6 +1220,13 @@ function applyInitialLayout() {
   }
 }
 
+/// A group row's title with the server's count for the group, while the
+/// server groups: the rows held are only the ones read so far.
+function trueCount(inner: (g: GroupingFormatterItem) => string) {
+  return (g: GroupingFormatterItem) =>
+    inner(grouped ? { ...g, count: grouped.counts.get(g.groupingKey)! } : g);
+}
+
 /// The grid's columns: the applet's, drawn by type, refined by the
 /// overrides above, with the card's own beside `project` — among the
 /// facets, where a 640px card still has them on screen. Built once per
@@ -1056,6 +1249,9 @@ watch(
     gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)].map((c) => ({
       ...c,
       sortComparer: serverOrder,
+      ...(c.grouping
+        ? { grouping: { ...c.grouping, formatter: trueCount(c.grouping.formatter!) } }
+        : {}),
     }));
     createGrid();
   },
@@ -1363,7 +1559,7 @@ function gridOptions(): GridOption {
       sortDescIconCssClass: "mdi mdi-arrow-down",
       onGroupChanged: () => {
         updateCols();
-        loadWanted();
+        void runSearch(query.value);
       },
       onExtensionRegistered: (plugin) => {
         groupingPlugin = plugin;
@@ -1381,7 +1577,8 @@ function gridOptions(): GridOption {
 /// and the cell a highlight for the second — through the data view's
 /// item metadata, which the grid reads for every row it paints. The
 /// grouping extension installs its own provider for group rows, so
-/// this wraps whatever is there rather than replacing it.
+/// this wraps whatever is there rather than replacing it. A group's
+/// placeholder, for its rows not yet read, is one cell across the row.
 function changedColumns(row: SearchRow | undefined): Set<string> {
   const names = row?.diff_changed_columns;
   if (!names) return new Set();
@@ -1391,11 +1588,19 @@ function changedColumns(row: SearchRow | undefined): Set<string> {
   return new Set(names.split("|").map(asShown));
 }
 
-function installDiffMetadata(dataView: Grid["dataView"]) {
+const PLACEHOLDER_META = {
+  cssClasses: "datalib-more",
+  focusable: false,
+  selectable: false,
+  columns: { 0: { colspan: "*", formatter: () => "loading…" } },
+};
+
+function installRowMetadata(dataView: Grid["dataView"]) {
   const inner = dataView.getItemMetadata.bind(dataView);
   dataView.getItemMetadata = (row: number) => {
     const meta = inner(row);
     const item = dataView.getItem(row) as SearchRow | undefined;
+    if (item && MORE in item) return PLACEHOLDER_META;
     const status = item?.diff_status;
     if (!status || status === "unchanged") return meta;
     const columns: Record<string, { cssClass: string }> = {};
@@ -1428,7 +1633,7 @@ function createGrid() {
     rows.value,
   ) as Grid;
   vueGrid = bundle;
-  installDiffMetadata(bundle.dataView);
+  installRowMetadata(bundle.dataView);
   const grid = bundle.slickGrid;
   grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
   grid.onClick.subscribe(onClick);
@@ -1445,9 +1650,15 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     // Load pages until the row is held, as scrolling to it would.
     seek,
+    // A search, a page, or a group's page on its way.
+    busy: () =>
+      loading.value ||
+      loadingMore !== null ||
+      [...(grouped?.windows.values() ?? [])].some((w) => w.pending !== null),
     uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
-    rows: () => bundle.dataView.getItems() as SearchRow[],
-    filteredRows: () => bundle.dataView.getFilteredItems() as SearchRow[],
+    rows: () => (bundle.dataView.getItems() as SearchRow[]).filter((r) => !(MORE in r)),
+    filteredRows: () =>
+      (bundle.dataView.getFilteredItems() as SearchRow[]).filter((r) => !(MORE in r)),
     scrollToRow: (row: number) => grid.scrollRowIntoView(row),
     scrollToColumn: (id: string) => {
       const idx = grid.getColumnIndex(id);
@@ -1524,7 +1735,12 @@ function onGridStateChanged(change: GridStateChange) {
   updateCols();
   const type = change.change?.type;
   if (type === "sorter") void runSearch(query.value);
-  if (type === "filter") loadWanted();
+  // A filter set or cleared while grouped moves the grouping between the
+  // server and the grid.
+  if (type === "filter") {
+    if (groupedBy().length > 0) void runSearch(query.value);
+    else loadWanted();
+  }
   if (type === "columns") onColumnsShown();
 }
 

@@ -4,10 +4,11 @@
 
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-/// A grid column a search can be ordered by, named by the grid's column id.
+/// A grid column a search can be ordered or grouped by, named by the
+/// grid's column id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
-pub enum SortColumn {
+pub enum GridColumn {
     /// qmd's relevance. A search without free text has no score, and
     /// comes in its default order instead.
     Score,
@@ -28,7 +29,7 @@ pub enum SortColumn {
     DiffChangedColumns,
 }
 
-impl SortColumn {
+impl GridColumn {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -42,32 +43,32 @@ impl SortColumn {
     /// no column holds. A label the grid shows through a lookup (a
     /// source's name, an account's) sorts by the stored value.
     ///
-    /// [`Score`]: SortColumn::Score
+    /// [`Score`]: GridColumn::Score
     pub fn sql(self) -> Option<&'static str> {
         Some(match self {
-            SortColumn::Score => return None,
-            SortColumn::SourceRef => "source_id",
-            SortColumn::Kind => "kind",
-            SortColumn::ConversationName => "conversation_name",
-            SortColumn::Project => "project",
-            SortColumn::Channel => "channel",
-            SortColumn::CreatedAt => "created_at_utc",
-            SortColumn::ModifiedAt => "modified_at_utc",
-            SortColumn::Snippet => "preview",
-            SortColumn::Author => "author",
-            SortColumn::Account => "account",
-            SortColumn::OrgName => "org_name",
-            SortColumn::ByteSize => "byte_size",
-            SortColumn::ItemCount => "item_count",
-            SortColumn::DiffStatus => "diff_status",
-            SortColumn::DiffChangedColumns => "diff_changed_columns",
+            GridColumn::Score => return None,
+            GridColumn::SourceRef => "source_id",
+            GridColumn::Kind => "kind",
+            GridColumn::ConversationName => "conversation_name",
+            GridColumn::Project => "project",
+            GridColumn::Channel => "channel",
+            GridColumn::CreatedAt => "created_at_utc",
+            GridColumn::ModifiedAt => "modified_at_utc",
+            GridColumn::Snippet => "preview",
+            GridColumn::Author => "author",
+            GridColumn::Account => "account",
+            GridColumn::OrgName => "org_name",
+            GridColumn::ByteSize => "byte_size",
+            GridColumn::ItemCount => "item_count",
+            GridColumn::DiffStatus => "diff_status",
+            GridColumn::DiffChangedColumns => "diff_changed_columns",
         })
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sort {
-    pub column: SortColumn,
+    pub column: GridColumn,
     pub descending: bool,
 }
 
@@ -82,7 +83,7 @@ impl Sort {
             _ => return None,
         };
         Some(Sort {
-            column: SortColumn::parse(column)?,
+            column: GridColumn::parse(column)?,
             descending,
         })
     }
@@ -108,8 +109,8 @@ mod tests {
 
     #[test]
     fn every_column_spells_as_it_parses() {
-        for column in SortColumn::VARIANTS {
-            assert_eq!(SortColumn::parse(column.as_str()), Some(*column));
+        for column in GridColumn::VARIANTS {
+            assert_eq!(GridColumn::parse(column.as_str()), Some(*column));
         }
     }
 
@@ -118,9 +119,9 @@ mod tests {
     #[test]
     fn every_column_but_score_is_a_grid_rows_column() {
         let (_, columns) = datalib_schema::grid_rows::COLUMNS[0];
-        for column in SortColumn::VARIANTS {
+        for column in GridColumn::VARIANTS {
             match column.sql() {
-                None => assert_eq!(*column, SortColumn::Score),
+                None => assert_eq!(*column, GridColumn::Score),
                 Some(sql) => assert!(columns.contains(&sql), "{sql} is not a grid_rows column"),
             }
         }
@@ -131,7 +132,7 @@ mod tests {
         assert_eq!(
             Sort::parse("created_at:desc"),
             Some(Sort {
-                column: SortColumn::CreatedAt,
+                column: GridColumn::CreatedAt,
                 descending: true
             })
         );

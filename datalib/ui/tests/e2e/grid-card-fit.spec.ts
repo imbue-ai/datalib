@@ -8,7 +8,7 @@
 // growing worked even then.
 
 import { test, expect, type Page } from "@playwright/test";
-import { everyRowLoaded, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
+import { gridSettled, SEARCH_ROWS, searchGrid, type GridApi } from "./grid-helpers";
 
 async function openGrid(page: Page) {
   await page.goto("/");
@@ -82,11 +82,11 @@ test("clicking a group header folds the group and opens nothing", async ({ page 
   await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(["kind"]),
   );
-  // Grouped, the grid loads the whole search; the groups settle once it has.
-  await everyRowLoaded(page);
   await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
   );
+  // The groups on screen have read their rows; nothing is still arriving.
+  await gridSettled(page);
   const group = page.locator(".grid-box .slick-row.slick-group").first();
   await expect(group).toBeVisible();
   const title = (await group.textContent())!.trim();

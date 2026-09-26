@@ -28,6 +28,8 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
+  /// A search, a page, or a group's page on its way.
+  busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
   filteredRows: () => Record<string, unknown>[];
@@ -41,19 +43,16 @@ export type GridApi = {
   groupBy: (ids: string[]) => void;
 };
 
-/// Wait until the search grid holds every row of its search: what it
-/// loads while grouped or filtered, a page at a time otherwise.
-export async function everyRowLoaded(page: Page) {
+/// Wait until nothing the grid asked for is still on its way.
+export async function gridSettled(page: Page) {
   await expect
     .poll(
-      async () => {
-        const status = await page.locator(".grid-column .status").first().textContent();
-        const m = status?.match(/(\d+) rows \(of (\d+)\)/);
-        return m !== null && m !== undefined && m[1] === m[2];
+      () => page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.busy()),
+      {
+        message: "the grid never finished loading",
       },
-      { timeout: 15_000, message: "the grid never held every row of its search" },
     )
-    .toBe(true);
+    .toBe(false);
 }
 
 /// The uuid of the first row the grid has, whatever is at the top of

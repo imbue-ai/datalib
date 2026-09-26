@@ -1,7 +1,7 @@
 # Paged grids: the search grid and the log card load a page, then more
 
-*Proposal (2026-09-25); steps 1 to 4 and 6 of "Order of work" are
-built; the rest is not. Every number was measured
+*Proposal (2026-09-25); steps 1 to 6 of "Order of work" are built; the
+rest is not. Every number was measured
 on 2026-09-25 against a copy of `~/datalib/stay_alive_1` (74,023
 `grid_rows`, a 1.3 GB index, 238,716 log lines) with the
 `datalib-doltlite` shell; each measurement includes about 0.1 s of
@@ -174,29 +174,37 @@ qmd's score and matched words for a free-text search. A list for all
 asked for again once the UI moves to the new one. Grouping (step 5)
 adds its group lists and counts to the same cache.
 
-**Drag-to-group stays, and moves to the server.** Grouping by a column
-is two kinds of request:
+**Drag-to-group stays, and moves to the server.** Grouping is two kinds
+of request:
 
-- **The group list:** `SELECT <col>, count(*) … WHERE <filter> GROUP BY
-  <col>`. Every filterable column has a `(col, touched_at_utc, …)`
-  index, so this is an index-only scan: the equivalent `count(*)` for
-  one provider took 0.08 s. A column without an index scans once and
-  lands in the result cache. The counts in the group headers are true
-  counts for the whole result, not for what happens to be loaded.
-- **An expanded group** is its own paged window over the same query
-  with `<col> = <value>` added. That is exactly an indexed filter, so
-  its rows come newest-first off the composite index, and each group
-  scrolls and loads more on its own. Nested grouping repeats the
-  pattern one level down, with the outer group's value added to the
-  filter.
+- **The groups:** `/search/groups?q=…&by=kind,author`. One `SELECT
+  <cols>, count(*), uuid, max(touched_at_utc) … GROUP BY 1, 2` answers
+  every level at once: each innermost group with its count, and its
+  newest row as a sample (a bare column beside the one `max()` takes
+  its value from that row), read in the same snapshot. For free text the
+  groups are over qmd's ranking. The counts in the group rows are true
+  counts for the whole search, not for what happens to be loaded.
+  Measured at full size (74,163 rows): 0.04 s by an indexed column,
+  0.2 s by two columns or by one without an index, so the groups are not
+  cached. At most 10,000 groups come back, and more says so: `channel`
+  has 18,234 values on the measured root.
+- **A group's rows** are `/search` with `within=[["kind","Chat"], …]`: its
+  own paged list of the same query with each column's value added (a
+  missing one is `IS NULL`), in the result cache under its own key.
+  Every sort and group of a free-text search is cut from qmd's ranking,
+  kept once per search, so qmd runs once however many groups open.
 
-In the browser, the draggable-grouping drop zone stays the control.
-The grid stops handing grouping to SlickGrid's DataView, which needs
-every row, and builds the flat list itself: group header rows, the
-loaded rows of each expanded group, and a "loading…" row at the end of
-a group that has more. The log card groups the same way over
-`runs.sqlite`. `log_by_run_step` already serves step and run; level
-and target would each want an index.
+In the browser, the draggable-grouping bar stays the control, and
+SlickGrid still draws the groups, their folding and the "Expand /
+collapse all" button (`grid/serverGroups.ts`). What it is handed is
+each group's rows read so far and, while the group has more, a
+placeholder row built from the group's sample, so every grouping column
+files it under the right group. A placeholder on screen reads the
+group's next page, through a `pagedWindow` of its own; a folded group
+hides its placeholder and reads nothing. Group titles take the server's
+count. A header filter still works over every row, so while one is on
+the grid loads the whole search and groups it itself. The log card
+still groups the lines it holds.
 
 **The indexes live on `main`, and the writer pays for them.** Keeping
 them only on the read branch, so the writer never pays, looked better
@@ -377,7 +385,7 @@ with each, and what is left:
 | in the browser | now |
 |---|---|
 | sort by any column header | on the server: a header click asks again with `sort=`, and every column's comparer keeps the order the server sent |
-| drag a column to group, with counts | while grouped, the grid loads the whole search; step 5 moves it to the server |
+| drag a column to group, with counts | on the server: every group with its true count, and each group's rows read as it is opened and scrolled (step 5) |
 | the header filter row (per-column text boxes) | the same: while one is set, the grid loads the whole search. Turning them into query tokens is left, and needs their operators mapped onto the search bar's |
 | adaptive column hiding | computed from the first page |
 | restore the selected row from the URL | the first request asks `through=` the selected row, so the page reaches it |
@@ -456,7 +464,7 @@ Each step is one PR, useful on its own:
      clicks sorting on the server and `through=` on `/search`. While
      grouped or filtered, the grid loads everything, until step 5; the
      header filter row as query terms is left.
-5. **Server-side drag-to-group** in `GridCard`: the group list, a
+5. **Done: server-side drag-to-group** in `GridCard`: the group list, a
    paged window per expanded group, and nesting.
 6. **Done: `/api/log` newest-first, and `RunLogPanel` on the same
    module.**
