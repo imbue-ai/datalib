@@ -30,13 +30,28 @@ const quoted = (v: string) =>
 /// Manage card; picking this server's launch retitles it. The lines
 /// already shown stay until the launch's replace them, so this waits
 /// for that load to finish before anything reads a row.
-/// The log opens at its bottom, on the newest lines; this is its top,
-/// the oldest line held, where the server's own start-up lines are.
-async function scrollLogToTop(dialog: Locator) {
-  await dialog
-    .locator(".rl-grid .slick-viewport")
-    .first()
-    .evaluate((el) => (el.scrollTop = 0));
+/// The log opens at its bottom, on the newest lines, and reads older
+/// pages as it is scrolled up. This scrolls up until there are none left
+/// to read, so the top row is the log's first line — the server's own
+/// start-up — and stays that row while the tail grows below.
+async function scrollLogToStart(dialog: Locator) {
+  const viewport = dialog.locator(".rl-grid .slick-viewport").first();
+  await expect
+    .poll(
+      async () => {
+        await viewport.evaluate((el) => (el.scrollTop = 0));
+        return dialog
+          .page()
+          .evaluate(() =>
+            (
+              window as unknown as { __fwRunLogApi: { hasOlder: () => boolean } }
+            ).__fwRunLogApi.hasOlder(),
+          );
+      },
+      { message: "the log's first line was never read" },
+    )
+    .toBe(false);
+  await viewport.evaluate((el) => (el.scrollTop = 0));
   await expect(dialog.locator(`${ROWS}[data-row="0"]`)).toBeVisible();
 }
 
@@ -100,7 +115,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   // test can predict without knowing what the server logged. Not
   // trimmed, for the same reason: the token has to carry the value the
   // cell holds. The top line, which the tail arriving below leaves be.
-  await scrollLogToTop(dialog);
+  await scrollLogToStart(dialog);
   const msgCell = dialog.locator(`${ROWS}[data-row="0"] .slick-cell[col-id="msg"]`);
   const msg = (await msgCell.textContent()) ?? "";
   expect(msg.trim(), "the first line should have a message").not.toBe("");
@@ -198,7 +213,7 @@ test("a long log opens on its newest lines and reads older ones as it is scrolle
       { message: "scrolling up never read the older lines" },
     )
     .toBe(800);
-  await scrollLogToTop(dialog);
+  await scrollLogToStart(dialog);
   await expect(dialog.locator(`${ROWS}[data-row="0"] .slick-cell[col-id="msg"]`)).toHaveText(
     "stardate 0001",
   );
@@ -271,7 +286,7 @@ test("a line's source links to its file and line at the server's commit", async 
 // narrows the log through the bus.
 test("a selected line opens in full beside the log, and can narrow it", async ({ page }) => {
   const dialog = await openServerLog(page);
-  await scrollLogToTop(dialog);
+  await scrollLogToStart(dialog);
   const first = dialog.locator(ROWS).first();
   const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   await first.locator('.slick-cell[col-id="msg"]').click();
