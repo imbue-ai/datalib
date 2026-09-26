@@ -232,13 +232,15 @@ tree it writes; `inputs` name steps by that id and are the edges; an
 no `command` and runs `datalib-step`.
 
 Each source has an `ingest` step and a `render_markdown` step, and two
-fan-in steps under `unified_index` index every render tree their
+fan-in steps under `unified_index` read every render tree their
 `inputs` name: `grid_index` (the SQL index the grid reads) and
-`qmd_index` (semantic search, one collection per group). A third,
-`embedding_map`, reads only `qmd_index` and lays its embeddings out on a
-plane for the map card (`datalib/backend/embedding_map/README.md`). All
-three are read by the `unified_index` applet; `datalib-http` never opens
-them. A render
+`qmd_index` (free-text search: it registers one qmd collection per
+group). A searched source fills its own collection with two more steps
+of its own, `keyword_index` and then `embed`, so the slow embedding can
+be turned off or run by hand per source. `embedding_map` reads every
+`embed` and lays the embeddings out on a plane for the map card
+(`datalib/backend/embedding_map/README.md`). All of it is read by the
+`unified_index` applet; `datalib-http` never opens them. A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in

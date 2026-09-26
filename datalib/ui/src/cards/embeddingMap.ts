@@ -221,12 +221,21 @@ export function encodeState(st: MapState): string {
   return p.toString();
 }
 
-/// The TOML stanza that declares the step, for a config that lacks it.
-export const STEP_STANZA = `
+/// The TOML stanza that declares the step, for a config that lacks it:
+/// it reads every source's embeddings, so it runs after any of them.
+export function stepStanza(embedIds: string[]): string {
+  const inputs = embedIds.map((id) => JSON.stringify(id)).join(", ");
+  return `
 # qmd's document embeddings laid out on a plane, for the map card. Each
 # run starts from the last map; resetting the step lays one out afresh.
 [[steps]]
 group = "unified_index"
 function = "embedding_map"
-inputs = ["unified_index/qmd_index"]
+inputs = [${inputs}]
 `;
+}
+
+/// The steps the map reads: each source's `embed`.
+export function embedStepIds(steps: { id: string }[]): string[] {
+  return steps.map((s) => s.id).filter((id) => /^[^/]+\/embed$/.test(id));
+}

@@ -1088,8 +1088,13 @@ fn accept_steps(
     let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
+    let declared: BTreeSet<&str> = candidates.iter().map(|c| c.entry.id.as_str()).collect();
+    let unindexed: Vec<Vec<String>> = candidates
+        .iter()
+        .map(|c| registered_but_never_indexed(&c.entry, &declared))
+        .collect();
 
-    for c in candidates {
+    for (c, unindexed) in candidates.into_iter().zip(unindexed) {
         let id = c.entry.id.clone();
         let mut group_type: Option<&str> = None;
         let mut source_group: Option<(&str, &str)> = None;
@@ -1111,7 +1116,9 @@ fn accept_steps(
                 match groups.get(g.as_str()) {
                     Some(group) => {
                         group_type = group.r#type.as_deref();
-                        if group_type == Some(DIFF_GROUP_TYPE) {
+                        if group_type == Some(DIFF_GROUP_TYPE)
+                            && !QMD_SOURCE_FUNCTIONS.contains(&f.as_str())
+                        {
                             if f != DIFF_GROUP_FUNCTION {
                                 diags.push(
                                     c.diag(
@@ -1119,8 +1126,9 @@ fn accept_steps(
                                         text,
                                         Some("function"),
                                         format!(
-                                            "a diff group has one step, `{DIFF_GROUP_FUNCTION}`; \
-                                             it has no raw store of its own to `{f}` into"
+                                            "a diff group renders `{DIFF_GROUP_FUNCTION}` and \
+                                             indexes it; it has no raw store of its own to `{f}` \
+                                             into"
                                         ),
                                     )
                                     .with_help(format!(
@@ -1303,6 +1311,27 @@ fn accept_steps(
             );
             continue;
         }
+        if !unindexed.is_empty() {
+            diags.push(
+                c.diag(
+                    Severity::Warning,
+                    text,
+                    Some("inputs"),
+                    format!(
+                        "registers a qmd collection for {} and nothing fills it: no \
+                         `keyword_index` step reads it, so free-text search does not reach \
+                         that source",
+                        unindexed.join(", ")
+                    ),
+                )
+                .with_help(
+                    "each source searched has `keyword_index` and `embed` steps in its own \
+                     group; `datalib-migrate-config <data root> --force` adds them for every \
+                     source this step names. Or drop the source from `inputs` to leave it out \
+                     of search.",
+                ),
+            );
+        }
         if c.entry.group.is_some() && c.entry.name.is_some() {
             diags.push(
                 c.diag(
@@ -1373,6 +1402,22 @@ fn retired_subcommand(command: &str) -> Option<&str> {
         .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
 }
 
+/// The groups a built-in `qmd_index` registers a collection for with no
+/// `<group>/keyword_index` in the config to fill it: the shape from
+/// before the keyword index and the embedding were per source, when the
+/// fan-in did both itself.
+fn registered_but_never_indexed(e: &StepEntry, declared: &BTreeSet<&str>) -> Vec<String> {
+    if e.command.is_some() || e.function.as_deref() != Some("qmd_index") {
+        return Vec::new();
+    }
+    e.inputs
+        .iter()
+        .filter_map(|i| i.strip_suffix("/render_markdown"))
+        .filter(|g| !declared.contains(format!("{g}/keyword_index").as_str()))
+        .map(str::to_string)
+        .collect()
+}
+
 fn nests_with(a: &str, b: &str) -> bool {
     a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
@@ -1392,15 +1437,32 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
 /// Built-in steps that read their inputs off disk rather than at a pinned
-/// commit: the qmd index globs each render tree's `.md` files, the
-/// embedding map reads qmd's own SQLite file, and perseus renders
+/// commit: a keyword index globs its render tree's `.md` files, an embed
+/// and the embedding map read qmd's own SQLite file, and perseus renders
 /// straight from its ingest's TEI files. `(group type, function)`,
 /// `None` matching any type.
 const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
-    (None, "qmd_index"),
+    (None, "keyword_index"),
+    (None, "embed"),
     (None, "embedding_map"),
     (Some("perseus"), "render_markdown"),
 ];
+
+/// The lock a built-in step holds when it names none, where its shape's
+/// budget would not keep it safe: the qmd steps all write one index file,
+/// which the runner cannot see as shared.
+const BUILTIN_LOCKS: &[(&str, &str)] = &[
+    ("qmd_index", crate::supervisor::locks::QMD_KEYWORD),
+    ("keyword_index", crate::supervisor::locks::QMD_KEYWORD),
+    ("embed", crate::supervisor::locks::QMD_EMBED),
+];
+
+fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
+    BUILTIN_LOCKS
+        .iter()
+        .find(|&&(f, _)| function == Some(f))
+        .map(|&(_, lock)| lock)
+}
 
 /// The shape of the store each built-in function writes: the hash of its
 /// DDL, as `datalib_store_meta::schema_hash` takes it. A build that moves
@@ -1435,6 +1497,10 @@ fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
 /// read a group's documents from is `<group>/render_markdown`, whoever
 /// wrote it.
 const DIFF_GROUP_FUNCTION: &str = "render_markdown";
+
+/// A source's own qmd steps, which read its `render_markdown` whoever
+/// wrote it — so a diff group may have them too.
+const QMD_SOURCE_FUNCTIONS: &[&str] = &["keyword_index", "embed"];
 
 fn spec_of(
     e: &StepEntry,
@@ -1490,7 +1556,12 @@ fn spec_of(
         Some(reads) => reads == Reads::Pinned,
         None => e.command.is_some() || !reads_unpinned(group_type, e.function.as_deref()),
     };
-    spec.locks = e.locks.as_ref().map(StepLocks::held);
+    spec.locks = match (&e.locks, &e.command) {
+        (Some(locks), _) => Some(locks.held()),
+        (None, None) => builtin_lock(e.function.as_deref())
+            .map(|lock| vec![(lock.to_string(), crate::supervisor::locks::Hold::Shared)]),
+        (None, Some(_)) => None,
+    };
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -2238,6 +2309,16 @@ mod tests {
             inputs = ["mail/ingest"]
 
             [[steps]]
+            group = "mail"
+            function = "keyword_index"
+            inputs = ["mail/render_markdown", "unified_index/qmd_index"]
+
+            [[steps]]
+            group = "mail"
+            function = "embed"
+            inputs = ["mail/keyword_index"]
+
+            [[steps]]
             group = "unified_index"
             function = "grid_index"
             inputs = ["iliad/render_markdown", "mail/render_markdown"]
@@ -2250,7 +2331,7 @@ mod tests {
             [[steps]]
             group = "unified_index"
             function = "embedding_map"
-            inputs = ["unified_index/qmd_index"]
+            inputs = ["mail/embed"]
 
             [[steps]]
             id = "custom/qmd"
@@ -2269,7 +2350,8 @@ mod tests {
             unpinned,
             [
                 "iliad/render_markdown",
-                "unified_index/qmd_index",
+                "mail/keyword_index",
+                "mail/embed",
                 "unified_index/embedding_map"
             ]
         );
@@ -2466,7 +2548,7 @@ mod tests {
                 source = "slack""#,
                 r#"function = "ingest"
                 params.api = {}"#,
-                "has one step, `render_markdown`",
+                "no raw store of its own to `ingest` into",
             ),
             (
                 r#"type = "diff"
@@ -3641,9 +3723,174 @@ inputs = ["a"]
         let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
         assert!(check.is_clean(), "{:?}", check.diagnostics);
         let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["network", "cpu", "index"]);
+        assert_eq!(
+            names,
+            ["network", "cpu", "index", "qmd_keyword", "qmd_embed"]
+        );
         assert_eq!(slots(&check, "network"), Some(1));
         assert_eq!(slots(&check, "cpu"), Some(4));
+    }
+
+    /// The qmd steps all write one index file the runner cannot see as
+    /// shared, so each holds a one-slot lock by its function: a keyword
+    /// update and an embed may overlap, two of either may not. A step
+    /// that names its own locks, or runs its own command, keeps those.
+    #[test]
+    fn the_qmd_steps_hold_the_qmd_locks() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["mail/render_markdown"]
+
+[[steps]]
+group = "mail"
+function = "keyword_index"
+inputs = ["mail/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "mail"
+function = "embed"
+inputs = ["mail/keyword_index"]
+locks = ["cpu"]
+
+[[steps]]
+id = "custom/embed"
+command = "x"
+inputs = ["mail/keyword_index"]
+"#,
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let held = |id: &str| {
+            let spec = check.graph.steps.iter().find(|s| s.id == id).unwrap();
+            crate::supervisor::locks::held_by(spec)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(held("unified_index/qmd_index"), ["qmd_keyword"]);
+        assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
+        assert_eq!(held("mail/embed"), ["cpu"], "named locks win");
+        assert_eq!(
+            held("custom/embed"),
+            ["index"],
+            "a custom command is not built in"
+        );
+        assert_eq!(slots(&check, "qmd_keyword"), Some(1));
+        assert_eq!(slots(&check, "qmd_embed"), Some(1));
+    }
+
+    /// The shape from before a source's qmd steps were its own: the fan-in
+    /// registers a collection nothing fills. Loaded, so search keeps its
+    /// old index, and warned about, naming the tool that adds the steps.
+    #[test]
+    fn a_qmd_index_naming_a_source_with_no_keyword_index_warns() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[groups]]
+id = "notes"
+type = "email"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+
+[[steps]]
+group = "notes"
+function = "render_markdown"
+
+[[steps]]
+group = "notes"
+function = "keyword_index"
+inputs = ["notes/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["mail/render_markdown", "notes/render_markdown"]
+"#,
+        );
+        let warned: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("unified_index/qmd_index"))
+            .collect();
+        assert_eq!(warned.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(warned[0].severity, Severity::Warning);
+        let text = warned[0].describe();
+        assert!(text.contains("mail") && !text.contains("notes,"), "{text}");
+        assert!(text.contains("datalib-migrate-config"), "{text}");
+        assert!(check
+            .graph
+            .steps
+            .iter()
+            .any(|s| s.id == "unified_index/qmd_index"));
+    }
+
+    /// A comparison is searched like any source, so its group may carry
+    /// the qmd steps beside its one render.
+    #[test]
+    fn a_diff_group_may_carry_its_qmd_steps() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[groups]]
+id = "slack-diff"
+type = "diff"
+source = "slack"
+
+[[groups]]
+id = "unified_index"
+
+[[steps]]
+group = "slack-diff"
+function = "render_markdown"
+
+[[steps]]
+group = "unified_index"
+function = "qmd_index"
+inputs = ["slack-diff/render_markdown"]
+
+[[steps]]
+group = "slack-diff"
+function = "keyword_index"
+inputs = ["slack-diff/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "slack-diff"
+function = "embed"
+inputs = ["slack-diff/keyword_index"]
+"#,
+        );
+        let dropped: Vec<_> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity.drops_the_entry())
+            .collect();
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(check.graph.steps.len(), 4);
     }
 
     /// When a step may run is not what it makes: neither re-runs anything.

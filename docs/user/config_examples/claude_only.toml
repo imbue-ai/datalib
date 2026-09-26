@@ -23,6 +23,16 @@ group = "claude_chats"
 function = "render_markdown"
 inputs = ["claude_chats/ingest"]
 
+[[steps]]
+group = "claude_chats"
+function = "keyword_index"
+inputs = ["claude_chats/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude_chats"
+function = "embed"
+inputs = ["claude_chats/keyword_index"]
+
 [[groups]]
 id = "unified_index"
 

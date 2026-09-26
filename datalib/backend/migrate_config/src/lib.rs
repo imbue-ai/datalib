@@ -8,12 +8,14 @@
 //! it. Nothing pre-TOML is convertible any more: a root that still has a
 //! `config.yaml` is set up again from the app.
 //!
-//! What the rewrite covers today is the header of `convert.rs`: the
+//! What the rewrite covers today is the header of `convert.rs` — the
 //! `datalib-step download <type>` command lines, the `_api` / `_backup`
 //! type words, and the `sync` / `common.input_path` / `common.raw_path`
-//! params.
+//! params — and, after it, `qmd_steps.rs`: a source the qmd fan-in names
+//! gets its own `keyword_index` and `embed` steps.
 
 pub mod convert;
+pub mod qmd_steps;
 
 use std::path::{Path, PathBuf};
 
@@ -34,12 +36,18 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if let Some(shape) = convert::retired_shape(text)? {
         return Ok(shape);
     }
+    if qmd_steps::is_retired(text)? {
+        return Ok(LegacyFormat::SharedQmdIndex);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
 pub fn convert(text: &str) -> Result<String> {
-    detect(text)?;
-    let out = convert::rewrite(text)?;
+    let out = match detect(text)? {
+        LegacyFormat::SharedQmdIndex => text.to_string(),
+        _ => convert::rewrite(text)?,
+    };
+    let out = qmd_steps::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.

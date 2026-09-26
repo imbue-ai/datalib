@@ -254,6 +254,16 @@ group = "claude"
 function = "render_markdown"
 inputs = ["claude/ingest"]
 
+[[steps]]
+group = "claude"
+function = "keyword_index"
+inputs = ["claude/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+inputs = ["claude/keyword_index"]
+
 [[groups]]
 id = "unified_index"
 
@@ -376,10 +386,14 @@ faster.
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
   the SQL store at `<data_root>/unified_index/grid_index/db.doltlite_db`.
-- The `qmd_index` step: builds the semantic search index. **The first
-  run is slow** — embedding takes roughly 5–10 minutes per thousand
-  chunks on CPU, after a one-time download of the models. It's
-  resumable, so Ctrl-C and re-run is safe. Re-runs after the backlog
+- The `qmd_index` step: sets up the search index, one part per source,
+  after a one-time download of the models.
+- A `keyword_index` and an `embed` step per source: that source's part
+  of free-text search — its words, then its embeddings, which let a
+  search match on meaning. **The first embed is slow** — roughly 5–10
+  minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
+  re-run is safe, and one source's `embed` can be turned off on the
+  Manage screen without touching the others. Re-runs after the backlog
   drains take seconds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):

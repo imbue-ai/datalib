@@ -59,19 +59,32 @@ pub const NETWORK: &str = "network";
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
+/// Whatever writes qmd's collection registry or its keyword index. One
+/// slot, and resizing it is a mistake: two keyword updates on one index
+/// can lose a document's body (`docs/dev/qmd_behaviour.md`, finding 12).
+pub const QMD_KEYWORD: &str = "qmd_keyword";
+/// Whatever embeds into qmd's index. One slot: two embeds race on qmd's
+/// vector table, and share one GPU besides.
+pub const QMD_EMBED: &str = "qmd_embed";
 
 /// The locks every config has, whether or not it declares them: the three
-/// budgets, as `--parallelism 4` sizes them. A config's `[[locks]]` entry
-/// of the same name resizes one; `--parallelism N` sets `network` and
-/// `cpu` to N, over the config.
+/// budgets, as `--parallelism 4` sizes them, and the two qmd writers'. A
+/// config's `[[locks]]` entry of the same name resizes one;
+/// `--parallelism N` sets `network` and `cpu` to N, over the config.
 pub fn defaults() -> Vec<LockSpec> {
-    [(NETWORK, 4), (CPU, 4), (INDEX, 2)]
-        .into_iter()
-        .map(|(name, slots)| LockSpec {
-            name: name.to_string(),
-            slots,
-        })
-        .collect()
+    [
+        (NETWORK, 4),
+        (CPU, 4),
+        (INDEX, 2),
+        (QMD_KEYWORD, 1),
+        (QMD_EMBED, 1),
+    ]
+    .into_iter()
+    .map(|(name, slots)| LockSpec {
+        name: name.to_string(),
+        slots,
+    })
+    .collect()
 }
 
 /// The lock a step holds when it names none: `network` for a source,

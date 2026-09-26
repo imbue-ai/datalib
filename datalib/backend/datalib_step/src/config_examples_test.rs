@@ -41,7 +41,13 @@ fn validate_config(name: &str, path: &std::path::Path) {
         let phase = match Function::parse(function) {
             Some(Function::Ingest) => Phase::Ingest,
             Some(Function::RenderMarkdown) => Phase::Render,
-            Some(Function::GridIndex | Function::QmdIndex | Function::EmbeddingMap) => continue,
+            Some(
+                Function::GridIndex
+                | Function::QmdIndex
+                | Function::KeywordIndex
+                | Function::Embed
+                | Function::EmbeddingMap,
+            ) => continue,
             None => panic!(
                 "{name}: step {}: datalib-step has no function {function:?}",
                 step.id

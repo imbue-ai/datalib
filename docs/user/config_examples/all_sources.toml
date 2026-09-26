@@ -117,6 +117,16 @@ group = "claude-api"
 function = "render_markdown"
 inputs = ["claude-api/ingest"]
 
+[[steps]]
+group = "claude-api"
+function = "keyword_index"
+inputs = ["claude-api/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude-api"
+function = "embed"
+inputs = ["claude-api/keyword_index"]
+
 # An unpacked Claude data export already on disk: the same `claude`
 # type, with `export` as the method instead of `api`. No network and no
 # credentials — the ingest step just reads the export's JSON and writes
@@ -142,6 +152,16 @@ path = "~/backups/claude-export"
 group = "claude-export"
 function = "render_markdown"
 inputs = ["claude-export/ingest"]
+
+[[steps]]
+group = "claude-export"
+function = "keyword_index"
+inputs = ["claude-export/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude-export"
+function = "embed"
+inputs = ["claude-export/keyword_index"]
 
 # --- Claude Code --------------------------------------------------------
 
@@ -172,6 +192,16 @@ inputs = ["claude-code/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384
 
+[[steps]]
+group = "claude-code"
+function = "keyword_index"
+inputs = ["claude-code/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude-code"
+function = "embed"
+inputs = ["claude-code/keyword_index"]
+
 # --- Codex --------------------------------------------------------------
 
 # Codex CLI threads, read off the store Codex itself keeps on this
@@ -200,6 +230,16 @@ inputs = ["codex/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384
 
+[[steps]]
+group = "codex"
+function = "keyword_index"
+inputs = ["codex/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "codex"
+function = "embed"
+inputs = ["codex/keyword_index"]
+
 # --- ChatGPT ------------------------------------------------------------
 
 # ChatGPT conversation mirror. Credentials via latchkey.
@@ -222,6 +262,16 @@ sleep_between = 0.5    # seconds between requests (be polite)
 group = "chatgpt"
 function = "render_markdown"
 inputs = ["chatgpt/ingest"]
+
+[[steps]]
+group = "chatgpt"
+function = "keyword_index"
+inputs = ["chatgpt/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "chatgpt"
+function = "embed"
+inputs = ["chatgpt/keyword_index"]
 
 # --- Slack --------------------------------------------------------------
 
@@ -293,6 +343,16 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
+
 # --- GitHub -------------------------------------------------------------
 
 # GitHub PR mirror. Credentials via latchkey. With `pull_requests` set,
@@ -318,6 +378,16 @@ group = "github"
 function = "render_markdown"
 inputs = ["github/ingest"]
 
+[[steps]]
+group = "github"
+function = "keyword_index"
+inputs = ["github/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "github"
+function = "embed"
+inputs = ["github/keyword_index"]
+
 # --- GitLab -------------------------------------------------------------
 
 # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
@@ -341,6 +411,16 @@ merge_requests = [
 group = "gitlab"
 function = "render_markdown"
 inputs = ["gitlab/ingest"]
+
+[[steps]]
+group = "gitlab"
+function = "keyword_index"
+inputs = ["gitlab/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "gitlab"
+function = "embed"
+inputs = ["gitlab/keyword_index"]
 
 # --- Notion -------------------------------------------------------------
 
@@ -387,6 +467,16 @@ group = "notion"
 function = "render_markdown"
 inputs = ["notion/ingest"]
 
+[[steps]]
+group = "notion"
+function = "keyword_index"
+inputs = ["notion/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "notion"
+function = "embed"
+inputs = ["notion/keyword_index"]
+
 # --- Email: two input modes ---------------------------------------------
 
 # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
@@ -429,6 +519,16 @@ outlink_format = "fastmail"
 # whole account but only render two branches:
 #   only_render_labels = ["Inbox", "Work/Projects"]
 only_render_labels = []
+
+[[steps]]
+group = "fastmail"
+function = "keyword_index"
+inputs = ["fastmail/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "fastmail"
+function = "embed"
+inputs = ["fastmail/keyword_index"]
 
 # Mode B — Gmail REST API, for a Gmail account. The mode that needs the
 # least setup of any source in this file: latchkey has a built-in
@@ -494,6 +594,16 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 only_render_labels = []
 
+[[steps]]
+group = "gmail"
+function = "keyword_index"
+inputs = ["gmail/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "gmail"
+function = "embed"
+inputs = ["gmail/keyword_index"]
+
 # Mode C — Google Takeout .mbox on disk. The `mbox` table selects it:
 # `path` is the file, and the rest labels the synthesized account row.
 [[groups]]
@@ -533,6 +643,16 @@ inputs = ["gmail-takeout/ingest"]
 outlink_format = "gmail"   # render each message's `↗` outlink to Gmail
 only_render_labels = []    # render only threads touching these labels; empty = all
 
+[[steps]]
+group = "gmail-takeout"
+function = "keyword_index"
+inputs = ["gmail-takeout/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "embed"
+inputs = ["gmail-takeout/keyword_index"]
+
 # --- Contacts: two input modes ------------------------------------------
 
 # Mode A — CardDAV server. The `carddav` table selects it; `server_url`
@@ -553,6 +673,16 @@ addressbooks = ["Contacts"]
 group = "icloud-contacts"
 function = "render_markdown"
 inputs = ["icloud-contacts/ingest"]
+
+[[steps]]
+group = "icloud-contacts"
+function = "keyword_index"
+inputs = ["icloud-contacts/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "icloud-contacts"
+function = "embed"
+inputs = ["icloud-contacts/keyword_index"]
 
 # Mode B — local vCard files. The `vcf` table selects it: `.vcf` files
 # are read from the directory at its `path`.
@@ -575,6 +705,16 @@ always_clear_before_ingest = true
 group = "vcard-contacts"
 function = "render_markdown"
 inputs = ["vcard-contacts/ingest"]
+
+[[steps]]
+group = "vcard-contacts"
+function = "keyword_index"
+inputs = ["vcard-contacts/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "vcard-contacts"
+function = "embed"
+inputs = ["vcard-contacts/keyword_index"]
 
 # --- Calendar: four input modes -----------------------------------------
 
@@ -600,6 +740,16 @@ group = "google-calendar"
 function = "render_markdown"
 inputs = ["google-calendar/ingest"]
 
+[[steps]]
+group = "google-calendar"
+function = "keyword_index"
+inputs = ["google-calendar/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "google-calendar"
+function = "embed"
+inputs = ["google-calendar/keyword_index"]
+
 # Mode B — Fastmail, over CalDAV. Credentials via latchkey's built-in
 # `fastmail-dav` service, which holds an app password.
 [[groups]]
@@ -616,6 +766,16 @@ calendars = ["Work", "Home"]
 group = "fastmail-calendar"
 function = "render_markdown"
 inputs = ["fastmail-calendar/ingest"]
+
+[[steps]]
+group = "fastmail-calendar"
+function = "keyword_index"
+inputs = ["fastmail-calendar/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "fastmail-calendar"
+function = "embed"
+inputs = ["fastmail-calendar/keyword_index"]
 
 # Mode C — any other CalDAV server. `server_url` is where discovery
 # starts; the host's `/.well-known/caldav` is tried when it does not
@@ -635,6 +795,16 @@ group = "icloud-calendar"
 function = "render_markdown"
 inputs = ["icloud-calendar/ingest"]
 
+[[steps]]
+group = "icloud-calendar"
+function = "keyword_index"
+inputs = ["icloud-calendar/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "icloud-calendar"
+function = "embed"
+inputs = ["icloud-calendar/keyword_index"]
+
 # Mode D — a folder of `.ics` files: Google Takeout's `Calendar/`, an
 # Apple Calendar export. Each file is one calendar.
 [[groups]]
@@ -651,6 +821,16 @@ path = "~/Downloads/Takeout/Calendar"
 group = "ics-calendar"
 function = "render_markdown"
 inputs = ["ics-calendar/ingest"]
+
+[[steps]]
+group = "ics-calendar"
+function = "keyword_index"
+inputs = ["ics-calendar/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "ics-calendar"
+function = "embed"
+inputs = ["ics-calendar/keyword_index"]
 
 # --- Beeper -------------------------------------------------------------
 
@@ -678,6 +858,16 @@ inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
 
+[[steps]]
+group = "beeper"
+function = "keyword_index"
+inputs = ["beeper/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "beeper"
+function = "embed"
+inputs = ["beeper/keyword_index"]
+
 # --- Perseus Digital Library --------------------------------------------
 
 # TEI editions from PerseusDL/canonical-greekLit. The `github` table
@@ -700,6 +890,16 @@ group = "perseus"
 function = "render_markdown"
 inputs = ["perseus/ingest"]
 [steps.params]
+
+[[steps]]
+group = "perseus"
+function = "keyword_index"
+inputs = ["perseus/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "perseus"
+function = "embed"
+inputs = ["perseus/keyword_index"]
 # alignment_pairs = [   # edition pairs to sentence-align, e.g.
 #   ["perseus-grc2", "perseus-eng2"],
 # ]
@@ -745,6 +945,16 @@ group = "yolink"
 function = "render_markdown"
 inputs = ["yolink/ingest"]
 
+[[steps]]
+group = "yolink"
+function = "keyword_index"
+inputs = ["yolink/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "yolink"
+function = "embed"
+inputs = ["yolink/keyword_index"]
+
 # --- Garmin Connect -----------------------------------------------------
 
 # Everything a Garmin watch uploads to Garmin Connect, over the API the
@@ -782,6 +992,16 @@ since = "2024-01-01"       # earliest day to mirror; default a year back. Quote 
 group = "garmin"
 function = "render_markdown"
 inputs = ["garmin/ingest"]
+
+[[steps]]
+group = "garmin"
+function = "keyword_index"
+inputs = ["garmin/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "garmin"
+function = "embed"
+inputs = ["garmin/keyword_index"]
 # --- AirVisual (IQAir) monitors -----------------------------------------
 
 # AirVisual Pros' own history files, read off each unit's Samba share
@@ -820,6 +1040,16 @@ group = "ship-air"
 function = "render_markdown"
 inputs = ["ship-air/ingest"]
 
+[[steps]]
+group = "ship-air"
+function = "keyword_index"
+inputs = ["ship-air/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "ship-air"
+function = "embed"
+inputs = ["ship-air/keyword_index"]
+
 # --- Signal (Android backup) --------------------------------------------
 
 # Decrypts the newest `signal-backup-*` snapshot under `backup.path`
@@ -846,6 +1076,16 @@ function = "render_markdown"
 inputs = ["signal/ingest"]
 [steps.params]
 period = "month"   # month (default) | day | year | all — span of each rendered doc
+
+[[steps]]
+group = "signal"
+function = "keyword_index"
+inputs = ["signal/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "signal"
+function = "embed"
+inputs = ["signal/keyword_index"]
 
 # --- WhatsApp (Android crypt15 backup) ----------------------------------
 
@@ -875,6 +1115,16 @@ group = "whatsapp"
 function = "render_markdown"
 inputs = ["whatsapp/ingest"]
 
+[[steps]]
+group = "whatsapp"
+function = "keyword_index"
+inputs = ["whatsapp/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "whatsapp"
+function = "embed"
+inputs = ["whatsapp/keyword_index"]
+
 # --- Facebook (data export) ---------------------------------------------
 
 # File-backed: point `export.path` at an unzipped "Download your
@@ -899,6 +1149,16 @@ path = "~/backups/Facebook"
 group = "facebook"
 function = "render_markdown"
 inputs = ["facebook/ingest"]
+
+[[steps]]
+group = "facebook"
+function = "keyword_index"
+inputs = ["facebook/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "facebook"
+function = "embed"
+inputs = ["facebook/keyword_index"]
 
 # --- LinkedIn (data export) ---------------------------------------------
 
@@ -934,6 +1194,16 @@ maximum_sequential_failed_requests = 20
 group = "linkedin"
 function = "render_markdown"
 inputs = ["linkedin/ingest"]
+
+[[steps]]
+group = "linkedin"
+function = "keyword_index"
+inputs = ["linkedin/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "linkedin"
+function = "embed"
+inputs = ["linkedin/keyword_index"]
 
 # --- Google Takeout (data export) ---------------------------------------
 
@@ -980,6 +1250,16 @@ group = "google-takeout"
 function = "render_markdown"
 inputs = ["google-takeout/ingest"]
 
+[[steps]]
+group = "google-takeout"
+function = "keyword_index"
+inputs = ["google-takeout/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "google-takeout"
+function = "embed"
+inputs = ["google-takeout/keyword_index"]
+
 # --- SMS Backup & Restore (Android export) ------------------------------
 
 # File-backed: point `backup.path` at the directory holding the Android
@@ -1005,6 +1285,16 @@ always_clear_before_ingest = true
 group = "sms-backup-restore"
 function = "render_markdown"
 inputs = ["sms-backup-restore/ingest"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "keyword_index"
+inputs = ["sms-backup-restore/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "embed"
+inputs = ["sms-backup-restore/keyword_index"]
 
 # --- fsindex (directory-tree scanner) -----------------------------------
 
@@ -1075,6 +1365,16 @@ path = "~/Documents"
 group = "pdfs"
 function = "render_markdown"
 inputs = ["pdfs/ingest"]
+
+[[steps]]
+group = "pdfs"
+function = "keyword_index"
+inputs = ["pdfs/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "pdfs"
+function = "embed"
+inputs = ["pdfs/keyword_index"]
 
 # --- media (local music / photos / video / playlists) --------------------
 
@@ -1314,6 +1614,16 @@ path = "~/Library/Messages/chat.db"
 group = "messages"
 function = "render_markdown"
 inputs = ["messages/ingest"]
+
+[[steps]]
+group = "messages"
+function = "keyword_index"
+inputs = ["messages/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "messages"
+function = "embed"
+inputs = ["messages/keyword_index"]
 
 # The app's own surface: `unified_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
