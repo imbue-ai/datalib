@@ -122,20 +122,20 @@ async fn a_step_deaf_to_its_stop_is_killed_at_the_grace() {
     h.finish().await;
 }
 
-/// A pause stops a running step; a resume while its request is still
+/// Turning off stops a running step; turning on while its request is still
 /// open runs it again.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_paused_step_stops_and_runs_again_on_resume() {
+async fn a_turned_off_step_stops_and_runs_again_on_turn_on() {
     let mut h = Harness::new(&[source("a"), source("b")]).await;
     let sync = h.sync(&["a", "b"]).await;
     h.started("a").await;
     h.started("b").await;
     h.run("a", "stall").await;
-    h.pause("a").await;
+    h.turn_off("a").await;
     h.ack("a", "sigint").await;
     assert_eq!(h.ended("a", 1).await.outcome, "stopped");
     // b holds the request open.
-    h.resume("a").await;
+    h.turn_on("a").await;
     h.started("a").await;
     h.run("a", "ok v1").await;
     h.run("b", "ok v1").await;
@@ -160,12 +160,12 @@ async fn a_stop_during_a_retry_backoff_ends_it_at_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_pause_during_a_retry_backoff_ends_it_at_once() {
+async fn a_turn_off_during_a_retry_backoff_ends_it_at_once() {
     let mut h = Harness::new(&[source("a")]).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
     h.run("a", "fail transient").await;
-    h.pause("a").await;
+    h.turn_off("a").await;
     let end = h.ended("a", 1).await;
     assert_eq!((end.outcome.as_str(), end.attempts), ("stopped", 1));
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
@@ -451,16 +451,16 @@ async fn stopping_a_streaming_producers_request_stops_its_consumer() {
     h.finish().await;
 }
 
-/// Pausing the producer stops it; the consumer mid-pass finishes.
+/// Turning off the producer stops it; the consumer mid-pass finishes.
 #[tokio::test(flavor = "multi_thread")]
-async fn pausing_a_streaming_producer_lets_its_consumer_finish() {
+async fn turning_off_a_streaming_producer_lets_its_consumer_finish() {
     let mut h = Harness::new(&chain()).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
     h.run("a", "streams").await;
     h.run("a", "seal s1").await;
     h.started("c").await;
-    h.pause("a").await;
+    h.turn_off("a").await;
     h.ack("a", "sigint").await;
     h.run("c", "ok c1").await;
     assert_eq!(h.ended("c", 1).await.outcome, "succeeded");
@@ -468,24 +468,24 @@ async fn pausing_a_streaming_producer_lets_its_consumer_finish() {
     h.finish().await;
 }
 
-/// A paused consumer waits out its producer's seals and runs once, on
-/// the newest, when resumed.
+/// A consumer turned off waits out its producer's seals and runs once,
+/// on the newest, when turned on.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_paused_consumer_waits_out_seals_and_runs_on_resume() {
+async fn a_turned_off_consumer_waits_out_seals_and_runs_on_turn_on() {
     let mut h = Harness::new(&chain()).await;
-    h.pause("c").await;
+    h.turn_off("c").await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
     h.run("a", "streams").await;
     h.run("a", "seal s1").await;
     h.run("a", "seal s2").await;
-    h.until("c to read paused after the seals", |s| {
+    h.until("c to read off after the seals", |s| {
         let sealed = s.version("a").is_some_and(|v| v.contains("s2"));
         (sealed && s.detail("c") == Some("turned off by person")).then_some(())
     })
     .await;
     assert_eq!(h.state().await.started("c"), 0);
-    h.resume("c").await;
+    h.turn_on("c").await;
     h.started("c").await;
     h.tell("c", "reads");
     let reads = h
@@ -600,7 +600,7 @@ async fn a_streaming_chain_runs_every_hop_at_once() {
     h.finish().await;
 }
 
-// A fan-in under pressure: wake-ups in bursts, mixed with stops and pauses.
+// A fan-in under pressure: wake-ups in bursts, mixed with stops and switches.
 
 /// The versions `step` was handed, input → version, from its `reads` ack.
 async fn handed(h: &mut Harness, step: &str) -> std::collections::BTreeMap<String, String> {
@@ -702,12 +702,12 @@ async fn stopping_every_sync_a_fan_in_serves_stops_it() {
     h.finish().await;
 }
 
-/// A paused fan-in waits out a burst of seals and runs once on resume,
+/// A fan-in turned off waits out a burst of seals and runs once turned on,
 /// on the newest of each input.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
+async fn a_turned_off_fan_in_waits_out_a_burst_and_runs_once_on_turn_on() {
     let mut h = Harness::new(&fan_in(&["a", "b"])).await;
-    h.pause("d").await;
+    h.turn_off("d").await;
     let sync = h.sync(&["a", "b"]).await;
     for s in ["a", "b"] {
         h.started(s).await;
@@ -716,14 +716,14 @@ async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
     for (s, v) in [("a", "a1"), ("b", "b1"), ("a", "a2"), ("b", "b2")] {
         h.run(s, &format!("seal {v}")).await;
     }
-    h.until("d to read paused after the burst", |s| {
+    h.until("d to read off after the burst", |s| {
         let sealed = s.version("a").is_some_and(|v| v.ends_with(":a2"))
             && s.version("b").is_some_and(|v| v.ends_with(":b2"));
         (sealed && s.detail("d") == Some("turned off by person")).then_some(())
     })
     .await;
     assert_eq!(h.state().await.started("d"), 0);
-    h.resume("d").await;
+    h.turn_on("d").await;
     h.started("d").await;
     let read = handed(&mut h, "d").await;
     assert!(
@@ -739,23 +739,23 @@ async fn a_paused_fan_in_waits_out_a_burst_and_runs_once_on_resume() {
 }
 
 /// A step that says it failed is not a stopped run, though the loop had
-/// just asked it to stop: its failure stands, and a resume does not run it
+/// just asked it to stop: its failure stands, and turning it on does not run it
 /// again for the request it failed. (One that exits with no word after a
 /// stop was asked is taken to have stopped: that is all a plain command
 /// can tell us.)
 #[tokio::test(flavor = "multi_thread")]
 async fn a_step_that_fails_after_being_asked_to_stop_is_a_failure_not_a_stop() {
-    // `b` holds the request open across the pause and the resume.
+    // `b` holds the request open across turning it off and on.
     let mut h = Harness::new(&[source("a"), source("b")]).await;
     let sync = h.sync(&["a", "b"]).await;
     h.started("a").await;
     h.started("b").await;
     h.run("a", "on_stop ignore").await;
-    h.pause("a").await;
+    h.turn_off("a").await;
     h.ack("a", "sigint").await;
     h.run("a", "fail data").await;
     assert_eq!(h.ended("a", 1).await.outcome, "failed");
-    h.resume("a").await;
+    h.turn_on("a").await;
     h.run("b", "ok v1").await;
     h.until("the request to close, or a to run again", |s| {
         (s.outcome(&sync).is_some() || s.started("a") > 1).then_some(())

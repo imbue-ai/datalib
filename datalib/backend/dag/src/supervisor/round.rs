@@ -89,7 +89,7 @@ impl Slot {
 enum LastWanted {
     #[default]
     Unwanted,
-    Paused,
+    Off,
     Waiting,
     Blocked(String),
     Other,
@@ -99,17 +99,17 @@ impl LastWanted {
     fn of(graph: &Graph, state: Row) -> LastWanted {
         match state {
             Row::Idle | Row::Stale => LastWanted::Unwanted,
-            Row::Paused => LastWanted::Paused,
+            Row::Off => LastWanted::Off,
             Row::Waiting(_) => LastWanted::Waiting,
             Row::Blocked(on) => LastWanted::Blocked(graph.steps[on].id.clone()),
             _ => LastWanted::Other,
         }
     }
 
-    /// A paused step took no part: none.
+    /// A step turned off took no part: none.
     fn settles(&self, cancelled: bool) -> Option<StepStatus> {
         Some(match self {
-            LastWanted::Paused => return None,
+            LastWanted::Off => return None,
             LastWanted::Waiting if cancelled => StepStatus::Failed {
                 kind: FailureKind::Cancelled,
             },
@@ -152,7 +152,7 @@ impl<'a> Recorded<'a> {
     }
 }
 
-/// Where the loop's requests and pauses come from: the store, read again
+/// Where the loop's requests and switches come from: the store, read again
 /// whenever another process writes to it.
 struct Mailbox<'a> {
     store: &'a Store,
@@ -244,7 +244,7 @@ impl Runner {
         let mut shape = shape_of(graph, &self.lock_slots);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
-        let mut paused: BTreeMap<usize, String> = BTreeMap::new();
+        let mut turned_off: BTreeMap<usize, String> = BTreeMap::new();
         let mut seq = 0u64;
         let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
         let mut changed_now: HashMap<String, bool> = HashMap::new();
@@ -256,7 +256,7 @@ impl Runner {
             graph,
             &mut mailbox,
             &mut open,
-            &mut paused,
+            &mut turned_off,
             &mut seq,
             &mut slots,
         )
@@ -366,7 +366,7 @@ impl Runner {
                             slot.ever_in_scope |= s;
                         }
                     }
-                    paused = paused_in(graph, store).await?;
+                    turned_off = turned_off_in(graph, store).await?;
                     // Read the requests again: one left for want of a step
                     // this graph has is taken on now.
                     mailbox.seen = None;
@@ -395,7 +395,7 @@ impl Runner {
                     graph,
                     &mut mailbox,
                     &mut open,
-                    &mut paused,
+                    &mut turned_off,
                     &mut seq,
                     &mut slots,
                 )
@@ -403,7 +403,7 @@ impl Runner {
             }
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
-                paused: paused.keys().copied().collect(),
+                turned_off: turned_off.keys().copied().collect(),
             };
             let t = tick(&shape, &intent, &facts);
             for (slot, &st) in slots.iter_mut().zip(&t.states) {
@@ -468,7 +468,7 @@ impl Runner {
             // reader that sees it closed must find no step still serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
             let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
-            record_states(graph, &shape, &mut state, &t, &held, &paused, |i| {
+            record_states(graph, &shape, &mut state, &t, &held, &turned_off, |i| {
                 let mut serving = open
                     .iter()
                     .enumerate()
@@ -608,7 +608,7 @@ impl Runner {
         }
         let at_rest = Intent {
             requests: Vec::new(),
-            paused: paused.keys().copied().collect(),
+            turned_off: turned_off.keys().copied().collect(),
         };
         let t = tick(&shape, &at_rest, &facts);
         record_states(
@@ -617,7 +617,7 @@ impl Runner {
             &mut state,
             &t,
             &vec![false; slots.len()],
-            &paused,
+            &turned_off,
             |_| None,
         );
         record_deferred(graph, &mut state, &mailbox.deferred);
@@ -652,7 +652,7 @@ impl Runner {
         Ok(report)
     }
 
-    /// Bring `open` and `paused` up to what the mailbox says. A request
+    /// Bring `open` and `turned_off` up to what the mailbox says. A request
     /// the loop has not seen before is opened now, so only an invocation
     /// started after this counts as serving it.
     #[allow(clippy::too_many_arguments)]
@@ -661,7 +661,7 @@ impl Runner {
         graph: &Graph,
         mailbox: &mut Mailbox<'_>,
         open: &mut Vec<Open>,
-        paused: &mut BTreeMap<usize, String>,
+        turned_off: &mut BTreeMap<usize, String>,
         seq: &mut u64,
         slots: &mut [Slot],
     ) -> Result<()> {
@@ -697,7 +697,7 @@ impl Runner {
                 // loaded.
                 let first = !std::mem::replace(started, true);
                 *seen = Some(version);
-                let (rows, all_paused) = store.mailbox().await?;
+                let (rows, all_turned_off) = store.mailbox().await?;
                 deferred.retain(|id, _| {
                     rows.iter()
                         .any(|r| &r.id == id && r.stop_requested_by.is_none())
@@ -767,30 +767,30 @@ impl Runner {
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
-                *paused = paused_of(graph, &all_paused);
+                *turned_off = turned_off_of(graph, &all_turned_off);
             }
         }
         Ok(())
     }
 
     /// One tick with no request open, its states saved: for a host whose
-    /// loop is idle when a pause or a resume lands, or that has just taken
+    /// loop is idle when a step is turned off or on, or that has just taken
     /// the lock from a loop that died with steps running.
-    /// The pauses it recorded, as the store held them: a host compares
-    /// the pauses it finds later with these, not with any it read before.
+    /// The switches it recorded, as the store held them: a host compares
+    /// the switches it finds later with these, not with any it read before.
     pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<BTreeMap<String, String>> {
         let mut record = Recorded::load(store).await?;
         let mut state = record.saved.clone();
-        let all = store.paused().await?;
-        let paused = paused_of(graph, &all);
+        let all = store.turned_off().await?;
+        let turned_off = turned_off_of(graph, &all);
         let intent = Intent {
             requests: Vec::new(),
-            paused: paused.keys().copied().collect(),
+            turned_off: turned_off.keys().copied().collect(),
         };
         let shape = shape_of(graph, &self.lock_slots);
         let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![false; graph.steps.len()];
-        record_states(graph, &shape, &mut state, &t, &held, &paused, |_| None);
+        record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| None);
         record.save(&state).await?;
         Ok(all)
     }
@@ -1039,12 +1039,12 @@ impl Runner {
     }
 }
 
-/// Step index → who paused it, for the steps this graph has.
-async fn paused_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
-    Ok(paused_of(graph, &store.paused().await?))
+/// Step index → who turned it off, for the steps this graph has.
+async fn turned_off_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
+    Ok(turned_off_of(graph, &store.turned_off().await?))
 }
 
-fn paused_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, String> {
+fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, String> {
     all.iter()
         .filter_map(|(id, by)| Some((*graph.by_id.get(id)?, by.clone())))
         .collect()
@@ -1060,19 +1060,21 @@ fn record_states(
     state: &mut Record,
     t: &Tick,
     held: &[bool],
-    paused: &BTreeMap<usize, String>,
+    turned_off: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Option<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
         let st = if held[i] { Row::Running } else { st };
-        let paused_by = paused.get(&i).cloned();
+        let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
-            Row::Running if t.stops.contains(&i) => Some(match &paused_by {
+            Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
                 Some(by) => format!("stopping: turned off by {by}"),
                 None => "stopping: no open request wants it".to_string(),
             }),
-            Row::Paused => paused_by.as_ref().map(|by| format!("turned off by {by}")),
+            Row::Off => turned_off_by
+                .as_ref()
+                .map(|by| format!("turned off by {by}")),
             Row::Blocked(p) => Some(format!(
                 "{} has published nothing and is not going to run",
                 id(p)
@@ -1099,7 +1101,7 @@ fn record_states(
         let entry = state.steps.entry(id(i).to_string()).or_default();
         entry.state = Some(st.into());
         entry.state_detail = detail;
-        entry.paused_by = paused_by;
+        entry.turned_off_by = turned_off_by;
         entry.request = serving(i);
     }
 }
@@ -1452,11 +1454,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_paused_step_is_not_started_and_its_request_closes() {
+    async fn a_turned_off_step_is_not_started_and_its_request_closes() {
         let f = fixture();
         f.go.store(true, Ordering::SeqCst);
         let other = Store::open(f.root.path()).await.unwrap();
-        other.pause("a/raw", "claude").await.unwrap();
+        other.turn_off("a/raw", "claude").await.unwrap();
         let id = other
             .open_request(&["a/raw".into(), "b/raw".into()], "ui")
             .await
@@ -1469,8 +1471,8 @@ mod tests {
             .await
             .steps["a/raw"]
             .clone();
-        assert_eq!(a.state, Some(StateKind::Paused));
-        assert_eq!(a.paused_by.as_deref(), Some("claude"));
+        assert_eq!(a.state, Some(StateKind::Off));
+        assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
         assert_eq!(a.last_run, None, "a step it skipped took no part");
         assert_eq!(a.last_success_at, None);
     }
@@ -1840,31 +1842,31 @@ mod tests {
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }
 
-    /// A pause landing while no loop runs reaches the rows only through a
+    /// A turn-off landing while no loop runs reaches the rows only through a
     /// tick; `settle` is that tick, with no request open.
     #[tokio::test]
-    async fn a_pause_while_the_loop_is_idle_reads_once_settled() {
+    async fn a_turn_off_while_the_loop_is_idle_reads_once_settled() {
         let f = fixture();
         let store = Store::open(f.root.path()).await.unwrap();
         let runner = Runner::new(f.root.path());
-        store.pause("a/raw", "claude").await.unwrap();
+        store.turn_off("a/raw", "claude").await.unwrap();
         runner.settle(&f.graph, &store).await.unwrap();
         let a = crate::supervisor::record::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
-        assert_eq!(a.state, Some(StateKind::Paused));
-        assert_eq!(a.paused_by.as_deref(), Some("claude"));
+        assert_eq!(a.state, Some(StateKind::Off));
+        assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
         assert_eq!(a.state_detail.as_deref(), Some("turned off by claude"));
 
-        store.resume("a/raw").await.unwrap();
+        store.turn_on("a/raw").await.unwrap();
         runner.settle(&f.graph, &store).await.unwrap();
         let a = crate::supervisor::record::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
         assert_eq!(
-            (a.state, a.paused_by, a.state_detail),
+            (a.state, a.turned_off_by, a.state_detail),
             (Some(StateKind::Stale), None, None)
         );
     }

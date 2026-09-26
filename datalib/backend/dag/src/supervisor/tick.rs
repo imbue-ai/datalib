@@ -49,11 +49,11 @@ pub struct StepShape {
     pub pins_reads: bool,
 }
 
-/// What people have asked for: the open requests and the paused steps.
+/// What people have asked for: the open requests and the steps turned off.
 #[derive(Debug, Clone, Default)]
 pub struct Intent {
     pub requests: Vec<Request>,
-    pub paused: BTreeSet<StepIx>,
+    pub turned_off: BTreeSet<StepIx>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub struct Consumed {
 pub struct Attempt {
     pub started: Seq,
     pub failed: bool,
-    /// It was stopped — a pause, a stop, the host going — rather than
+    /// It was stopped — turned off, a stop, the host going — rather than
     /// ending on its own. That is neither a failure nor a run: the work is
     /// not done, and it runs again for a request that still wants it.
     pub stopped: bool,
@@ -109,7 +109,7 @@ pub struct Tick {
     /// One per step, indexed like [`Shape::steps`].
     pub states: Vec<StepState>,
     pub starts: Vec<Start>,
-    /// Running steps nobody wants any more, or that are paused.
+    /// Running steps nobody wants any more, or that are turned off.
     pub stops: Vec<StepIx>,
     /// Requests that close now, by index into [`Intent::requests`].
     pub closed: Vec<(usize, Outcome)>,
@@ -137,7 +137,7 @@ pub enum StepState {
     /// Wanted, and up to date.
     Fresh,
     Running,
-    Paused,
+    Off,
     /// Its retries ran out and nothing it reads has moved since.
     Failed,
     /// Out of date, but a producer it reads has never published
@@ -220,13 +220,13 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
 
         if f.running.is_some() {
             states[i] = StepState::Running;
-            if intent.paused.contains(&i) || wanting[i].is_empty() {
+            if intent.turned_off.contains(&i) || wanting[i].is_empty() {
                 stops.push(i);
             }
             continue;
         }
-        if intent.paused.contains(&i) {
-            states[i] = StepState::Paused;
+        if intent.turned_off.contains(&i) {
+            states[i] = StepState::Off;
             continue;
         }
         let stale = stale_by_inputs(f, &now);
@@ -510,7 +510,7 @@ mod tests {
                 roots: roots.to_vec(),
                 opened: Seq(opened),
             }],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         }
     }
 
@@ -894,23 +894,23 @@ mod tests {
     }
 
     #[test]
-    fn a_paused_step_never_starts_and_does_not_hold_its_request_open() {
+    fn a_turned_off_step_never_starts_and_does_not_hold_its_request_open() {
         let s = chain();
         let facts = all_fresh(&s, 1);
         let mut intent = request(&[0], 5);
-        intent.paused.insert(0);
+        intent.turned_off.insert(0);
 
         let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
-        assert_eq!(t.states[0], StepState::Paused);
+        assert_eq!(t.states[0], StepState::Off);
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
 
-    /// A source stopped by a pause, and resumed while its request is
+    /// A source stopped by turning it off, and turned on while its request is
     /// still open, runs again: a stopped run is neither a failure nor a
     /// run. Before, it counted as both, and the request closed failed.
     #[test]
-    fn a_step_stopped_by_a_pause_runs_again_on_resume() {
+    fn a_step_stopped_by_a_turn_off_runs_again_on_turn_on() {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         let intent = request(&[0], 5);
@@ -925,12 +925,12 @@ mod tests {
     }
 
     #[test]
-    fn pausing_a_running_step_stops_it() {
+    fn turning_off_a_running_step_stops_it() {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         run(&mut facts, 0, 6);
         let mut intent = request(&[0], 5);
-        intent.paused.insert(0);
+        intent.turned_off.insert(0);
         assert_eq!(tick(&s, &intent, &facts).stops, vec![0]);
     }
 
@@ -964,13 +964,13 @@ mod tests {
                     opened: Seq(5),
                 },
             ],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         };
         assert!(tick(&s, &both, &facts).stops.is_empty());
 
         let slack_only = Intent {
             requests: vec![both.requests[1].clone()],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         };
         let t = tick(&s, &slack_only, &facts);
         assert!(t.stops.is_empty(), "{t:?}");

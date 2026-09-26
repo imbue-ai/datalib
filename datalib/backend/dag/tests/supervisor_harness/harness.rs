@@ -540,14 +540,14 @@ impl Harness {
         self.note(format!("person: stop {request}"));
     }
 
-    pub async fn pause(&mut self, step: &str) {
-        self.person.pause(step, "person").await.unwrap();
-        self.note(format!("person: pause {step}"));
+    pub async fn turn_off(&mut self, step: &str) {
+        self.person.turn_off(step, "person").await.unwrap();
+        self.note(format!("person: turn_off {step}"));
     }
 
-    pub async fn resume(&mut self, step: &str) {
-        self.person.resume(step).await.unwrap();
-        self.note(format!("person: resume {step}"));
+    pub async fn turn_on(&mut self, step: &str) {
+        self.person.turn_on(step).await.unwrap();
+        self.note(format!("person: turn_on {step}"));
     }
 
     /// Wait for a request to close; how it did.
@@ -642,10 +642,10 @@ impl host::Periods for Periods {
     async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
         let (checked, _) = self.graph()?;
         match Runner::new(&self.root).settle(&checked.graph, store).await {
-            Ok(paused) => {
-                let steps: Vec<&String> = paused.keys().collect();
+            Ok(turned_off) => {
+                let steps: Vec<&String> = turned_off.keys().collect();
                 let _ = self.report.send(Seen::Host(format!("settled {steps:?}")));
-                Some(paused)
+                Some(turned_off)
             }
             Err(e) => {
                 let _ = self.report.send(Seen::Broke(format!("{e:#}")));
