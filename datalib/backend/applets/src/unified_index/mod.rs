@@ -21,7 +21,7 @@ mod problems;
 
 use datalib_columns::Identity;
 use datalib_unified_index::db::datalib_source_id;
-use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport};
+use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport, SummaryCache};
 use datalib_unified_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdHit,
     QmdIndexReader, QmdIndexSummary, QmdRunner, QmdRunnerConfig, QueryMode,
@@ -44,6 +44,7 @@ struct Index {
     /// rebuilt mid-sync) degrades to the SQL fallback and upgrades again
     /// with no restart.
     qmd: Arc<QmdDaemon>,
+    qmd_summary: Arc<SummaryCache>,
 }
 
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
@@ -71,6 +72,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
             .with_context(|| format!("open the grid index under {}", root.display()))?;
         let state = Index {
             qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+            qmd_summary: Arc::new(SummaryCache::default()),
             repo: Arc::new(repo),
             root,
         };
@@ -499,7 +501,7 @@ async fn qmd_state(
         });
     };
 
-    let summary = match reader.summary().await {
+    let summary = match s.qmd_summary.summary(&s.root, &reader).await {
         Ok(v) => v,
         Err(e) => {
             errors.push(format!("qmd summary: {e}"));

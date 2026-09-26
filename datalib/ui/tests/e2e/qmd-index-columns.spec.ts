@@ -98,3 +98,35 @@ test("the columns are off by default and render check marks once shown", async (
     ).toBe(true);
   }
 });
+
+// The columns ask only about the rows on screen and a margin around them.
+// Rows far below the first screen get their answers once the grid is
+// scrolled to them; a version that asked once on load would leave them
+// as the unknown em dash for good.
+test("rows scrolled to later get their check marks too", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
+  await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.showColumns([
+      "qmd_indexed",
+      "qmd_embedded",
+    ]),
+  );
+  await expect(page.locator('.grid-box .slick-row [col-id="qmd_indexed"]').first()).toHaveText(
+    CHECK,
+    { timeout: 15_000 },
+  );
+
+  // Whichever end of the result set the grid did not open on: the
+  // first request covered the rows around the opening view, not these.
+  const openedAtTop = (await page.locator('.grid-box .slick-row[data-row="0"]').count()) > 0;
+  const target = await page.evaluate((top) => {
+    const a = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
+    const row = top ? a.rows().length - 1 : 0;
+    a.scrollToRow(row);
+    return row;
+  }, openedAtTop);
+  const far = page.locator(`.grid-box .slick-row[data-row="${target}"] [col-id="qmd_indexed"]`);
+  await expect(far).toBeVisible();
+  await expect(far).toHaveText(CHECK, { timeout: 15_000 });
+});

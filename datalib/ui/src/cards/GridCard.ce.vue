@@ -42,6 +42,7 @@ import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
 import { perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
+import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
@@ -96,25 +97,17 @@ const qmdError = ref<string | null>(null);
 const accounts = ref<AccountsMap>({});
 
 // --- qmd index state (the Indexed / Embedded columns) ---------------
+// Answers for the documents behind the rows on screen, gathered as the
+// grid scrolls, and started over when the result set changes.
 const qmdState = ref<Map<string, QmdDocState>>(new Map());
 // Collection-wide totals, shown next to the row count.
 const qmdSummary = ref<{ documents: number; embedded: number } | null>(null);
-let qmdInflight: AbortController | null = null;
-// Monotonic request id. A slow response must never overwrite a newer
-// one's state — without this guard, switching queries quickly can leave
-// the badges describing a result set the user has already left.
-let qmdSeq = 0;
-
-// Distinct markdown_uuids behind the current result set. Many grid rows
-// (one per message) share a single rendered document, so this is
-// typically far smaller than `rows`.
-function currentMarkdownUuids(): string[] {
-  const seen = new Set<string>();
-  for (const r of rows.value) {
-    if (r.markdown_uuid) seen.add(r.markdown_uuid);
-  }
-  return [...seen];
-}
+// Bumped when the result set changes. An answer for an older one is
+// dropped rather than merged into state describing rows now gone.
+let qmdGeneration = 0;
+// What is out for this generation, so a scroll does not ask twice.
+const qmdAsked = new Set<string>();
+const qmdInflight = new Set<AbortController>();
 
 // True when either index-state column is on screen. Both are hidden by
 // default, and asking about a document costs a file read + a SHA-256
@@ -127,41 +120,66 @@ function qmdColumnsVisible(): boolean {
     .some((c) => (c.id === "qmd_indexed" || c.id === "qmd_embedded") && !c.hidden);
 }
 
-async function refreshQmdState() {
-  // With both columns hidden we still ask — with an empty uuid list.
-  // That costs two SQL queries and no file I/O, and keeps the "N of M
-  // documents searchable" line under the grid current, which is the
-  // only thing on screen that hints the columns exist.
-  const uuids = qmdColumnsVisible() ? currentMarkdownUuids() : [];
-  qmdInflight?.abort();
-  const seq = ++qmdSeq;
+// The result set changed: forget every answer and ask afresh. With both
+// columns hidden this still asks, with no documents, for the "N of M
+// documents searchable" line under the grid, which is the only thing on
+// screen that hints the columns exist.
+function refreshQmdState() {
+  qmdGeneration++;
+  qmdAsked.clear();
+  for (const ctrl of qmdInflight) ctrl.abort();
+  qmdInflight.clear();
+  qmdState.value = new Map();
+  refreshIndexCells();
+  if (qmdColumnsVisible()) askAboutVisibleRows();
+  else void askQmdState([]);
+}
+
+function askAboutVisibleRows() {
+  const grid = vueGrid?.slickGrid;
+  if (!grid || !qmdColumnsVisible()) return;
+  const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
+  const rowsInView = [];
+  for (let row = top; row <= bottom; row++) rowsInView.push(rowData(row));
+  const uuids = markdownsToAsk(rowsInView, qmdState.value, qmdAsked);
+  if (uuids.length > 0) void askQmdState(uuids);
+}
+
+async function askQmdState(uuids: string[]) {
+  const generation = qmdGeneration;
+  for (const u of uuids) qmdAsked.add(u);
   const ctrl = new AbortController();
-  qmdInflight = ctrl;
+  qmdInflight.add(ctrl);
   try {
     const r = await fetchQmdState(uuids, ctrl.signal);
-    // Superseded while in flight — drop it rather than clobber newer state.
-    if (seq !== qmdSeq) return;
-    const m = new Map<string, QmdDocState>();
-    for (const [uuid, st] of Object.entries(r.docs)) m.set(uuid, st);
-    // Empty when the columns are hidden — which is also the state the
-    // formatters need to see, so an un-hide refetches rather than
-    // painting whatever the last visible result set held.
-    qmdState.value = m;
+    if (generation !== qmdGeneration) return;
+    const merged = new Map(qmdState.value);
+    for (const [uuid, st] of Object.entries(r.docs)) merged.set(uuid, st);
+    qmdState.value = merged;
     qmdSummary.value = r.summary;
     refreshIndexCells();
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
-    // Non-fatal: the columns fall back to "unknown". fetchQmdState has
-    // already raised a toast for anything the user should see.
-    if (seq === qmdSeq) {
-      qmdState.value = new Map();
-      refreshIndexCells();
-    }
+    // Non-fatal: these cells stay "unknown", and the next scroll over
+    // them asks again. fetchQmdState has already raised a toast for
+    // anything the user should see.
+    if (generation === qmdGeneration) for (const u of uuids) qmdAsked.delete(u);
+  } finally {
+    qmdInflight.delete(ctrl);
   }
 }
 
-// Spelled out on hover: the summary counts CONTENT, not files — two
-// documents with identical bytes are one entry in the index.
+// The grid calls this as it scrolls, many times a second; ask once it
+// settles.
+let qmdScrollTimer: ReturnType<typeof setTimeout> | null = null;
+function onViewportChanged() {
+  if (qmdScrollTimer) clearTimeout(qmdScrollTimer);
+  qmdScrollTimer = setTimeout(() => {
+    qmdScrollTimer = null;
+    askAboutVisibleRows();
+  }, 150);
+}
+
 const qmdSummaryTitle = computed(() => {
   const s = qmdSummary.value;
   if (!s) return "";
@@ -1349,6 +1367,7 @@ function createGrid() {
   grid.onSelectedRowsChanged.subscribe(onSelectedRowsChanged);
   grid.onClick.subscribe(onClick);
   grid.onDblClick.subscribe(onDblClick);
+  grid.onViewportChanged.subscribe(onViewportChanged);
   bundle.instances?.eventPubSubService?.subscribe<GridStateChange>(
     "onGridStateChanged",
     onGridStateChanged,
@@ -1445,14 +1464,11 @@ function onGridStateChanged(change: GridStateChange) {
   if (change.change?.type === "columns") onColumnsShown();
 }
 
-// Turning an index-state column on is the first moment we owe the
-// user per-document answers. Guarded on an empty map so hiding and
-// re-showing doesn't refetch state we already hold for these rows;
-// the `rows` watcher covers the case where the result set moved.
+// Turning an index-state column on is the first moment we owe the user
+// per-document answers. Asking only for what is missing, hiding and
+// re-showing refetches nothing already held for these rows.
 function onColumnsShown() {
-  if (qmdColumnsVisible() && qmdState.value.size === 0 && rows.value.length > 0) {
-    refreshQmdState();
-  }
+  askAboutVisibleRows();
 }
 
 /// The app's theme is an attribute on `<html>`; the grid's is an option.
