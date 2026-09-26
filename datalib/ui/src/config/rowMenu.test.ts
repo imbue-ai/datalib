@@ -11,8 +11,9 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   editBlocked: null,
   revealBlocked: null,
   browseBlocked: null,
+  rawStore: false,
   stopRequestId: null,
-  pausedBy: null,
+  turnedOffBy: null,
   statusFrom: "slack/render_markdown",
   revealPath: "/data/slack",
   ...over,
@@ -33,7 +34,7 @@ describe("rowMenu", () => {
     expect(actions).toEqual([
       "browse",
       "sync",
-      "pause",
+      "turn_off",
       "edit",
       "compare",
       "log",
@@ -123,6 +124,14 @@ describe("rowMenu", () => {
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
   });
 
+  it("names Browse for what it opens on a download step with a raw store", () => {
+    const step = { kind: "step" as const, func: "ingest", id: "slack/ingest" };
+    expect(entry(rowMenu([target(step)], opts), "browse").name).toBe("Browse this data");
+    expect(entry(rowMenu([target({ ...step, rawStore: true })], opts), "browse").name).toBe(
+      "Browse the downloaded tables",
+    );
+  });
+
   it("limits the one-row actions when several rows are targeted, and names the row a reason came from", () => {
     const menu = rowMenu([target(), target({ id: "mail", name: "Mail", editBlocked: "x" })], opts);
     expect(entry(menu, "browse").disabled).toBe("One row at a time");
@@ -162,10 +171,12 @@ describe("rowMenu", () => {
   });
 
   it("offers Turn on only when every target is off, and Turn off on nothing unscheduled", () => {
-    expect(entry(rowMenu([target({ pausedBy: "claude" })], opts), "resume").disabled).toBeNull();
-    const mixed = rowMenu([target({ pausedBy: "ui" }), target({ id: "mail" })], opts);
-    expect(entry(mixed, "pause").disabled).toBeNull();
-    expect(entry(rowMenu([target({ kind: "applet" })], opts), "pause").disabled).toBe(
+    expect(
+      entry(rowMenu([target({ turnedOffBy: "claude" })], opts), "turn_on").disabled,
+    ).toBeNull();
+    const mixed = rowMenu([target({ turnedOffBy: "ui" }), target({ id: "mail" })], opts);
+    expect(entry(mixed, "turn_off").disabled).toBeNull();
+    expect(entry(rowMenu([target({ kind: "applet" })], opts), "turn_off").disabled).toBe(
       "An applet is not scheduled",
     );
   });

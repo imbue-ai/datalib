@@ -995,7 +995,7 @@ mod tests {
             .await
             .unwrap();
         let mut rx = watching(td.path()).await;
-        store.pause("a/raw", "loop").await.unwrap();
+        store.turn_off("a/raw", "loop").await.unwrap();
         until(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
     }
 

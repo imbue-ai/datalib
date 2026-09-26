@@ -665,17 +665,6 @@ export type DagStepProgress = {
   updated_at_utc: string;
 };
 
-// The fraction a step's `done` / `queued` pair describes, or null when
-// the step has not said how much is ahead of it — a bar drawn from an
-// invented total claims more than we know.
-export function progressFraction(p: DagStepProgress | null | undefined): number | null {
-  if (!p) return null;
-  const done = p.metrics.done;
-  const queued = p.metrics.queued;
-  if (done == null || queued == null || done + queued <= 0) return null;
-  return Math.max(0, Math.min(1, done / (done + queued)));
-}
-
 // What a step is doing, or did, in one run — the runner's own
 // vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
 // Keep the two in step: the backend writes these words into the
@@ -955,11 +944,12 @@ export type ManageRow = {
   reveal_blocked: string | null;
   /// The open request this row is being run for: what Stop stops.
   stop_request_id: string | null;
-  /// Who paused this step, while it is paused.
-  paused_by: string | null;
+  /// Who turned this step off, while it is off.
+  turned_off_by: string | null;
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
+  raw_store_path: string | null;
 };
 
 export type ManageResponse = {
@@ -1082,12 +1072,12 @@ export async function stopRequest(id: string): Promise<void> {
   await post(`/api/requests/${encodeURIComponent(id)}/stop`);
 }
 
-export async function pauseStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/pause`);
+export async function turnOffStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_off`);
 }
 
-export async function resumeStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/resume`);
+export async function turnOnStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_on`);
 }
 
 /// Empty what the targets wrote, keeping the history, and sync what reads

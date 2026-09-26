@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 /// Everything `bundle.resources` expects under `binaries/`, staged at
-/// `tauri build` time: all but the last by the config's
+/// `tauri build` time: all but `latchkey` by the config's
 /// beforeBuildCommand (copied from Bazel output), the `latchkey`
 /// wrapper by stage-runtime.sh (installed from scripts/latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
@@ -14,6 +14,7 @@ const STAGED_BINARIES: &[&str] = &[
     "binaries/latchkey-curl-router",
     "binaries/curl-impersonate",
     "binaries/latchkey",
+    "binaries/datalib-doltlite",
 ];
 
 fn main() {
@@ -73,5 +74,22 @@ fn main() {
     // staging rsyncs writable copies out of Bazel's read-only outputs.
     let _ = fs::create_dir_all("runtime");
 
-    tauri_build::build()
+    // Declaring the app's commands is what lets a capability grant one
+    // to the main window, whose page comes from a remote origin (the
+    // backend's localhost URL): Tauri refuses a remote page any app
+    // command no capability names. Once declared, every app command is
+    // checked, so each one here must be granted somewhere
+    // (`capabilities/default.json`, `capabilities/open-raw-stores.json`).
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            "version",
+            "launcher_state",
+            "launcher_open",
+            "launcher_pick",
+            "launcher_create",
+            "launcher_quit",
+            "open_raw_store",
+        ])),
+    )
+    .expect("failed to run tauri-build")
 }

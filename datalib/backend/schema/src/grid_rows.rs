@@ -23,11 +23,10 @@ use serde::{Deserialize, Serialize};
     // walks the whole sort index row by row: 38 s for one provider's
     // single row over 74k rows, 0.08 s with this shape
     // (docs/dev/plans/paged_grids.md). A key added to the search bar
-    // wants an index here; `every_filter_key_is_served_by_an_index`
-    // says which one is missing.
+    // wants an index here, and an index no key uses costs every write
+    // for nothing: `every_filter_key_is_served_by_an_index` names both.
     index = "grid_rows_by_touched:touched_at_utc,is_document,uuid",
     index = "grid_rows_by_source_id:source_id,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_provider:provider,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_source_label:source_label,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",

@@ -60,9 +60,16 @@ bazel_dep(name = "bazel_skylib", version = "1.9.0")
 # ~300-line file-curation that took). v0.11.4 fixed the amalgamation
 # pipeline, so we're back to the trivial single-file build.
 #
-# v0.50.3 is a deliberate exception to the 7-day burn-in above (it
-# was published the day it was pinned), and it is the second one in a
-# row — v0.11.53 before it carried dolthub/doltlite#2329, the fix for
+# v0.50.12 is an exception to the 7-day burn-in above (it was five days
+# old when pinned). What we need from it arrived in v0.50.10:
+# dolthub/doltlite#2837, which stops `dolt_status` on a read-only
+# connection from failing a concurrent writer's `dolt_commit` and
+# losing its rows (dolthub/doltlite#2832). The etl two-process test
+# `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
+# checks it.
+#
+# v0.50.3 was an exception too (published the day it was pinned), and
+# so was v0.11.53, which carried dolthub/doltlite#2329, the fix for
 # the silent large-value corruption we hit building the lightroom
 # mirror (dolthub/doltlite#2327 — every value past the source file's
 # local payload limit collapsed onto the first row's bytes when read
@@ -87,9 +94,9 @@ bazel_dep(name = "bazel_skylib", version = "1.9.0")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-amalgamation-0.50.3.zip"],
-    sha256 = "216ed94387cc7a5c8a07b1a72c412b3a2c8c2d22da6028eede7827fd3a9da639",
-    strip_prefix = "doltlite-amalgamation-0.50.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.12/doltlite-amalgamation-0.50.12.zip"],
+    sha256 = "22209ff737a0113c585d5b4ea9e52ab29835453e009a77fd924bfebe18f28bb7",
+    strip_prefix = "doltlite-amalgamation-0.50.12",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
@@ -109,9 +116,9 @@ http_archive(
 # fails the build if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.3/doltlite-autoconf-0.50.3.tar.gz"],
-    sha256 = "fbe66215a3f214d92d1edab82d7125df8257690844541f9a75a3bc6435c2d714",
-    strip_prefix = "doltlite-autoconf-0.50.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.50.12/doltlite-autoconf-0.50.12.tar.gz"],
+    sha256 = "817f93ec0f34da03076a0a5cab82e422edaa98bc4a6d9d1103a4038a4d586cfa",
+    strip_prefix = "doltlite-autoconf-0.50.12",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 

@@ -383,17 +383,14 @@ is four `Entry` values and an assertion about which single row survives
 the rollup. `tests/store_test.rs` covers the half only a real store can
 prove: that two independent files unify and diff across each other.
 
-### One doltlite trap worth knowing
+### Fetching and reading share a connection
 
-`dolt_diff_<table>` and `dolt_at_<table>` are registered **when a
-connection opens**, from the tables present at that moment. A scratch
-database is empty when we open it to add the remotes, so *that*
-connection never learns about `files` and every later query on it fails
-with `no such table: dolt_diff_files` — while a fresh connection to the
-same file works. Fetching and reading therefore cannot share a
-connection, which is why `store::unify` hands back nothing and the
-caller reopens. `store_test.rs` pins the behaviour, so if doltlite ever
-starts refreshing the registry the test fails and the reopen can go.
+Doltlite registers `dolt_diff_<table>` and `dolt_at_<table>` the first
+time a statement names them, so the connection that fetched both scans
+into the empty scratch store can read `files` straight away, and
+`store::unify` hands it back. `store_test.rs` pins that; on a doltlite
+that registered the modules at open, the fetching connection saw
+`no such table: dolt_diff_files` and needed a reopen.
 
 ## What a subtree move costs, and why
 

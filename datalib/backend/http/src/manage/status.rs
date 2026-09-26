@@ -24,7 +24,7 @@ pub const STATUS_LABELS: &[(&str, &str)] = &[
     ("config_blocked", "Can\u{2019}t run"),
     ("running", "Running"),
     ("queued", "Queued"),
-    ("paused", "Off"),
+    ("off", "Off"),
     ("succeeded", "Succeeded"),
     ("skipped_up_to_date", "Up to date"),
     ("failed", "Failed"),
@@ -150,7 +150,7 @@ pub fn step_status(
                 "up to date so far; runs again if what it reads moves before the sync ends".into(),
             ),
         ),
-        Some(StateKind::Paused) => view("paused", ended, detail),
+        Some(StateKind::Off) => view("off", ended, detail),
         Some(StateKind::Blocked) => view("blocked", ended, detail),
         _ => match last {
             None => view("never_run", None, None),
@@ -250,13 +250,13 @@ mod tests {
             "queued"
         );
 
-        let paused = step_status(
-            Some(&at(StateKind::Paused, Some("turned off by claude"))),
+        let turned_off = step_status(
+            Some(&at(StateKind::Off, Some("turned off by claude"))),
             None,
             None,
         );
-        assert_eq!(paused.label, "Off");
-        assert_eq!(paused.detail.as_deref(), Some("turned off by claude"));
+        assert_eq!(turned_off.label, "Off");
+        assert_eq!(turned_off.detail.as_deref(), Some("turned off by claude"));
     }
 
     /// At rest — idle, stale, failed — the row is the last outcome and

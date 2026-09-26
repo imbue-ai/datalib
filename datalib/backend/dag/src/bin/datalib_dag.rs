@@ -72,10 +72,10 @@ async fn main() -> Result<()> {
          `cli`). If another process is already running the loop on this root — the app, \
          or another datalib-dag — this one hands it the request and follows it; either \
          way it exits with the request's outcome. Ctrl-C asks for this request to stop.\n\n\
-         datalib-dag status <config.toml>                          open requests, pauses, running steps\n\
+         datalib-dag status <config.toml>                          open requests, steps off, running steps\n\
          datalib-dag stop <config.toml> <request-id> [--by WHO]    ask a request to stop\n\
-         datalib-dag pause <config.toml> <step-id> [--by WHO]      keep a step from running\n\
-         datalib-dag resume <config.toml> <step-id>                lift a pause\n\n\
+         datalib-dag turn-off <config.toml> <step-id> [--by WHO]   skip a step in every sync; stop it if running\n\
+         datalib-dag turn-on <config.toml> <step-id>               include it in syncs again\n\n\
          Each writes a row and returns; whoever runs the loop acts on it within a second.";
     if let Some(verb) = std::env::args().nth(1).as_deref().and_then(Verb::parse) {
         return run_verb(verb, std::env::args().skip(2).collect(), USAGE).await;
@@ -502,8 +502,11 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
 enum Verb {
     Status,
     Stop,
-    Pause,
-    Resume,
+    // A person may still type what these were called before the switch.
+    #[strum(to_string = "turn-off", serialize = "pause")]
+    TurnOff,
+    #[strum(to_string = "turn-on", serialize = "resume")]
+    TurnOn,
 }
 
 impl Verb {
@@ -554,7 +557,7 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
                 }
             }
         }
-        Verb::Pause => {
+        Verb::TurnOff => {
             let step = &positional[1];
             if !checked.graph.by_id.contains_key(step) {
                 let mut ids: Vec<&str> = checked.graph.by_id.keys().map(String::as_str).collect();
@@ -564,21 +567,21 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
                     ids.join(", ")
                 );
             }
-            match store.paused().await?.get(step) {
-                Some(who) => vec![format!("{step} is already paused, by {who}")],
+            match store.turned_off().await?.get(step) {
+                Some(who) => vec![format!("{step} is already off, turned off by {who}")],
                 None => {
-                    store.pause(step, &by).await?;
-                    vec![format!("paused {step}")]
+                    store.turn_off(step, &by).await?;
+                    vec![format!("turned off {step}")]
                 }
             }
         }
-        Verb::Resume => {
+        Verb::TurnOn => {
             let step = &positional[1];
-            match store.paused().await?.get(step) {
-                None => vec![format!("{step} was not paused")],
+            match store.turned_off().await?.get(step) {
+                None => vec![format!("{step} was not off")],
                 Some(who) => {
-                    store.resume(step).await?;
-                    vec![format!("resumed {step}, which {who} had paused")]
+                    store.turn_on(step).await?;
+                    vec![format!("turned on {step}, which {who} had turned off")]
                 }
             }
         }
@@ -591,7 +594,7 @@ async fn run_verb(verb: Verb, args: Vec<String>, usage: &str) -> Result<()> {
     Ok(())
 }
 
-/// One line per open request and per pause, in a shape a script can split
+/// One line per open request and per step turned off, in a shape a script can split
 /// on two spaces.
 async fn status_lines(store: &Store) -> Result<Vec<String>> {
     let mut lines = Vec::new();
@@ -607,8 +610,8 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
             r.roots.join(",")
         ));
     }
-    for (step, who) in store.paused().await? {
-        lines.push(format!("paused {step}  by {who}"));
+    for (step, who) in store.turned_off().await? {
+        lines.push(format!("off {step}  by {who}"));
     }
     for inv in store.running_invocations().await? {
         lines.push(format!(
@@ -617,7 +620,7 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
         ));
     }
     if lines.is_empty() {
-        lines.push("nothing open, nothing paused, nothing running".to_string());
+        lines.push("nothing open, nothing off, nothing running".to_string());
     }
     Ok(lines)
 }

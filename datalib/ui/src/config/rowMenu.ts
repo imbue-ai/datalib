@@ -24,19 +24,25 @@ export type MenuTarget = {
   editBlocked: string | null;
   revealBlocked: string | null;
   browseBlocked: string | null;
+  /// Browse opens the step's raw store rather than the grid: a download
+  /// step with one, in the desktop app.
+  rawStore: boolean;
   /// Non-null while an open request wants this row — the state in which
   /// Sync reads as Stop.
   stopRequestId: string | null;
   /// Who turned it off; for a group, who turned off every step under it.
-  pausedBy: string | null;
+  turnedOffBy: string | null;
   /// For a group, the step whose status it shows; the log to open.
   statusFrom: string | null;
   revealPath: string | null;
 };
 
+export const RAW_STORE_BROWSE_LABEL = "Browse the downloaded tables";
+
 /// The Browse entry's name — shared with the Actions cell's button, so
 /// the two never say different things.
-export function browseLabel(t: Pick<MenuTarget, "kind" | "type">): string {
+export function browseLabel(t: Pick<MenuTarget, "kind" | "type" | "rawStore">): string {
+  if (t.rawStore) return RAW_STORE_BROWSE_LABEL;
   if (t.kind === "system") return "Browse the log";
   return t.kind === "group" && !t.type ? "Browse every source" : "Browse this data";
 }
@@ -53,8 +59,8 @@ export type MenuAction =
   | "browse"
   | "sync"
   | "stop"
-  | "pause"
-  | "resume"
+  | "turn_off"
+  | "turn_on"
   | "edit"
   | "compare"
   | "rename"
@@ -134,7 +140,7 @@ export function notResettableReason(t: MenuTarget): string | null {
 }
 
 /// Why "Turn off" does not apply: only the loop's steps are scheduled.
-export function notPausableReason(t: MenuTarget): string | null {
+export function notSwitchableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet is not scheduled";
   return null;
@@ -217,11 +223,11 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
           : firstBlocked(targets, (t) => t.runBlocked),
     });
   }
-  const paused = targets.filter((t) => t.pausedBy).length;
+  const off = targets.filter((t) => t.turnedOffBy).length;
   entries.push({
-    action: paused === targets.length ? "resume" : "pause",
-    name: paused === targets.length ? "Turn on" : "Turn off",
-    disabled: firstBlocked(targets, notPausableReason),
+    action: off === targets.length ? "turn_on" : "turn_off",
+    name: off === targets.length ? "Turn on" : "Turn off",
+    disabled: firstBlocked(targets, notSwitchableReason),
   });
   entries.push({
     action: "edit",

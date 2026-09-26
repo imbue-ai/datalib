@@ -15,7 +15,7 @@ use datalib_etl_claude::ingest::normalize::normalize_to_export_shape;
 use datalib_etl_claude::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps an Anthropic `file_uuid` to its CAS
-/// blake3. Consumed by [`BlobBundle::load`].
+/// blake3. Consumed by [`BlobBundle::load_many`].
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_uuid AS ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
@@ -337,24 +337,33 @@ async fn parse_doltlite_async(
 
     // Per-doc BlobBundle: walk each conversation's
     // `chat_messages[*].files[*].file_uuid` and bulk-load the matching
-    // edge-table rows + CAS bytes. Two SQL queries per conversation.
-    for conv in &mut parsed.conversations {
-        let refs = collect_attachment_ref_ids(&conv.upstream_payload);
-        for file_uuid in &refs {
+    // edge-table rows + CAS bytes, every conversation's together.
+    let refs_by_conv: Vec<Vec<String>> = parsed
+        .conversations
+        .iter()
+        .map(|conv| collect_attachment_ref_ids(&conv.upstream_payload))
+        .collect();
+    for (conv, refs) in parsed.conversations.iter_mut().zip(&refs_by_conv) {
+        for file_uuid in refs {
             conv.inputs.read(
                 "claude_attachments",
                 &ConversationAttachmentRow::pk_recipe(&conv.conv.conversation_uuid, file_uuid),
             );
         }
-        let Some(cas_pool) = cas_pool.as_ref() else {
-            continue;
-        };
-        if refs.is_empty() {
-            continue;
+    }
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        let mut blobs = BlobBundle::load_many(
+            &pool,
+            cas_pool,
+            ATTACHMENTS_PROJECTION_SQL,
+            refs_by_conv.into_iter().enumerate(),
+        )
+        .await?;
+        for (i, conv) in parsed.conversations.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                conv.blobs = b;
+            }
         }
-        let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-        conv.blobs =
-            BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
     }
 
     Ok(parsed)

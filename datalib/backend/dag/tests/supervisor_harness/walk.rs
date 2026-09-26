@@ -1,7 +1,7 @@
 //! A seeded random walk over everything the scenarios do one at a time:
 //! sources `a` and `b`, a consumer `c` of `a`, a fan-in `d` of both, and
-//! syncs, stops, pauses,
-//! resumes and every way a step can end, in any order. The invariants are
+//! syncs, stops, steps turned
+//! off and on, and every way a step can end, in any order. The invariants are
 //! checked as it goes (one process per step, on every start) and after
 //! each episode. `HARNESS_SEED=<n>` replays one walk; `HARNESS_SEEDS=<n>`
 //! runs that many.
@@ -51,8 +51,8 @@ struct Walk {
     puppets: BTreeMap<&'static str, Puppet>,
     open: Vec<String>,
     stopped: BTreeSet<String>,
-    paused: BTreeSet<&'static str>,
-    /// Per source: how many runs its requests and resumes allow.
+    turned_off: BTreeSet<&'static str>,
+    /// Per source: how many runs its requests and turn-ons allow.
     allowed: BTreeMap<&'static str, usize>,
     /// Per source: what the walk did that allows a run, for the message
     /// when a source runs more often than that.
@@ -119,46 +119,46 @@ impl Walk {
         self.h.closed(&id).await;
     }
 
-    async fn pause(&mut self) {
+    async fn turn_off(&mut self) {
         let step = *self.rng.pick(&STEPS);
-        if !self.paused.insert(step) {
+        if !self.turned_off.insert(step) {
             return;
         }
-        self.h.pause(step).await;
-        let what = format!("{step} to read paused");
+        self.h.turn_off(step).await;
+        let what = format!("{step} to read off");
         self.h
             .until(&what, |s| {
                 let st = s.record.steps.get(step)?;
-                (st.paused_by.as_deref() == Some("person")).then_some(())
+                (st.turned_off_by.as_deref() == Some("person")).then_some(())
             })
             .await;
     }
 
-    async fn resume(&mut self) {
+    async fn turn_on(&mut self) {
         let Some(&step) = self
-            .paused
+            .turned_off
             .iter()
-            .nth(self.rng.below(self.paused.len().max(1)))
+            .nth(self.rng.below(self.turned_off.len().max(1)))
         else {
             return;
         };
-        self.paused.remove(step);
+        self.turned_off.remove(step);
         if let Some(n) = self.allowed.get_mut(step) {
             *n += 1;
         }
         if let Some(log) = self.allowances.get_mut(step) {
-            log.push("resume".to_string());
+            log.push("turn_on".to_string());
         }
-        self.h.resume(step).await;
-        let what = format!("{step} to read resumed");
+        self.h.turn_on(step).await;
+        let what = format!("{step} to read on");
         self.h
             .until(&what, |s| {
-                let paused = s
+                let turned_off = s
                     .record
                     .steps
                     .get(step)
-                    .and_then(|st| st.paused_by.as_ref());
-                paused.is_none().then_some(())
+                    .and_then(|st| st.turned_off_by.as_ref());
+                turned_off.is_none().then_some(())
             })
             .await;
     }
@@ -223,8 +223,8 @@ impl Walk {
             self.stopped.insert(id.clone());
             self.h.stop(&id).await;
         }
-        for step in std::mem::take(&mut self.paused) {
-            self.h.resume(step).await;
+        for step in std::mem::take(&mut self.turned_off) {
+            self.h.turn_on(step).await;
         }
         let requests = self.requests.clone();
         self.h
@@ -258,7 +258,7 @@ impl Walk {
                     })
                     .collect();
                 self.h.fail(&format!(
-                    "{step} ran {ran} times; its syncs and resumes allow {allowed}\n\
+                    "{step} ran {ran} times; its syncs and turn-ons allow {allowed}\n\
                      its runs:\n  {}\nwhat allowed them:\n  {}",
                     runs.join("\n  "),
                     self.allowances[step].join("\n  ")
@@ -298,7 +298,7 @@ async fn walk(seed: u64) {
         puppets: STEPS.iter().map(|s| (*s, Puppet::default())).collect(),
         open: Vec::new(),
         stopped: BTreeSet::new(),
-        paused: BTreeSet::new(),
+        turned_off: BTreeSet::new(),
         allowed: [("a", 0), ("b", 0)].into_iter().collect(),
         allowances: [("a", Vec::new()), ("b", Vec::new())].into_iter().collect(),
         requests: Vec::new(),
@@ -310,8 +310,8 @@ async fn walk(seed: u64) {
             match w.rng.below(10) {
                 0..=2 => w.sync().await,
                 3 => w.stop().await,
-                4 => w.pause().await,
-                5 => w.resume().await,
+                4 => w.turn_off().await,
+                5 => w.turn_on().await,
                 _ => w.tell().await,
             }
         }

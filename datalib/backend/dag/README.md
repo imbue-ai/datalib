@@ -82,8 +82,8 @@ The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
 pressed on, or every source step for `datalib-dag` with no `--sync` —
 and who opened it (`by`). Its **scope** is the roots and everything
-downstream of them. Anyone may open one, or ask one to stop, or pause a
-step: that is a row too. Only the process holding `runner-lock` runs the
+downstream of them. Anyone may open one, or ask one to stop, or turn a
+step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it
 (below, "What wakes the loop"). A **run** is one busy period of the loop — from taking a
 request on while idle to having none left — and every request served in
@@ -100,7 +100,7 @@ and a run records nothing for it: its `last_run` stays as it was, so a
 `--sync slack` never moves email's "last synced".
 
 **Which step does what is one pure function**, `supervisor/tick.rs`: from
-the graph, the open requests, the pauses and the facts (each sink's
+the graph, the open requests, the steps turned off and the facts (each sink's
 version, what each step last read, what is running), it gives every step
 a state, and the starts, stops and request closures to make.
 `supervisor/round.rs` is the loop that feeds it and acts on it. The
@@ -112,7 +112,7 @@ them:
 | `running` | an invocation is live — or it ran a pass and what it reads has not settled (below) |
 | `waiting` | wanted and due, and held back; `state_detail` says by what |
 | `fresh` | wanted, and up to date |
-| `paused` | someone paused it; `paused_by` says who |
+| `off` | someone turned it off; `turned_off_by` says who |
 | `blocked` | wanted, but a producer it reads has never published and is not going to run |
 | `failed` | its retries ran out and nothing it reads has moved since |
 | `idle`, `stale` | no open request wants it; up to date, or not |
@@ -123,13 +123,13 @@ one look and a lost one costs latency, never a wrong start. **A step
 starts** in a tick, visited in topological order, iff:
 
 1. **it is not running**: one instance of a step at a time;
-2. **it is not paused**;
+2. **it is not turned off**;
 3. **an open request wants it**: some request's scope (its roots and
    everything downstream) holds it;
 4. **it has not failed for every request that wants it**: its last run
    failed, after that request opened, on the inputs and definition it has
    now. A run the loop asked to stop, and that stopped, is neither a
-   failure nor a run: resumed while a request wants it, the step runs
+   failure nor a run: turned on while a request wants it, the step runs
    again. One that says it failed has failed, whatever it was asked;
 5. **it is due**: it is **stale** (it has never succeeded, an input's
    version differs from the one it read at its last success, or its
@@ -179,15 +179,15 @@ again for that request unless something it reads moves.
 `failed`, naming the first step in topological order that failed for it
 or was blocked, or `done`. **A stop** closes it at once as `stopped`, and
 a running step no open request wants any more gets SIGINT; it
-checkpoints and exits, and until it has, its row reads Stopping. **A
-pause** keeps a step from starting and stops it if it is running; a
-paused step a request skipped takes no part and records no run. **A run
-the loop stopped is neither a failure nor a run**: resumed while a
+checkpoints and exits, and until it has, its row reads Stopping. **Turning
+a step off** keeps it from starting and stops it if it is running; a
+step turned off that a request skipped takes no part and records no run.
+**A run the loop stopped is neither a failure nor a run**: turned on while a
 request still wants it, the step runs again. That is a run the loop
 asked to stop, not one that reported `cancelled` on its own, which is a
-failure like any other. A pause made while the loop is idle reaches the
+failure like any other. A step turned off while the loop is idle reaches the
 record through `Runner::settle`, one tick with nothing open; the idle
-host settles again after every busy period, and compares the pauses it
+host settles again after every busy period and on a config change, and compares the switches it
 finds later with the ones the settle recorded, not with any it read
 before. A request naming a step
 no config the loop has taken on has waits, with its roots recorded as
@@ -447,7 +447,7 @@ same as publishing zero, because zero means finished.
 
 Nothing on a timer. **Whoever commits to `system/supervisor.sqlite`
 announces it**, the way a step announces a seal. `Store` does, after
-every commit it makes (`request opened <id>`, `paused <step>`, `record
+every commit it makes (`request opened <id>`, `turned off <step>`, `record
 saved`, …), and so do the two writers that are not the store: the
 server, when its watch sees `config.toml` move (`config changed`, which
 is what makes the loop re-read its config), and whoever lets go of
@@ -482,14 +482,14 @@ the config, so it takes an edit on at its next busy period, not mid-sync.
 
 The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
 period whenever a request is open, requests asked to stop before any
-period took them closed as `stopped`, the record settled when the pauses
-move, then a wait for an announcement, a nudge (in-memory work such as a
+period took them closed as `stopped`, the record settled when the
+switches or the config move, then a wait for an announcement, a nudge (in-memory work such as a
 reset) or the host's stop. The server's host and the tests both run it.
 
 ## The record
 
 The loop's memory is its **record**, in `system/supervisor.sqlite` beside
-the requests and pauses (`supervisor/record.rs`). It is plain SQLite in
+the requests and the steps turned off (`supervisor/record.rs`). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the
@@ -498,7 +498,7 @@ header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `state_detail`, `paused_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and the open `request` it serves), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |

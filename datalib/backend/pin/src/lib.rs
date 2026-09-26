@@ -81,16 +81,20 @@ pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
     commit.map(Pin::at).transpose()
 }
 
-/// True iff `e` is SQLite's "no such table" for `table` read bare or
-/// through its `dolt_at_` module — the fresh-store state, before whatever
-/// owns the table has committed it. Deliberately an exact match on the
-/// one table the query reads, so corruption, bad SQL and missing columns
-/// still surface as errors.
+/// True iff `e` says `table` is not there to read: SQLite's "no such
+/// table" for it bare or for its `dolt_at_` module, or doltlite's "table
+/// not found: <table> at <hash>" for a table the schema has and that
+/// commit does not. The fresh-store state, before whatever owns the table
+/// has committed it. Deliberately a match on the one table the query
+/// reads, so corruption, bad SQL and missing columns still surface as
+/// errors.
 pub fn is_missing_table(e: &sqlx::Error, table: &str) -> bool {
     match e {
         sqlx::Error::Database(db) => {
             let m = db.message();
-            m == format!("no such table: {table}") || m == format!("no such table: dolt_at_{table}")
+            m == format!("no such table: {table}")
+                || m == format!("no such table: dolt_at_{table}")
+                || m.starts_with(&format!("table not found: {table} at "))
         }
         _ => false,
     }
@@ -271,12 +275,11 @@ mod tests {
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
     }
 
-    /// A table committed after the reader opened cannot be read pinned on
-    /// that connection — `dolt_at_` modules are registered at open — and
-    /// a reopen is the cure. Until the table is committed at all it reads
-    /// as missing, the same as one never created.
+    /// A table committed after the reader opened reads pinned on that same
+    /// connection, with no reopen. At a commit from before it existed it
+    /// reads as missing, the same as one never created.
     #[tokio::test]
-    async fn a_table_committed_after_the_reader_opened_needs_a_reopen() {
+    async fn a_table_committed_after_the_reader_opened_reads_without_a_reopen() {
         let td = tempfile::tempdir().unwrap();
         let db = td.path().join("t.doltlite_db");
         let w = writer(&db).await;
@@ -300,12 +303,10 @@ mod tests {
         commit(&w).await.unwrap();
         let first = head(&r).await.unwrap().unwrap();
         assert_ne!(first, born);
-        let e = count_at(&r, &first).await.unwrap_err();
-        assert!(is_missing_table(&e, "t"), "{e}");
-
-        r.close().await;
-        let r = open_reader(&db).await.unwrap();
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
+        let e = count_at(&r, &born).await.unwrap_err();
+        assert!(is_missing_table(&e, "t"), "{e}");
+        assert!(!is_missing_table(&e, "u"), "{e}");
     }
 
     /// A reader must never be the thing that creates the writer's file.

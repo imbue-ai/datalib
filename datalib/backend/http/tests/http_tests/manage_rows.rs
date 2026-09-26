@@ -16,11 +16,15 @@ async fn get_rows(root: &Path) -> serde_json::Value {
 }
 
 async fn rows_of(state: AppState) -> serde_json::Value {
+    rows_at(state, "/api/manage/rows").await
+}
+
+async fn rows_at(state: AppState, uri: &str) -> serde_json::Value {
     let app = router(state);
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/manage/rows")
+                .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -448,6 +452,43 @@ function = \"ingest\"
         .contains("no render step"));
     // Its step says the same, not something of its own.
     assert_eq!(rows["photos/ingest"]["actions"][0], photos["actions"][0]);
+}
+
+/// A download step's row names its raw store once the file exists —
+/// what Browse opens in the desktop app — and no other row names one.
+#[tokio::test]
+async fn a_download_step_names_its_raw_store_once_it_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    let ingest = tmp.path().join("slack/ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::create_dir_all(tmp.path().join("slack/render_markdown")).unwrap();
+    std::fs::write(
+        tmp.path()
+            .join("slack/render_markdown/indexed_markdown.doltlite_db"),
+        b"CTLD",
+    )
+    .unwrap();
+    let uri = "/api/manage/rows?refresh=1";
+
+    let before = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    assert_eq!(
+        before["slack/ingest"]["raw_store_path"],
+        serde_json::Value::Null
+    );
+
+    std::fs::write(ingest.join("entities.doltlite_db"), b"CTLD").unwrap();
+    let rows = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let named: Vec<(&String, &serde_json::Value)> = rows
+        .iter()
+        .filter(|(_, r)| !r["raw_store_path"].is_null())
+        .collect();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert_eq!(named[0].0, "slack/ingest");
+    assert_eq!(
+        Path::new(named[0].1["raw_store_path"].as_str().unwrap()),
+        ingest.join("entities.doltlite_db")
+    );
 }
 
 #[tokio::test]

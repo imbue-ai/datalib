@@ -655,6 +655,8 @@ name = "datalib-tauri"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde_json",
  "tauri",
  "tauri-build",

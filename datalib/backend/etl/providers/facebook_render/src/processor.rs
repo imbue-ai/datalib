@@ -181,17 +181,14 @@ pub fn render_source(
 
             let mut blobs = HashMap::new();
             if let Some(cas) = db.cas() {
-                for chat in posts.iter().chain(&albums).chain(&comments) {
-                    let refs = attachment_refs(chat);
-                    if refs.is_empty() {
-                        continue;
-                    }
-                    let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
-                    let bundle = BlobBundle::load(db.pool(), cas.pool(), MEDIA_PROJECTION, &refs)
-                        .await
-                        .with_context(|| format!("load media for {}", chat.id))?;
-                    blobs.insert(chat.id.clone(), bundle);
-                }
+                let refs = posts
+                    .iter()
+                    .chain(&albums)
+                    .chain(&comments)
+                    .map(|chat| (chat.id.clone(), attachment_refs(chat)));
+                blobs = BlobBundle::load_many(db.pool(), cas.pool(), MEDIA_PROJECTION, refs)
+                    .await
+                    .context("load media")?;
             }
             let head = pin.commit().to_string();
             db.close().await;
