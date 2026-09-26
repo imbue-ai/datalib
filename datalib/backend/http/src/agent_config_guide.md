@@ -59,8 +59,9 @@ group = "slack"
 function = "ingest"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
-[steps.params]
-sync = {}
+# The one table under it names how the data is reached: `api` is the
+# product's own API, and an empty one takes the provider's defaults.
+[steps.params.api]
 
 [[steps]]
 group = "slack"
