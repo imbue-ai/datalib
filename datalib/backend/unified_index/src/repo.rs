@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::db::ChatMeta;
+use crate::group::{Grouping, Within};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
@@ -29,13 +30,15 @@ pub trait IndexRepo: Send + Sync {
     /// The commit the index is at now, or `None` when it has none yet.
     async fn head(&self) -> Result<Option<String>, RepoError>;
 
-    /// Every row `query`'s structured terms match, as uuids in `sort`'s
-    /// order, or newest first with none. Its free text is qmd's; nothing
-    /// here reads it.
+    /// Every row `query`'s structured terms match, in the group `within`
+    /// names (all of them, for an empty path), as uuids in `sort`'s order,
+    /// or newest first with none. Its free text is qmd's; nothing here
+    /// reads it.
     async fn ordered_uuids(
         &self,
         query: &ParsedQuery,
         sort: Option<Sort>,
+        within: &[Within],
     ) -> Result<Listing, RepoError>;
 
     /// The rows behind `uuids`, qmd's ranking, that `query`'s structured
@@ -46,7 +49,18 @@ pub trait IndexRepo: Send + Sync {
         query: &ParsedQuery,
         uuids: &[String],
         sort: Option<Sort>,
+        within: &[Within],
     ) -> Result<Listing, RepoError>;
+
+    /// The groups the rows `query`'s structured terms match fall into, by
+    /// the `grid_rows` columns `by`, and among `among` alone when given
+    /// (qmd's ranking, for free text).
+    async fn group_counts(
+        &self,
+        query: &ParsedQuery,
+        by: &[&'static str],
+        among: Option<&[String]>,
+    ) -> Result<Grouping, RepoError>;
 
     /// The rows `uuids` name, in that order; one the index no longer has is
     /// left out.
@@ -55,7 +69,7 @@ pub trait IndexRepo: Send + Sync {
     /// The first `limit` rows `query`'s structured terms match, newest
     /// first.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
-        let listing = self.ordered_uuids(query, None).await?;
+        let listing = self.ordered_uuids(query, None, &[]).await?;
         let page = &listing.uuids[..limit.min(listing.uuids.len())];
         self.rows_by_uuids(page).await
     }

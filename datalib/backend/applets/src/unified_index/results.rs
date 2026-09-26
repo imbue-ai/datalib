@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use datalib_unified_index::group::Within;
 use datalib_unified_index::sort::Sort;
 
 /// Searches kept. A list of every row of a large root is a few MB of
@@ -15,6 +16,8 @@ const CAPACITY: usize = 16;
 pub struct Key {
     pub q: String,
     pub sort: Option<Sort>,
+    /// The group whose rows these are; empty for the whole search.
+    pub within: Vec<Within>,
     /// The commit the list was read at, `None` before the index has one.
     /// A search after the index moves is a different key, so a list never
     /// outlives the rows it names.
@@ -89,6 +92,7 @@ mod tests {
         Key {
             q: q.into(),
             sort: None,
+            within: Vec::new(),
             at: Some(at.into()),
         }
     }

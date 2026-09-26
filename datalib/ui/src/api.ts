@@ -468,8 +468,14 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 /// Which page of a search, and in what order: `sort` is a column id and
 /// a direction (`created_at:desc`), or none for newest first (qmd's rank
 /// for free text). `through` names a row the page must reach, however
-/// far past `offset` it is.
-export type SearchPageSpec = { offset?: number; sort?: string | null; through?: string | null };
+/// far past `offset` it is. `within` narrows it to one group,
+/// `[[column, value], …]` as JSON.
+export type SearchPageSpec = {
+  offset?: number;
+  sort?: string | null;
+  through?: string | null;
+  within?: string | null;
+};
 
 export async function fetchSearch(
   q: string,
@@ -482,6 +488,7 @@ export async function fetchSearch(
   if (spec.offset) params.set("offset", String(spec.offset));
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
+  if (spec.within) params.set("within", spec.within);
   const r = await getJson<SearchResponse>(
     `${UNIFIED_INDEX}/search?${params.toString()}`,
     signal,
@@ -494,6 +501,38 @@ export async function fetchSearch(
   if (r.errors && r.errors.length > 0) {
     for (const e of r.errors) pushToast(e);
   }
+  return r;
+}
+
+/// One group of a search: its value in each grouped column, how many
+/// rows it holds, and its newest row, which its labels are read from.
+export type SearchGroup = { values: (string | null)[]; count: number; sample: SearchRow };
+
+export type GroupsResponse = {
+  groups: SearchGroup[];
+  // More groups than one answer carries; the rest are left out.
+  truncated: boolean;
+  at: string | null;
+  qmd_error: string | null;
+  errors: string[];
+};
+
+/// The groups a search falls into by `by`, grid column ids outermost
+/// first and comma-joined (`source_ref,kind`), each with its true count.
+export async function fetchGroups(
+  q: string,
+  by: string,
+  signal?: AbortSignal,
+): Promise<GroupsResponse> {
+  const params = new URLSearchParams({ q, by });
+  const r = await getJson<GroupsResponse>(
+    `${UNIFIED_INDEX}/search/groups?${params.toString()}`,
+    signal,
+    { toast: false },
+  );
+  for (const e of r.errors) pushToast(e);
+  if (r.truncated)
+    pushToast("There are more groups than the grid can show; the rest are left out.");
   return r;
 }
 

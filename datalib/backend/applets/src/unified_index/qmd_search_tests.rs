@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use super::tests::{index_over, search, uuids};
+use super::tests::{groups, index_over, search, search_within, uuids};
 use super::*;
 
 /// A word the fixture's corpus uses across several sources.
@@ -107,6 +107,34 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
+/// A free-text search groups the rows qmd ranked, and nothing else: the
+/// groups' counts add up to the ranking, and a group's rows are its own.
+#[tokio::test]
+async fn free_text_groups_the_ranked_rows() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let ranked = search(&s, QUERY, None, 1_000, None).await;
+
+    let by_source = groups(&s, QUERY, "source_ref").await;
+    assert_eq!(by_source.qmd_error, None);
+    assert!(by_source.groups.len() > 1, "the hits span sources");
+    let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
+    assert_eq!(counted, ranked.total);
+
+    let slack = by_source
+        .groups
+        .iter()
+        .find(|g| g.values == [Some("slack".to_string())])
+        .expect("the fixture's slack source has hits");
+    let rows = search_within(&s, QUERY, r#"[["source_ref","slack"]]"#, 1_000).await;
+    assert_eq!(rows.total, slack.count);
+    assert!(rows.rows.iter().all(|r| r.source_id == "slack"));
+    assert!(
+        rows.rows.iter().all(|r| r.score.is_some()),
+        "a group keeps qmd's scores"
+    );
+}
+
 /// The embedding map lights up the documents behind the same hits.
 #[tokio::test]
 async fn the_map_matches_the_documents_the_grid_finds() {
@@ -174,6 +202,9 @@ async fn free_text_without_a_qmd_index_says_why() {
     let r = search(&s, QUERY, None, 10, None).await;
     assert!(r.rows.is_empty());
     assert!(qmd_error(&r).is_some(), "{:?}", r.query_echo);
+    let g = groups(&s, QUERY, "kind").await;
+    assert!(g.groups.is_empty());
+    assert!(g.qmd_error.is_some());
 
     let params = map::MatchParams {
         q: Some(QUERY.to_string()),
