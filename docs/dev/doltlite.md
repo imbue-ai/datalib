@@ -4,7 +4,10 @@
 > doltlite, grab a release from
 > <https://github.com/thadd3us/sqlitebrowser/releases>. The CLI recipes
 > below all still apply; the GUI is just nicer for exploring schema and
-> running ad-hoc SELECTs.
+> running ad-hoc SELECTs. In the desktop app, Browse on a download step
+> opens its `entities.doltlite_db` read-only: in that build (`-R`) when
+> it is what opens `.doltlite_db` files, otherwise in the bundled shell
+> (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
 
 
 Our raw ETL captures (under `<data_root>/<name>/raw/`) and the per-mirror

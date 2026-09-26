@@ -11,6 +11,7 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   editBlocked: null,
   revealBlocked: null,
   browseBlocked: null,
+  rawStore: false,
   stopRequestId: null,
   pausedBy: null,
   statusFrom: "slack/render_markdown",
@@ -121,6 +122,14 @@ describe("rowMenu", () => {
       opts,
     );
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
+  });
+
+  it("names Browse for what it opens on a download step with a raw store", () => {
+    const step = { kind: "step" as const, func: "ingest", id: "slack/ingest" };
+    expect(entry(rowMenu([target(step)], opts), "browse").name).toBe("Browse this data");
+    expect(entry(rowMenu([target({ ...step, rawStore: true })], opts), "browse").name).toBe(
+      "Browse the downloaded tables",
+    );
   });
 
   it("limits the one-row actions when several rows are targeted, and names the row a reason came from", () => {

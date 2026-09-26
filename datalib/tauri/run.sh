@@ -9,7 +9,7 @@
 # runner and `datalib-step`, then stages them into binaries/ so they're bundled under the .app's
 # Resources) and produces the .app, so there are no prerequisite steps
 # to remember. The shell spawns the bundled `datalib-http` at
-# runtime (see `resolve_http_bin` in src/main.rs). We then launch it
+# runtime (see `resolve_bundled` in src/main.rs). We then launch it
 # with `open` so macOS treats it as a real app (see the launch block
 # below for why that matters). A data-root argument is forwarded to
 # skip the folder picker (see `explicit_data_root` in src/main.rs),

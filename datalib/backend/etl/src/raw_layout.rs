@@ -2,13 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Entity tables + per-provider CAS edge tables + shared sync
-/// bookkeeping. The primary doltlite database for a source.
-pub const ENTITIES_DB: &str = "entities.doltlite_db";
-
-/// Content-addressed blob store: a single `cas_objects` table keyed by
-/// blake3 hash. Sibling of [`ENTITIES_DB`] inside the same raw dir.
-pub const BLOBS_DB: &str = "blobs.doltlite_db";
+pub use datalib_runtime::layout::{BLOBS_DB, ENTITIES_DB};
 
 /// Plain-text, append-only JSONL mirror of what came off the wire, one
 /// subfile per table. Debug aid only — never read by the pipeline, safe

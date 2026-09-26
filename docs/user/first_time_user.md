@@ -524,7 +524,10 @@ just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: a second
 writer against a live store can wedge your next sync. If you prefer a
 GUI, a build of DB Browser for SQLite patched to open doltlite files is
-at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). More
+at <https://github.com/thadd3us/sqlitebrowser/releases> (macOS). In the
+desktop app, **Browse** on a source's download row opens its raw store
+read-only for you — in that DB Browser when it is installed, otherwise
+in `datalib-doltlite` in Terminal. More
 recipes, including the commit history and per-sync diffs, are in
 [`docs/dev/doltlite.md`](../dev/doltlite.md).
 

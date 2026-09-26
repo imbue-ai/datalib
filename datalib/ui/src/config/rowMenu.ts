@@ -24,6 +24,9 @@ export type MenuTarget = {
   editBlocked: string | null;
   revealBlocked: string | null;
   browseBlocked: string | null;
+  /// Browse opens the step's raw store rather than the grid: a download
+  /// step with one, in the desktop app.
+  rawStore: boolean;
   /// Non-null while an open request wants this row — the state in which
   /// Sync reads as Stop.
   stopRequestId: string | null;
@@ -34,9 +37,12 @@ export type MenuTarget = {
   revealPath: string | null;
 };
 
+export const RAW_STORE_BROWSE_LABEL = "Browse the downloaded tables";
+
 /// The Browse entry's name — shared with the Actions cell's button, so
 /// the two never say different things.
-export function browseLabel(t: Pick<MenuTarget, "kind" | "type">): string {
+export function browseLabel(t: Pick<MenuTarget, "kind" | "type" | "rawStore">): string {
+  if (t.rawStore) return RAW_STORE_BROWSE_LABEL;
   if (t.kind === "system") return "Browse the log";
   return t.kind === "group" && !t.type ? "Browse every source" : "Browse this data";
 }

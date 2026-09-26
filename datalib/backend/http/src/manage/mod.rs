@@ -17,6 +17,7 @@ mod problems;
 mod status;
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use axum::extract::{Query, State};
 use axum::Json;
@@ -196,6 +197,9 @@ pub struct ManageRow {
     pub live_run_id: Option<String>,
     /// Absolute path to reveal: the first output that exists.
     pub reveal_path: Option<String>,
+    /// A download step's raw store, absolute, once it exists: what
+    /// Browse opens on this row in the desktop app.
+    pub raw_store_path: Option<String>,
 }
 
 /// The data root as a whole, for the status bar.
@@ -268,12 +272,14 @@ pub async fn get_manage_rows(
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
     let applet_errors = s.applets.frontend_view().applet_errors;
 
+    let raw_stores = raw_stores(&storage.outputs);
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,
         record: &record,
         requests: &requests,
         outputs: &storage.outputs,
+        raw_stores: &raw_stores,
         applet_errors: &applet_errors,
     }
     .rows();
@@ -286,6 +292,19 @@ pub async fn get_manage_rows(
         storage: root_storage,
         rows,
     })
+}
+
+fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
+    outputs
+        .iter()
+        .filter(|o| o.present)
+        .filter_map(|o| {
+            let store = Path::new(&o.abs).join(datalib_core::layout::ENTITIES_DB);
+            store
+                .is_file()
+                .then(|| (o.path.clone(), store.to_string_lossy().into_owned()))
+        })
+        .collect()
 }
 
 /// The requests the record's steps are being run for, by id.
@@ -312,6 +331,8 @@ struct Snapshot<'a> {
     record: &'a DagRecord,
     requests: &'a HashMap<String, RequestRow>,
     outputs: &'a [OutputStorage],
+    /// Each tree holding a raw store, by step id, to the store's path.
+    raw_stores: &'a HashMap<String, String>,
     applet_errors: &'a std::collections::BTreeMap<String, String>,
 }
 
@@ -544,6 +565,7 @@ impl Snapshot<'_> {
             last_run_id: String::new(),
             live_run_id: None,
             reveal_path: on_disk.map(|t| t.abs.clone()),
+            raw_store_path: None,
         };
         let group = row(
             dir,
@@ -1012,6 +1034,7 @@ impl RowCtx<'_> {
             last_run_id,
             live_run_id,
             reveal_path: on_disk.map(|o| o.abs.clone()),
+            raw_store_path: self.snap.raw_stores.get(&id).cloned(),
             id,
         }
     }
@@ -1279,6 +1302,7 @@ impl RowCtx<'_> {
             last_run_id: String::new(),
             live_run_id: None,
             reveal_path: on_disk.map(|t| t.abs.clone()),
+            raw_store_path: None,
         }
     }
 }
