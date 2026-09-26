@@ -20,7 +20,9 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         Function::Ingest => return crate::ingest::raw_store_version(&tree).await,
         Function::RenderMarkdown => datalib_etl_render::indexed_markdown::path_for(&tree),
         Function::GridIndex => datalib_core::layout::grid_index_db(data_root),
-        Function::QmdIndex | Function::EmbeddingMap => return Ok(None),
+        Function::QmdIndex | Function::KeywordIndex | Function::Embed | Function::EmbeddingMap => {
+            return Ok(None)
+        }
     };
     datalib_etl::doltlite_raw::head_commit_at_path(&store).await
 }

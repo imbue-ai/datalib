@@ -1,5 +1,6 @@
-//! The checked-in example configs — `docs/user/config_examples/*.toml` and
-//! `configs/dag_example.toml` — have to load as the runner would and plan as
+//! The checked-in example configs — `docs/user/config_examples/*.toml`,
+//! `configs/dag_example.toml`, and the TOML the agent config guide shows —
+//! have to load as the runner would and plan as
 //! this binary would, so the documentation cannot drift from the real
 //! schemas. Every `ingest` and `render_markdown` step's params go through
 //! `dispatch::plan`, the same parse a sync performs.
@@ -41,7 +42,13 @@ fn validate_config(name: &str, path: &std::path::Path) {
         let phase = match Function::parse(function) {
             Some(Function::Ingest) => Phase::Ingest,
             Some(Function::RenderMarkdown) => Phase::Render,
-            Some(Function::GridIndex | Function::QmdIndex | Function::EmbeddingMap) => continue,
+            Some(
+                Function::GridIndex
+                | Function::QmdIndex
+                | Function::KeywordIndex
+                | Function::Embed
+                | Function::EmbeddingMap,
+            ) => continue,
             None => panic!(
                 "{name}: step {}: datalib-step has no function {function:?}",
                 step.id
@@ -103,6 +110,36 @@ fn example_configs_load_and_plan() {
     ] {
         validate_config(name, &example_config(name));
     }
+}
+
+/// The config guide the app serves to agents (`/agent/config.md`) shows
+/// one example config. An agent copies it, so a shape the loader has
+/// retired there (it once said `sync = {}`) teaches every agent to write
+/// a config that does not load.
+#[test]
+fn the_agent_config_guides_example_loads_and_plans() {
+    let guide = std::fs::read_to_string(example_config(
+        "datalib/backend/http/src/agent_config_guide.md",
+    ))
+    .expect("read the guide");
+    let toml = guide
+        .split("```toml\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("the guide has a ```toml block");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, toml).expect("write the example");
+    validate_config("agent_config_guide.md", &path);
+    let check = datalib_dag::config::check_text(toml);
+    assert!(
+        !check
+            .diagnostics
+            .iter()
+            .any(|d| d.severity.drops_the_entry()),
+        "{:?}",
+        check.diagnostics
+    );
 }
 
 /// Same validation, applied to the manual-e2e live-golden config — which lives

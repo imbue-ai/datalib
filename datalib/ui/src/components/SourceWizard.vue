@@ -74,9 +74,8 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Whether `unified_index/qmd_index` names this source's render
-    /// step today — the config's way of saying "semantic search covers
-    /// this source".
+    /// Whether this source has its own qmd steps today — the config's
+    /// way of saying "free-text search covers this source".
     qmdIndexed: boolean;
   } | null;
 }>();
@@ -103,9 +102,9 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null for a provider that renders nothing.
       renderId: string | null;
-      /// Whether the render step belongs in `unified_index/qmd_index`'s
-      /// inputs. False leaves the markdown out of semantic search; the
-      /// grid index is not a choice.
+      /// Whether the source gets its `keyword_index` and `embed` steps.
+      /// False leaves the markdown out of free-text search; the grid
+      /// index is not a choice.
       qmdIndex: boolean;
     },
   ): void;
@@ -152,9 +151,9 @@ const renders = computed(() => providerRenders.value && renderWanted.value);
 
 /// Whether this source's markdown goes into the qmd index. On by
 /// default, for the same reason rendering is: a source nobody can
-/// search semantically is a surprise, not a saving. Editing seeds it
-/// from the fan-in's inputs. Embedding is the slow part of a sync, so
-/// off is a real choice for a source whose value is its rows.
+/// search is a surprise, not a saving. Editing seeds it from whether the
+/// source has its qmd steps. Embedding is the slow part of a sync, and
+/// its own step can be turned off from the Manage screen instead.
 const qmdWanted = ref(props.editing ? props.editing.qmdIndexed : true);
 
 /// Does this source reach the qmd index — there is markdown to index,
@@ -1122,7 +1121,7 @@ function submit() {
               </small>
             </label>
             <label class="wiz-field wiz-inline">
-              <span class="wiz-label">Index the markdown for semantic search</span>
+              <span class="wiz-label">Index the markdown for free-text search</span>
               <input
                 v-model="qmdWanted"
                 type="checkbox"
@@ -1130,11 +1129,12 @@ function submit() {
                 :disabled="!renderWanted"
               />
               <small class="wiz-help">
-                Names this source in <code>unified_index/qmd_index</code>, the index every free-text
-                search goes to: it embeds this source's markdown so a search matches on meaning as
-                well as on words. Embedding is the slow part of a sync. Turn it off and the source
-                keeps its rows, its columns and its filters in the grid, but typing words into the
-                search bar will not find it.<template v-if="!renderWanted">
+                Gives this source two steps of its own that fill its part of the index every
+                free-text search goes to: a keyword index, and embeddings so a search matches on
+                meaning as well as on words. Embedding is the slow part of a sync; its step can be
+                turned off on its own. Turn this off and the source keeps its rows, its columns and
+                its filters in the grid, but typing words into the search bar will not find
+                it.<template v-if="!renderWanted">
                   Nothing to index while rendering is off.</template
                 >
               </small>

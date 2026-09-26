@@ -17,7 +17,8 @@ import {
   OTHER_COLOR,
   PointGrid,
   SLOTS,
-  STEP_STANZA,
+  embedStepIds,
+  stepStanza,
   categoryOf,
   decodeState,
   encodeState,
@@ -52,6 +53,7 @@ const loadError = ref<string | null>(null);
 const loading = ref(false);
 const step = shallowRef<DagStep | null>(null);
 const configured = ref<boolean | null>(null);
+const embedIds = ref<string[]>([]);
 const busy = ref<string | null>(null);
 
 const hidden = ref(new Set<string>());
@@ -170,6 +172,7 @@ async function loadStep() {
     const s = dag.steps.find((x) => x.id === EMBEDDING_MAP_STEP) ?? null;
     step.value = s;
     configured.value = dag.ok ? s !== null : configured.value;
+    embedIds.value = embedStepIds(dag.steps);
     const finished = s?.last_run?.status === "succeeded" ? s.last_run.finished_at : null;
     // A run that finished since we last looked wrote a new map.
     if (lastFinished !== undefined && finished && finished !== lastFinished) void load();
@@ -247,7 +250,7 @@ async function layOutAfresh() {
 function addStep() {
   return act("adding the step", async () => {
     const cfg = await api.fetchConfig();
-    const res = await api.saveConfig(`${cfg.text.trimEnd()}\n${STEP_STANZA}`);
+    const res = await api.saveConfig(`${cfg.text.trimEnd()}\n${stepStanza(embedIds.value)}`);
     if (!res.ok) throw new Error(res.error ?? "config.toml refused the step");
     props.ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
     await api.openRequest([EMBEDDING_MAP_STEP]);
@@ -632,9 +635,9 @@ onBeforeUnmount(() => {
           <template v-if="configured === false">
             <p>
               There is no map yet, and <code>config.toml</code> has no step to make one. The step
-              reads qmd's embeddings, so it needs <code>unified_index/qmd_index</code>.
+              reads qmd's embeddings, so it runs after each source's <code>embed</code> step.
             </p>
-            <pre>{{ STEP_STANZA.trim() }}</pre>
+            <pre>{{ stepStanza(embedIds).trim() }}</pre>
             <button type="button" :disabled="!!busy" @click="addStep">
               {{ busy ?? "Add the step and lay out the map" }}
             </button>

@@ -9,7 +9,7 @@
 # No `data_root`: it defaults to this file's directory, so the root can
 # be copied anywhere (a bind mount, say) and still work.
 #
-# The semantic index is the one step NOT built into the image — see the
+# The search index is the one thing NOT built into the image — see the
 # BUILD-TIME CUT marker at the bottom. Everything after that line is
 # dropped for the build-time run and present in the shipped file, so
 # the first `Sync all` (or `datalib-dag` run) in a container builds it.
@@ -163,7 +163,7 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 
 # === BUILD-TIME CUT === (the Dockerfile drops everything below this line
-# for the build-time run; keep the semantic index step last)
+# for the build-time run; keep the search index's steps last)
 [[steps]]
 group = "unified_index"
 function = "qmd_index"
@@ -176,3 +176,75 @@ inputs = [
   "contacts/render_markdown",
   "pdfs/render_markdown",
 ]
+
+# Each source fills its own part of the index: keywords, then embeddings.
+
+[[steps]]
+group = "claude-export"
+function = "keyword_index"
+inputs = ["claude-export/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "claude-export"
+function = "embed"
+inputs = ["claude-export/keyword_index"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "keyword_index"
+inputs = ["gmail-takeout/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "embed"
+inputs = ["gmail-takeout/keyword_index"]
+
+[[steps]]
+group = "google-takeout"
+function = "keyword_index"
+inputs = ["google-takeout/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "google-takeout"
+function = "embed"
+inputs = ["google-takeout/keyword_index"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "keyword_index"
+inputs = ["sms-backup-restore/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "sms-backup-restore"
+function = "embed"
+inputs = ["sms-backup-restore/keyword_index"]
+
+[[steps]]
+group = "linkedin"
+function = "keyword_index"
+inputs = ["linkedin/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "linkedin"
+function = "embed"
+inputs = ["linkedin/keyword_index"]
+
+[[steps]]
+group = "contacts"
+function = "keyword_index"
+inputs = ["contacts/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "contacts"
+function = "embed"
+inputs = ["contacts/keyword_index"]
+
+[[steps]]
+group = "pdfs"
+function = "keyword_index"
+inputs = ["pdfs/render_markdown", "unified_index/qmd_index"]
+
+[[steps]]
+group = "pdfs"
+function = "embed"
+inputs = ["pdfs/keyword_index"]

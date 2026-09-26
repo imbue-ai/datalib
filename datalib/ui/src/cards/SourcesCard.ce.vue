@@ -15,6 +15,8 @@ import {
   replaceSteps,
   sourceStepsOf,
   fanInNames,
+  readersOf,
+  setQmdSteps,
   unwireFromFanIns,
   wireIntoFanIns,
   paramsAreRepresentable,
@@ -1024,7 +1026,10 @@ async function openEdit(groupId: string) {
   const steps = sourceStepsOf(group.id, sources.value);
   const entry = groupEntry(group, steps);
   if (!entry) return;
-  const qmdIndexed = steps.render ? fanInNames(sources.value, "qmd_index", steps.render.id) : true;
+  const qmdIndexed = steps.render
+    ? fanInNames(sources.value, "qmd_index", steps.render.id) ||
+      sources.value.some((s) => s.id === `${group.id}/keyword_index`)
+    : true;
   editing.value = { group, entry, steps, qmdIndexed };
   wizardKey.value++;
   wizardOpen.value = true;
@@ -1068,11 +1073,13 @@ async function onWizardSubmit(payload: {
 
   // The fan-ins name their inputs, so a render step added without this
   // renders happily and is never indexed. Idempotent, so re-saving an
-  // edit doesn't duplicate the entry. Semantic search is the one fan-in
-  // the wizard asks about, so it is the one that can be taken back out.
+  // edit doesn't duplicate the entry. Free-text search is the one index
+  // the wizard asks about: the source's own qmd steps, added or taken out.
   if (payload.renderId) {
     next = wireIntoFanIns(next, payload.renderId);
-    if (!payload.qmdIndex) next = unwireFromFanIns(next, payload.renderId, "qmd_index");
+    next = setQmdSteps(next, payload.id, payload.qmdIndex);
+  } else {
+    next = setQmdSteps(next, payload.id, false);
   }
 
   // Banners are for a person, so they say the name; the id is what the
@@ -1101,6 +1108,7 @@ async function onCompareSubmit(payload: {
   const built = buildDiffSource(payload);
   let next = appendSource(configText.value, `${built.groupBody}\n\n${built.stepsBody}`);
   next = wireIntoFanIns(next, built.renderId);
+  next = setQmdSteps(next, payload.id, true);
   const ok = await writeConfig(next, `Added ${payload.name}.`);
   if (!ok) return;
   compareFor.value = null;
@@ -1170,7 +1178,11 @@ async function deleteSource(id: string) {
   // exists, which the loader refuses outright — a whole config broken
   // by a partial delete.
   const sibling = step.phase === "ingest" ? renderSiblingOf(step.id) : undefined;
-  const doomed = sibling ? [step, sibling] : [step];
+  const readers = readersOf([step.id], sources.value).filter((r) => r.id !== sibling?.id);
+  const doomed = [step, ...(sibling ? [sibling] : []), ...readers];
+  const alsoGone = readers.length
+    ? `\n\nThe steps that read it go too: ${readers.map((r) => `"${r.name}"`).join(", ")}.`
+    : "";
 
   // A group with nothing left under it goes too: the loader would only
   // warn about it, but a `[[groups]]` entry naming a source that is
@@ -1189,13 +1201,14 @@ async function deleteSource(id: string) {
         `serve will stop working until you add it back.`
       : step.phase === "index"
         ? `Remove the "${name}" index step from the config?\n\n` +
-          `Its output stays on disk but stops being refreshed, so search results go stale.`
+          `Its output stays on disk but stops being refreshed, so search results go stale.` +
+          alsoGone
         : sibling
           ? `Remove "${name}" and the render step that reads it ("${sibling.name}")?\n\n` +
             `Both have to go together: a render step whose input is gone is a config ` +
-            `datalib refuses to load.\n\n` +
+            `datalib refuses to load.${alsoGone}\n\n` +
             `The data stays on disk. Re-adding later resumes from what's already there.`
-          : `Remove "${name}" from the config?\n\n` +
+          : `Remove "${name}" from the config?${alsoGone}\n\n` +
             `Its data stays on disk — only this step stops running. Re-adding it later ` +
             `resumes from what's already there.`;
   const purge = await confirmRemoval(what, emptied);
@@ -1205,9 +1218,7 @@ async function deleteSource(id: string) {
   // unwiring a fan-in above the source would shift them. Unwiring is a
   // regex over the result, so it needs no offsets.
   let next = removeSteps(configText.value, [...doomed, ...emptied]);
-  for (const d of doomed) {
-    if (d.phase === "render") next = unwireFromFanIns(next, d.id);
-  }
+  for (const d of doomed) next = unwireFromFanIns(next, d.id);
   await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
@@ -1218,7 +1229,14 @@ async function deleteGroup(id: string) {
   const group = configGroups.value.find((g) => g.id === id);
   if (!group) return;
   const name = group.name ?? group.id;
-  const members = sources.value.filter((s) => s.group === id);
+  const inGroup = sources.value.filter((s) => s.group === id);
+  const members = [
+    ...inGroup,
+    ...readersOf(
+      inGroup.map((m) => m.id),
+      sources.value,
+    ),
+  ];
   const steps = members.filter((s) => s.kind === "step").length;
   const applets = members.filter((s) => s.kind === "applet").length;
   const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -1235,9 +1253,7 @@ async function deleteGroup(id: string) {
   if (!purge) return;
 
   let next = removeSteps(configText.value, [...members, group]);
-  for (const m of members) {
-    if (m.phase === "render") next = unwireFromFanIns(next, m.id);
-  }
+  for (const m of members) next = unwireFromFanIns(next, m.id);
   await removeAndPurge(next, `Removed ${name}.`, purge);
 }
 
@@ -1267,6 +1283,7 @@ async function deleteRows(targets: Row[]) {
       if (sibling) doomed.set(sibling.id, sibling);
     }
   }
+  for (const r of readersOf([...doomed.keys()], sources.value)) doomed.set(r.id, r);
   // A group with nothing left under it goes too, as in `deleteSource`.
   for (const g of configGroups.value) {
     if (groups.has(g.id)) continue;
@@ -1287,7 +1304,7 @@ async function deleteRows(targets: Row[]) {
   if (!purge) return;
   let next = removeSteps(configText.value, entries);
   for (const d of entries) {
-    if ("phase" in d && d.phase === "render") next = unwireFromFanIns(next, d.id);
+    if ("phase" in d) next = unwireFromFanIns(next, d.id);
   }
   await removeAndPurge(next, `Removed ${targets.length} entries.`, purge);
 }

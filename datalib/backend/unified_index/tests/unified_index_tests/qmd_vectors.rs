@@ -12,7 +12,7 @@ use datalib_unified_index::qmd::QmdIndexReader;
 use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
 
-use crate::qmd_index_state::materialize_root_with_grid;
+use datalib_qmd_fixture::materialize_root_with_grid;
 
 #[tokio::test]
 async fn every_embedded_document_has_one_unit_vector_and_a_grid_row() {

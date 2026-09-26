@@ -28,8 +28,15 @@ pub enum Function {
     RenderMarkdown,
     /// Stack every source's render store into the unified grid table.
     GridIndex,
-    /// Build the qmd search index over every rendered tree.
+    /// Register one qmd collection per source it reads, and provision
+    /// qmd's models. Indexes nothing itself.
     QmdIndex,
+    /// Bring one source's qmd collection in line with its rendered tree:
+    /// the keyword (BM25) index.
+    KeywordIndex,
+    /// Embed what one source's qmd collection is missing: the vectors
+    /// semantic search reads.
+    Embed,
     /// Lay the qmd index's document embeddings out on a plane.
     EmbeddingMap,
 }
