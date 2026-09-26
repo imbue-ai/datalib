@@ -665,17 +665,6 @@ export type DagStepProgress = {
   updated_at_utc: string;
 };
 
-// The fraction a step's `done` / `queued` pair describes, or null when
-// the step has not said how much is ahead of it — a bar drawn from an
-// invented total claims more than we know.
-export function progressFraction(p: DagStepProgress | null | undefined): number | null {
-  if (!p) return null;
-  const done = p.metrics.done;
-  const queued = p.metrics.queued;
-  if (done == null || queued == null || done + queued <= 0) return null;
-  return Math.max(0, Math.min(1, done / (done + queued)));
-}
-
 // What a step is doing, or did, in one run — the runner's own
 // vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
 // Keep the two in step: the backend writes these words into the
