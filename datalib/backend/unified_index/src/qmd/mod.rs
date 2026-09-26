@@ -4,12 +4,14 @@ pub mod daemon;
 pub mod index_state;
 pub mod mapping;
 pub mod runner;
+pub mod snippet;
 pub mod vectors;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use index_state::{DocIndexState, QmdIndexReader, QmdIndexSummary};
-pub use mapping::{display_snippet, CollectionScope, GridIndex, GridRowRef, QmdHit, QueryMode};
+pub use mapping::{CollectionScope, GridIndex, GridRowRef, QmdHit, QueryMode};
 pub use runner::{QmdRunner, QmdRunnerConfig};
+pub use snippet::display_snippet;
 
 /// The qmd version pin and the `Command` builder that spawns it moved
 /// down into `datalib_runtime` — a crate with no dependencies — so that
