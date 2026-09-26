@@ -10,16 +10,55 @@ use crate::db::ChatMeta;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
+use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::problems::ProblemRow;
 
+/// Which rows a search holds, in order, and the commit they were read at
+/// (`None` for a root with no index yet).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Listing {
+    pub uuids: Vec<String>,
+    pub at: Option<String>,
+}
+
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
 #[async_trait]
 pub trait IndexRepo: Send + Sync {
-    /// The rows `query`'s structured terms match. Its free text is qmd's;
-    /// nothing here reads it.
-    async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
+    /// The commit the index is at now, or `None` when it has none yet.
+    async fn head(&self) -> Result<Option<String>, RepoError>;
+
+    /// Every row `query`'s structured terms match, as uuids in `sort`'s
+    /// order, or newest first with none. Its free text is qmd's; nothing
+    /// here reads it.
+    async fn ordered_uuids(
+        &self,
+        query: &ParsedQuery,
+        sort: Option<Sort>,
+    ) -> Result<Listing, RepoError>;
+
+    /// The rows behind `uuids`, qmd's ranking, that `query`'s structured
+    /// terms match: in `uuids`' order, or `sort`'s when given. A score
+    /// sort is the ranking's own order, reversed for ascending.
+    async fn filter_uuids(
+        &self,
+        query: &ParsedQuery,
+        uuids: &[String],
+        sort: Option<Sort>,
+    ) -> Result<Listing, RepoError>;
+
+    /// The rows `uuids` name, in that order; one the index no longer has is
+    /// left out.
+    async fn rows_by_uuids(&self, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError>;
+
+    /// The first `limit` rows `query`'s structured terms match, newest
+    /// first.
+    async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
+        let listing = self.ordered_uuids(query, None).await?;
+        let page = &listing.uuids[..limit.min(listing.uuids.len())];
+        self.rows_by_uuids(page).await
+    }
 
     /// Fetch the per-markdown header data (title, account, channel, …)
     /// for the chat preview pane. Returns `Ok(None)` when no row
@@ -61,17 +100,6 @@ pub trait IndexRepo: Send + Sync {
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError>;
-
-    /// Same shape as [`search`](Self::search), but with a caller-supplied
-    /// ranked uuid list (output of `GridIndex::rows_for_hits`). The free-text
-    /// portion of `q` is ignored — qmd has already done that work. Structured
-    /// filters and date ranges still apply. Output preserves the input order.
-    async fn search_by_uuids(
-        &self,
-        q: &ParsedQuery,
-        uuids: &[String],
-        limit: usize,
-    ) -> Result<Vec<SearchRow>, RepoError>;
 
     /// List outgoing edges originating from `markdown_uuid`. Each
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever

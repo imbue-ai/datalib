@@ -601,10 +601,10 @@ async function runSearch(q: string) {
       columns.value = r.columns;
     }
     rows.value = r.rows;
-    total.value = r.total_estimated;
+    total.value = r.total;
     const qe = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
     qmdError.value = qe;
-    cachePut(q, { rows: r.rows, total: r.total_estimated, qmdError: qe });
+    cachePut(q, { rows: r.rows, total: r.total, qmdError: qe });
     shownQuery.value = q;
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;

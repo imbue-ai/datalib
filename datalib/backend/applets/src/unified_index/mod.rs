@@ -18,17 +18,19 @@ use axum::{
 mod columns;
 mod map;
 mod problems;
+mod results;
 
 use datalib_columns::Identity;
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::qmd::index_state::{resolve_markdown_states, DocReport, SummaryCache};
 use datalib_unified_index::qmd::{
-    display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdHit,
-    QmdIndexReader, QmdIndexSummary, QmdRunner, QmdRunnerConfig, QueryMode,
+    display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader,
+    QmdIndexSummary, QmdRunner, QmdRunnerConfig, QueryMode,
 };
 use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::sort::Sort;
 use serde::{Deserialize, Serialize};
 
 /// Everything the handlers need, cloned per request.
@@ -45,6 +47,7 @@ struct Index {
     /// with no restart.
     qmd: Arc<QmdDaemon>,
     qmd_summary: Arc<SummaryCache>,
+    results: Arc<results::ResultCache>,
 }
 
 pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
@@ -73,6 +76,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
         let state = Index {
             qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
             qmd_summary: Arc::new(SummaryCache::default()),
+            results: Arc::new(results::ResultCache::default()),
             repo: Arc::new(repo),
             root,
         };
@@ -192,6 +196,13 @@ fn ensure_models(root: &std::path::Path) {
 pub struct SearchParams {
     pub q: Option<String>,
     pub limit: Option<usize>,
+    /// Where this page starts in the search's rows: the `next_offset` a
+    /// previous page answered with. None is the first page.
+    pub offset: Option<usize>,
+    /// A grid column and direction, `created_at:desc` (see
+    /// `datalib_unified_index::sort`). None is newest first, or qmd's rank
+    /// for free text.
+    pub sort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,7 +211,14 @@ pub struct SearchResponse {
     /// The columns the rows carry, typed — see `datalib_columns`.
     pub columns: Vec<datalib_columns::ColumnSpec>,
     pub rows: Vec<SearchRow>,
-    pub total_estimated: u64,
+    /// Every row the search holds, not just this page's.
+    pub total: u64,
+    /// The offset of the next page, or None when this one reaches the end.
+    pub next_offset: Option<usize>,
+    /// The commit the search was read at. A later page answered at another
+    /// one means the index moved in between, and what the client holds
+    /// should be read again.
+    pub at: Option<String>,
     /// Backend-side errors the user should know about even though we
     /// returned 200, where a swallowed error would otherwise leave the
     /// UI staring at an empty grid with no signal. The UI surfaces
@@ -248,38 +266,41 @@ async fn search_handler(
     State(s): State<Index>,
     Query(p): Query<SearchParams>,
 ) -> Json<SearchResponse> {
-    let parsed = parse_query(p.q.as_deref().unwrap_or(""));
+    let q = p.q.unwrap_or_default();
+    let parsed = parse_query(&q);
     let limit = p.limit.unwrap_or(200).min(100_000);
+    let mut errors: Vec<String> = Vec::new();
+    let sort = p.sort.as_deref().and_then(|spelled| {
+        let sort = Sort::parse(spelled);
+        if sort.is_none() {
+            errors.push(format!(
+                "unknown sort {spelled:?}; showing the default order"
+            ));
+        }
+        sort
+    });
     // Structured terms alone are a SQL filter; free text is qmd's, with the
     // structured terms applied to its hits. A qmd failure is the answer —
     // `query_echo.qmd_error`, no rows — not a quieter search in its place.
     let mut qmd_error: Option<String> = None;
-    let mut errors: Vec<String> = Vec::new();
-    let rows = if parsed.free_text.is_empty() {
-        match s.repo.search(&parsed, limit).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                let msg = format!("structured search: {e}");
-                eprintln!("search: {msg}");
-                errors.push(msg);
-                Vec::new()
-            }
+    let offset = p.offset.unwrap_or(0);
+    let page = match search_page(&s, &q, &parsed, sort, offset, limit).await {
+        Ok(page) => page,
+        Err(SearchFailure::Qmd(e)) => {
+            qmd_error = Some(e);
+            Page::default()
         }
-    } else {
-        match run_qmd_search(&s.root, &s.repo, &s.qmd, &parsed, limit).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                qmd_error = Some(format!("{e:#}"));
-                Vec::new()
-            }
+        Err(SearchFailure::Index(e)) => {
+            let msg = format!("structured search: {e}");
+            eprintln!("search: {msg}");
+            errors.push(msg);
+            Page::default()
         }
     };
-
-    let total = rows.len() as u64;
+    let mut rows = page.rows;
     // The names and marks the config gives each source, read per
     // request: a rename lands on the next search, with no re-index.
     let sources = columns::Sources::read(&s.root);
-    let mut rows = rows;
     for row in &mut rows {
         sources.resolve(row);
     }
@@ -298,29 +319,143 @@ async fn search_handler(
             "qmd_error": qmd_error,
         }),
         rows,
-        total_estimated: total,
+        total: page.total as u64,
+        next_offset: page.next_offset,
+        at: page.at,
         errors,
     })
 }
 
-/// Run a qmd-routed search. qmd itself is shelled out via `npx` on a
-/// blocking thread; the row-resolution layer is async and goes through
-/// the repo trait so both Dolt and SQLite backends work.
-async fn run_qmd_search(
+enum SearchFailure {
+    Qmd(String),
+    Index(String),
+}
+
+fn index(e: impl std::fmt::Display) -> SearchFailure {
+    SearchFailure::Index(e.to_string())
+}
+
+#[derive(Default)]
+struct Page {
+    rows: Vec<SearchRow>,
+    total: usize,
+    next_offset: Option<usize>,
+    at: Option<String>,
+}
+
+/// One page of the search, with qmd's score and matched words on each
+/// row it ranked.
+async fn search_page(
+    s: &Index,
+    q: &str,
+    parsed: &ParsedQuery,
+    sort: Option<Sort>,
+    offset: usize,
+    limit: usize,
+) -> Result<Page, SearchFailure> {
+    let (list, at) = search_results(s, q, parsed, sort).await?;
+    let (entries, next_offset) = results::page(&list, offset, limit);
+    let uuids: Vec<String> = entries.iter().map(|e| e.uuid.clone()).collect();
+    let mut rows = s.repo.rows_by_uuids(&uuids).await.map_err(index)?;
+    let hits: std::collections::HashMap<&str, &(f64, String)> = entries
+        .iter()
+        .filter_map(|e| Some((e.uuid.as_str(), e.hit.as_ref()?)))
+        .collect();
+    for row in &mut rows {
+        if let Some((score, context)) = hits.get(row.uuid.as_str()) {
+            row.score = Some(*score);
+            // The words the hit matched, rather than the row's opening words.
+            if !context.is_empty() {
+                row.snippet = context.clone();
+            }
+        }
+    }
+    Ok(Page {
+        rows,
+        total: list.len(),
+        next_offset,
+        at,
+    })
+}
+
+/// The search's rows in order, from the cache when this query and sort
+/// were listed at the index's current commit, and that commit.
+async fn search_results(
+    s: &Index,
+    q: &str,
+    parsed: &ParsedQuery,
+    sort: Option<Sort>,
+) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
+    let key = results::Key {
+        q: q.to_string(),
+        sort,
+        at: s.repo.head().await.map_err(index)?,
+    };
+    if let Some(list) = s.results.get(&key) {
+        return Ok((list, key.at));
+    }
+    let (list, at) = if parsed.free_text.is_empty() {
+        let listing = s.repo.ordered_uuids(parsed, sort).await.map_err(index)?;
+        let list: Vec<results::Entry> = listing
+            .uuids
+            .into_iter()
+            .map(|uuid| results::Entry { uuid, hit: None })
+            .collect();
+        (list, listing.at)
+    } else {
+        let ranking = qmd_ranking(&s.root, &s.repo, &s.qmd, parsed, QMD_DEPTH)
+            .await
+            .map_err(|e| SearchFailure::Qmd(format!("{e:#}")))?;
+        let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
+        let listing = s
+            .repo
+            .filter_uuids(parsed, &uuids, sort)
+            .await
+            .map_err(index)?;
+        let mut hit_of: std::collections::HashMap<String, (f64, String)> =
+            ranking.into_iter().collect();
+        let list: Vec<results::Entry> = listing
+            .uuids
+            .into_iter()
+            .map(|uuid| results::Entry {
+                hit: hit_of.remove(&uuid),
+                uuid,
+            })
+            .collect();
+        (list, listing.at)
+    };
+    let list = Arc::new(list);
+    // Filed under the commit it was actually read at, which is the key's
+    // unless a seal landed between the two reads.
+    s.results.put(
+        results::Key {
+            at: at.clone(),
+            ..key
+        },
+        list.clone(),
+    );
+    Ok((list, at))
+}
+
+/// How many hits qmd ranks for one free-text search: every page of it is
+/// cut from these.
+const QMD_DEPTH: usize = 1_000;
+
+/// qmd's ranked answer to `parsed`'s free text, as grid rows: one row per
+/// document, at its best-ranked hit, with the hit's score and the words it
+/// matched. qmd itself runs on a blocking thread, on the long-lived daemon
+/// or, failing that, a fresh shell-out.
+async fn qmd_ranking(
     root: &std::sync::Arc<PathBuf>,
     repo: &DynIndexRepo,
     daemon: &Arc<QmdDaemon>,
     parsed: &ParsedQuery,
-    limit: usize,
-) -> anyhow::Result<Vec<SearchRow>> {
+    depth: usize,
+) -> anyhow::Result<Vec<(String, (f64, String))>> {
     let root_owned = root.as_ref().clone();
     let parsed_for_qmd = parsed.clone();
     let daemon = daemon.clone();
     let scope = collection_scope(parsed);
-    // Ask qmd for a generous hit count: a single qmd hit (e.g. a
-    // conversation-level snippet) can resolve to many grid rows. We then
-    // truncate to `limit` after row expansion.
-    let qmd_limit = std::cmp::min(limit.saturating_mul(2).max(50), 1_000);
     let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let mode = match parsed_for_qmd.free_text_mode {
             FreeTextMode::Hybrid => QueryMode::Hybrid,
@@ -330,7 +465,7 @@ async fn run_qmd_search(
         // including a not-yet-built index — we drop down to a fresh
         // `npx … query` shell-out so a missing or misbehaving daemon
         // doesn't kill search entirely.
-        match daemon.search(mode, &parsed_for_qmd.free_text, qmd_limit, &scope) {
+        match daemon.search(mode, &parsed_for_qmd.free_text, depth, &scope) {
             Ok(hits) => return Ok(hits),
             Err(e) => {
                 eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
@@ -338,7 +473,7 @@ async fn run_qmd_search(
         }
         let cfg = QmdRunnerConfig::new(root_owned);
         let runner = QmdRunner::new(cfg)?;
-        runner.search(mode, &parsed_for_qmd.free_text, qmd_limit, &scope)
+        runner.search(mode, &parsed_for_qmd.free_text, depth, &scope)
     })
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
@@ -362,28 +497,30 @@ async fn run_qmd_search(
             h.path, h.score
         );
     });
-    let uuids: Vec<String> = ranked.iter().map(|(row, _)| row.uuid.clone()).collect();
-    let hit_for: std::collections::HashMap<String, &QmdHit> = ranked
-        .iter()
-        .map(|(row, hit)| (row.uuid.clone(), *hit))
-        .collect();
-    drop(idx);
-    let mut rows = repo
-        .search_by_uuids(parsed, &uuids, limit)
+    Ok(ranked
+        .into_iter()
+        .map(|(row, hit)| (row.uuid.clone(), (hit.score, display_snippet(&hit.snippet))))
+        .collect())
+}
+
+/// The rows qmd ranks for `parsed` that its structured terms also match,
+/// in rank order: what the embedding map lights up for free text.
+async fn qmd_rows(
+    root: &std::sync::Arc<PathBuf>,
+    repo: &DynIndexRepo,
+    daemon: &Arc<QmdDaemon>,
+    parsed: &ParsedQuery,
+    depth: usize,
+) -> anyhow::Result<Vec<SearchRow>> {
+    let ranking = qmd_ranking(root, repo, daemon, parsed, depth).await?;
+    let uuids: Vec<String> = ranking.into_iter().map(|(uuid, _)| uuid).collect();
+    let listing = repo
+        .filter_uuids(parsed, &uuids, None)
         .await
-        .map_err(|e| anyhow::anyhow!("search_by_uuids: {e}"))?;
-    for r in rows.iter_mut() {
-        let Some(hit) = hit_for.get(&r.uuid) else {
-            continue;
-        };
-        r.score = Some(hit.score);
-        // The words the hit matched, rather than the row's opening words.
-        let context = display_snippet(&hit.snippet);
-        if !context.is_empty() {
-            r.snippet = context;
-        }
-    }
-    Ok(rows)
+        .map_err(|e| anyhow::anyhow!("filter the qmd hits: {e}"))?;
+    repo.rows_by_uuids(&listing.uuids)
+        .await
+        .map_err(|e| anyhow::anyhow!("read the qmd hits: {e}"))
 }
 
 /// The qmd collections a parsed query may draw from.
@@ -691,5 +828,189 @@ mod tests {
             strip_frontmatter("---\nunterminated\n"),
             "---\nunterminated\n"
         );
+    }
+
+    /// Commits one chat per `(uuid, created_at)` to the root's grid index,
+    /// the way the `grid_index` step writes and seals it.
+    async fn index_chats(root: &std::path::Path, chats: &[(&str, &str)]) {
+        use datalib_etl_render::grid_index::{apply_one, open_index, RenderedMarkdown, WriteLock};
+        use datalib_schema::grid_rows::GridRow;
+        use datalib_schema::providers::Provider;
+
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::new(pool.clone());
+        for (uuid, created_at) in chats {
+            let row = GridRow::builder()
+                .uuid(*uuid)
+                .provider(Provider::Claude)
+                .kind("Chat")
+                .source_label("Claude")
+                .is_document(true)
+                .created_at(Some(created_at.to_string()))
+                .conversation_uuid(*uuid)
+                .entire_chat(format!("/chat/{uuid}"))
+                .body("")
+                .markdown_uuid(Some(uuid.to_string()))
+                .build()
+                .unwrap();
+            let md = RenderedMarkdown {
+                markdown_uuid: uuid.to_string(),
+                source_id: "enterprise".into(),
+                upstream_cursor: None,
+                bucket_key: None,
+                md_path: root.join(format!("enterprise/{uuid}.md")),
+                render_version: 1,
+                rows: vec![row],
+                sections: Vec::new(),
+                edges: Vec::new(),
+                problems: Vec::new(),
+            };
+            apply_one(&lock, root, &md).await.unwrap();
+        }
+        datalib_etl::doltlite_raw::commit_run(&pool, "chats")
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    async fn index_over(root: &std::path::Path) -> Index {
+        let root = Arc::new(root.to_path_buf());
+        Index {
+            repo: Arc::new(
+                datalib_unified_index::dolt_repo::DoltRepo::open(root.clone())
+                    .await
+                    .unwrap(),
+            ),
+            qmd: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
+            qmd_summary: Arc::new(SummaryCache::default()),
+            results: Arc::new(results::ResultCache::default()),
+            root,
+        }
+    }
+
+    async fn search(
+        s: &Index,
+        offset: Option<usize>,
+        limit: usize,
+        sort: Option<&str>,
+    ) -> SearchResponse {
+        let params = SearchParams {
+            q: None,
+            limit: Some(limit),
+            offset,
+            sort: sort.map(String::from),
+        };
+        search_handler(State(s.clone()), Query(params)).await.0
+    }
+
+    fn uuids(r: &SearchResponse) -> Vec<&str> {
+        r.rows.iter().map(|row| row.uuid.as_str()).collect()
+    }
+
+    /// Following `next_offset` from the first page reads every row once,
+    /// newest first, all at one commit; a seal in between is a new search,
+    /// answered at the new commit, so the client can tell what it holds
+    /// is stale.
+    #[tokio::test]
+    async fn pages_read_the_search_once_and_a_seal_starts_a_new_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        index_chats(
+            tmp.path(),
+            &[
+                ("c-1", "2026-01-01T09:00:00+00:00"),
+                ("c-2", "2026-01-02T09:00:00+00:00"),
+                ("c-3", "2026-01-03T09:00:00+00:00"),
+                ("c-4", "2026-01-04T09:00:00+00:00"),
+                ("c-5", "2026-01-05T09:00:00+00:00"),
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+
+        let first = search(&s, None, 2, None).await;
+        assert_eq!(uuids(&first), ["c-5", "c-4"]);
+        assert_eq!((first.total, first.next_offset), (5, Some(2)));
+        let at = first
+            .at
+            .clone()
+            .expect("a committed index answers with its commit");
+        let key = results::Key {
+            q: String::new(),
+            sort: None,
+            at: Some(at.clone()),
+        };
+        assert!(
+            s.results.get(&key).is_some(),
+            "the list is kept for the next page"
+        );
+
+        let second = search(&s, first.next_offset, 2, None).await;
+        assert_eq!(uuids(&second), ["c-3", "c-2"]);
+        let last = search(&s, second.next_offset, 2, None).await;
+        assert_eq!(uuids(&last), ["c-1"]);
+        assert_eq!(last.next_offset, None);
+        assert_eq!([&second.at, &last.at], [&first.at, &first.at]);
+
+        index_chats(tmp.path(), &[("c-6", "2026-01-06T09:00:00+00:00")]).await;
+        let after = search(&s, Some(2), 2, None).await;
+        assert_ne!(after.at.as_deref(), Some(at.as_str()));
+        assert_eq!(after.total, 6);
+        assert_eq!(uuids(&after), ["c-4", "c-3"]);
+    }
+
+    /// An index the search cannot read is said, as an error the grid
+    /// shows, not answered as an empty result.
+    #[tokio::test]
+    async fn a_search_the_index_cannot_answer_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = datalib_etl_render::grid_index::open_index(
+            &datalib_runtime::layout::grid_index_db(tmp.path()),
+        )
+        .await
+        .unwrap();
+        for ddl in [
+            "DROP TABLE grid_rows",
+            "CREATE TABLE grid_rows (only_column TEXT)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        datalib_etl::doltlite_raw::commit_run(&pool, "a table the search cannot read")
+            .await
+            .unwrap();
+        pool.close().await;
+        let s = index_over(tmp.path()).await;
+
+        let r = search(&s, None, 10, None).await;
+        assert!(r.rows.is_empty());
+        assert_eq!(r.total, 0);
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(r.errors[0].contains("no such column"), "{:?}", r.errors);
+    }
+
+    /// A sort the grid names reorders the whole search, not the page; one
+    /// this build does not know says so and answers in the default order.
+    #[tokio::test]
+    async fn a_sort_orders_the_whole_search_and_an_unknown_one_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        index_chats(
+            tmp.path(),
+            &[
+                ("c-1", "2026-01-01T09:00:00+00:00"),
+                ("c-2", "2026-01-02T09:00:00+00:00"),
+                ("c-3", "2026-01-03T09:00:00+00:00"),
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+
+        let oldest = search(&s, None, 2, Some("created_at:asc")).await;
+        assert_eq!(uuids(&oldest), ["c-1", "c-2"]);
+        assert!(oldest.errors.is_empty(), "{:?}", oldest.errors);
+
+        let unknown = search(&s, None, 2, Some("warp_factor")).await;
+        assert_eq!(uuids(&unknown), ["c-3", "c-2"]);
+        assert_eq!(unknown.errors.len(), 1, "{:?}", unknown.errors);
     }
 }
