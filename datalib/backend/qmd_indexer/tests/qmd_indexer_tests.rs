@@ -81,19 +81,15 @@ fn by_name(index: &Index) -> Vec<(String, u64, u64)> {
 
 fn quiet(_: UpdateProgress) {}
 
-fn names(groups: &[&str]) -> Vec<String> {
-    groups.iter().map(|g| g.to_string()).collect()
-}
-
 /// The point of a per-source step: one source's keyword update fills its
 /// own collection and leaves every other one as it was.
 #[test]
 fn a_keyword_update_fills_its_own_collection_and_no_other() {
     let root = root_with(LOGS);
     let index = open(root.path());
-    index.register(&names(&["bridge", "sickbay"]), &[]).unwrap();
+    index.register(&["bridge", "sickbay"]).unwrap();
 
-    let updated = index.keyword_index("bridge", &quiet).unwrap();
+    let updated = index.keyword_index(&["bridge"], &quiet).unwrap();
     assert_eq!(
         updated,
         Updated {
@@ -116,7 +112,7 @@ fn a_keyword_update_registers_its_own_collection() {
     let root = root_with(LOGS);
     let index = open(root.path());
 
-    index.keyword_index("sickbay", &quiet).unwrap();
+    index.keyword_index(&["sickbay"], &quiet).unwrap();
     assert_eq!(by_name(&index), [("sickbay".into(), 1, 1)]);
     let yml = root.path().join("unified_index/qmd_index/qmd/index.yml");
     let yml = std::fs::read_to_string(&yml).unwrap();
@@ -128,9 +124,9 @@ fn a_keyword_update_registers_its_own_collection() {
 fn an_unchanged_tree_is_left_alone() {
     let root = root_with(LOGS);
     let index = open(root.path());
-    index.keyword_index("bridge", &quiet).unwrap();
+    index.keyword_index(&["bridge"], &quiet).unwrap();
 
-    let again = index.keyword_index("bridge", &quiet).unwrap();
+    let again = index.keyword_index(&["bridge"], &quiet).unwrap();
     assert_eq!(
         again,
         Updated {
@@ -144,7 +140,7 @@ fn an_unchanged_tree_is_left_alone() {
 fn a_new_an_edited_and_a_deleted_file_all_reach_the_index() {
     let root = root_with(LOGS);
     let index = open(root.path());
-    index.keyword_index("bridge", &quiet).unwrap();
+    index.keyword_index(&["bridge"], &quiet).unwrap();
 
     write(
         root.path(),
@@ -160,7 +156,7 @@ fn a_new_an_edited_and_a_deleted_file_all_reach_the_index() {
         "# Captain's log\n\nThe Borg.\n",
     );
 
-    let updated = index.keyword_index("bridge", &quiet).unwrap();
+    let updated = index.keyword_index(&["bridge"], &quiet).unwrap();
     assert_eq!(
         updated,
         Updated {
@@ -173,25 +169,23 @@ fn a_new_an_edited_and_a_deleted_file_all_reach_the_index() {
     assert_eq!(by_name(&index), [("bridge".into(), 2, 2)]);
 }
 
-/// A source removed from the config is retired with its documents, not
-/// just unregistered: unregistered documents would still be searched.
+/// Registering is the whole collection set: a source no longer named is
+/// retired with its documents, not just unregistered, since unregistered
+/// documents would still be searched.
 #[test]
-fn retiring_a_collection_takes_its_documents_and_its_yml_entry() {
+fn registering_retires_every_other_collection_with_its_documents() {
     let root = root_with(LOGS);
     let index = open(root.path());
-    index.keyword_index("bridge", &quiet).unwrap();
-    index.keyword_index("sickbay", &quiet).unwrap();
+    index.keyword_index(&["bridge", "sickbay"], &quiet).unwrap();
 
-    index
-        .register(&names(&["bridge"]), &names(&["sickbay"]))
-        .unwrap();
+    assert_eq!(index.register(&["bridge"]).unwrap(), ["sickbay"]);
     assert_eq!(by_name(&index), [("bridge".into(), 2, 2)]);
     let yml = root.path().join("unified_index/qmd_index/qmd/index.yml");
     assert!(!std::fs::read_to_string(yml).unwrap().contains("sickbay"));
 
     // Registered again, it starts from nothing rather than finding its
     // old rows still there.
-    index.register(&names(&["bridge", "sickbay"]), &[]).unwrap();
+    index.register(&["bridge", "sickbay"]).unwrap();
     assert_eq!(
         by_name(&index),
         [("bridge".into(), 2, 2), ("sickbay".into(), 0, 0)]
@@ -206,7 +200,7 @@ fn keyword_progress_counts_every_file() {
     let index = open(root.path());
     let seen = Mutex::new(Vec::new());
     index
-        .keyword_index("bridge", &|p| seen.lock().unwrap().push(p))
+        .keyword_index(&["bridge"], &|p| seen.lock().unwrap().push(p))
         .unwrap();
     let seen = seen.into_inner().unwrap();
     assert_eq!(
@@ -233,8 +227,8 @@ fn link_model(index: &Index, work: &Path) {
 fn an_embed_without_the_model_linked_says_so() {
     let root = root_with(LOGS);
     let index = open(root.path());
-    index.keyword_index("bridge", &quiet).unwrap();
-    let err = index.embed("bridge", &|_| {}).unwrap_err();
+    index.keyword_index(&["bridge"], &quiet).unwrap();
+    let err = index.embed(&["bridge"], &|_| {}).unwrap_err();
     assert!(
         format!("{err:#}").contains("embedding model missing"),
         "{err:#}"
@@ -249,22 +243,23 @@ fn an_embed_of_an_unregistered_collection_fails() {
     let index = open(root.path());
     let work = tempfile::tempdir().unwrap();
     link_model(&index, work.path());
-    let err = index.embed("holodeck", &|_| {}).unwrap_err();
+    let err = index.embed(&["holodeck"], &|_| {}).unwrap_err();
     assert!(format!("{err:#}").contains("is not registered"), "{err:#}");
 }
 
-/// One source's embed embeds its own documents and nobody else's, and a
-/// second embed of it finds nothing left to do. Loads the model.
+/// One source's embed embeds its own documents and nobody else's; one
+/// call can cover several sources, in one process and so one model load,
+/// which is what a whole root's first embed wants; and an embed with
+/// nothing left finds nothing to do. Loads the model twice.
 #[test]
-fn an_embed_fills_its_own_collection_and_then_has_nothing_to_do() {
+fn an_embed_fills_only_the_collections_it_names() {
     let root = root_with(LOGS);
     let index = open(root.path());
     let work = tempfile::tempdir().unwrap();
     link_model(&index, work.path());
-    index.keyword_index("bridge", &quiet).unwrap();
-    index.keyword_index("sickbay", &quiet).unwrap();
+    index.keyword_index(&["bridge", "sickbay"], &quiet).unwrap();
 
-    let embedded = index.embed("bridge", &|_| {}).unwrap();
+    let embedded = index.embed(&["bridge"], &|_| {}).unwrap();
     assert_eq!(
         (embedded.documents, embedded.errors),
         (2, 0),
@@ -276,5 +271,19 @@ fn an_embed_fills_its_own_collection_and_then_has_nothing_to_do() {
         [("bridge".into(), 2, 0), ("sickbay".into(), 1, 1)]
     );
 
-    assert_eq!(index.embed("bridge", &|_| {}).unwrap(), Embedded::default());
+    let embedded = index.embed(&["bridge", "sickbay"], &|_| {}).unwrap();
+    assert_eq!(
+        (embedded.documents, embedded.errors),
+        (1, 0),
+        "{embedded:?}"
+    );
+    assert_eq!(
+        by_name(&index),
+        [("bridge".into(), 2, 0), ("sickbay".into(), 1, 0)]
+    );
+
+    assert_eq!(
+        index.embed(&["bridge", "sickbay"], &|_| {}).unwrap(),
+        Embedded::default()
+    );
 }

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_qmd_indexer::{Collection, EmbedProgress, Index, Qmd, UpdateProgress};
+use datalib_qmd_indexer::{EmbedProgress, Index, Qmd, UpdateProgress};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
@@ -45,17 +45,6 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
         }
     }
     out.into_iter().collect()
-}
-
-/// Collections the index still holds that no group claims any more:
-/// the pre-per-source `mirror`, and any source since removed from the
-/// config.
-fn to_retire(registered: &[Collection], groups: &[String]) -> Vec<String> {
-    registered
-        .iter()
-        .map(|c| c.name.clone())
-        .filter(|name| !groups.contains(name))
-        .collect()
 }
 
 fn open_index(root: &Path) -> Result<Index> {
@@ -225,20 +214,16 @@ pub async fn run(
     let groups = groups_from_inputs(&env.inputs);
     let root = data_root.to_path_buf();
     let registered = groups.clone();
-    tokio::task::spawn_blocking(move || {
+    let retired = tokio::task::spawn_blocking(move || {
         let index = open_index(&root)?;
         provision_models(&index, &root, models_dir, SEARCH_MODELS)?;
-        let retire = to_retire(&index.collections()?, &registered);
-        if !retire.is_empty() {
-            tracing::info!(
-                collections = %retire.join(", "),
-                "retiring the collections no group claims"
-            );
-        }
-        index.register(&registered, &retire)
+        index.register(&registered)
     })
     .await
     .context("qmd task panicked")??;
+    if !retired.is_empty() {
+        tracing::info!(collections = %retired.join(", "), "retired the collections no group claims");
+    }
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
     // whole `unified_index/` tree for the same reason the grid step
@@ -264,7 +249,7 @@ pub async fn run_keyword(
     let root = data_root.to_path_buf();
     let group = env.group.clone();
     let updated = tokio::task::spawn_blocking(move || {
-        open_index(&root)?.keyword_index(&group, sink.as_ref())
+        open_index(&root)?.keyword_index(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
@@ -289,7 +274,7 @@ pub async fn run_embed(
         // runner does not hold a step back for an input still waiting.
         let index = open_index(&root)?;
         provision_models(&index, &root, models_dir, EMBED_MODELS)?;
-        index.embed(&group, sink.as_ref())
+        index.embed(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
@@ -469,30 +454,5 @@ mod tests {
             groups_from_inputs(&inputs),
             vec!["a".to_string(), "b".to_string()]
         );
-    }
-
-    fn collection(name: &str) -> Collection {
-        Collection {
-            name: name.to_string(),
-            documents: 0,
-            needs_embedding: 0,
-        }
-    }
-
-    /// The migration this exists for: a root indexed before per-source
-    /// collections carries `mirror`, which no group claims, and a source
-    /// removed from the config leaves its collection behind.
-    #[test]
-    fn the_collections_no_group_claims_are_retired() {
-        let registered = [
-            collection("mirror"),
-            collection("slack_imbue"),
-            collection("deleted_source"),
-        ];
-        assert_eq!(
-            to_retire(&registered, &["slack_imbue".to_string()]),
-            ["mirror", "deleted_source"]
-        );
-        assert!(to_retire(&[], &["slack_imbue".to_string()]).is_empty());
     }
 }

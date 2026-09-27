@@ -4,9 +4,9 @@
 //
 // argv: <package-dir> <index.sqlite> <verb> <json>, where <json> is:
 //
-//   register  {config, root, collections: [{name, glob}], retire: [name]}
-//   update    {config, root, collection: {name, glob}}   registers it first
-//   embed     {collection: name}
+//   register  {config, root, collections: [{name, glob}]}  exactly these, no others
+//   update    {config, root, collections: [{name, glob}]}  registers them first
+//   embed     {collections: [name]}                        in one process: one model load
 //   status    {}
 //
 // Why the SDK and not the CLI: `qmd update` cannot be scoped to one
@@ -46,29 +46,35 @@ const { createStore } = await load("dist/index.js");
 const { generateEmbeddings, removeCollection, getHashesNeedingEmbedding } =
   await load("dist/store.js");
 
-async function addCollection(store, root, { name, glob }) {
-  await store.addCollection(name, { path: root, pattern: glob });
-  return name;
+async function addCollections(store, root, collections) {
+  for (const { name, glob } of collections) {
+    await store.addCollection(name, { path: root, pattern: glob });
+  }
+  return collections.map((c) => c.name);
 }
 
-async function register(store, { root, collections, retire }) {
-  for (const c of collections) await addCollection(store, root, c);
+// Leaves the registry naming exactly `collections`. Any other collection
+// is retired with its documents: unregistered ones would still be
+// searched.
+async function register(store, { root, collections }) {
+  const keep = new Set(await addCollections(store, root, collections));
+  const retired = (await store.listCollections()).map((c) => c.name).filter((n) => !keep.has(n));
   // After registering, not before: removing a collection also deletes
   // every body no remaining document names, so the others must already
   // claim theirs.
-  for (const name of retire) {
+  for (const name of retired) {
     await store.removeCollection(name);
     removeCollection(store.internal.db, name);
   }
-  emit({ event: "done", registered: collections.length, retired: retire.length });
+  emit({ event: "done", retired });
 }
 
 // Registers first, so a keyword update never depends on the step that
 // registers every source having run before it: the runner does not hold
 // a step back for an input that is itself still waiting.
-async function update(store, { root, collection }) {
+async function update(store, { root, collections }) {
   const r = await store.update({
-    collections: [await addCollection(store, root, collection)],
+    collections: await addCollections(store, root, collections),
     onProgress: ({ current, total }) => emit({ event: "progress", current, total }),
   });
   emit({
@@ -99,20 +105,21 @@ async function requireRegistered(store, name) {
 // that always fails loses its other chunks at the end of each pass
 // (`removeIncompleteEmbeddings`), so every pass embeds something and the
 // loop never ends.
-async function embed(store, { collection }) {
-  await requireRegistered(store, collection);
-  const r = await generateEmbeddings(store.internal, {
-    collection,
-    maxDurationMs: 0,
-    // `failures` repeats every failed chunk on every callback.
-    onProgress: ({ failures: _drop, ...p }) => emit({ event: "progress", ...p }),
-  });
-  emit({
-    event: "done",
-    documents: r.docsProcessed,
-    chunks: r.chunksEmbedded,
-    errors: r.errors,
-  });
+async function embed(store, { collections }) {
+  for (const collection of collections) await requireRegistered(store, collection);
+  const total = { event: "done", documents: 0, chunks: 0, errors: 0 };
+  for (const collection of collections) {
+    const r = await generateEmbeddings(store.internal, {
+      collection,
+      maxDurationMs: 0,
+      // `failures` repeats every failed chunk on every callback.
+      onProgress: ({ failures: _drop, ...p }) => emit({ event: "progress", collection, ...p }),
+    });
+    total.documents += r.docsProcessed;
+    total.chunks += r.chunksEmbedded;
+    total.errors += r.errors;
+  }
+  emit(total);
 }
 
 async function status(store) {

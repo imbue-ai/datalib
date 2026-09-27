@@ -11,7 +11,10 @@ rust_library(
     compile_data = ["src/js/qmd_sdk.mjs"],
     crate_name = "datalib_qmd_indexer",
     edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
+    visibility = [
+        "//datalib:__subpackages__",
+        "//tests/fixtures:__pkg__",
+    ],
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/status_line:datalib_status_line",

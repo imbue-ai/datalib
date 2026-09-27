@@ -299,29 +299,34 @@ impl Index {
     }
 
     /// Leave the registry — and `index.yml` beside it, which `qmd mcp`
-    /// reconciles the registry against — naming each of `groups`, and
-    /// none of `retire`, whose documents go with it. Indexes nothing.
-    pub fn register(&self, groups: &[String], retire: &[String]) -> Result<()> {
-        let collections: Vec<Value> = groups.iter().map(|g| self.collection_arg(g)).collect();
-        self.run(
+    /// reconciles the registry against — naming exactly `groups`. Any
+    /// other collection is retired with its documents, and its name
+    /// returned. Indexes nothing.
+    pub fn register(&self, groups: &[impl AsRef<str>]) -> Result<Vec<String>> {
+        let done = self.run(
             "register",
             json!({
                 "config": self.config_path(),
                 "root": self.root,
-                "collections": collections,
-                "retire": retire,
+                "collections": self.collection_args(groups),
             }),
             &mut |_| {},
         )?;
-        Ok(())
+        Ok(done
+            .get("retired")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str().map(str::to_string))
+            .collect())
     }
 
-    /// Bring `group`'s keyword index in line with its rendered tree,
-    /// registering its collection first. qmd hashes every file and skips
-    /// the unchanged, and touches no other collection.
+    /// Bring each of `groups`' keyword index in line with its rendered
+    /// tree, registering its collection first. qmd hashes every file and
+    /// skips the unchanged, and touches no other collection.
     pub fn keyword_index(
         &self,
-        group: &str,
+        groups: &[impl AsRef<str>],
         on_progress: &(dyn Fn(UpdateProgress) + Send + Sync),
     ) -> Result<Updated> {
         let done = self.run(
@@ -329,7 +334,7 @@ impl Index {
             json!({
                 "config": self.config_path(),
                 "root": self.root,
-                "collection": self.collection_arg(group),
+                "collections": self.collection_args(groups),
             }),
             &mut |v| on_progress(UpdateProgress::from_json(v)),
         )?;
@@ -342,12 +347,13 @@ impl Index {
         })
     }
 
-    /// Embed what `group`'s collection is missing, and nothing of any
-    /// other. The collection has to be registered, and the embedding model
-    /// linked (`link_models`).
+    /// Embed what each of `groups`' collections is missing, and nothing of
+    /// any other, in one process: the model loads once however many there
+    /// are. Progress is per collection, starting again at each. Each has to
+    /// be registered, and the embedding model linked (`link_models`).
     pub fn embed(
         &self,
-        group: &str,
+        groups: &[impl AsRef<str>],
         on_progress: &(dyn Fn(EmbedProgress) + Send + Sync),
     ) -> Result<Embedded> {
         let models = self.qmd_dir.join("models");
@@ -359,7 +365,8 @@ impl Index {
                 embed_model_names().join(", ")
             );
         }
-        let done = self.run("embed", json!({ "collection": group }), &mut |v| {
+        let names: Vec<&str> = groups.iter().map(AsRef::as_ref).collect();
+        let done = self.run("embed", json!({ "collections": names }), &mut |v| {
             on_progress(EmbedProgress::from_json(v))
         })?;
         Ok(Embedded {
@@ -394,8 +401,11 @@ impl Index {
         self.qmd_dir.join("index.yml")
     }
 
-    fn collection_arg(&self, group: &str) -> Value {
-        json!({ "name": group, "glob": mask_for_group(group) })
+    fn collection_args(&self, groups: &[impl AsRef<str>]) -> Vec<Value> {
+        groups
+            .iter()
+            .map(|g| json!({ "name": g.as_ref(), "glob": mask_for_group(g.as_ref()) }))
+            .collect()
     }
 
     /// Run one verb of the script and return its `done` line.
