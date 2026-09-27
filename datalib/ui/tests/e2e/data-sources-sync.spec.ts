@@ -803,9 +803,11 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await btn.click();
     await settleRow(page, render, before[render]);
     await settleRunner(page);
-    expect(await lastSyncedOf(page, "pdfs/ingest"), "the download did not run").toBe(
-      before["pdfs/ingest"],
-    );
+    // Polled: settleRunner remounts the page, and the rows paint after
+    // the shell it waits for, so one read can land on no row at all.
+    await expect
+      .poll(() => lastSyncedOf(page, "pdfs/ingest"), { message: "the download ran too" })
+      .toBe(before["pdfs/ingest"]);
     await expect(btn).toBeDisabled();
   });
 });
