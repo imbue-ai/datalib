@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Driver invoked by the Bazel genrule that runs the qmd indexer against the
-TNG fixture's rendered markdown tree and emits an overlay tar containing the
-resulting SQLite index.
+"""Driver invoked by the Bazel genrule that builds the TNG fixture's qmd
+index — each source's `keyword_index` and then `embed`, run through
+`datalib-step` exactly as the runner runs them — and emits an overlay tar
+containing the resulting SQLite index.
 
 The INPUT is `qmd_md.tar` — markdown only — and not the full `qmd.tar`.
 Bazel keys this action on the content of its inputs, and the embedder
@@ -17,17 +18,16 @@ qmd index at `<root>/unified_index/qmd_index/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd_md.tar`) — we have to extract it to
-     a real directory before qmd's `collection add` can walk it.
-  2. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. The
-     indexer binary pins XDG_CACHE_HOME at the data root, so we pull
-     `qmd/` back out as a tar overlay.
+     a real directory before qmd can walk it.
+  2. The steps write the index under `<root>/unified_index/qmd_index/qmd/`,
+     so we pull that tree back out as a tar overlay.
   3. qmd used to be invoked via `npx -y @tobilu/qmd@<version>`, which
      resolved the whole package tree from the live npm registry on every
      cache miss, with no lockfile and no integrity checking, and ran every
      package's install scripts. We now stage a `DATALIB_RUNTIME_DIR` tree
-     from Bazel-managed inputs instead (see `_stage_runtime`), which
-     `datalib_core::node_runtime::bundled_command` picks up in preference
-     to npx. Nothing here touches a registry.
+     from Bazel-managed inputs instead (see `_stage_runtime`), which the
+     steps resolve qmd from in preference to npx. Nothing here touches a
+     registry.
   4. The embedding model is a Bazel input as well, so this script stages
      a models directory holding it (see `_stage_models`) instead of
      pointing qmd at the host's shared `~/.cache/qmd/models`. That is
@@ -35,7 +35,7 @@ Why a script:
      every CI container — without downloading anything.
 
 Args (positional):
-    1: path to the qmd_indexer rust_binary
+    1: path to the datalib-step binary
     2: path to qmd_md.tar (the rendered markdown, and nothing else)
     3: output path for qmd-index.tar (Bazel-supplied overlay tar)
     4: qmd npm package version to pin (e.g. "2.1.0")
@@ -117,7 +117,7 @@ def _stage_models(work: Path, embed_model: Path) -> Path:
 
 
 def main() -> int:
-    indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
+    step_bin, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
     node_bin, qmd_pkg_dir, embed_model = (Path(p) for p in sys.argv[5:8])
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
@@ -143,33 +143,40 @@ def main() -> int:
 
     env = os.environ.copy()
     env["HOME"] = str(work)  # nothing should be reaching for a real home
-    # Point the indexer at the Bazel-staged Node + qmd tree. With this
-    # set, `qmd_command()` resolves via `bundled_command` and the
-    # `npx -y @tobilu/qmd@<v>` fallback is never reached — so the build
-    # no longer needs `npx` (or any host Node) on PATH.
+    # Point the steps at the Bazel-staged Node + qmd tree, so qmd resolves
+    # without `npx` (or any host Node) on PATH.
     env["DATALIB_RUNTIME_DIR"] = str(
         _stage_runtime(work, qmd_version, node_bin, qmd_pkg_dir)
     )
+    # The embedding model is an input; a missing one must fail the action
+    # rather than be downloaded.
+    env["DATALIB_QMD_MODELS_NO_FETCH"] = "1"
+    env["DATALIB_DAG_DATA_ROOT"] = str(work)
 
-    cmd = [
-        indexer,
-        "--root",
-        str(work),
-        "--qmd-version",
-        qmd_version,
-        "--models-dir",
-        str(models_dir),
-    ]
-    r = subprocess.run(cmd, env=env, check=False)
-    if r.returncode != 0:
-        return r.returncode
+    groups = sorted(p.name for p in work.iterdir() if (p / "render_markdown").is_dir())
+    for group in groups:
+        for function, inputs in [
+            ("keyword_index", [f"{group}/render_markdown", "unified_index/qmd_index"]),
+            ("embed", [f"{group}/keyword_index"]),
+        ]:
+            step_env = dict(
+                env,
+                DATALIB_DAG_STEP=f"{group}/{function}",
+                DATALIB_DAG_GROUP=group,
+                DATALIB_DAG_FUNCTION=function,
+                DATALIB_DAG_INPUTS="\n".join(inputs),
+            )
+            cmd = [str(Path(step_bin).resolve()), "--models-dir", str(models_dir)]
+            r = subprocess.run(cmd, env=step_env, cwd=work, check=False)
+            if r.returncode != 0:
+                sys.stderr.write(f"{group}/{function} failed: exit {r.returncode}\n")
+                return r.returncode
 
-    # The indexer pins XDG_CACHE_HOME at the `qmd_index` step's tree, so
-    # qmd writes its index under `<root>/unified_index/qmd_index/qmd/`
-    # (see runtime::qmd).
+    # The steps write the one index file under the `qmd_index` step's
+    # tree (see runtime::qmd).
     produced = work / "unified_index" / "qmd_index" / "qmd" / "index.sqlite"
     if not produced.exists():
-        sys.stderr.write(f"qmd_indexer did not produce {produced}\n")
+        sys.stderr.write(f"the qmd steps did not produce {produced}\n")
         return 1
 
     # Emit an overlay tar that layers onto qmd.tar: every entry is prefixed

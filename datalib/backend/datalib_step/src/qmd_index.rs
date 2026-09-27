@@ -9,14 +9,11 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_qmd_indexer::{EmbedProgress, UpdateProgress};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::Row;
+use datalib_qmd_indexer::{Collection, EmbedProgress, Index, Qmd, UpdateProgress};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
@@ -52,53 +49,17 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 
 /// Collections the index still holds that no group claims any more:
 /// the pre-per-source `mirror`, and any source since removed from the
-/// config. Read from qmd's own registry table.
-///
-/// An unreadable or absent index yields none. This runs before qmd does,
-/// so the answer is only ever used to *retire* a collection, and a
-/// missed one costs a stale collection until the next run — not a wrong
-/// index. Failing the step over it would be worse.
-async fn collections_to_retire(data_root: &Path, keep: &[String]) -> Vec<String> {
-    let path = datalib_runtime::qmd::qmd_index_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let found = match read_collection_names(&path).await {
-        Ok(names) => names,
-        Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "could not read qmd's collections");
-            return Vec::new();
-        }
-    };
-    let keep: BTreeSet<&str> = keep.iter().map(String::as_str).collect();
-    found
-        .into_iter()
-        .filter(|name| !keep.contains(name.as_str()))
+/// config.
+fn to_retire(registered: &[Collection], groups: &[String]) -> Vec<String> {
+    registered
+        .iter()
+        .map(|c| c.name.clone())
+        .filter(|name| !groups.contains(name))
         .collect()
 }
 
-async fn read_collection_names(path: &Path) -> Result<Vec<String>> {
-    // qmd's index is a plain SQLite database, unlike every `.doltlite_db`
-    // in the tree. Read-only: the file belongs to the qmd subprocess this
-    // step is about to run.
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
-        .create_if_missing(false)
-        .read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await?;
-    let rows = sqlx::query("SELECT name FROM store_collections")
-        .fetch_all(&pool)
-        .await;
-    pool.close().await;
-    Ok(rows
-        .context("read store_collections")?
-        .iter()
-        .filter_map(|r| r.try_get::<String, _>("name").ok())
-        .collect())
+fn open_index(root: &Path) -> Result<Index> {
+    Index::open(root, Qmd::pinned()?)
 }
 
 /// One call on a [`Progress`] handle. Named so the translation below can
@@ -212,21 +173,28 @@ fn version_of_collections(groups: &[String]) -> String {
     format!("collections:{}", blake3::hash(text.as_bytes()).to_hex())
 }
 
-/// Put every pinned GGUF in place, sha256-verified, and link the index
-/// to them: qmd then finds each model already there and never fetches
-/// one itself. A no-op once they are. Both steps that can be the first
-/// to need them do it, since the runner may run either first.
+/// Every model search uses: embedding, query expansion, reranking.
+/// `qmd_index` provisions these for the applet that searches.
+const SEARCH_MODELS: &[datalib_runtime::qmd::PinnedModel] = datalib_qmd_models::PINNED_MODELS;
+
+/// The embedding model alone, first in the pinned table: all an embed
+/// loads.
+const EMBED_MODELS: &[datalib_runtime::qmd::PinnedModel] = SEARCH_MODELS.split_at(1).0;
+
+/// Put `models` in place, sha256-verified, and link the index to them:
+/// qmd then finds each already there and never fetches one itself. A
+/// no-op once they are.
 fn provision_models(
-    index: &datalib_qmd_indexer::Index,
+    index: &Index,
     root: &Path,
     models_dir: Option<PathBuf>,
+    models: &[datalib_runtime::qmd::PinnedModel],
 ) -> Result<()> {
     let models_dir = models_dir.unwrap_or_else(datalib_qmd_indexer::default_models_dir);
     let effective = datalib_qmd_models::effective_models_dir(
         &datalib_runtime::qmd::qmd_state_dir(root),
         &models_dir,
     );
-    let models = datalib_qmd_models::PINNED_MODELS;
     let outcomes = datalib_qmd_models::ensure_models(
         &effective,
         models,
@@ -255,19 +223,18 @@ pub async fn run(
 ) -> Result<Vec<OutputClaim>> {
     emitter.progress().set_message("registering collections");
     let groups = groups_from_inputs(&env.inputs);
-    let retire = collections_to_retire(data_root, &groups).await;
-    if !retire.is_empty() {
-        tracing::info!(
-            collections = %retire.join(", "),
-            "retiring the collections no group claims"
-        );
-    }
     let root = data_root.to_path_buf();
     let registered = groups.clone();
     tokio::task::spawn_blocking(move || {
-        let index =
-            datalib_qmd_indexer::Index::at(&root, datalib_qmd_indexer::DEFAULT_QMD_VERSION)?;
-        provision_models(&index, &root, models_dir)?;
+        let index = open_index(&root)?;
+        provision_models(&index, &root, models_dir, SEARCH_MODELS)?;
+        let retire = to_retire(&index.collections()?, &registered);
+        if !retire.is_empty() {
+            tracing::info!(
+                collections = %retire.join(", "),
+                "retiring the collections no group claims"
+            );
+        }
         index.register(&registered, &retire)
     })
     .await
@@ -296,13 +263,12 @@ pub async fn run_keyword(
     let sink = update_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
-    let summary = tokio::task::spawn_blocking(move || {
-        datalib_qmd_indexer::Index::at(&root, datalib_qmd_indexer::DEFAULT_QMD_VERSION)?
-            .keyword_index(&[group], Some(sink.as_ref()))
+    let updated = tokio::task::spawn_blocking(move || {
+        open_index(&root)?.keyword_index(&group, sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
-    tracing::info!(%summary, "the keyword index is done");
+    tracing::info!(%updated, "the keyword index is done");
     Ok(claim_reads(env))
 }
 
@@ -318,15 +284,16 @@ pub async fn run_embed(
     let sink = embed_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
-    let summary = tokio::task::spawn_blocking(move || {
-        let index =
-            datalib_qmd_indexer::Index::at(&root, datalib_qmd_indexer::DEFAULT_QMD_VERSION)?;
-        provision_models(&index, &root, models_dir)?;
-        index.embed(Some(&group), Some(sink.as_ref()))
+    let embedded = tokio::task::spawn_blocking(move || {
+        // Its own, rather than relying on `qmd_index` having run: the
+        // runner does not hold a step back for an input still waiting.
+        let index = open_index(&root)?;
+        provision_models(&index, &root, models_dir, EMBED_MODELS)?;
+        index.embed(&group, sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
-    tracing::info!(%summary, "the embeddings are done");
+    tracing::info!(%embedded, "the embeddings are done");
     Ok(claim_reads(env))
 }
 
@@ -504,51 +471,28 @@ mod tests {
         );
     }
 
-    /// A data root that has never synced has no index to read, and that
-    /// is a normal state — nothing to retire, no error.
-    #[tokio::test]
-    async fn no_index_means_nothing_to_retire() {
-        let td = tempfile::tempdir().unwrap();
-        assert!(collections_to_retire(td.path(), &["a".to_string()])
-            .await
-            .is_empty());
+    fn collection(name: &str) -> Collection {
+        Collection {
+            name: name.to_string(),
+            documents: 0,
+            needs_embedding: 0,
+        }
     }
 
     /// The migration this exists for: a root indexed before per-source
-    /// collections carries `mirror`, which no group claims.
-    #[tokio::test]
-    async fn legacy_and_orphaned_collections_are_retired() {
-        let td = tempfile::tempdir().unwrap();
-        let path = datalib_runtime::qmd::qmd_index_path(td.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-            .unwrap()
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE store_collections (name TEXT PRIMARY KEY)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        for name in ["mirror", "slack_imbue", "deleted_source"] {
-            sqlx::query("INSERT INTO store_collections (name) VALUES (?)")
-                .bind(name)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        pool.close().await;
-
-        let mut retire = collections_to_retire(td.path(), &["slack_imbue".to_string()]).await;
-        retire.sort();
+    /// collections carries `mirror`, which no group claims, and a source
+    /// removed from the config leaves its collection behind.
+    #[test]
+    fn the_collections_no_group_claims_are_retired() {
+        let registered = [
+            collection("mirror"),
+            collection("slack_imbue"),
+            collection("deleted_source"),
+        ];
         assert_eq!(
-            retire,
-            vec!["deleted_source".to_string(), "mirror".to_string()]
+            to_retire(&registered, &["slack_imbue".to_string()]),
+            ["mirror", "deleted_source"]
         );
+        assert!(to_retire(&[], &["slack_imbue".to_string()]).is_empty());
     }
 }

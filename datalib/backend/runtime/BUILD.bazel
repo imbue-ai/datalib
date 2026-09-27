@@ -10,20 +10,7 @@ exports_files([
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary
-# shares.
-#
-# Editing this crate re-embeds the qmd index on CI. `qmd_indexer_bin`
-# links exactly this crate and //datalib/backend/status_line, and it is an input
-# to //tests/fixtures:ingested_tng_qmd — which keys on its inputs'
-# digests. So any change here, comments included, re-runs a
-# CPU-only embed of the whole fixture corpus (61-611s on CI, depending on
-# what else is competing for the runner's 4 vCPUs). Not a reason to avoid
-# editing it; a reason to know the bill.
-#
-# `deps` is empty and should stay that way. That is load-bearing rather
-# than tidy: a dependency added here is inherited by the indexer binary,
-# so it widens the set of crates whose next edit pays for that embed. See
-# src/lib.rs.
+# shares. No dependencies, so any crate can link it.
 rust_library(
     name = "datalib_runtime",
     srcs = glob(["src/**/*.rs"]),

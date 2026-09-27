@@ -1,15 +1,13 @@
-//! Drive `qmd` to build its keyword and embedding index over the rendered
-//! markdown under a data root, one collection per group, in three
-//! separable operations: register the collections, keyword-index some,
-//! embed some.
+//! Drive `qmd` to keep its keyword and embedding index over the rendered
+//! markdown under a data root, one collection per source: register the
+//! collections, bring one source's keyword index up to date, embed one
+//! source, and say what each collection holds.
 //!
-//! All three run a small script of ours against qmd's SDK and read its
-//! NDJSON back (`src/js/qmd_sdk.mjs`): the CLI cannot scope a keyword
+//! Every operation runs a small script of ours against qmd's SDK and reads
+//! its NDJSON back (`src/js/qmd_sdk.mjs`): the CLI cannot scope a keyword
 //! update to one collection, and reports embedding progress only to a
-//! terminal. Retiring a collection is the one CLI call left.
-//!
-//! What qmd actually does, measured — where its CLI and its SDK differ,
-//! and which of its operations may overlap — is
+//! terminal. What qmd actually does, measured — where its CLI and its SDK
+//! differ, and which of its operations may overlap — is
 //! `docs/dev/qmd_behaviour.md`. Read it before changing how qmd is driven.
 
 use std::ffi::OsString;
@@ -18,17 +16,12 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use datalib_status_line::status_line;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// Re-export of the ONE canonical qmd pin (`datalib_runtime::qmd`) — a
 /// re-export rather than a literal so this crate *cannot* drift from the
 /// search runner/daemon the way two same-named constants once did.
 pub use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
-
-/// The single collection every rendered document used to live in.
-/// Nothing indexes into it any more; the name survives so a data root
-/// built before per-source collections can be migrated off it.
-pub const LEGACY_COLLECTION_NAME: &str = "mirror";
 
 /// The glob one group's collection covers, relative to the data root.
 ///
@@ -39,28 +32,6 @@ pub const LEGACY_COLLECTION_NAME: &str = "mirror";
 /// would shorten every stored path by that prefix and break the join.
 pub fn mask_for_group(group: &str) -> String {
     format!("{group}/render_markdown/**/*.md")
-}
-
-/// The groups under `root` that have a rendered-markdown tree.
-///
-/// For a caller with no config to read — the standalone CLI. The steps
-/// take the graph's own list instead, which omits a directory left behind
-/// by a source that has since been removed from the config.
-pub fn discover_groups(root: &Path) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(root)
-        .with_context(|| format!("read dir {}", root.display()))?
-        .flatten()
-    {
-        if !entry.path().join("render_markdown").is_dir() {
-            continue;
-        }
-        if let Some(name) = entry.file_name().to_str() {
-            out.push(name.to_string());
-        }
-    }
-    out.sort();
-    Ok(out)
 }
 
 /// How far along the embedding pass is, as qmd's own `EmbedProgress`
@@ -200,305 +171,252 @@ pub fn models_present(models_dir: &Path, names: &[String]) -> bool {
     })
 }
 
-/// A data root's qmd index, resolved: where it is, and which qmd drives it.
-///
-/// qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`, and is pointed at
-/// `unified_index/qmd_index` so the index lives in that step's tree. The
-/// per-source steps write into the same file, one collection each.
+/// qmd itself: the node that runs it and the `@tobilu/qmd` package it
+/// imports. Every operation runs our script against these two.
+#[derive(Debug, Clone)]
+pub struct Qmd {
+    node: PathBuf,
+    package: PathBuf,
+}
+
+impl Qmd {
+    pub fn new(node: impl Into<PathBuf>, package: impl Into<PathBuf>) -> Self {
+        Self {
+            node: node.into(),
+            package: package.into(),
+        }
+    }
+
+    /// The staged runtime's qmd at the pinned version, fetched on a miss.
+    pub fn pinned() -> Result<Self> {
+        let version = DEFAULT_QMD_VERSION;
+        // Resolving the CLI is what fetches the runtime when it is missing.
+        datalib_runtime::qmd::qmd_command(version)?;
+        let (node, package) = datalib_runtime::qmd::qmd_sdk_paths(version).with_context(|| {
+            format!(
+                "qmd {version} resolved through npx, which has no package path to import \
+                 from; stage the runtime with `scripts/stage_runtime.sh`"
+            )
+        })?;
+        status_line!("[qmd-indexer] qmd = {}", package.display());
+        Ok(Self::new(node, package))
+    }
+}
+
+/// What a keyword update did to one collection, by file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Updated {
+    pub indexed: u64,
+    pub updated: u64,
+    pub unchanged: u64,
+    pub removed: u64,
+    /// Files qmd could not read.
+    pub skipped: u64,
+}
+
+impl std::fmt::Display for Updated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} new, {} updated, {} unchanged, {} removed",
+            self.indexed, self.updated, self.unchanged, self.removed
+        )?;
+        if self.skipped > 0 {
+            write!(f, ", {} unreadable", self.skipped)?;
+        }
+        Ok(())
+    }
+}
+
+/// What an embed did to one collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Embedded {
+    pub documents: u64,
+    pub chunks: u64,
+    /// Chunks that still failed after qmd's retries.
+    pub errors: u64,
+}
+
+impl std::fmt::Display for Embedded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "embedded {} chunks from {} documents",
+            self.chunks, self.documents
+        )?;
+        if self.errors > 0 {
+            write!(f, ", {} chunk(s) failed after retries", self.errors)?;
+        }
+        Ok(())
+    }
+}
+
+/// One registered collection, as qmd counts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Collection {
+    pub name: String,
+    /// Documents whose file is still there.
+    pub documents: u64,
+    /// Distinct contents with no complete set of vectors for the current
+    /// model: qmd's own measure of what an embed has left to do.
+    pub needs_embedding: u64,
+}
+
+/// A data root's qmd index: the one file every source's collection lives
+/// in, at `unified_index/qmd_index/qmd/index.sqlite`.
 #[derive(Debug, Clone)]
 pub struct Index {
     root: PathBuf,
     cache_home: PathBuf,
     qmd_dir: PathBuf,
-    index_path: PathBuf,
-    qmd_version: String,
+    qmd: Qmd,
 }
 
 impl Index {
-    /// Resolve qmd (fetching the runtime on a miss) and make the index's
-    /// directory. Opens nothing: the first SDK call creates the file.
-    pub fn at(root: &Path, qmd_version: &str) -> Result<Self> {
+    /// Make the index's directory under `root`. Opens nothing: the first
+    /// operation creates the file.
+    pub fn open(root: &Path, qmd: Qmd) -> Result<Self> {
         let root = root
             .canonicalize()
             .with_context(|| format!("root does not exist: {}", root.display()))?;
-        let cache_home = datalib_runtime::qmd::qmd_cache_home(&root);
         let qmd_dir = datalib_runtime::qmd::qmd_state_dir(&root);
         std::fs::create_dir_all(&qmd_dir)
             .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
-        let probe = datalib_runtime::qmd::qmd_command(qmd_version)?;
-        status_line!(
-            "[qmd-indexer] qmd package = @tobilu/qmd@{qmd_version} ({})",
-            if datalib_runtime::node_runtime::is_bundled(&probe) {
-                "bundled runtime"
-            } else {
-                "via npx"
-            }
-        );
         Ok(Self {
-            index_path: qmd_dir.join("index.sqlite"),
-            root,
-            cache_home,
+            cache_home: datalib_runtime::qmd::qmd_cache_home(&root),
             qmd_dir,
-            qmd_version: qmd_version.to_string(),
+            root,
+            qmd,
         })
     }
 
-    pub fn index_path(&self) -> &Path {
-        &self.index_path
-    }
-
-    /// Point `<index>/models` at `models_dir`, where qmd then finds the
-    /// GGUFs the caller provisioned.
+    /// Point the index's `models` at `models_dir`, where qmd then finds
+    /// the GGUFs the caller provisioned and never fetches one itself.
     pub fn link_models(&self, models_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(models_dir)
             .with_context(|| format!("failed to create models dir {}", models_dir.display()))?;
         ensure_models_symlink(&self.qmd_dir, models_dir)
     }
 
-    /// `index.yml`, the root, and each group's name and glob: what
-    /// registering takes.
-    fn collection_args(&self, groups: &[String]) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec![
-            self.qmd_dir.join("index.yml").into(),
-            self.root.clone().into(),
-        ];
-        for group in groups {
-            args.push(group.into());
-            args.push(mask_for_group(group).into());
-        }
-        args
-    }
-
-    /// Register a collection for each of `groups` and unregister each of
-    /// `retire`, leaving the index's registry — and `index.yml` beside it,
-    /// which `qmd mcp` reconciles that registry against — naming exactly
-    /// the collections the caller wants. Indexes nothing.
+    /// Leave the registry — and `index.yml` beside it, which `qmd mcp`
+    /// reconciles the registry against — naming each of `groups`, and
+    /// none of `retire`, whose documents go with it. Indexes nothing.
     pub fn register(&self, groups: &[String], retire: &[String]) -> Result<()> {
-        status_line!("[qmd-indexer] collections = {}", groups.join(", "));
-        self.run_sdk("register", &self.collection_args(groups), &mut |_| {})?;
-
-        // After registering, not before: `qmd collection remove` deletes
-        // the retired collection's documents and then every content row no
-        // remaining document references. Measured migrating off `mirror`,
-        // with the per-group collections already indexed the content
-        // survives; retired first, the index is left with no bodies.
-        for name in retire {
-            retire_collection(&self.cache_home, &self.qmd_version, name)?;
-        }
+        let collections: Vec<Value> = groups.iter().map(|g| self.collection_arg(g)).collect();
+        self.run(
+            "register",
+            json!({
+                "config": self.config_path(),
+                "root": self.root,
+                "collections": collections,
+                "retire": retire,
+            }),
+            &mut |_| {},
+        )?;
         Ok(())
     }
 
-    /// Register each of `groups` (a no-op for one already registered) and
-    /// bring its keyword index in line with its rendered tree. qmd hashes
-    /// every file and skips the unchanged.
+    /// Bring `group`'s keyword index in line with its rendered tree,
+    /// registering its collection first. qmd hashes every file and skips
+    /// the unchanged, and touches no other collection.
     pub fn keyword_index(
         &self,
-        groups: &[String],
-        on_progress: Option<&(dyn Fn(UpdateProgress) + Send + Sync)>,
-    ) -> Result<String> {
-        let done = self.run_sdk("update", &self.collection_args(groups), &mut |v| {
-            if let Some(f) = on_progress {
-                f(UpdateProgress::from_json(v));
-            }
-        })?;
-        Ok(format!(
-            "{} new, {} updated, {} unchanged, {} removed{}",
-            n(&done, "indexed"),
-            n(&done, "updated"),
-            n(&done, "unchanged"),
-            n(&done, "removed"),
-            match n(&done, "skipped") {
-                0 => String::new(),
-                s => format!(", {s} unreadable"),
-            }
-        ))
+        group: &str,
+        on_progress: &(dyn Fn(UpdateProgress) + Send + Sync),
+    ) -> Result<Updated> {
+        let done = self.run(
+            "update",
+            json!({
+                "config": self.config_path(),
+                "root": self.root,
+                "collection": self.collection_arg(group),
+            }),
+            &mut |v| on_progress(UpdateProgress::from_json(v)),
+        )?;
+        Ok(Updated {
+            indexed: n(&done, "indexed"),
+            updated: n(&done, "updated"),
+            unchanged: n(&done, "unchanged"),
+            removed: n(&done, "removed"),
+            skipped: n(&done, "skipped"),
+        })
     }
 
-    /// Embed what `group`'s collection is missing — every collection's
-    /// with `None`. One process for all of them pays the model load once.
+    /// Embed what `group`'s collection is missing, and nothing of any
+    /// other. The collection has to be registered, and the embedding model
+    /// linked (`link_models`).
     pub fn embed(
         &self,
-        group: Option<&str>,
-        on_progress: Option<&(dyn Fn(EmbedProgress) + Send + Sync)>,
-    ) -> Result<String> {
-        // Through the link, not a models dir argument: a root whose link
-        // was made earlier (the test fixture's, pointing at bazel outputs)
-        // reads its models from wherever that link goes.
-        let models_link = self.qmd_dir.join("models");
-        if !models_present(&models_link, &embed_model_names()) {
+        group: &str,
+        on_progress: &(dyn Fn(EmbedProgress) + Send + Sync),
+    ) -> Result<Embedded> {
+        let models = self.qmd_dir.join("models");
+        if !models_present(&models, &embed_model_names()) {
             bail!(
-                "embedding model missing from {} — expected {}; provision it \
-                 (`datalib-step pull-models`) and link it (`link_models`) first",
-                models_link.display(),
+                "embedding model missing from {} — expected {}; provision it and \
+                 `link_models` first",
+                models.display(),
                 embed_model_names().join(", ")
             );
         }
-        let args: Vec<OsString> = group.map(OsString::from).into_iter().collect();
-        let done = self.run_sdk("embed", &args, &mut |v| {
-            if let Some(f) = on_progress {
-                f(EmbedProgress::from_json(v));
-            }
+        let done = self.run("embed", json!({ "collection": group }), &mut |v| {
+            on_progress(EmbedProgress::from_json(v))
         })?;
-        Ok(format!(
-            "embedded {} chunks from {} documents{}",
-            n(&done, "chunksEmbedded"),
-            n(&done, "docsProcessed"),
-            match n(&done, "errors") {
-                0 => String::new(),
-                e => format!(", {e} chunk(s) failed after retries"),
-            }
-        ))
+        Ok(Embedded {
+            documents: n(&done, "documents"),
+            chunks: n(&done, "chunks"),
+            errors: n(&done, "errors"),
+        })
     }
 
-    /// `qmd status`, as text: qmd has no `--json` for it.
-    pub fn status(&self) -> Result<String> {
-        let mut cmd = datalib_runtime::qmd::qmd_command(&self.qmd_version)?;
-        cmd.arg("status");
-        cmd.env("XDG_CACHE_HOME", &self.cache_home);
-        cmd.env("XDG_CONFIG_HOME", &self.cache_home);
-        cmd.env("NO_COLOR", "1");
-        let out = cmd
-            .output()
-            .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
-        if !out.status.success() {
-            bail!(
-                "qmd status failed: {}: stderr: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim(),
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    /// Every registered collection, with what it holds.
+    pub fn collections(&self) -> Result<Vec<Collection>> {
+        let done = self.run("status", json!({}), &mut |_| {})?;
+        let list = done
+            .get("collections")
+            .and_then(Value::as_array)
+            .context("qmd status reported no collections list")?;
+        Ok(list
+            .iter()
+            .map(|c| Collection {
+                name: c
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                documents: n(c, "documents"),
+                needs_embedding: n(c, "needsEmbedding"),
+            })
+            .collect())
+    }
+
+    fn config_path(&self) -> PathBuf {
+        self.qmd_dir.join("index.yml")
+    }
+
+    fn collection_arg(&self, group: &str) -> Value {
+        json!({ "name": group, "glob": mask_for_group(group) })
     }
 
     /// Run one verb of the script and return its `done` line.
-    fn run_sdk(
-        &self,
-        verb: &str,
-        args: &[OsString],
-        on_progress: &mut dyn FnMut(&Value),
-    ) -> Result<Value> {
-        let Some((node, pkg_dir)) = datalib_runtime::qmd::qmd_sdk_paths(&self.qmd_version) else {
-            bail!(
-                "qmd's SDK needs the staged runtime, and qmd resolved through npx, which has no \
-                 package path to import from; stage it with `scripts/stage_runtime.sh`"
-            );
-        };
+    fn run(&self, verb: &str, args: Value, on_progress: &mut dyn FnMut(&Value)) -> Result<Value> {
         let script = SdkScript::write()?;
-        let mut cmd = std::process::Command::new(&node);
+        let mut cmd = std::process::Command::new(&self.qmd.node);
         // No node flags before the script. Anything here is inherited by
         // every process forked below us — see the script's header.
         cmd.arg(&script.0)
-            .arg(&pkg_dir)
-            .arg(&self.index_path)
+            .arg(&self.qmd.package)
+            .arg(self.qmd_dir.join("index.sqlite"))
             .arg(verb)
-            .args(args);
+            .arg(args.to_string());
+        // Where qmd looks for its models: `<cache home>/qmd/models`.
         cmd.env("XDG_CACHE_HOME", &self.cache_home);
         cmd.env("XDG_CONFIG_HOME", &self.cache_home);
         cmd.env("NO_COLOR", "1");
         cmd.stdout(std::process::Stdio::piped());
-        status_line!(
-            "[qmd-indexer] $ {}",
-            datalib_runtime::node_runtime::display_command(&cmd)
-        );
-        let done = read_events(&mut cmd, on_progress).with_context(|| format!("qmd {verb}"))?;
-        status_line!("[qmd-indexer] {verb}: {done}");
-        Ok(done)
+        status_line!("[qmd-indexer] qmd {verb} {args}");
+        read_events(&mut cmd, on_progress).with_context(|| format!("qmd {verb}"))
     }
-}
-
-/// Options for [`run_index`], the whole index in one call. Construct with
-/// `IndexOptions::new(root)` and override fields as needed.
-#[derive(Clone)]
-pub struct IndexOptions {
-    pub root: PathBuf,
-    pub embed: bool,
-    pub qmd_version: String,
-    /// One qmd collection per group, named after the group. Scoping a
-    /// search to one source is then a `collections` argument qmd applies
-    /// *inside* retrieval, instead of a filter over a global top-N —
-    /// which drops a source's hits entirely whenever a larger source
-    /// fills that global list.
-    pub groups: Vec<String>,
-    /// Collections to unregister once the rest are registered.
-    pub retire_collections: Vec<String>,
-    /// Where the GGUF models already are. The indexer never fetches
-    /// one: `qmd pull` compares an etag against HuggingFace `main` and
-    /// re-downloads on any difference, which is how a re-upload upstream
-    /// would silently change every embedding. The caller provisions the
-    /// pinned, sha256-verified files (`datalib_qmd_models`) before this
-    /// runs, and qmd finds them in place.
-    pub models_dir: PathBuf,
-    /// Where to report the embedding pass's progress.
-    pub on_embed_progress: Option<OnEmbedProgress>,
-}
-
-impl IndexOptions {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            embed: true,
-            qmd_version: DEFAULT_QMD_VERSION.to_string(),
-            groups: Vec::new(),
-            retire_collections: Vec::new(),
-            models_dir: default_models_dir(),
-            on_embed_progress: None,
-        }
-    }
-}
-
-impl std::fmt::Debug for IndexOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IndexOptions")
-            .field("root", &self.root)
-            .field("embed", &self.embed)
-            .field("qmd_version", &self.qmd_version)
-            .field("groups", &self.groups)
-            .field("retire_collections", &self.retire_collections)
-            .field("models_dir", &self.models_dir)
-            .field("on_embed_progress", &self.on_embed_progress.is_some())
-            .finish()
-    }
-}
-
-/// Result of a `run_index` pass. `status_output` is the raw stdout of
-/// `qmd status`, and `None` if capturing it failed — indexing success
-/// doesn't depend on it.
-#[derive(Debug, Clone)]
-pub struct IndexOutcome {
-    pub index_path: PathBuf,
-    pub status_output: Option<String>,
-}
-
-/// Register, keyword-index and (with `embed`) embed every group in one
-/// call: what the steps do one source at a time, for a caller with no
-/// runner — the standalone CLI, and through it the test fixture.
-pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
-    let index = Index::at(&opts.root, &opts.qmd_version)?;
-    index.link_models(&opts.models_dir)?;
-    index.register(&opts.groups, &opts.retire_collections)?;
-    if !opts.groups.is_empty() {
-        index.keyword_index(&opts.groups, None)?;
-    }
-    if opts.embed {
-        index.embed(None, opts.on_embed_progress.as_deref())?;
-    }
-    if !index.index_path().exists() {
-        bail!(
-            "qmd reported success but index.sqlite is missing at {}",
-            index.index_path().display()
-        );
-    }
-    let status_output = match index.status() {
-        Ok(s) => Some(s),
-        Err(e) => {
-            status_line!("[qmd-indexer] qmd status capture failed (non-fatal): {e:#}");
-            None
-        }
-    };
-    Ok(IndexOutcome {
-        index_path: index.index_path().to_path_buf(),
-        status_output,
-    })
 }
 
 /// Ensure `<qmd_dir>/models` is a symlink to `models_dir` (the shared
@@ -526,45 +444,6 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
         )
     })?;
     Ok(())
-}
-
-/// Unregister a collection, tolerating one that is already gone.
-/// `qmd collection remove` exits non-zero with "Collection not found"
-/// for a name it doesn't have, which for a re-run of a migration that
-/// already happened is success.
-fn retire_collection(cache_home: &Path, qmd_version: &str, name: &str) -> Result<()> {
-    let mut cmd = datalib_runtime::qmd::qmd_command(qmd_version)?;
-    cmd.args(["collection", "remove", name]);
-    cmd.env("XDG_CACHE_HOME", cache_home);
-    cmd.env("XDG_CONFIG_HOME", cache_home);
-    cmd.env("NO_COLOR", "1");
-    status_line!(
-        "[qmd-indexer] $ {}",
-        datalib_runtime::node_runtime::display_command(&cmd)
-    );
-    let out = cmd
-        .output()
-        .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if out.status.success() {
-        status_line!(
-            "[qmd-indexer] retired collection {name:?}: {}",
-            combined.trim()
-        );
-        return Ok(());
-    }
-    if combined.contains("Collection not found") {
-        return Ok(());
-    }
-    bail!(
-        "qmd collection remove {name:?} failed: {}: {}",
-        out.status,
-        combined.trim()
-    );
 }
 
 /// Our SDK driver. Written to a temp file per run and deleted after,
