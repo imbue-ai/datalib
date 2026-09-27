@@ -123,6 +123,10 @@ pub async fn matches_handler(
 /// nothing and says why.
 async fn matching(s: &Index, q: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let parsed = parse_query(q);
+    if let Some(why) = parsed.refusal() {
+        errors.push(why);
+        return HashSet::new();
+    }
     let found = if parsed.free_text.is_empty() {
         s.repo.matching_documents(&parsed).await
     } else {

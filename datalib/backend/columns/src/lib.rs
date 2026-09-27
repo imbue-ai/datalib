@@ -91,6 +91,19 @@ pub struct ColumnSpec {
     /// decides what an edit does.
     #[serde(default)]
     pub editable: bool,
+    /// How the producer's search bar filters on this column, where it
+    /// can: a cell's value becomes a term the viewer writes into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<ColumnSearch>,
+}
+
+/// The key a term on this column starts with (`author:`), and the row
+/// field whose value the term names: the uuid behind a name, the id
+/// behind a label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSearch {
+    pub key: String,
+    pub field: String,
 }
 
 fn yes() -> bool {
@@ -106,6 +119,7 @@ impl ColumnSpec {
             description: None,
             default_visible: true,
             editable: false,
+            search: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {

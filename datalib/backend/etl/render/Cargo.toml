@@ -9,21 +9,14 @@ license.workspace = true
 name = "datalib_etl_render"
 path = "src/lib.rs"
 
-[[bin]]
-name = "grid-rows-load"
-path = "src/bin/grid_rows_load.rs"
-
 [dependencies]
 datalib-core = { path = "../../core" }
 datalib-etl = { path = ".." }
 datalib-etl-macros = { path = "../macros" }
-datalib-obs = { path = "../../obs" }
-datalib-qmd-indexer = { path = "../../qmd_indexer" }
 datalib-schema = { path = "../../schema" }
 datalib-table = { path = "../../table" }
 datalib-time = { path = "../../time" }
 anyhow = { workspace = true }
-clap = { version = "4.5", features = ["derive", "env"] }
 async-trait = { workspace = true }
 futures = "0.3"
 blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }

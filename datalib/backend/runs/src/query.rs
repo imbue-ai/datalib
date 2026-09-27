@@ -21,17 +21,10 @@ pub enum LogCursor {
     Before(i64),
 }
 
-/// One read of the log. `run` and `step` narrow it the way the panel
-/// does; `q` is what was typed; `cursor` is where in the log.
+/// One read of the log. `q` is the search, the panel's pickers included
+/// (`run:`, `process_id:`, `step:`, `attempt:`); `cursor` is where in the
+/// log.
 pub struct LogQuery<'a> {
-    pub run: Option<&'a str>,
-    /// The lines one process wrote: a launch of the server, or the
-    /// runner, picked from the list `processes` gives.
-    pub process: Option<&'a str>,
-    pub step: Option<&'a str>,
-    /// With `step`: the lines about one attempt of it — what came out
-    /// of the attempt, and what the runner said about it.
-    pub attempt: Option<i64>,
     pub q: &'a str,
     pub cursor: LogCursor,
     pub limit: i64,
@@ -52,7 +45,13 @@ impl std::fmt::Display for QueryError {
 const KEYS: &[(&str, &str)] = &[
     ("run", "l.run_id"),
     ("process", "p.process"),
+    // One process's lines, by its id: a launch of the server, a page of
+    // the app, or a run's runner.
+    ("process_id", "l.process_id"),
     ("step", "l.step"),
+    // With `step:`, the lines about one attempt of it: what came out of
+    // the attempt, and what the runner said about it.
+    ("attempt", "l.attempt"),
     ("level", "l.level"),
     ("stream", "l.stream"),
     ("target", "l.target"),
@@ -113,22 +112,6 @@ fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
             c.clauses.push("l.seq < ?".to_string());
             c.binds.push(Bound::Int(seq));
         }
-    }
-    if let Some(run) = q.run {
-        c.clauses.push("l.run_id = ?".to_string());
-        c.binds.push(Bound::Text(run.to_string()));
-    }
-    if let Some(process) = q.process {
-        c.clauses.push("l.process_id = ?".to_string());
-        c.binds.push(Bound::Text(process.to_string()));
-    }
-    if let Some(step) = q.step {
-        c.clauses.push("l.step = ?".to_string());
-        c.binds.push(Bound::Text(step.to_string()));
-    }
-    if let Some(attempt) = q.attempt {
-        c.clauses.push("l.attempt = ?".to_string());
-        c.binds.push(Bound::Int(attempt));
     }
     for tok in datalib_query::parse(q.q) {
         match tok {
@@ -262,10 +245,6 @@ mod tests {
 
     fn q(s: &str) -> LogQuery<'_> {
         LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: s,
             cursor: LogCursor::After(0),
             limit: 10,
@@ -325,11 +304,30 @@ mod tests {
         assert_eq!(c.clauses[1], "p.process = ?");
     }
 
+    /// What the panel's pickers write: a process by its id, and a step's
+    /// attempt, each one column.
+    #[test]
+    fn the_pickers_terms_are_columns() {
+        let c = compile(&q("process_id:p-1 step:slack/ingest attempt:2")).unwrap();
+        assert_eq!(
+            c.clauses,
+            [
+                "l.seq > ?",
+                "l.process_id = ?",
+                "l.step = ?",
+                "l.attempt = ?"
+            ]
+        );
+    }
+
     #[test]
     fn an_unknown_key_is_refused_by_name() {
         let e = compile(&q("author:thad")).unwrap_err();
         assert!(e.0.contains("`author:`"), "{e}");
-        assert!(e.0.contains("run, process, step, level"), "{e}");
+        assert!(
+            e.0.contains("run, process, process_id, step, attempt, level"),
+            "{e}"
+        );
         assert!(e.0.ends_with("min_level"), "{e}");
     }
 }

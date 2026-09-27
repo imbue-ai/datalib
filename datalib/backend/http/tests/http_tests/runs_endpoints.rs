@@ -186,10 +186,15 @@ async fn the_log_is_read_through_the_shared_query_grammar() {
     let td = tempfile::tempdir().unwrap();
     write_two_runs(td.path());
 
-    let all = get(td.path(), "/api/log?step=slack/ingest").await;
+    let all = get(td.path(), "/api/log?q=step:slack/ingest").await;
     assert_eq!(all.as_array().unwrap().len(), 4, "both runs' lines");
 
-    let q = |q: &str| format!("/api/log?step=slack/ingest&q={}", urlencoding(q));
+    let q = |q: &str| {
+        format!(
+            "/api/log?q={}",
+            urlencoding(&format!("step:slack/ingest {q}"))
+        )
+    };
     let warned = get(td.path(), &q("level:warn")).await;
     assert_eq!(warned.as_array().unwrap().len(), 1);
     assert_eq!(warned[0]["msg"], "slow");
@@ -239,22 +244,37 @@ async fn the_log_opens_on_its_newest_lines_and_pages_back() {
             .map(|l| l["msg"].as_str().unwrap().to_string())
             .collect()
     };
-    let all = get(td.path(), "/api/log?step=slack/ingest").await;
-    let newest = get(td.path(), "/api/log?step=slack/ingest&limit=2").await;
+    let all = get(td.path(), "/api/log?q=step:slack/ingest").await;
+    let newest = get(td.path(), "/api/log?q=step:slack/ingest&limit=2").await;
     assert_eq!(msgs(&newest), msgs(&all)[2..]);
     let oldest_held = newest[0]["seq"].as_i64().unwrap();
     let before = get(
         td.path(),
-        &format!("/api/log?step=slack/ingest&limit=2&before_seq={oldest_held}"),
+        &format!("/api/log?q=step:slack/ingest&limit=2&before_seq={oldest_held}"),
     )
     .await;
     assert_eq!(msgs(&before), msgs(&all)[..2]);
     let after = get(
         td.path(),
-        &format!("/api/log?step=slack/ingest&after_seq={oldest_held}"),
+        &format!("/api/log?q=step:slack/ingest&after_seq={oldest_held}"),
     )
     .await;
     assert_eq!(msgs(&after), msgs(&all)[3..]);
+
+    // The panel's pickers are search terms now; a caller still sending
+    // one as a parameter is refused rather than handed every line.
+    let app = router(state(td.path()).await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/log?step=slack/ingest")
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let app = router(state(td.path()).await);
     let resp = app

@@ -67,7 +67,7 @@ there is no codegen step.
     │   ├── core/             query engine + deeplink grammar
     │   ├── etl/              shared render/load framework
     │   ├── etl/providers/*/  per-provider download/render crates
-    │   ├── qmd_indexer/      qmd search index binary
+    │   ├── qmd_indexer/      the qmd index's operations, over qmd's SDK
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
     │   └── http/             axum binary

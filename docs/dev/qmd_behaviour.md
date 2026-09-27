@@ -17,7 +17,9 @@ line number that drifts is still findable.
 
 Read this before touching `qmd_indexer/src/lib.rs` or anything that
 drives `qmd embed`. Finding 6 is how an embed reported success for work
-qmd did not do, until the step called past `store.embed()`.
+qmd did not do, until the step called past `store.embed()`. Findings 1
+and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
+which drives the real qmd through `Index`.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -159,10 +161,12 @@ does not carry over to `createStore()` without being re-measured.
     survive — it
     is the registry that goes — but a later scoped `update` then matches
     nothing and silently does no work, which is how this was noticed.
-    The shipped step passes `configPath` only when the file is on disk
-    (`qmd_indexer/src/lib.rs`, `run_embed`); anything else built on the
-    SDK needs the same guard, or `{ dbPath }` alone, which is the
-    DB-only mode that reads `store_collections` and syncs nothing.
+    `embed` and `status` in `qmd_indexer/src/js/qmd_sdk.mjs` open with
+    `{ dbPath }` alone, the DB-only mode that reads `store_collections`
+    and syncs nothing. `register` and `update` pass the file, because
+    they are its writers and register their collections as they open;
+    a file deleted by hand costs the other collections' registration
+    until `qmd_index` next runs, never their documents.
 
 11. **The SDK reports progress the CLI keeps to itself.** `embed`'s
     `onProgress` fires per batch with chunks embedded, bytes processed

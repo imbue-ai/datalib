@@ -648,6 +648,11 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     await expect(which.locator("option:checked")).toHaveText(
       /^flaky\/ingest · attempt 1 · exited 1$/,
     );
+    // The pickers write what they pick into the query, which is the
+    // whole of what the panel shows.
+    await expect(dialog.locator(".rl-search")).toHaveValue(
+      /(^| )run:\S+ step:flaky\/ingest attempt:1$/,
+    );
     // The line the panel opened on is the runner's word on how the step
     // ended, marked, with the step's own last words above it.
     const jumped = dialog.locator('.rl-grid .slick-cell.rl-jumped[col-id="msg"]');

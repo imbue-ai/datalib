@@ -901,6 +901,9 @@ export type ColumnSpec = {
   description?: string;
   default_visible: boolean;
   editable: boolean;
+  // How the producer's search bar filters on this column: the key a term
+  // starts with, and the row field holding the value it names.
+  search?: { key: string; field: string };
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -1261,13 +1264,8 @@ export function fetchRuns(
 // `seq` is monotone across runs.
 export function fetchLog(
   opts: {
-    run?: string;
-    // The lines one process wrote, by id: a launch of the server, or
-    // the runner.
-    process?: string;
-    step?: string;
-    // With `step`: the lines about one attempt of it.
-    attempt?: number;
+    // The search, what the panel's pickers narrow it to included:
+    // `run:`, `process_id:`, `step:`, `attempt:`.
     q?: string;
     // The lines after this `seq` (the tail), or the newest before it (an
     // older page); neither is the newest lines.
@@ -1278,10 +1276,6 @@ export function fetchLog(
   signal?: AbortSignal,
 ): Promise<RunLogLine[]> {
   const params = new URLSearchParams();
-  if (opts.run) params.set("run", opts.run);
-  if (opts.process) params.set("process", opts.process);
-  if (opts.step) params.set("step", opts.step);
-  if (opts.attempt != null) params.set("attempt", String(opts.attempt));
   if (opts.q) params.set("q", opts.q);
   if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
   if (opts.beforeSeq != null) params.set("before_seq", String(opts.beforeSeq));

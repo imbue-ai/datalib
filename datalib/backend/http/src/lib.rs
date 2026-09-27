@@ -1887,20 +1887,16 @@ async fn run_log(
     )
 }
 
+/// A parameter this does not take is refused, not ignored: the run, the
+/// process, the step and the attempt are search terms (`run:`,
+/// `process_id:`, `step:`, `attempt:`), and a caller still sending them
+/// as parameters would otherwise get every line back.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LogParams {
-    #[serde(default)]
-    run: Option<String>,
-    /// One process's lines, by its id from `/api/processes`.
-    #[serde(default)]
-    process: Option<String>,
-    #[serde(default)]
-    step: Option<String>,
-    /// With `step`: one attempt of it.
-    #[serde(default)]
-    attempt: Option<i64>,
     /// The search bar, in the grammar every grid shares (`datalib_query`):
-    /// `level:warn -target:sqlx "history"`.
+    /// `level:warn -target:sqlx "history"`, and what the panel's pickers
+    /// write there: `run:`, `process_id:`, `step:`, `attempt:`.
     #[serde(default)]
     q: String,
     /// The lines after this `seq`: how a panel follows the tail.
@@ -1913,7 +1909,7 @@ struct LogParams {
     limit: Option<i64>,
 }
 
-/// `GET /api/log?run=…&step=…&q=…` — log lines across every run the
+/// `GET /api/log?q=…` — log lines across every run the
 /// store holds unless `run` narrows it: the newest `limit` of them, or the
 /// page `after_seq` or `before_seq` names, oldest first either way. A `q`
 /// naming a key a log line does not have is a 400 with the key spelled
@@ -1935,10 +1931,6 @@ async fn log_lines(
         }
     };
     let q = datalib_runs::LogQuery {
-        run: p.run.as_deref(),
-        process: p.process.as_deref(),
-        step: p.step.as_deref(),
-        attempt: p.attempt,
         q: &p.q,
         cursor,
         limit,

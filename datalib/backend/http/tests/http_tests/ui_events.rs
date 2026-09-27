@@ -1,6 +1,6 @@
 //! A page of the app reports what happened on it through
 //! `POST /api/ui/events`, and it comes back as a `ui` process with its
-//! lines: `GET /api/processes?process=ui`, `GET /api/log?process=<id>`.
+//! lines: `GET /api/processes?process=ui`, `GET /api/log?q=process_id:<id>`.
 //! One test, because the subscriber it installs is the process's only
 //! one.
 
@@ -125,7 +125,7 @@ async fn a_page_is_a_process_and_what_it_reports_are_its_lines() {
     assert!(page["run_id"].is_null());
     assert!(page["finished_at_utc"].is_string(), "closed: {page}");
 
-    let lines = get_json(root, &format!("/api/log?process={PAGE}")).await;
+    let lines = get_json(root, &format!("/api/log?q=process_id:{PAGE}")).await;
     let lines = lines.as_array().unwrap();
     let targets: Vec<&str> = lines
         .iter()

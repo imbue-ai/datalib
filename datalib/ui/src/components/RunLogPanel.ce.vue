@@ -44,6 +44,7 @@ import {
   withPage,
   type PagedWindow,
 } from "@/grid/pagedWindow";
+import { EVERYTHING, scopeOf, withScope, type LogScope as Scope } from "@/grid/logScope";
 // The column rules and cell helpers every slickgrid here shares.
 import "@/cards/tableGrid.css";
 import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
@@ -98,18 +99,20 @@ const emit = defineEmits<{
 const ALL_RUNS = "*";
 const LAUNCH_PREFIX = "launch:";
 
-/// The first picker: a run, a launch of the server or a page of the
-/// app, or everything. A run's value is its id; a launch's or a page's
-/// is prefixed, since all are UUIDs.
-const picked = ref(props.launchId ? `${LAUNCH_PREFIX}${props.launchId}` : props.runId);
-const allRuns = computed(() => picked.value === ALL_RUNS);
-const launchId = computed(() =>
-  picked.value.startsWith(LAUNCH_PREFIX) ? picked.value.slice(LAUNCH_PREFIX.length) : null,
+/// What the query narrows the log to (grid/logScope.ts): the pickers
+/// show it, and write it back into the query.
+const scope = computed(() => scopeOf(query.value));
+/// The first picker: a run, a launch of the server or a page of the app,
+/// or everything. A run's value is its id; a launch's or a page's is
+/// prefixed, since all are UUIDs.
+const picked = computed(
+  () =>
+    scope.value.run ??
+    (scope.value.processId ? `${LAUNCH_PREFIX}${scope.value.processId}` : ALL_RUNS),
 );
-const runId = computed(() => (allRuns.value || launchId.value ? null : picked.value));
-/// The second picker, within a run: one of its processes — the runner
-/// or a step's attempt — or the whole run (`null`).
-const processId = ref<string | null>(null);
+const allRuns = computed(() => picked.value === ALL_RUNS);
+const launchId = computed(() => (scope.value.run ? null : scope.value.processId));
+const runId = computed(() => scope.value.run);
 /// The runs the picker offers: the ones this step took part in, newest
 /// first, or every recent run when the panel is not about one step.
 const runs = ref<RunInfo[]>([]);
@@ -126,9 +129,17 @@ const launch = computed(() =>
 /// The processes of the run on screen: its runner and its steps'
 /// attempts, newest first.
 const runProcesses = ref<ProcessInfo[]>([]);
-const currentProcess = computed(
-  () => runProcesses.value.find((p) => p.process_id === processId.value) ?? null,
-);
+/// The second picker: one of the run's processes, the runner by its id
+/// or a step's attempt by its step and number, or the whole run (`null`).
+const currentProcess = computed(() => {
+  const s = scope.value;
+  if (!s.run) return null;
+  return (
+    runProcesses.value.find((p) =>
+      s.step ? p.step === s.step && p.attempt === s.attempt : p.process_id === s.processId,
+    ) ?? null
+  );
+});
 /// Whether what is on screen may still be writing — tail while it
 /// may: by whether the store has closed it, and until the lists say,
 /// a run or launch is taken as still going (tailing a finished one
@@ -262,29 +273,13 @@ async function untilLetAlone() {
 /// The `seq` of the line the panel opened on, which its cells mark.
 let jumpedTo: number | null = null;
 
-/// What the panel is showing, as a log read: a step's attempt by subject
-/// — what came out of it and what the runner said about it; a launch or
-/// the runner by author. A step opened before its first attempt started
-/// has no process to pick yet; its lines are still its own by name.
-function scope() {
-  const attempt = currentProcess.value?.step ? currentProcess.value : null;
-  const byName = runId.value && !processId.value && props.step && !runProcesses.value.length;
-  return {
-    run: runId.value ?? undefined,
-    process: launchId.value ?? (attempt ? undefined : (processId.value ?? undefined)),
-    step: attempt?.step ?? (byName ? props.step! : undefined),
-    attempt: attempt?.attempt ?? undefined,
-    q: query.value,
-  };
-}
-
 /// Lines written after the newest one held, however many: the tail is
 /// read a page at a time until a page comes back short.
 async function tailLines(): Promise<RunLogLine[]> {
   const out: RunLogLine[] = [];
   for (;;) {
     const after = out[out.length - 1]?.seq ?? win!.rows[0]?.seq ?? 0;
-    const got = await fetchLog({ ...scope(), afterSeq: after, limit: TAIL_PAGE });
+    const got = await fetchLog({ q: query.value, afterSeq: after, limit: TAIL_PAGE });
     out.push(...got);
     if (got.length < TAIL_PAGE) return out;
   }
@@ -310,7 +305,7 @@ async function load(fresh: boolean) {
   try {
     // A fresh load opens on the newest lines; the older ones come as the
     // reader scrolls up to them.
-    const got = fresh ? await fetchLog({ ...scope(), limit: LOG_PAGE }) : await tailLines();
+    const got = fresh ? await fetchLog({ q: query.value, limit: LOG_PAGE }) : await tailLines();
     await untilLetAlone();
     win = fresh
       ? firstWindow(newestFirst(got, LOG_PAGE, bySeq))
@@ -407,7 +402,7 @@ async function loadOlder() {
   const asked = generation;
   win = asking(win, fetch);
   try {
-    const got = await fetchLog({ ...scope(), beforeSeq: fetch.from, limit: fetch.limit });
+    const got = await fetchLog({ q: query.value, beforeSeq: fetch.from, limit: fetch.limit });
     await untilLetAlone();
     if (asked !== generation || !win || !bundle) return;
     // A log page carries no commit (`at` is null on both), so it never
@@ -465,23 +460,24 @@ async function loadRuns() {
   }
 }
 
-/// The run's processes, and — on a run just picked, or opened on a
-/// step — which of them to show: the step's newest attempt.
-async function loadProcesses(pickStep: string | null) {
-  if (!runId.value) {
+/// The processes of `run`, newest first, for the second picker.
+async function loadProcesses(run: string | null) {
+  if (!run) {
     runProcesses.value = [];
     return;
   }
   try {
-    runProcesses.value = await fetchProcesses({ run: runId.value, limit: 1000 });
+    runProcesses.value = await fetchProcesses({ run, limit: 1000 });
   } catch {
     runProcesses.value = [];
   }
-  if (pickStep) {
-    processId.value = runProcesses.value.find((p) => p.step === pickStep)?.process_id ?? null;
-  } else if (processId.value && !currentProcess.value) {
-    processId.value = null;
-  }
+}
+
+/// A run, opened on a step: its newest attempt, or the step by name
+/// before it has one.
+function onStep(run: string, step: string): Scope {
+  const newest = runProcesses.value.find((p) => p.step === step);
+  return { ...EVERYTHING, run, step, attempt: newest?.attempt ?? null };
 }
 
 function announce() {
@@ -496,19 +492,39 @@ function announce() {
   );
 }
 
-async function pickScope(ev: Event) {
-  picked.value = (ev.target as HTMLSelectElement).value;
-  processId.value = null;
-  await loadProcesses(props.step);
+/// Show `next` instead of what is on screen: written into the query,
+/// which is what the panel reads.
+function rescope(next: Scope) {
+  query.value = withScope(query.value, next);
   announce();
   void load(true);
 }
 
+async function pickScope(ev: Event) {
+  const value = (ev.target as HTMLSelectElement).value;
+  const next: Scope =
+    value === ALL_RUNS
+      ? EVERYTHING
+      : value.startsWith(LAUNCH_PREFIX)
+        ? { ...EVERYTHING, processId: value.slice(LAUNCH_PREFIX.length) }
+        : { ...EVERYTHING, run: value };
+  await loadProcesses(next.run);
+  rescope(next.run && props.step ? onStep(next.run, props.step) : next);
+}
+
 function pickProcess(ev: Event) {
-  const v = (ev.target as HTMLSelectElement).value;
-  processId.value = v === "" ? null : v;
-  announce();
-  void load(true);
+  const id = (ev.target as HTMLSelectElement).value;
+  const p = runProcesses.value.find((x) => x.process_id === id);
+  const run = scope.value.run;
+  // A step's attempt by subject: what came out of it and what the
+  // runner said about it. The runner by author.
+  rescope(
+    !p
+      ? { ...EVERYTHING, run }
+      : p.step
+        ? { ...EVERYTHING, run, step: p.step, attempt: p.attempt ?? null }
+        : { ...EVERYTHING, run, processId: p.process_id },
+  );
 }
 
 /// How a process reads in its picker: which step and attempt, or the
@@ -978,22 +994,27 @@ onMounted(async () => {
   // On the window, so a release outside the grid still ends the press.
   window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("pointercancel", onPointerUp, true);
-  // The run's processes first, so a step opens on its attempt rather
-  // than on the run and then jumps; the pickers' lists with them, so
-  // the header can say what opened.
-  await Promise.all([loadProcesses(props.step), loadRuns()]);
-  announce();
-  void load(true);
+  // What the panel was opened on, written into its query. The run's
+  // processes first, so a step opens on its attempt rather than on the
+  // run and then jumps; the pickers' lists with them, so the header can
+  // say what opened.
+  const opening: Scope = props.launchId
+    ? { ...EVERYTHING, processId: props.launchId }
+    : props.runId === ALL_RUNS
+      ? EVERYTHING
+      : { ...EVERYTHING, run: props.runId };
+  await Promise.all([loadProcesses(opening.run), loadRuns()]);
+  rescope(opening.run && props.step ? onStep(opening.run, props.step) : opening);
   unsubscribe = subscribeLive(
     {
       root: (e) => {
         if (changed(e, "log") && live.value) void load(false);
         // A step's new attempt is a new process for the picker to offer.
-        if (changed(e, "runs")) void loadProcesses(null);
+        if (changed(e, "runs")) void loadProcesses(runId.value);
       },
       resync: () => {
         void loadRuns();
-        void loadProcesses(null);
+        void loadProcesses(runId.value);
         if (live.value) void load(false);
       },
     },
@@ -1064,7 +1085,7 @@ onUnmounted(() => {
       <select
         v-if="runId && runProcesses.length"
         class="rl-run"
-        :value="processId ?? ''"
+        :value="currentProcess?.process_id ?? ''"
         aria-label="Which process of the run"
         @change="pickProcess"
       >

@@ -33,7 +33,7 @@ use datalib_unified_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdDaemon, QmdDaemonConfig, QmdIndexReader,
     QmdIndexSummary, QueryMode,
 };
-use datalib_unified_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
+use datalib_unified_index::query::{parse_query, FreeTextMode, ParsedQuery};
 use datalib_unified_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_index::search::SearchRow;
 use datalib_unified_index::sort::Sort;
@@ -308,6 +308,9 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
+    if let Some(why) = parsed.refusal() {
+        return Json(SearchResponse::refused(vec![why]));
+    }
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
     let sort = match p.sort.as_deref().map(Sort::parse_order).transpose() {
@@ -367,7 +370,7 @@ async fn search_handler(
             },
             "documents": parsed.documents,
             "filters": parsed.filters.iter()
-                .map(|(k, v)| (format!("{:?}", k), v.clone()))
+                .map(|(k, v)| (k.key().to_string(), v.clone()))
                 .collect::<Vec<_>>(),
             "qmd_error": qmd_error,
         }),
@@ -417,6 +420,10 @@ async fn groups_handler(
     let q = p.q.unwrap_or_default();
     let parsed = parse_query(&q);
     let mut out = GroupsResponse::default();
+    if let Some(why) = parsed.refusal() {
+        out.errors.push(why);
+        return Json(out);
+    }
     let by = match grouping::parse_by(&p.by) {
         Ok(by) => by,
         Err(e) => {
@@ -738,7 +745,7 @@ fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
     let names: Vec<String> = parsed
         .terms
         .iter()
-        .filter(|t| t.field == Field::SourceId && !t.negate)
+        .filter(|t| t.field.key() == "source_id" && !t.negate)
         .filter(|t| t.value != datalib_source_id())
         .map(|t| t.value.clone())
         .collect();
@@ -1366,6 +1373,31 @@ mod tests {
         assert_eq!(
             uuids(&refused),
             ["note-2", "note-1", "log-3", "log-2", "log-1"]
+        );
+    }
+
+    /// A key the search does not have is refused by name, by the search
+    /// and by the groups, rather than quietly matching every row.
+    #[tokio::test]
+    async fn an_unknown_key_is_refused_not_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        crew(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+
+        let r = search(&s, "rank:captain", None, 10, None).await;
+        assert!(r.rows.is_empty());
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(r.errors[0].contains("`rank:`"), "{:?}", r.errors);
+
+        let g = groups(&s, "rank:captain", "kind").await;
+        assert!(g.groups.is_empty());
+        assert_eq!(g.errors.len(), 1, "{:?}", g.errors);
+
+        let org = search(&s, "org_name:*", None, 10, None).await;
+        assert!(
+            org.errors.is_empty(),
+            "a key every column now has: {:?}",
+            org.errors
         );
     }
 

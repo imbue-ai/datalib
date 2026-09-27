@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Driver invoked by the Bazel genrule that runs the qmd indexer against the
-TNG fixture's rendered markdown tree and emits an overlay tar containing the
-resulting SQLite index.
+"""Driver invoked by the Bazel genrule that builds the TNG fixture's qmd
+index — through `build_qmd_index.rs`, which drives the same
+`datalib_qmd_indexer` library a sync does — and emits an overlay tar
+containing the resulting SQLite index.
 
 The INPUT is `qmd_md.tar` — markdown only — and not the full `qmd.tar`.
 Bazel keys this action on the content of its inputs, and the embedder
@@ -17,17 +18,11 @@ qmd index at `<root>/unified_index/qmd_index/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd_md.tar`) — we have to extract it to
-     a real directory before qmd's `collection add` can walk it.
-  2. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. The
-     indexer binary pins XDG_CACHE_HOME at the data root, so we pull
-     `qmd/` back out as a tar overlay.
-  3. qmd used to be invoked via `npx -y @tobilu/qmd@<version>`, which
-     resolved the whole package tree from the live npm registry on every
-     cache miss, with no lockfile and no integrity checking, and ran every
-     package's install scripts. We now stage a `DATALIB_RUNTIME_DIR` tree
-     from Bazel-managed inputs instead (see `_stage_runtime`), which
-     `datalib_core::node_runtime::bundled_command` picks up in preference
-     to npx. Nothing here touches a registry.
+     a real directory before qmd can walk it.
+  2. The library writes the index under `<root>/unified_index/qmd_index/qmd/`,
+     so we pull that tree back out as a tar overlay.
+  3. Node and the qmd package are Bazel inputs, handed to the library as
+     paths, so nothing here touches a registry or a host Node.
   4. The embedding model is a Bazel input as well, so this script stages
      a models directory holding it (see `_stage_models`) instead of
      pointing qmd at the host's shared `~/.cache/qmd/models`. That is
@@ -35,58 +30,21 @@ Why a script:
      every CI container — without downloading anything.
 
 Args (positional):
-    1: path to the qmd_indexer rust_binary
+    1: path to the build_qmd_index binary
     2: path to qmd_md.tar (the rendered markdown, and nothing else)
     3: output path for qmd-index.tar (Bazel-supplied overlay tar)
-    4: qmd npm package version to pin (e.g. "2.1.0")
-    5: path to the Node binary (@nodejs_host//:node_bin)
-    6: path to the linked `@tobilu/qmd` package dir, used to locate the
-       root of the pnpm store it lives in
-    7: path to the embedding GGUF (//third-party/qmd_models:embeddinggemma)
+    4: path to the Node binary (@nodejs_host//:node_bin)
+    5: path to the `@tobilu/qmd` package dir
+    6: path to the embedding GGUF (//third-party/qmd_models:embeddinggemma)
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
 import tarfile
 from pathlib import Path
-
-
-def _stage_runtime(
-    work: Path, qmd_version: str, node_bin: Path, qmd_pkg_dir: Path
-) -> Path:
-    """Build a `DATALIB_RUNTIME_DIR` tree and return its root.
-
-    Layout is the one `datalib_core::node_runtime` resolves (and that
-    `datalib/tauri/stage-runtime.sh` produces for the packaged app):
-
-        runtime/node/bin/node
-        runtime/qmd/<version>/node_modules/@tobilu/qmd/dist/cli/qmd.js
-
-    Two symlinks, no copying. That works only because the package store
-    is already complete: better-sqlite3's native binding is baked into
-    the package by `npm.npm_replace_package` in MODULE.bazel, so nothing
-    here has to write into a read-only build output.
-    """
-    runtime = work / "runtime"
-
-    node_dir = runtime / "node" / "bin"
-    node_dir.mkdir(parents=True, exist_ok=True)
-    (node_dir / "node").symlink_to(node_bin.resolve())
-
-    # `$(execpath)` on the link target points INSIDE the pnpm virtual
-    # store (`<root>/node_modules/.aspect_rules_js/@tobilu+qmd@<v>/node_modules/@tobilu/qmd`),
-    # so cut at the FIRST `/node_modules/` to get the store root rather
-    # than qmd's own dependency directory.
-    store = Path(str(qmd_pkg_dir).split("/node_modules/")[0]) / "node_modules"
-    staged = runtime / "qmd" / qmd_version
-    staged.mkdir(parents=True, exist_ok=True)
-    (staged / "node_modules").symlink_to(store.resolve())
-
-    return runtime
 
 
 def _stage_models(work: Path, embed_model: Path) -> Path:
@@ -117,8 +75,8 @@ def _stage_models(work: Path, embed_model: Path) -> Path:
 
 
 def main() -> int:
-    indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
-    node_bin, qmd_pkg_dir, embed_model = (Path(p) for p in sys.argv[5:8])
+    build_bin, qmd_tar, out_tar = sys.argv[1:4]
+    node_bin, qmd_pkg_dir, embed_model = (Path(p) for p in sys.argv[4:7])
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
     out_tar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,35 +99,27 @@ def main() -> int:
             member.name = rel
             tf.extract(member, work)
 
-    env = os.environ.copy()
-    env["HOME"] = str(work)  # nothing should be reaching for a real home
-    # Point the indexer at the Bazel-staged Node + qmd tree. With this
-    # set, `qmd_command()` resolves via `bundled_command` and the
-    # `npx -y @tobilu/qmd@<v>` fallback is never reached — so the build
-    # no longer needs `npx` (or any host Node) on PATH.
-    env["DATALIB_RUNTIME_DIR"] = str(
-        _stage_runtime(work, qmd_version, node_bin, qmd_pkg_dir)
-    )
-
+    groups = sorted(p.name for p in work.iterdir() if (p / "render_markdown").is_dir())
     cmd = [
-        indexer,
-        "--root",
+        str(Path(build_bin).resolve()),
         str(work),
-        "--qmd-version",
-        qmd_version,
-        "--models-dir",
+        str(node_bin.resolve()),
+        str(qmd_pkg_dir.resolve()),
         str(models_dir),
+        *groups,
     ]
-    r = subprocess.run(cmd, env=env, check=False)
+    # HOME too: nothing should be reaching for a real one.
+    r = subprocess.run(
+        cmd, env={"PATH": "/usr/bin:/bin", "HOME": str(work)}, check=False
+    )
     if r.returncode != 0:
         return r.returncode
 
-    # The indexer pins XDG_CACHE_HOME at the `qmd_index` step's tree, so
-    # qmd writes its index under `<root>/unified_index/qmd_index/qmd/`
-    # (see runtime::qmd).
+    # The one index file, under the `qmd_index` step's tree (see
+    # runtime::qmd).
     produced = work / "unified_index" / "qmd_index" / "qmd" / "index.sqlite"
     if not produced.exists():
-        sys.stderr.write(f"qmd_indexer did not produce {produced}\n")
+        sys.stderr.write(f"build_qmd_index did not produce {produced}\n")
         return 1
 
     # Emit an overlay tar that layers onto qmd.tar: every entry is prefixed

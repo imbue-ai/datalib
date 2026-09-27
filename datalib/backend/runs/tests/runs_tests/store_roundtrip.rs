@@ -201,10 +201,6 @@ async fn the_newest_lines_come_first_and_pages_read_back_from_them() {
         let root = td.path().to_path_buf();
         async move {
             let q = LogQuery {
-                run: None,
-                process: None,
-                step: None,
-                attempt: None,
                 q: "",
                 cursor,
                 limit: 2,
@@ -238,11 +234,7 @@ async fn log_query_spans_runs_and_reads_terms() {
                 log_query(
                     &root,
                     &LogQuery {
-                        run: None,
-                        process: None,
-                        step: Some(step),
-                        attempt: None,
-                        q: "",
+                        q: &format!("step:{step}"),
                         cursor: LogCursor::After(after_seq),
                         limit,
                     },
@@ -276,11 +268,7 @@ async fn log_query_spans_runs_and_reads_terms() {
     let not_first = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: Some("a"),
-            attempt: None,
-            q: "-run:run-1 sec",
+            q: "step:a -run:run-1 sec",
             cursor: LogCursor::After(0),
             limit: 100,
         },
@@ -292,10 +280,6 @@ async fn log_query_spans_runs_and_reads_terms() {
     let refused = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "author:thad",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -705,10 +689,6 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -758,10 +738,6 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let servers_only = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -776,10 +752,6 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let loud = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "min_level:warn",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -796,10 +768,6 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let one_build = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "commit:f2068",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -847,10 +815,6 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
             cursor: LogCursor::After(0),
             limit: 100,
@@ -940,10 +904,6 @@ async fn process_lines_past_the_cap_go_oldest_first() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
             cursor: LogCursor::After(0),
             limit: 100,
