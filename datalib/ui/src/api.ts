@@ -901,6 +901,9 @@ export type ColumnSpec = {
   description?: string;
   default_visible: boolean;
   editable: boolean;
+  // How the producer's search bar filters on this column: the key a term
+  // starts with, and the row field holding the value it names.
+  search?: { key: string; field: string };
 };
 
 /// Something resolved before it was sent: the id the producer joins on,

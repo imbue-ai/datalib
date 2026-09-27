@@ -8,11 +8,25 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use datalib_columns::{source_catalog, ColumnSpec, ColumnType, Identity};
+use datalib_columns::{source_catalog, ColumnSearch, ColumnSpec, ColumnType, Identity};
 use datalib_unified_index::db::datalib_source_id;
 use datalib_unified_index::search::SearchRow;
+use datalib_unified_index::search_keys;
 
 pub fn columns() -> Vec<ColumnSpec> {
+    let mut columns = declared();
+    // The search bar is the grid's one filter: each column says which of
+    // its keys filters its cells.
+    for c in &mut columns {
+        c.search = search_keys::for_column(&c.field).map(|(key, field)| ColumnSearch {
+            key: key.into(),
+            field: field.into(),
+        });
+    }
+    columns
+}
+
+fn declared() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("score", "Score", ColumnType::Number).describe(
             "How well the row matched a free-text search. Not comparable across searches.",
@@ -178,6 +192,25 @@ impl Sources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The search bar is the grid's one filter: every column a person
+    /// might narrow by names its key, and a row field the grid can read
+    /// the term's value from.
+    #[test]
+    fn every_column_but_score_and_contents_says_how_to_search_it() {
+        let row = serde_json::to_value(SearchRow::default()).unwrap();
+        for c in columns() {
+            match (&c.search, c.field.as_str()) {
+                (None, "score" | "snippet") => {}
+                (None, field) => panic!("{field} has no search key"),
+                (Some(s), field) => assert!(
+                    row.get(&s.field).is_some(),
+                    "{field} searches by {}, which a row does not carry",
+                    s.field
+                ),
+            }
+        }
+    }
 
     fn row(provider: &str, source: &str, source_id: &str) -> SearchRow {
         SearchRow {

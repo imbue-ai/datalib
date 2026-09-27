@@ -10,4 +10,5 @@ pub mod qmd;
 pub mod query;
 pub mod repo;
 pub mod search;
+pub mod search_keys;
 pub mod sort;

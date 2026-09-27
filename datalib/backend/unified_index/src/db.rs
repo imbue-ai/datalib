@@ -32,34 +32,12 @@ pub struct ChatMeta {
     pub source_url: Option<String>,
 }
 
-/// Map a query [`Field`] to the underlying `grid_rows` column it
-/// constrains, or `None` for fields that aren't single-column equality
-/// filters (Before/After are range, Is sets `documents`, Subj/Other have
-/// no column yet).
-fn column_for_field(f: &Field) -> Option<&'static str> {
-    match f {
-        Field::Source => Some("source_label"),
-        // Derived at index time: the path's first segment, or `datalib`
-        // for a storage row (`GridRow::derived_source_id`).
-        Field::SourceId => Some("source_id"),
-        Field::Kind => Some("kind"),
-        Field::Channel => Some("channel"),
-        Field::Convo => Some("conversation_uuid"),
-        Field::Author => Some("author"),
-        Field::Account => Some("account"),
-        Field::Project => Some("project"),
-        Field::NotionPage => Some("notion_page_uuid"),
-        Field::Change => Some("diff_status"),
-        Field::Before | Field::After | Field::Is | Field::Subj | Field::Other(_) => None,
-    }
-}
+/// A term's value that stands for any value at all: `author:*`.
+pub const ANY_VALUE: &str = "*";
 
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
 /// parameter list for a parsed query's structured terms. Free text is not
 /// here: it goes to qmd.
-/// A term's value that stands for any value at all: `author:*`.
-pub const ANY_VALUE: &str = "*";
-
 pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -73,9 +51,12 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     for term in &q.terms {
-        let Some(col) = column_for_field(&term.field) else {
+        // Before/after are a range, below; `is:` sets `documents`; an
+        // unknown key is refused before a query gets here.
+        let Field::Column(key) = term.field else {
             continue;
         };
+        let col = key.column;
         // `author:*` is the rows with an author, `-author:*` the rows with
         // none; an empty value is none, as the grid shows it.
         if term.value == ANY_VALUE {
@@ -94,7 +75,7 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
         } else {
             clauses.push(format!("{col} = ?"));
         }
-        let bound = if term.field.is_uuid_bearing() {
+        let bound = if key.uuid {
             extract_uuid_suffix(&term.value).to_string()
         } else {
             term.value.clone()

@@ -280,11 +280,13 @@ Pick the surface that fits the question:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
   `field:value`, `-field:value`, quoted values, `field:*` for the rows
   with any value there and `-field:*` for the rows with none; fields
-  include `source:`, `source_id:` (`source_name:` is an accepted alias),
-  `kind:`, `channel:`, `author:`, `account:`,
-  `project:`, `before:`/`after:`, `convo:`, `is:document` for the one
-  row per rendered document and `-is:document` for the rows inside
-  them. It answers a page: `limit=` rows from `offset=`, with `total`
+  are `source:`, `source_id:` (`source_name:` is an accepted alias),
+  `kind:`, `channel:`, `author:`, `account:`, `project:`, `convo:`,
+  `notion_page:`, `change:`, and a grid column's id for the rest
+  (`org_name:`, `byte_size:`, `created_at:`, …); `before:`/`after:`;
+  `is:document` for the one row per rendered document and
+  `-is:document` for the rows inside them. A key the search does not
+  have is refused by name, in `errors`, rather than ignored. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

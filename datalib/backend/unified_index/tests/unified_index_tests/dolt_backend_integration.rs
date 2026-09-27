@@ -8,8 +8,9 @@ use datalib_schema::problems::{
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_index::dolt_repo::{listing_sql, DoltRepo};
-use datalib_unified_index::query::{parse_query, Field};
+use datalib_unified_index::query::parse_query;
 use datalib_unified_index::repo::IndexRepo;
+use datalib_unified_index::search_keys::SEARCH_KEYS;
 use datalib_unified_index::sort::Sort;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -583,36 +584,27 @@ async fn every_wire_field_survives_the_round_trip() {
     drop(repo);
 }
 
-/// The query that exercises a filter key, or `None` for a key no index
-/// can serve in newest-first order. Exhaustive, so a new key does not
-/// compile until it says which it is.
-fn query_for(field: &Field) -> Option<&'static str> {
-    match field {
-        Field::Source => Some("source:Claude"),
-        Field::SourceId => Some("source_id:slack"),
-        Field::Kind => Some("kind:Chat"),
-        Field::Channel => Some("channel:bridge"),
-        Field::Is => Some("is:document"),
-        Field::Convo => Some("convo:00000000-0000-8000-8000-000000000001"),
-        Field::Author => Some("author:picard"),
-        Field::Account => Some("account:acct-1701"),
-        Field::Project => Some("project:proj-1701"),
-        Field::NotionPage => Some("notion_page:00000000-0000-8000-8000-000000000002"),
-        Field::Change => Some("change:added"),
-        // Ranges on `created_at_utc`, which cannot share an index with a
-        // newest-first order: a `before:` far back walks the sort index.
-        Field::Before | Field::After => None,
-        // Not filters: free text goes to qmd, an unknown key matches nothing.
-        Field::Subj | Field::Other(_) => None,
-    }
-}
+/// The keys the search has no index for: each filters by walking the
+/// newest-first index and testing every row. Measured at full size
+/// (74,163 rows, 2026-09-27): 0.25 s for the whole listing, against 0.01
+/// s for an indexed key, which the result cache then pays once per
+/// search. Columns people rarely narrow by; one that turns out common
+/// earns an index, and leaves this list.
+const SCANS: &[&str] = &[
+    "created_at",
+    "modified_at",
+    "org_name",
+    "byte_size",
+    "item_count",
+    "diff_changed_columns",
+];
 
-/// A filter the search bar offers must be served by an index in the
-/// order the grid sorts by. Without one, a filter that matches few rows
-/// walks the whole newest-first index row by row: 38 s for one row among
-/// 74k (`docs/dev/plans/paged_grids.md`). Fails naming the query whose
-/// plan scans the table or sorts it in a temporary B-tree, and naming an
-/// index no query uses.
+/// A key the search bar offers must be served by an index in the order
+/// the grid sorts by, or be one of [`SCANS`]: a new key does not pass
+/// until someone decides which. Fails naming the query whose plan does
+/// neither, a key in `SCANS` that no longer scans, and an index no query
+/// uses. `before:`/`after:` are ranges on `created_at_utc`, which cannot
+/// share an index with a newest-first order.
 #[tokio::test]
 async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
@@ -621,31 +613,23 @@ async fn every_filter_key_is_served_by_an_index() {
     for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
         sqlx::query(*ddl).execute(&writer).await.expect("create");
     }
-    let every_field = [
-        Field::Before,
-        Field::After,
-        Field::Subj,
-        Field::Source,
-        Field::SourceId,
-        Field::Kind,
-        Field::Channel,
-        Field::Is,
-        Field::Convo,
-        Field::Author,
-        Field::Account,
-        Field::Project,
-        Field::NotionPage,
-        Field::Change,
-        Field::Other(String::new()),
-    ];
-    let queries = every_field
+    let key_queries: Vec<(String, bool)> = SEARCH_KEYS
         .iter()
-        .filter_map(query_for)
-        // The unfiltered grid, its inverse, and what a Browse card asks.
-        .chain(["", "-is:document", "source_id:slack is:document"]);
+        .map(|k| (format!("{}:x", k.key), SCANS.contains(&k.key)))
+        .collect();
+    let queries = key_queries
+        .iter()
+        .map(|(q, scans)| (q.as_str(), *scans))
+        // The unfiltered grid, `is:`, its inverse, and a Browse card.
+        .chain([
+            ("", false),
+            ("is:document", false),
+            ("-is:document", false),
+            ("source_id:slack is:document", false),
+        ]);
     let mut unserved: Vec<String> = Vec::new();
     let mut used: std::collections::BTreeSet<String> = Default::default();
-    for q in queries {
+    for (q, scans) in queries {
         let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
         let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
@@ -673,8 +657,13 @@ async fn every_filter_key_is_served_by_an_index() {
             })
         };
         let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
-        if !served || sorts {
-            unserved.push(format!("{q:?}: {plan:?}"));
+        if served == scans || sorts {
+            let why = if scans {
+                "listed in SCANS but served"
+            } else {
+                "not served"
+            };
+            unserved.push(format!("{q:?} ({why}): {plan:?}"));
         }
         for detail in &plan {
             if let Some(rest) = detail.split("INDEX ").nth(1) {
@@ -695,7 +684,7 @@ async fn every_filter_key_is_served_by_an_index() {
     );
     assert!(
         unserved.is_empty(),
-        "no index serves these in newest-first order:\n{}",
+        "these keys are not what the test expects of them:\n{}",
         unserved.join("\n")
     );
 }

@@ -3,7 +3,15 @@
 // column dropped on the search bar becomes a term there.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { gridSettled, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import {
+  actOnRowByUuid,
+  firstRowUuid,
+  gridSettled,
+  SEARCH_ROWS,
+  searchHeader,
+  searchMenuItem,
+  type GridApi,
+} from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
   const r = await request.get(`/applet/unified_index/search?${params}`);
@@ -63,4 +71,32 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   );
   await expect(page.locator(".datalib-toast", { hasText: "cannot filter by" })).toBeVisible();
   await expect(page.getByTestId("search-input")).toHaveValue("author:*");
+});
+
+/// Every column but Score and Contents has a search key, so a cell's
+/// right-click can keep only its value: here Created, which had none
+/// while the grid kept its own list of the columns that could.
+test("a cell's right-click keeps only its value, in any column", async ({ page }) => {
+  await openGrid(page);
+  const uuid = await firstRowUuid(page);
+  const created = await page.evaluate(
+    (u) =>
+      (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().find((r) => r.uuid === u)!
+        .created_at as string,
+    uuid,
+  );
+  await actOnRowByUuid(
+    page,
+    uuid,
+    (row) => row.locator('[col-id="created_at"]').click({ button: "right", timeout: 3_000 }),
+    "created_at",
+  );
+  await searchMenuItem(page, /Keep only Created=/).click();
+  await expect(page.getByTestId("search-input")).toHaveValue(`created_at:"${created}"`);
+  await gridSettled(page);
+  const held = await page.evaluate(() =>
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.created_at),
+  );
+  expect(held.length).toBeGreaterThan(0);
+  expect(new Set(held)).toEqual(new Set([created]));
 });

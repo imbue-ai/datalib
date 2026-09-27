@@ -460,40 +460,17 @@ const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
 const feedbackSurfaceLabel = ref("");
 
-// Filter context for a right-clicked cell. Null for non-filterable
-// columns (Time, Contents) or rows with no value in the clicked column.
+// Filter context for a right-clicked cell: the term its value makes in
+// the search bar. Null for a column the search has no key for (Score,
+// Contents) or a row with no value in it.
 type FilterCtx = {
-  // Query-language key (e.g. "source", "channel"); maps to a backend Field.
+  // The search bar's key for the column (`author`, `source_id`).
   key: string;
   // Human-facing column header for menu labels.
   header: string;
-  // Raw value to filter by: whatever the column stores, which for a
-  // uuidCol column is the sibling UUID rather than the cell's text.
+  // The value a term names: what the column's key compares, which for
+  // an id or a uuid behind a label is the id or uuid, not the cell's text.
   value: string;
-};
-
-// Map column id → query-language key + header. Keep in sync with
-// `column_for_field` in backend/unified_index/src/db.rs.
-//
-// `uuidCol` (when set) names a sibling row field carrying the load-bearing
-// UUID for this filter. The cell's display text becomes a non-load-bearing
-// slug; the emitted token is `slug-uuid` (Notion-shaped). Filter comparison
-// is on UUID only — the slug is decoration so URLs/tokens are self-describing.
-const FILTER_COLUMNS: Record<
-  string,
-  { key: string; header: string; uuidCol?: keyof SearchRow; field?: keyof SearchRow }
-> = {
-  source_ref: { key: "source_id", header: "Source", field: "source_id" },
-  kind: { key: "kind", header: "Type" },
-  channel: { key: "channel", header: "Channel" },
-  author: { key: "author", header: "Author", uuidCol: "author" },
-  account: { key: "account", header: "Account", uuidCol: "account" },
-  project: { key: "project", header: "Project", uuidCol: "project" },
-  conversation_name: {
-    key: "convo",
-    header: "Title",
-    uuidCol: "conversation_uuid",
-  },
 };
 
 function openFeedbackForSearchBar(ev: MouseEvent) {
@@ -537,32 +514,25 @@ async function copyIds(targets: SearchRow[], pick: (r: SearchRow) => string) {
   await copyToClipboard(text);
 }
 
-// Build a FilterCtx for the cell at `colId` on the given row, or null
-// when the column is non-filterable or has no value to filter by.
+// Build a FilterCtx for the cell at `colId` on the given row, from the
+// search key the applet declares for the column.
 function buildFilterCtx(colId: string, data: SearchRow): FilterCtx | null {
-  const meta = FILTER_COLUMNS[colId];
-  if (!meta) return null;
+  const spec = columns.value.find((c) => c.field === colId);
+  if (!spec?.search) return null;
   const row = data as Record<string, unknown>;
-  const cellRaw = row[(meta.field ?? colId) as string];
-  if (meta.uuidCol) {
-    const uuid = row[meta.uuidCol as string];
-    if (typeof uuid !== "string" || uuid.length === 0) return null;
-    let displayLabel = "";
-    if (colId === "author" || colId === "account") {
-      displayLabel = accounts.value[uuid]?.label ?? "";
-    } else if (colId === "conversation_name") {
-      displayLabel = typeof cellRaw === "string" ? cellRaw : "";
-    }
-    return {
-      key: meta.key,
-      header: meta.header,
-      value: formatSlugUuid(displayLabel, uuid),
-    };
-  }
-  if (typeof cellRaw === "string" && cellRaw.length > 0) {
-    return { key: meta.key, header: meta.header, value: cellRaw };
-  }
-  return null;
+  const raw = row[spec.search.field];
+  if (raw == null || raw === "") return null;
+  const value = String(raw);
+  // A uuid rides with the name a person reads, as `slug-uuid`: an
+  // account's from the accounts map, a conversation's from its own cell.
+  const shown = row[colId];
+  const label =
+    colId === "author" || colId === "account"
+      ? (accounts.value[value]?.label ?? "")
+      : spec.search.field !== colId && typeof shown === "string"
+        ? shown
+        : "";
+  return { key: spec.search.key, header: spec.header, value: formatSlugUuid(label, value) };
 }
 
 function accountLabel(uuid: string): string {
@@ -1299,7 +1269,11 @@ const linkOf = (r: SearchRow): string => r.source_url || "";
 
 function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const anchor = args.row != null ? rowData(args.row) : null;
-  const colId = String((args.column as Column | undefined)?.id ?? "");
+  // `onBeforeMenuShow`, where the scope is worked out, is handed the
+  // cell's coordinates and nothing else; the item callbacks get the
+  // column as well.
+  const column = (args.column ?? args.grid.getColumns()[args.cell ?? -1]) as Column | undefined;
+  const colId = String(column?.id ?? "");
   const el =
     args.row != null && args.cell != null
       ? (args.grid.getCellNode(args.row, args.cell) ?? null)
@@ -1675,13 +1649,13 @@ type SortableClass = { create(el: HTMLElement, options: object): Sortable };
 let searchDrop: Sortable | null = null;
 
 function dropOnSearch(colId: string) {
-  const meta = FILTER_COLUMNS[colId];
-  if (!meta) {
+  const key = columns.value.find((c) => c.field === colId)?.search?.key;
+  if (!key) {
     const name = gridColumns.value.find((c) => c.id === colId)?.name ?? colId;
     pushToast(`The search cannot filter by ${name}.`, "info");
     return;
   }
-  appendFilterToQuery(`${meta.key}:*`);
+  appendFilterToQuery(`${key}:*`);
 }
 
 function installSearchDrop() {
