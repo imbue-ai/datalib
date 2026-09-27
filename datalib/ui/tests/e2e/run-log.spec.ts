@@ -287,7 +287,10 @@ test("a line's source links to its file and line at the server's commit", async 
 test("a selected line opens in full beside the log, and can narrow it", async ({ page }) => {
   const dialog = await openServerLog(page);
   await scrollLogToStart(dialog);
-  const first = dialog.locator(ROWS).first();
+  // By row, not by the first element: the grid adds a row's element when
+  // it first scrolls in, so the page's order is not the grid's.
+  const row = (n: number) => dialog.locator(`${ROWS}[data-row="${n}"]`);
+  const first = row(0);
   const msg = (await first.locator('.slick-cell[col-id="msg"]').textContent())?.trim() ?? "";
   await first.locator('.slick-cell[col-id="msg"]').click();
 
@@ -312,11 +315,9 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
   await expect(dialog.locator(".rl-search")).toHaveValue("min_level:info thread:main");
 
   // The arrow key moves the selection, and the inspector follows.
-  await dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]').click();
+  await row(0).locator('.slick-cell[col-id="msg"]').click();
   await page.keyboard.press("ArrowDown");
-  const second = (
-    await dialog.locator(ROWS).nth(1).locator('.slick-cell[col-id="msg"]').textContent()
-  )?.trim();
+  const second = (await row(1).locator('.slick-cell[col-id="msg"]').textContent())?.trim();
   await expect(inspector.locator(".ll-msg")).toHaveText(second ?? "");
 });
 
