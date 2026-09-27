@@ -60,14 +60,14 @@ export function newestFirst<Row, C>(
 
 /// The page to ask for so that every row up to index `through` is held,
 /// or null when they are, when there are no more, or when a page is
-/// already on its way. `Infinity` asks for the rest of the list.
+/// already on its way.
 export function nextFetch<Row, C>(
   w: PagedWindow<Row, C>,
   through: number,
   pageSize = PAGE,
 ): Fetch<C> | null {
   if (w.pending !== null || w.next === null || through < w.rows.length) return null;
-  const wanted = through === Infinity ? MAX_LIMIT : through + 1 - w.rows.length;
+  const wanted = through + 1 - w.rows.length;
   return { from: w.next, limit: Math.min(MAX_LIMIT, Math.max(pageSize, wanted)) };
 }
 

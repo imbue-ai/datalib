@@ -29,7 +29,7 @@ import type {
   SlickDraggableGrouping,
   SlickEventData,
 } from "@slickgrid-universal/common";
-import { FILTER_GRID_OPTIONS, typedColumns, groupTitle } from "./typedColumns";
+import { typedColumns, groupTitle } from "./typedColumns";
 import {
   type AccountsMap,
   type ColumnSpec,
@@ -58,7 +58,6 @@ import {
   asking,
   firstWindow,
   MARGIN,
-  MAX_LIMIT,
   nextFetch,
   PAGE,
   refreshLimit,
@@ -78,6 +77,7 @@ import {
   type ServerGroup,
 } from "@/grid/serverGroups";
 import { searchFailure, type SearchFailure } from "./searchFailure";
+import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
 const { fetchAccounts, fetchGroups, fetchQmdState, fetchSearch } = useApi();
@@ -418,8 +418,8 @@ function currentSort(): string | null {
   const sorters: CurrentSorter[] = vueGrid
     ? vueGrid.sortService.getCurrentLocalSorters()
     : (layout?.sort ?? []).map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" }));
-  const first = sorters[0];
-  return first ? `${first.columnId}:${String(first.direction).toLowerCase()}` : null;
+  if (sorters.length === 0) return null;
+  return sorters.map((s) => `${s.columnId}:${String(s.direction).toLowerCase()}`).join(",");
 }
 
 function rowKey(row: SearchRow): string {
@@ -589,8 +589,7 @@ let seekingSelection = sel.value !== null;
 /// While the grid is grouped, the search as the server groups it: every
 /// group with its true count, and each group's rows a window of their own,
 /// read as the group is opened and scrolled (grid/serverGroups.ts). Null
-/// while nothing is grouped, and while a header filter is on: that works
-/// over every row, so the grid holds them all and groups them itself.
+/// while nothing is grouped.
 let grouped: {
   q: string;
   sort: string | null;
@@ -603,10 +602,6 @@ let grouped: {
 /// The columns dragged into the grouping bar, outermost first.
 function groupedBy(): string[] {
   return groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
-}
-
-function filtered(): boolean {
-  return !!vueGrid && Object.keys(vueGrid.filterService.getColumnFilters()).length > 0;
 }
 
 /// A group's rows as `/search` narrows to them.
@@ -631,23 +626,17 @@ function searchPage(r: SearchResponse): Page<SearchRow, number> {
   return { rows: r.rows, next: r.next_offset, total: r.total, at: r.at };
 }
 
-/// The header filters work over every row the grid holds, so while one is
-/// on the grid holds every row.
-function wantsEverything(): boolean {
-  return filtered();
-}
-
 /// Ask for the first page of `q`, or, for a refresh of the search on
 /// screen, for every row through the last one held, so nobody scrolled
 /// along the list loses their place.
 async function runSearch(q: string, refresh = false) {
-  if (groupedBy().length > 0 && !filtered()) return runGrouped(q, refresh);
+  if (groupedBy().length > 0) return runGrouped(q, refresh);
   grouped = null;
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
   const sort = currentSort();
   const again = refresh && win !== null && shown?.q === q && shown.sort === sort;
-  const limit = wantsEverything() ? MAX_LIMIT : again ? refreshLimit(win!) : PAGE;
+  const limit = again ? refreshLimit(win!) : PAGE;
   const through = again
     ? win!.rows[win!.rows.length - 1]?.uuid
     : seekingSelection
@@ -719,19 +708,15 @@ async function loadThrough(through: number, uuid: string | null = null) {
   if (loadingMore === load) loadingMore = null;
 }
 
-/// Load whatever the grid needs now: the rest of the search while it is
-/// grouped or filtered, else the rows the viewport is nearing, and a
-/// restored selection that has not turned up.
+/// Load whatever the grid needs now: the rows of the groups on screen,
+/// else the rows the viewport is nearing, and a restored selection that
+/// has not turned up.
 function loadWanted() {
   if (grouped) {
     loadGroupsInView();
     return;
   }
   if (!vueGrid || !win) return;
-  if (wantsEverything()) {
-    void loadThrough(Infinity);
-    return;
-  }
   const { top, bottom } = vueGrid.slickGrid.getViewport();
   // Shown the other way up, the search's far end is the grid's top.
   const nearing = shown?.tail ? win.rows.length - 1 - top : bottom;
@@ -1243,7 +1228,6 @@ watch(
       rows: () => rows.value,
       overrides: columnOverrides,
       groupable: true,
-      filterable: true,
     });
     const at = typed.findIndex((c) => c.id === "project") + 1;
     gridColumns.value = [...typed.slice(0, at), ...extraColumns, ...typed.slice(at)].map((c) => ({
@@ -1523,16 +1507,10 @@ function gridOptions(): GridOption {
     enableSelection: true,
     multiSelect: true,
     selectionOptions: { selectActiveRow: true },
-    // Per-column filters in a row under the header; the query bar is
-    // the one the server answers, these narrow what it returned.
-    enableFiltering: true,
-    ...FILTER_GRID_OPTIONS,
-    showHeaderRow: true,
-    headerRowHeight: 28,
-    defaultFilterPlaceholder: "",
-    filterTypingDebounce: 250,
+    // The server sorts: a shift-click adds a column, numbered by how it
+    // ranks, and each breaks the ties of the one before.
     enableSorting: true,
-    multiColumnSort: false,
+    multiColumnSort: true,
     enableColumnReorder: true,
     enableHeaderMenu: true,
     enableGridMenu: true,
@@ -1650,6 +1628,8 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     // Load pages until the row is held, as scrolling to it would.
     seek,
+    // What a header dropped on the search bar does, without the mouse.
+    dropOnSearch,
     // A search, a page, or a group's page on its way.
     busy: () =>
       loading.value ||
@@ -1657,8 +1637,6 @@ function createGrid() {
       [...(grouped?.windows.values() ?? [])].some((w) => w.pending !== null),
     uuidAt: (row: number) => (bundle.dataView.getItem(row) as SearchRow | undefined)?.uuid ?? null,
     rows: () => (bundle.dataView.getItems() as SearchRow[]).filter((r) => !(MORE in r)),
-    filteredRows: () =>
-      (bundle.dataView.getFilteredItems() as SearchRow[]).filter((r) => !(MORE in r)),
     scrollToRow: (row: number) => grid.scrollRowIntoView(row),
     scrollToColumn: (id: string) => {
       const idx = grid.getColumnIndex(id);
@@ -1685,6 +1663,46 @@ function createGrid() {
   // The rows are already loaded by the time the grid exists — the
   // columns arrive with the first results.
   showNew();
+  installSearchDrop();
+}
+
+/// The search bar takes a column dragged from the headers, the way the
+/// grouping bar does, and adds a term keeping the rows with a value in
+/// it: `author:*`, which a person can then narrow to a value.
+const searchWrapEl = ref<HTMLDivElement | null>(null);
+type Sortable = { destroy(): void };
+type SortableClass = { create(el: HTMLElement, options: object): Sortable };
+let searchDrop: Sortable | null = null;
+
+function dropOnSearch(colId: string) {
+  const meta = FILTER_COLUMNS[colId];
+  if (!meta) {
+    const name = gridColumns.value.find((c) => c.id === colId)?.name ?? colId;
+    pushToast(`The search cannot filter by ${name}.`, "info");
+    return;
+  }
+  appendFilterToQuery(`${meta.key}:*`);
+}
+
+function installSearchDrop() {
+  const el = searchWrapEl.value;
+  const bar = groupingPlugin?.droppableInstance;
+  if (!el || !bar || !vueGrid) return;
+  // The Sortable the grouping bar is: a header's drag is offered to every
+  // list in its `shared` group, and the search bar joins it.
+  const Sortable = bar.constructor as unknown as SortableClass;
+  const uid = vueGrid.slickGrid.getUID();
+  searchDrop = Sortable.create(el, {
+    group: "shared",
+    // Nothing of its own to drag.
+    draggable: ".search-drop-none",
+    onAdd: (evt: { item: HTMLElement }) => {
+      const id = evt.item.getAttribute("id") ?? "";
+      evt.item.remove();
+      // Another grid's header, dropped here, is not a column of this one.
+      if (id.startsWith(uid)) dropOnSearch(id.slice(uid.length));
+    },
+  });
 }
 
 /// The records selected as of the last change the grid reported.
@@ -1735,12 +1753,6 @@ function onGridStateChanged(change: GridStateChange) {
   updateCols();
   const type = change.change?.type;
   if (type === "sorter") void runSearch(query.value);
-  // A filter set or cleared while grouped moves the grouping between the
-  // server and the grid.
-  if (type === "filter") {
-    if (groupedBy().length > 0) void runSearch(query.value);
-    else loadWanted();
-  }
   if (type === "columns") onColumnsShown();
 }
 
@@ -1762,6 +1774,8 @@ onMounted(() => {
   });
 });
 onBeforeUnmount(() => {
+  searchDrop?.destroy();
+  searchDrop = null;
   themeWatch?.disconnect();
   themeWatch = null;
   vueGrid?.dispose();
@@ -1771,7 +1785,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="cardEl" class="grid-column">
-    <div class="search-input-wrap">
+    <div ref="searchWrapEl" class="search-input-wrap">
       <input
         v-model="query"
         placeholder="search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)"
@@ -2012,5 +2026,13 @@ onBeforeUnmount(() => {
      clean, only the visible truncation cuts mid-word. */
   word-break: normal;
   overflow-wrap: break-word;
+}
+/* A header dragged over the search bar is put in it for the length of the
+   drag; it is not shown there, and the bar lights up instead. */
+.search-input-wrap > .slick-header-column {
+  display: none;
+}
+.search-input-wrap:has(> .slick-header-column) .search-input {
+  outline: 2px solid var(--datalib-accent, #4a8bff);
 }
 </style>

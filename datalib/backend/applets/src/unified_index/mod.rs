@@ -223,7 +223,7 @@ pub struct SearchParams {
 
 /// Which part of a search one request asks for.
 struct PageSpec<'a> {
-    sort: Option<Sort>,
+    sort: &'a [Sort],
     within: &'a [Within],
     offset: usize,
     limit: usize,
@@ -310,15 +310,13 @@ async fn search_handler(
     let parsed = parse_query(&q);
     let limit = p.limit.unwrap_or(200).min(results::MAX_PAGE);
     let mut errors: Vec<String> = Vec::new();
-    let sort = p.sort.as_deref().and_then(|spelled| {
-        let sort = Sort::parse(spelled);
-        if sort.is_none() {
-            errors.push(format!(
-                "unknown sort {spelled:?}; showing the default order"
-            ));
+    let sort = match p.sort.as_deref().map(Sort::parse_order).transpose() {
+        Ok(sort) => sort.unwrap_or_default(),
+        Err(e) => {
+            errors.push(format!("{e}; showing the default order"));
+            Vec::new()
         }
-        sort
-    });
+    };
     // Structured terms alone are a SQL filter; free text is qmd's, with the
     // structured terms applied to its hits. A qmd failure is the answer —
     // `query_echo.qmd_error`, no rows — not a quieter search in its place.
@@ -333,7 +331,7 @@ async fn search_handler(
         }
     };
     let spec = PageSpec {
-        sort,
+        sort: &sort,
         within: &within,
         offset,
         limit,
@@ -534,12 +532,12 @@ async fn search_results(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
-    sort: Option<Sort>,
+    sort: &[Sort],
     within: &[Within],
 ) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
-        sort,
+        sort: sort.to_vec(),
         within: within.to_vec(),
         at: s.repo.head().await.map_err(index)?,
     };
@@ -560,7 +558,7 @@ async fn search_results(
         (list, listing.at)
     } else {
         let (ranked, ranked_at) = ranked(s, q, parsed, key.at.clone()).await?;
-        if sort.is_none() && within.is_empty() {
+        if sort.is_empty() && within.is_empty() {
             return Ok((ranked, ranked_at));
         }
         let uuids: Vec<String> = ranked.iter().map(|e| e.uuid.clone()).collect();
@@ -605,7 +603,7 @@ async fn ranked(
 ) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
-        sort: None,
+        sort: Vec::new(),
         within: Vec::new(),
         at,
     };
@@ -618,7 +616,7 @@ async fn ranked(
     let uuids: Vec<String> = ranking.iter().map(|(uuid, _)| uuid.clone()).collect();
     let listing = s
         .repo
-        .filter_uuids(parsed, &uuids, None, &[])
+        .filter_uuids(parsed, &uuids, &[], &[])
         .await
         .map_err(index)?;
     let mut hit_of: std::collections::HashMap<String, (f64, String)> =
@@ -708,7 +706,7 @@ async fn qmd_rows(
     let ranking = qmd_ranking(root, repo, daemon, parsed, depth).await?;
     let uuids: Vec<String> = ranking.into_iter().map(|(uuid, _)| uuid).collect();
     let listing = repo
-        .filter_uuids(parsed, &uuids, None, &[])
+        .filter_uuids(parsed, &uuids, &[], &[])
         .await
         .map_err(|e| anyhow::anyhow!("filter the qmd hits: {e}"))?;
     repo.rows_by_uuids(&listing.uuids)
@@ -1148,7 +1146,7 @@ mod tests {
             .expect("a committed index answers with its commit");
         let key = results::Key {
             q: String::new(),
-            sort: None,
+            sort: Vec::new(),
             within: Vec::new(),
             at: Some(at.clone()),
         };
@@ -1348,6 +1346,40 @@ mod tests {
         let garbled = search_within(&s, "", "kind:Log", 10).await;
         assert!(garbled.rows.is_empty());
         assert_eq!(garbled.errors.len(), 1, "{:?}", garbled.errors);
+    }
+
+    /// Each column of a sort breaks the ties of the one before; a sort
+    /// that puts score beside a column is refused, and the default order
+    /// shown.
+    #[tokio::test]
+    async fn a_sort_of_several_columns_breaks_ties_in_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        crew(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+
+        let r = search(&s, "", None, 10, Some("kind:desc,created_at:asc")).await;
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(uuids(&r), ["note-1", "note-2", "log-1", "log-2", "log-3"]);
+
+        let refused = search(&s, "", None, 10, Some("kind,score")).await;
+        assert_eq!(refused.errors.len(), 1, "{:?}", refused.errors);
+        assert_eq!(
+            uuids(&refused),
+            ["note-2", "note-1", "log-3", "log-2", "log-1"]
+        );
+    }
+
+    /// `author:*` is the rows with an author, `-author:*` the ones without.
+    #[tokio::test]
+    async fn a_star_keeps_the_rows_with_a_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        crew(tmp.path()).await;
+        let s = index_over(tmp.path()).await;
+
+        let signed = search(&s, "author:*", None, 10, None).await;
+        assert_eq!(uuids(&signed), ["note-2", "log-3", "log-2", "log-1"]);
+        let unsigned = search(&s, "-author:*", None, 10, None).await;
+        assert_eq!(uuids(&unsigned), ["note-1"]);
     }
 
     /// A sort the grid names reorders the whole search, not the page; one

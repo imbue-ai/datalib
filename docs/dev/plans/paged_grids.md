@@ -202,9 +202,7 @@ placeholder row built from the group's sample, so every grouping column
 files it under the right group. A placeholder on screen reads the
 group's next page, through a `pagedWindow` of its own; a folded group
 hides its placeholder and reads nothing. Group titles take the server's
-count. A header filter still works over every row, so while one is on
-the grid loads the whole search and groups it itself. The log card
-still groups the lines it holds.
+count. The log card still groups the lines it holds.
 
 **The indexes live on `main`, and the writer pays for them.** Keeping
 them only on the read branch, so the writer never pays, looked better
@@ -384,9 +382,9 @@ with each, and what is left:
 
 | in the browser | now |
 |---|---|
-| sort by any column header | on the server: a header click asks again with `sort=`, and every column's comparer keeps the order the server sent |
+| sort by any column header | on the server: a header click asks again with `sort=`, a shift-click adds a column (`sort=kind,created_at:desc`), and every column's comparer keeps the order the server sent. Score, qmd's rank, sorts alone |
 | drag a column to group, with counts | on the server: every group with its true count, and each group's rows read as it is opened and scrolled (step 5) |
-| the header filter row (per-column text boxes) | the same: while one is set, the grid loads the whole search. Turning them into query tokens is left, and needs their operators mapped onto the search bar's |
+| the header filter row (per-column text boxes) | gone: the search bar is the one filter. A cell's right-click keeps or excludes its value there, and a column header dropped on it adds `key:*`, the rows with any value in that column |
 | adaptive column hiding | computed from the first page |
 | restore the selected row from the URL | the first request asks `through=` the selected row, so the page reaches it |
 | refetch everything on `index_changed` and diff | read the search again `through=` the last row held, and patch that in place |

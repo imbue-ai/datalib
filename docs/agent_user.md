@@ -278,15 +278,22 @@ Pick the surface that fits the question:
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_index/search?q=…` (Gmail-flavored query language:
-  `field:value`, `-field:value`, quoted values; fields include
-  `source:`, `source_id:` (`source_name:` is an accepted alias),
+  `field:value`, `-field:value`, quoted values, `field:*` for the rows
+  with any value there and `-field:*` for the rows with none; fields
+  include `source:`, `source_id:` (`source_name:` is an accepted alias),
   `kind:`, `channel:`, `author:`, `account:`,
   `project:`, `before:`/`after:`, `convo:`, `is:document` for the one
   row per rendered document and `-is:document` for the rows inside
-  them), `GET /api/log?q=…` (the
+  them. It answers a page: `limit=` rows from `offset=`, with `total`
+  and the `next_offset`; `sort=created_at:desc,author` orders by grid
+  columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
+  counts the groups, and `within=[["kind","Chat"]]` on `search` lists
+  one group), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `step:`,
   `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
-  substring of the line; `run=`/`step=` narrow it, `after_seq=` tails),
+  substring of the line; `run=`/`step=` narrow it; the newest `limit=`
+  lines, oldest first, with `before_seq=` paging back and `after_seq=`
+  tailing),
   `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,
   `GET /applet/unified_index/asset/{uuid}/{path}`, `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.

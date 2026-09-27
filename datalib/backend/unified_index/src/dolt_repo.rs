@@ -16,7 +16,7 @@ use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, MapDocRow};
 use crate::search::SearchRow;
-use crate::sort::{Sort, DEFAULT_ORDER};
+use crate::sort::{order_by, Sort, DEFAULT_ORDER};
 use datalib_core::repo::RepoError;
 use datalib_pin::{is_missing_table, open_reader};
 use datalib_schema::edges::EdgeRow;
@@ -86,15 +86,9 @@ const SEARCH_ROW_COLUMNS: &str =
      upstream_entity_kind, source_id, byte_size, item_count, diff_status, diff_changed_columns";
 
 /// What `ordered_uuids` runs, with its parameters.
-pub fn listing_sql(
-    q: &ParsedQuery,
-    sort: Option<Sort>,
-    within: &[Within],
-) -> (String, Vec<String>) {
+pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
     let (where_sql, params) = where_within(q, within);
-    let order = sort
-        .and_then(Sort::order_by)
-        .unwrap_or_else(|| DEFAULT_ORDER.to_string());
+    let order = order_by(sort).unwrap_or_else(|| DEFAULT_ORDER.to_string());
     (
         format!("SELECT uuid FROM grid_rows{where_sql} ORDER BY {order}"),
         params,
@@ -276,7 +270,7 @@ impl IndexRepo for DoltRepo {
     async fn ordered_uuids(
         &self,
         q: &ParsedQuery,
-        sort: Option<Sort>,
+        sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError> {
         let (sql, params) = listing_sql(q, sort, within);
@@ -313,14 +307,14 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
         uuids: &[String],
-        sort: Option<Sort>,
+        sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
         let (where_sql, params) = where_within(q, within);
-        let order = sort.and_then(Sort::order_by);
+        let order = order_by(sort);
         // One statement: qmd hands over at most its ranking depth of hits,
         // far under SQLite's bound-variable limit.
         let placeholders = vec!["?"; uuids.len()].join(",");
@@ -355,9 +349,9 @@ impl IndexRepo for DoltRepo {
                     .filter(|u| kept.contains(*u))
                     .cloned()
                     .collect();
-                // A score sort is the ranking itself; ascending reads it
-                // from the bottom.
-                if sort.is_some_and(|s| !s.descending) {
+                // A score sort, which sorts alone, is the ranking itself;
+                // ascending reads it from the bottom.
+                if sort.first().is_some_and(|s| !s.descending) {
                     ranked.reverse();
                 }
                 ranked

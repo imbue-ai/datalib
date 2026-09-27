@@ -91,6 +91,10 @@ fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
         .expect("a valid chat row")
 }
 
+fn order(spelled: &str) -> Vec<Sort> {
+    Sort::parse_order(spelled).unwrap()
+}
+
 fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-dolt-itest-")
         .expect("create tempdir")
@@ -115,7 +119,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
     let listing = repo
-        .filter_uuids(&parse_query(""), &["c-1".into()], None, &[])
+        .filter_uuids(&parse_query(""), &["c-1".into()], &[], &[])
         .await
         .unwrap();
     assert!(
@@ -285,7 +289,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         .expect("a committed index has a head");
 
     let newest_first = repo
-        .ordered_uuids(&parse_query(""), None, &[])
+        .ordered_uuids(&parse_query(""), &[], &[])
         .await
         .unwrap();
     assert_eq!(newest_first.uuids, ["c-new", "v-1", "c-mid", "c-old"]);
@@ -293,7 +297,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
 
     let enterprise = parse_query("source_id:enterprise");
     let oldest_first = repo
-        .ordered_uuids(&enterprise, Sort::parse("created_at:asc"), &[])
+        .ordered_uuids(&enterprise, &order("created_at:asc"), &[])
         .await
         .unwrap();
     assert_eq!(oldest_first.uuids, ["c-old", "c-mid", "c-new"]);
@@ -304,18 +308,19 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         .map(String::from)
         .into();
     let in_rank_order = repo
-        .filter_uuids(&enterprise, &ranked, None, &[])
+        .filter_uuids(&enterprise, &ranked, &[], &[])
         .await
         .unwrap();
     assert_eq!(in_rank_order.uuids, ["c-mid", "c-old", "c-new"]);
-    let by_score = |s| repo.filter_uuids(&enterprise, &ranked, Sort::parse(s), &[]);
-    assert_eq!(by_score("score:desc").await.unwrap(), in_rank_order);
+    let (desc, asc) = (order("score:desc"), order("score:asc"));
+    let by_score = |o| repo.filter_uuids(&enterprise, &ranked, o, &[]);
+    assert_eq!(by_score(&desc).await.unwrap(), in_rank_order);
     assert_eq!(
-        by_score("score:asc").await.unwrap().uuids,
+        by_score(&asc).await.unwrap().uuids,
         ["c-new", "c-old", "c-mid"]
     );
     let resorted = repo
-        .filter_uuids(&enterprise, &ranked, Sort::parse("created_at:desc"), &[])
+        .filter_uuids(&enterprise, &ranked, &order("created_at:desc"), &[])
         .await
         .unwrap();
     assert_eq!(resorted.uuids, ["c-new", "c-mid", "c-old"]);
@@ -641,7 +646,7 @@ async fn every_filter_key_is_served_by_an_index() {
     let mut unserved: Vec<String> = Vec::new();
     let mut used: std::collections::BTreeSet<String> = Default::default();
     for q in queries {
-        let (sql, params) = listing_sql(&parse_query(q), None, &[]);
+        let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
         let mut query = sqlx::query(sqlx::AssertSqlSafe(explain));
         for p in &params {

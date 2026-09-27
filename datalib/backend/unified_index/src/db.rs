@@ -57,6 +57,9 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
 /// parameter list for a parsed query's structured terms. Free text is not
 /// here: it goes to qmd.
+/// A term's value that stands for any value at all: `author:*`.
+pub const ANY_VALUE: &str = "*";
+
 pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -73,6 +76,16 @@ pub fn build_where(q: &ParsedQuery) -> (String, Vec<String>) {
         let Some(col) = column_for_field(&term.field) else {
             continue;
         };
+        // `author:*` is the rows with an author, `-author:*` the rows with
+        // none; an empty value is none, as the grid shows it.
+        if term.value == ANY_VALUE {
+            clauses.push(if term.negate {
+                format!("({col} IS NULL OR {col} = '')")
+            } else {
+                format!("({col} IS NOT NULL AND {col} != '')")
+            });
+            continue;
+        }
         if term.negate {
             // Nullable columns: NULL would pass `col != ?` as unknown
             // and be dropped, which surprises users who didn't ask to
@@ -141,6 +154,18 @@ mod tests {
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"));
         assert_eq!(sql, " WHERE is_document = 0");
+    }
+
+    /// `author:*` keeps the rows with an author and `-author:*` the rows
+    /// with none, an empty one included; nothing is bound.
+    #[test]
+    fn a_star_is_any_value_and_its_negation_none() {
+        let (sql, params) = build_where(&parse_query("author:* -channel:*"));
+        assert_eq!(
+            sql,
+            " WHERE (author IS NOT NULL AND author != '') AND (channel IS NULL OR channel = '')"
+        );
+        assert!(params.is_empty(), "{params:?}");
     }
 
     #[test]

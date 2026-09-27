@@ -15,7 +15,7 @@ const CAPACITY: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Key {
     pub q: String,
-    pub sort: Option<Sort>,
+    pub sort: Vec<Sort>,
     /// The group whose rows these are; empty for the whole search.
     pub within: Vec<Within>,
     /// The commit the list was read at, `None` before the index has one.
@@ -91,7 +91,7 @@ mod tests {
     fn key(q: &str, at: &str) -> Key {
         Key {
             q: q.into(),
-            sort: None,
+            sort: Vec::new(),
             within: Vec::new(),
             at: Some(at.into()),
         }

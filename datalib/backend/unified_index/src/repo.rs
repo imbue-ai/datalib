@@ -37,7 +37,7 @@ pub trait IndexRepo: Send + Sync {
     async fn ordered_uuids(
         &self,
         query: &ParsedQuery,
-        sort: Option<Sort>,
+        sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError>;
 
@@ -48,7 +48,7 @@ pub trait IndexRepo: Send + Sync {
         &self,
         query: &ParsedQuery,
         uuids: &[String],
-        sort: Option<Sort>,
+        sort: &[Sort],
         within: &[Within],
     ) -> Result<Listing, RepoError>;
 
@@ -69,7 +69,7 @@ pub trait IndexRepo: Send + Sync {
     /// The first `limit` rows `query`'s structured terms match, newest
     /// first.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
-        let listing = self.ordered_uuids(query, None, &[]).await?;
+        let listing = self.ordered_uuids(query, &[], &[]).await?;
         let page = &listing.uuids[..limit.min(listing.uuids.len())];
         self.rows_by_uuids(page).await
     }

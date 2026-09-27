@@ -28,11 +28,12 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
+  /// What a header dropped on the search bar does.
+  dropOnSearch: (colId: string) => void;
   /// A search, a page, or a group's page on its way.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
-  filteredRows: () => Record<string, unknown>[];
   scrollToRow: (row: number) => void;
   scrollToColumn: (id: string) => void;
   isSelected: (uuid: string) => boolean;

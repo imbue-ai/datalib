@@ -1,6 +1,7 @@
-//! The order a search's rows come in when the grid asks for one: one of
-//! its columns, ascending or descending. With none, rows come newest first
-//! (`touched_at`), or in qmd's rank for free text.
+//! The order a search's rows come in when the grid asks for one: its
+//! columns, most significant first, each ascending or descending. With
+//! none, rows come newest first (`touched_at`), or in qmd's rank for free
+//! text.
 
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -88,15 +89,39 @@ impl Sort {
         })
     }
 
-    /// The `ORDER BY` this sort means, with `uuid` breaking ties so the
-    /// order is total, or `None` for one no column holds.
-    pub fn order_by(self) -> Option<String> {
-        let direction = if self.descending { "DESC" } else { "ASC" };
-        Some(format!(
-            "{} {direction}, uuid {direction}",
-            self.column.sql()?
-        ))
+    /// `created_at:desc,author` — each column in turn breaking the ties
+    /// of the one before. Score is qmd's rank, which no column holds, so
+    /// it sorts alone.
+    pub fn parse_order(s: &str) -> Result<Vec<Sort>, String> {
+        let order: Vec<Sort> = s
+            .split(',')
+            .map(|one| Sort::parse(one).ok_or_else(|| format!("unknown sort {one:?}")))
+            .collect::<Result<_, _>>()?;
+        if order.len() > 1 && order.iter().any(|s| s.column == GridColumn::Score) {
+            return Err("score sorts alone: it is qmd's rank, not a column".to_string());
+        }
+        Ok(order)
     }
+
+    fn direction(self) -> &'static str {
+        if self.descending {
+            "DESC"
+        } else {
+            "ASC"
+        }
+    }
+}
+
+/// The `ORDER BY` an order means, with `uuid` breaking the last ties so
+/// the order is total, or `None` for none, or for qmd's rank, which no
+/// column holds.
+pub fn order_by(order: &[Sort]) -> Option<String> {
+    let first = order.first()?;
+    let keys: Vec<String> = order
+        .iter()
+        .map(|s| Some(format!("{} {}", s.column.sql()?, s.direction())))
+        .collect::<Option<_>>()?;
+    Some(format!("{}, uuid {}", keys.join(", "), first.direction()))
 }
 
 /// The grid's own order: newest first, a document ahead of its rows at the
@@ -139,12 +164,29 @@ mod tests {
         assert_eq!(Sort::parse("kind").map(|s| s.descending), Some(false));
         assert_eq!(Sort::parse("kind:sideways"), None);
         assert_eq!(Sort::parse("no_such_column"), None);
+    }
+
+    /// Each column breaks the ties of the one before, and `uuid` the last.
+    #[test]
+    fn an_order_reads_most_significant_first() {
+        let order = Sort::parse_order("author:desc,created_at").unwrap();
         assert_eq!(
-            Sort::parse("author:desc")
-                .and_then(Sort::order_by)
-                .as_deref(),
-            Some("author DESC, uuid DESC")
+            order_by(&order).as_deref(),
+            Some("author DESC, created_at_utc ASC, uuid DESC")
         );
-        assert_eq!(Sort::parse("score").and_then(Sort::order_by), None);
+        assert_eq!(order_by(&[]), None);
+        assert_eq!(order_by(&Sort::parse_order("score").unwrap()), None);
+    }
+
+    /// Score is qmd's rank: nothing to break its ties with in SQL, and
+    /// nothing it could break the ties of.
+    #[test]
+    fn an_order_that_does_not_read_says_why() {
+        assert!(Sort::parse_order("kind,score:desc")
+            .unwrap_err()
+            .contains("score"));
+        assert!(Sort::parse_order("kind,nope")
+            .unwrap_err()
+            .contains("\"nope\""));
     }
 }

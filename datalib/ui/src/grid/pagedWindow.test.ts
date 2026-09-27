@@ -45,13 +45,12 @@ describe("nextFetch", () => {
     expect(nextFetch(w, PAGE, 500)).toEqual({ from: PAGE, limit: 500 });
   });
 
-  /// Grouping and header filters need every row.
-  it("asks for the rest of the list, up to what one request carries", () => {
-    expect(nextFetch(w, Infinity)).toEqual({ from: PAGE, limit: MAX_LIMIT });
+  it("asks for no more than one request carries", () => {
+    expect(nextFetch(w, 10 * MAX_LIMIT)).toEqual({ from: PAGE, limit: MAX_LIMIT });
   });
 
   it("asks for nothing once every row is loaded", () => {
-    expect(nextFetch(firstWindow(page(0, 50, 50)), Infinity)).toBeNull();
+    expect(nextFetch(firstWindow(page(0, 50, 50)), 1000)).toBeNull();
   });
 
   /// A scroll fires many viewport events; only one page goes out at a time.
