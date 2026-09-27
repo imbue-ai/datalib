@@ -291,9 +291,11 @@ Pick the surface that fits the question:
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
   one group), `GET /api/log?q=…` (the
-  runner's log lines in the same grammar — keys `run:`, `step:`,
+  runner's log lines in the same grammar — keys `run:`, `process_id:`,
+  `step:`, `attempt:`,
   `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
-  substring of the line; `run=`/`step=` narrow it; the newest `limit=`
+  substring of the line; `run:`, `process_id:`, `step:` and `attempt:`
+  narrow it to a run, a process or a step's attempt; the newest `limit=`
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
   `GET /applet/unified_index/docs`, `GET /applet/unified_index/chat/{uuid}`,

@@ -155,8 +155,11 @@ after line of one process's log — run, process, commit, thread, target
 — start hidden, and the grid menu at the top right puts any of them
 back. The search bar takes the grammar every grid
 shares: the keys are the columns — `run`, `process`, `step`, `level`,
-`stream`, `target`, `thread`, `msg` — plus `min_level:warn` (this
-level and above) and `commit:0fc29cb` (prefix). Right-click a cell to
+`stream`, `target`, `thread`, `msg` — plus `process_id` and `attempt`,
+`min_level:warn` (this level and above) and `commit:0fc29cb` (prefix).
+The pickers above the grid are views of the query: picking a run, a
+launch or a step's attempt writes `run:`, `process_id:` or `step:` and
+`attempt:` into it, and clearing the query shows the whole store. Right-click a cell to
 keep or exclude its value; drag a column header into the bar to group.
 The card tails while what it shows may still be writing.
 
@@ -167,12 +170,16 @@ The card tails while what it shows may still be writing.
 GET /api/processes?run=&process=&limit=       the authors, newest first
 GET /api/runs                                 recent runs
 GET /api/runs/{run}/steps                     step_runs + current metrics
-GET /api/log?run=&process=&step=&attempt=&q=&after_seq=&limit=
+GET /api/log?q=&limit=&after_seq=|before_seq=  lines, oldest first
 GET /api/log/{seq}                            one line, with its process row
 ```
 
-`after_seq` is the tail cursor: remember the last `seq`, ask again on
-the SSE `table_changed: log` frame.
+`q` is the whole of what is asked: the panel's pickers write what they
+pick into it as `run:`, `process_id:`, `step:` and `attempt:`, and a
+parameter other than these four is refused. With no cursor the answer is
+the newest `limit` lines; `before_seq` pages back from the oldest one
+held, and `after_seq` is the tail cursor: remember the last `seq`, ask
+again on the SSE `table_changed: log` frame.
 
 **From a shell**, since it is plain SQLite:
 

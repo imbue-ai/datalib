@@ -65,8 +65,10 @@ async function openServerLog(page: Page) {
   await expect(mine).toHaveCount(1);
   const value = (await mine.getAttribute("value"))!;
   const launch = value.replace(/^launch:/, "");
+  // Picking the launch writes it into the query the log is read with.
   const loaded = page.waitForResponse(
-    (r) => r.url().includes("/api/log?") && r.url().includes(`process=${launch}`),
+    (r) =>
+      r.url().includes("/api/log?") && decodeURIComponent(r.url()).includes(`process_id:${launch}`),
   );
   await scope.selectOption(value);
   await loaded;
@@ -75,6 +77,10 @@ async function openServerLog(page: Page) {
   await expect(dialog.locator(ROWS).first()).toBeVisible({ timeout: 10_000 });
   return dialog;
 }
+
+/// The launch the server log is open on, as the scope picker holds it.
+const launchOf = async (dialog: Locator) =>
+  (await dialog.getByLabel("Which run or launch").inputValue()).replace(/^launch:/, "");
 
 const lineCount = (page: Page) =>
   page
@@ -104,8 +110,11 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   const scope = dialog.getByLabel("Which run or launch");
   await expect(scope).toHaveValue(/^launch:/);
   await expect(scope.locator("option:checked")).toHaveText(/this server$/);
+  // The launch is a term in the query, beside the level: the query is
+  // the whole of what the panel shows.
+  const launch = await launchOf(dialog);
   const query = dialog.locator(".rl-search");
-  await expect(query).toHaveValue("min_level:info");
+  await expect(query).toHaveValue(`min_level:info process_id:${launch}`);
   const all = await lineCount(page);
   expect(all).toBeGreaterThan(1);
 
@@ -126,7 +135,7 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await expect(menuEntry(page, `Exclude all Message=${msg}`)).toBeVisible();
   await keepOnly.click();
 
-  await expect(query).toHaveValue(`min_level:info msg:${quoted(msg)}`);
+  await expect(query).toHaveValue(`min_level:info process_id:${launch} msg:${quoted(msg)}`);
   // A reload empties the count before it refills, so "fewer than all"
   // alone is met mid-way; wait for the narrowed lines to be there.
   await expect
@@ -146,8 +155,10 @@ test("a cell's right-click keeps only its value, and the query clears again", as
   await rightClick(dialog.locator(ROWS).first().locator('.slick-cell[col-id="msg"]'), clear);
   await clear.click();
   await expect(query).toHaveValue("");
-  // With no query at all, every line this launch wrote.
-  await expect.poll(() => lineCount(page)).toBeGreaterThanOrEqual(all);
+  // With no query at all, the whole store's newest lines, and the
+  // picker says so: the launch was a term, and went with the rest.
+  await expect(scope).toHaveValue("*");
+  await expect.poll(() => lineCount(page)).toBeGreaterThan(0);
 
   // The level picker writes its word into the query, where it can be
   // read back, edited or cleared like anything typed.
@@ -187,7 +198,8 @@ test("a long log opens on its newest lines and reads older ones as it is scrolle
   // The store's writer flushes on an interval.
   await expect
     .poll(
-      async () => (await (await request.get(`/api/log?process=${id}&limit=1000`)).json()).length,
+      async () =>
+        (await (await request.get(`/api/log?q=process_id:${id}&limit=1000`)).json()).length,
     )
     .toBe(800);
 
@@ -312,7 +324,9 @@ test("a selected line opens in full beside the log, and can narrow it", async ({
     .locator(".ll-meta")
     .getByRole("button", { name: /^main$/ })
     .click();
-  await expect(dialog.locator(".rl-search")).toHaveValue("min_level:info thread:main");
+  await expect(dialog.locator(".rl-search")).toHaveValue(
+    `min_level:info process_id:${await launchOf(dialog)} thread:main`,
+  );
 
   // The arrow key moves the selection, and the inspector follows.
   await row(0).locator('.slick-cell[col-id="msg"]').click();
