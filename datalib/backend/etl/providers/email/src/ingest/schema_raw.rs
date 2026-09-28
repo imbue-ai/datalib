@@ -265,8 +265,8 @@ impl EmailRow {
         })
     }
 
-    /// The email's primary key (the JMAP `Email.id`, or the mbox
-    /// `Message-ID` / content hash fallback).
+    /// The email's primary key: the JMAP `Email.id`, or
+    /// `envelope::email_id` for the Gmail API and mbox modes.
     pub fn id(&self) -> &str {
         &self.id_and_payload.id
     }
