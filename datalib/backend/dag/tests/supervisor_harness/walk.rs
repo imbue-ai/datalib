@@ -276,21 +276,17 @@ impl Walk {
         }
         let requests = self.requests.clone();
         self.h
-            .until("every request closed and every invocation ended", |s| {
-                let closed = requests.iter().all(|id| s.outcome(id).is_some());
-                let ended = s.invocations.iter().all(|(_, end)| end.is_some());
-                (closed && ended).then_some(())
-            })
+            .until(
+                "every request closed, every invocation ended, and no step naming a request",
+                |s| {
+                    let closed = requests.iter().all(|id| s.outcome(id).is_some());
+                    let ended = s.invocations.iter().all(|(_, end)| end.is_some());
+                    let named = s.record.steps.values().any(|st| !st.requests.is_empty());
+                    (closed && ended && !named).then_some(())
+                },
+            )
             .await;
         let state = self.h.state().await;
-        for (step, st) in &state.record.steps {
-            if !st.requests.is_empty() {
-                self.h.fail(&format!(
-                    "{step} names {:?} with every request closed",
-                    st.requests
-                ));
-            }
-        }
         for id in &self.requests {
             let outcome = state.outcome(id).flatten();
             if outcome == Some(RequestOutcome::Stopped) && !self.stopped.contains(id) {
