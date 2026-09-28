@@ -332,6 +332,14 @@ after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
 
+`datalib-step topo-sort-config <root>/config.toml` puts a whole file in
+that order (`dag/src/config_order.rs`), keeping the old text as
+`config.toml.bak`; `--check` only says whether it is. Each group, with
+its steps and applets, goes after the groups it reads, and inside a
+group each step after the steps it reads. Nothing else moves, and the
+comments above an entry move with it. Where two groups read each other
+it orders the steps one by one instead.
+
 ## The retired shapes
 
 `datalib-migrate-config` (`datalib/backend/migrate_config/`) is the

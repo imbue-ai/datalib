@@ -20,6 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_dag::config::{owner_only_options, replace_config};
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -997,49 +998,6 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
-}
-
-/// `OpenOptions` for a file only this user may read. The config holds
-/// every source's credentials, so it is never left at the umask's mercy.
-fn owner_only_options() -> std::fs::OpenOptions {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts
-}
-
-/// Replace the config in one rename, so no reader sees half a file.
-fn replace_config(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    // One temp name per write, or two writes landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    write_owner_only(&tmp, text.as_bytes())?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
-}
-
-/// Create (or truncate) `path` owner-only and write `bytes` to it. A
-/// file that already exists keeps its mode: `mode` applies at creation.
-fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut f = owner_only_options()
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    f.write_all(bytes)
 }
 
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
