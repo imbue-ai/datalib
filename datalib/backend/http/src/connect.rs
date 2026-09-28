@@ -431,7 +431,8 @@ fn clear_args(service: &str, account: &str) -> Vec<String> {
 /// long silent stall behind a spinner is the worst way to deliver it.
 /// These three sources configure an existing browser or fail fast; the
 /// download stays a thing someone chooses, by running the command
-/// themselves.
+/// themselves. `datalib/tauri/check-app.sh` runs the same sources
+/// against every built .app.
 fn ensure_browser_args() -> Vec<String> {
     vec![
         "ensure-browser".to_string(),
