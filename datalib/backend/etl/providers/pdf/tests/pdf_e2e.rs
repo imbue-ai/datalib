@@ -254,7 +254,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
         .collect();
     assert_eq!(page_rows.len(), 1, "only page 1 has text");
     assert_eq!(page_rows[0].message_index, Some(1));
-    assert!(page_rows[0].text.contains("Ablative plating"));
+    assert!(page_rows[0].preview.contains("Ablative plating"));
 
     // Page 2 is in the markdown as a note, not as a hole. The note gets
     // no section anchor, because there is nothing to navigate to.

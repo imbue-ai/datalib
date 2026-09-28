@@ -10,6 +10,11 @@ name = "datalib_etl_timeseries_render"
 path = "src/lib.rs"
 
 [dependencies]
+datalib-etl = { path = ".." }
+datalib-etl-render = { path = "../render" }
+datalib-id = { path = "../../id" }
+datalib-schema = { path = "../../schema" }
 datalib-time = { path = "../../time" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+tracing = "0.1"

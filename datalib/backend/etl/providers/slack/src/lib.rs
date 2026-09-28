@@ -5,6 +5,7 @@
 pub mod ingest;
 pub mod probe;
 pub mod processor;
+pub mod recorded;
 pub mod synthesize;
 
 pub fn user_label(real_name: Option<&str>, name: Option<&str>, user_id: &str) -> String {

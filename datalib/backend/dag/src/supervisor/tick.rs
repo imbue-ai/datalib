@@ -5,8 +5,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
+
+use super::locks::Hold;
 
 pub type StepIx = usize;
 pub type SinkIx = usize;
@@ -17,101 +18,48 @@ pub type SinkIx = usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Seq(pub u64);
 
-/// Which budget a step's invocations count against, so a download
-/// waiting on a rate limit does not keep a render from starting.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    EnumString,
-    IntoStaticStr,
-    VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum Class {
-    Network,
-    Cpu,
-    Index,
+pub type LockIx = usize;
+
+/// A named lock as the tick needs it (`locks.rs`).
+#[derive(Debug, Clone)]
+pub struct LockShape {
+    pub name: String,
+    pub slots: usize,
 }
 
-impl Class {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-}
-
-/// The graph as the tick needs it: who writes and reads which sink.
+/// The graph as the tick needs it: who reads which sink. Each step writes
+/// one, the one its own index names.
 #[derive(Debug, Clone)]
 pub struct Shape {
     pub steps: Vec<StepShape>,
-    pub sink_count: usize,
+    pub locks: Vec<LockShape>,
     /// Every step, producers before the steps that read them.
     pub topo: Vec<StepIx>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StepShape {
-    pub writes: SinkIx,
     pub reads: Vec<SinkIx>,
     /// The hash of the step's own definition; a change makes it stale.
     pub fingerprint: String,
-    pub class: Class,
+    /// The named locks it holds while it runs.
+    pub locks: Vec<(LockIx, Hold)>,
     /// False for a step that reads its inputs off disk rather than at a
     /// pinned commit: it and a writer of what it reads never overlap.
     pub pins_reads: bool,
 }
 
-/// What people have asked for: the open requests and the paused steps.
+/// What people have asked for: the open requests and the steps turned off.
 #[derive(Debug, Clone, Default)]
 pub struct Intent {
     pub requests: Vec<Request>,
-    pub paused: BTreeSet<StepIx>,
+    pub turned_off: BTreeSet<StepIx>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Request {
     pub roots: Vec<StepIx>,
     pub opened: Seq,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Budgets {
-    pub network: usize,
-    pub cpu: usize,
-    pub index: usize,
-}
-
-impl Budgets {
-    /// What `--parallelism N` means: N downloads and N renders at once,
-    /// and the two index steps free to run beside each other.
-    pub fn from_parallelism(n: usize) -> Self {
-        Self {
-            network: n,
-            cpu: n,
-            index: 2,
-        }
-    }
-
-    fn of(&self, class: Class) -> usize {
-        match class {
-            Class::Network => self.network,
-            Class::Cpu => self.cpu,
-            Class::Index => self.index,
-        }
-    }
 }
 
 /// What has happened, as the host last heard it.
@@ -144,6 +92,10 @@ pub struct Consumed {
 pub struct Attempt {
     pub started: Seq,
     pub failed: bool,
+    /// It was stopped — turned off, a stop, the host going — rather than
+    /// ending on its own. That is neither a failure nor a run: the work is
+    /// not done, and it runs again for a request that still wants it.
+    pub stopped: bool,
     pub consumed: Consumed,
 }
 
@@ -157,7 +109,7 @@ pub struct Tick {
     /// One per step, indexed like [`Shape::steps`].
     pub states: Vec<StepState>,
     pub starts: Vec<Start>,
-    /// Running steps nobody wants any more, or that are paused.
+    /// Running steps nobody wants any more, or that are turned off.
     pub stops: Vec<StepIx>,
     /// Requests that close now, by index into [`Intent::requests`].
     pub closed: Vec<(usize, Outcome)>,
@@ -185,7 +137,7 @@ pub enum StepState {
     /// Wanted, and up to date.
     Fresh,
     Running,
-    Paused,
+    Off,
     /// Its retries ran out and nothing it reads has moved since.
     Failed,
     /// Out of date, but a producer it reads has never published
@@ -209,12 +161,11 @@ impl StateKind {
 pub enum Wait {
     /// A producer it reads is running or about to.
     Upstream(StepIx),
-    /// Another writer of its sink is running.
-    Sink(SinkIx),
     /// A step that reads its sink unpinned is running, and would read a
     /// write in progress.
     Reader(StepIx),
-    Budget(Class),
+    /// A named lock it holds is held by others, as far as it can be.
+    Lock(LockIx),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,12 +178,10 @@ pub enum Outcome {
     },
 }
 
-pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) -> Tick {
+pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     let n = shape.steps.len();
-    let mut writers: Vec<Vec<StepIx>> = vec![Vec::new(); shape.sink_count];
-    let mut readers: Vec<Vec<StepIx>> = vec![Vec::new(); shape.sink_count];
+    let mut readers: Vec<Vec<StepIx>> = vec![Vec::new(); n];
     for (i, s) in shape.steps.iter().enumerate() {
-        writers[s.writes].push(i);
         for &r in &s.reads {
             readers[r].push(i);
         }
@@ -247,10 +196,12 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
         .map(|i| (0..scopes.len()).filter(|&r| scopes[r][i]).collect())
         .collect();
 
-    let mut used: BTreeMap<Class, usize> = BTreeMap::new();
+    let mut held = vec![Held::default(); shape.locks.len()];
     for (i, f) in facts.steps.iter().enumerate() {
         if f.running.is_some() {
-            *used.entry(shape.steps[i].class).or_default() += 1;
+            for &(l, hold) in &shape.steps[i].locks {
+                held[l].take(hold);
+            }
         }
     }
 
@@ -269,13 +220,13 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
 
         if f.running.is_some() {
             states[i] = StepState::Running;
-            if intent.paused.contains(&i) || wanting[i].is_empty() {
+            if intent.turned_off.contains(&i) || wanting[i].is_empty() {
                 stops.push(i);
             }
             continue;
         }
-        if intent.paused.contains(&i) {
-            states[i] = StepState::Paused;
+        if intent.turned_off.contains(&i) {
+            states[i] = StepState::Off;
             continue;
         }
         let stale = stale_by_inputs(f, &now);
@@ -290,7 +241,10 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
 
         for &r in &wanting[i] {
             failed_for[i][r] = f.last_attempt.as_ref().is_some_and(|a| {
-                a.failed && a.started >= intent.requests[r].opened && a.consumed == now
+                a.failed
+                    && !a.stopped
+                    && a.started >= intent.requests[r].opened
+                    && a.consumed == now
             });
         }
         let live: Vec<usize> = wanting[i]
@@ -311,12 +265,12 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
             continue;
         }
 
-        if let Some(w) = blocking_producer(i, shape, facts, &writers, &states) {
+        if let Some(w) = blocking_producer(i, shape, facts, &states) {
             pending[i] = true;
             states[i] = StepState::Waiting(Wait::Upstream(w));
             continue;
         }
-        if let Some(w) = nothing_to_read(step, facts, &writers) {
+        if let Some(w) = nothing_to_read(step, facts) {
             if pending[w] {
                 pending[i] = true;
                 states[i] = StepState::Waiting(Wait::Upstream(w));
@@ -326,23 +280,24 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
             continue;
         }
         pending[i] = true;
-        if writers[step.writes].iter().any(|&w| busy[w]) {
-            states[i] = StepState::Waiting(Wait::Sink(step.writes));
-            continue;
-        }
-        if let Some(&r) = readers[step.writes]
+        if let Some(&r) = readers[i]
             .iter()
             .find(|&&r| busy[r] && !shape.steps[r].pins_reads)
         {
             states[i] = StepState::Waiting(Wait::Reader(r));
             continue;
         }
-        let in_use = used.entry(step.class).or_default();
-        if *in_use >= budgets.of(step.class) {
-            states[i] = StepState::Waiting(Wait::Budget(step.class));
+        let taken = step
+            .locks
+            .iter()
+            .find(|&&(l, hold)| !held[l].allows(hold, shape.locks[l].slots));
+        if let Some(&(l, _)) = taken {
+            states[i] = StepState::Waiting(Wait::Lock(l));
             continue;
         }
-        *in_use += 1;
+        for &(l, hold) in &step.locks {
+            held[l].take(hold);
+        }
         busy[i] = true;
         states[i] = StepState::Running;
         starts.push(Start {
@@ -377,6 +332,29 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts, budgets: &Budgets) ->
     }
 }
 
+/// How much of one named lock the running steps hold.
+#[derive(Debug, Clone, Copy, Default)]
+struct Held {
+    shared: usize,
+    exclusive: bool,
+}
+
+impl Held {
+    fn allows(&self, hold: Hold, slots: usize) -> bool {
+        match hold {
+            Hold::Shared => !self.exclusive && self.shared < slots,
+            Hold::Exclusive => !self.exclusive && self.shared == 0,
+        }
+    }
+
+    fn take(&mut self, hold: Hold) {
+        match hold {
+            Hold::Shared => self.shared += 1,
+            Hold::Exclusive => self.exclusive = true,
+        }
+    }
+}
+
 /// The roots and everything that reads, transitively, what they write.
 fn closure(shape: &Shape, readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool> {
     let mut seen = vec![false; shape.steps.len()];
@@ -385,7 +363,7 @@ fn closure(shape: &Shape, readers: &[Vec<StepIx>], roots: &[StepIx]) -> Vec<bool
         if std::mem::replace(&mut seen[i], true) {
             continue;
         }
-        stack.extend(readers[shape.steps[i].writes].iter().copied());
+        stack.extend(readers[i].iter().copied());
     }
     seen
 }
@@ -408,25 +386,30 @@ fn stale_by_inputs(f: &StepFacts, now: &Consumed) -> bool {
     f.last_success.as_ref() != Some(now)
 }
 
+/// Running, or ran to an end of its own, since `opened`. A stopped run
+/// did not.
 fn started_since(f: &StepFacts, opened: Seq) -> bool {
     let running = f.running.as_ref().is_some_and(|r| r.started >= opened);
-    let attempted = f.last_attempt.as_ref().is_some_and(|a| a.started >= opened);
+    let attempted = f
+        .last_attempt
+        .as_ref()
+        .is_some_and(|a| !a.stopped && a.started >= opened);
     running || attempted
 }
 
-/// A writer of what the step reads, when nothing it reads has ever been
+/// A producer of what the step reads, when nothing it reads has ever been
 /// published. A fan-in reads whichever of its sources exist.
-fn nothing_to_read(step: &StepShape, facts: &Facts, writers: &[Vec<StepIx>]) -> Option<StepIx> {
-    if step.reads.is_empty() || step.reads.iter().any(|&s| facts.sinks[s].is_some()) {
+fn nothing_to_read(step: &StepShape, facts: &Facts) -> Option<StepIx> {
+    if step.reads.iter().any(|&s| facts.sinks[s].is_some()) {
         return None;
     }
-    writers[step.reads[0]].first().copied()
+    step.reads.first().copied()
 }
 
 /// A producer of something `i` reads that `i` must wait for. Two reasons,
 /// and only two: it is running and does not stream, so its sink may be
-/// half-written; or it is about to run, held only by a budget, its sink or
-/// a reader, and will rewrite what `i` would read. A producer that is
+/// half-written; or it is about to run, held only by a lock or a reader,
+/// and will rewrite what `i` would read. A producer that is
 /// itself waiting on something upstream may not run for a long time, and a
 /// fan-in that waited on it would wait for its slowest source. A step that
 /// reads unpinned treats even a streaming producer as half-written.
@@ -434,71 +417,67 @@ fn blocking_producer(
     i: StepIx,
     shape: &Shape,
     facts: &Facts,
-    writers: &[Vec<StepIx>],
     states: &[StepState],
 ) -> Option<StepIx> {
-    shape.steps[i]
-        .reads
-        .iter()
-        .flat_map(|&s| writers[s].iter().copied())
-        .find(|&w| {
-            w != i
-                && match states[w] {
-                    StepState::Running => {
-                        !facts.steps[w].streams_output || !shape.steps[i].pins_reads
-                    }
-                    StepState::Waiting(Wait::Budget(_) | Wait::Sink(_) | Wait::Reader(_)) => true,
-                    _ => false,
-                }
-        })
+    shape.steps[i].reads.iter().copied().find(|&w| {
+        w != i
+            && match states[w] {
+                StepState::Running => !facts.steps[w].streams_output || !shape.steps[i].pins_reads,
+                StepState::Waiting(Wait::Lock(_) | Wait::Reader(_)) => true,
+                _ => false,
+            }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BUDGETS: Budgets = Budgets {
-        network: 4,
-        cpu: 4,
-        index: 1,
-    };
+    /// The default locks, as the loader declares them, with room for one
+    /// index at a time.
+    const NETWORK: LockIx = 0;
+    const CPU: LockIx = 1;
+    const INDEX: LockIx = 2;
 
-    /// A graph in the shape the tree has today: each step writes the sink
-    /// its own index names. `reads` are step indices, which are then also
-    /// sink indices.
+    fn default_locks() -> Vec<LockShape> {
+        [("network", 4), ("cpu", 4), ("index", 1)]
+            .into_iter()
+            .map(|(name, slots)| LockShape {
+                name: name.into(),
+                slots,
+            })
+            .collect()
+    }
+
+    /// `reads` are step indices, which are also sink indices.
     fn shape(reads: &[&[StepIx]]) -> Shape {
         let steps: Vec<StepShape> = reads
             .iter()
             .enumerate()
             .map(|(i, r)| StepShape {
-                writes: i,
                 reads: r.to_vec(),
                 fingerprint: format!("fp{i}"),
-                class: if r.is_empty() {
-                    Class::Network
-                } else {
-                    Class::Cpu
-                },
+                locks: vec![(if r.is_empty() { NETWORK } else { CPU }, Hold::Shared)],
                 pins_reads: true,
             })
             .collect();
         Shape {
-            sink_count: steps.len(),
             topo: (0..steps.len()).collect(),
             steps,
+            locks: default_locks(),
         }
     }
 
     /// source 0 → render 1 → index 2.
     fn chain() -> Shape {
         let mut s = shape(&[&[], &[0], &[1]]);
-        s.steps[2].class = Class::Index;
+        s.steps[2].locks = vec![(INDEX, Hold::Shared)];
         s
     }
 
     /// Every step succeeded against the sinks as they are now.
     fn all_fresh(shape: &Shape, at: u64) -> Facts {
-        let sinks: Vec<Option<String>> = (0..shape.sink_count)
+        let sinks: Vec<Option<String>> = (0..shape.steps.len())
             .map(|s| Some(format!("v{s}")))
             .collect();
         let steps = shape
@@ -514,6 +493,7 @@ mod tests {
                     last_attempt: Some(Attempt {
                         started: Seq(at),
                         failed: false,
+                        stopped: false,
                         consumed,
                     }),
                     running: None,
@@ -530,7 +510,7 @@ mod tests {
                 roots: roots.to_vec(),
                 opened: Seq(opened),
             }],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         }
     }
 
@@ -553,6 +533,7 @@ mod tests {
         facts.steps[step].last_attempt = Some(Attempt {
             started: r.started,
             failed: outcome.is_err(),
+            stopped: false,
             consumed,
         });
     }
@@ -570,7 +551,7 @@ mod tests {
     fn a_graph_all_fresh_under_a_derived_root_starts_nothing() {
         let s = chain();
         let facts = all_fresh(&s, 1);
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
@@ -582,7 +563,7 @@ mod tests {
         for f in &mut facts.steps {
             f.last_success = None;
         }
-        let t = tick(&s, &Intent::default(), &facts, &BUDGETS);
+        let t = tick(&s, &Intent::default(), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states, vec![StepState::Stale; 3]);
     }
@@ -591,7 +572,7 @@ mod tests {
     fn a_request_starts_its_source_and_holds_the_rest_until_it_lands() {
         let s = chain();
         let facts = all_fresh(&s, 1);
-        let t = tick(&s, &request(&[0], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0], 5), &facts);
         assert_eq!(started(&t), vec![0]);
         assert_eq!(t.states[1], StepState::Fresh);
         assert!(t.closed.is_empty());
@@ -603,12 +584,12 @@ mod tests {
         let mut facts = all_fresh(&s, 1);
         let intent = request(&[0], 5);
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         let c0 = start_of(&t, 0);
         run(&mut facts, 0, 6);
         finish(&mut facts, 0, c0, Ok("v0'"));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![1]);
         assert_eq!(
             t.states[2],
@@ -621,13 +602,13 @@ mod tests {
         run(&mut facts, 1, 7);
         finish(&mut facts, 1, c1, Ok("v1'"));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![2]);
         let c2 = start_of(&t, 2);
         run(&mut facts, 2, 8);
         finish(&mut facts, 2, c2, Ok("v2'"));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
@@ -637,14 +618,14 @@ mod tests {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         let intent = request(&[0], 5);
-        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
         run(&mut facts, 0, 6);
         finish(&mut facts, 0, c0, Ok("v0'"));
-        let c1 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 1);
+        let c1 = start_of(&tick(&s, &intent, &facts), 1);
         run(&mut facts, 1, 7);
         finish(&mut facts, 1, c1, Ok("v1"));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[2], StepState::Fresh);
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
@@ -657,14 +638,14 @@ mod tests {
         run(&mut facts, 0, 3);
         let intent = request(&[0], 5);
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty());
         assert_eq!(t.states[0], StepState::Running);
         assert!(t.stops.is_empty(), "a wanted step is not stopped");
 
         let c0 = facts.steps[0].last_success.clone().unwrap();
         finish(&mut facts, 0, c0, Ok("v0"));
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![0]);
     }
 
@@ -672,7 +653,7 @@ mod tests {
     fn a_source_that_ran_after_the_request_opened_is_fresh_for_it() {
         let s = chain();
         let facts = all_fresh(&s, 6);
-        let t = tick(&s, &request(&[0], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
@@ -685,7 +666,7 @@ mod tests {
         run(&mut facts, 0, 6);
         facts.sinks[0] = Some("v0-sealed".into());
 
-        let t = tick(&s, &request(&[0], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[1], StepState::Waiting(Wait::Upstream(0)));
     }
@@ -698,7 +679,7 @@ mod tests {
         run(&mut facts, 0, 6);
         let intent = request(&[0], 5);
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(
             t.states[1],
             StepState::Fresh,
@@ -706,7 +687,7 @@ mod tests {
         );
 
         facts.sinks[0] = Some("v0-sealed".into());
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![1]);
         assert_eq!(start_of(&t, 1).reads[&0].as_deref(), Some("v0-sealed"));
     }
@@ -720,22 +701,22 @@ mod tests {
         let intent = request(&[0], 5);
 
         facts.sinks[0] = Some("seal-1".into());
-        let c1 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 1);
+        let c1 = start_of(&tick(&s, &intent, &facts), 1);
         run(&mut facts, 1, 7);
         facts.sinks[0] = Some("seal-2".into());
         facts.sinks[0] = Some("seal-3".into());
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "one instance at a time: {t:?}");
 
         finish(&mut facts, 1, c1, Ok("v1-a"));
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![1]);
         let c1 = start_of(&t, 1);
         assert_eq!(c1.reads[&0].as_deref(), Some("seal-3"));
         run(&mut facts, 1, 8);
         finish(&mut facts, 1, c1, Ok("v1-b"));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(!started(&t).contains(&1), "{t:?}");
     }
 
@@ -744,11 +725,11 @@ mod tests {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         let intent = request(&[0], 5);
-        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
         run(&mut facts, 0, 6);
         finish(&mut facts, 0, c0, Err(()));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[0], StepState::Failed);
         assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 0 })]);
@@ -758,11 +739,11 @@ mod tests {
     fn a_new_request_retries_a_failed_step() {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
-        let c0 = start_of(&tick(&s, &request(&[0], 5), &facts, &BUDGETS), 0);
+        let c0 = start_of(&tick(&s, &request(&[0], 5), &facts), 0);
         run(&mut facts, 0, 6);
         finish(&mut facts, 0, c0, Err(()));
 
-        let t = tick(&s, &request(&[0], 9), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0], 9), &facts);
         assert_eq!(started(&t), vec![0]);
     }
 
@@ -774,16 +755,16 @@ mod tests {
         run(&mut facts, 0, 6);
         let intent = request(&[0], 5);
         facts.sinks[0] = Some("seal-1".into());
-        let c1 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 1);
+        let c1 = start_of(&tick(&s, &intent, &facts), 1);
         run(&mut facts, 1, 7);
         finish(&mut facts, 1, c1, Err(()));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(t.states[1], StepState::Failed);
         assert!(t.starts.is_empty());
 
         facts.sinks[0] = Some("seal-2".into());
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![1]);
     }
 
@@ -792,12 +773,12 @@ mod tests {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         let intent = request(&[0], 5);
-        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
         run(&mut facts, 0, 6);
         facts.sinks[0] = Some("partial".into());
         finish(&mut facts, 0, c0, Err(()));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert_eq!(started(&t), vec![1]);
         assert_eq!(start_of(&t, 1).reads[&0].as_deref(), Some("partial"));
     }
@@ -812,7 +793,7 @@ mod tests {
         //                  ├→ index 4
         //  b 2 → render 3 ┘
         let mut s = shape(&[&[], &[0], &[], &[2], &[1, 3]]);
-        s.steps[4].class = Class::Index;
+        s.steps[4].locks = vec![(INDEX, Hold::Shared)];
         let mut facts = all_fresh(&s, 1);
         for i in [0, 2] {
             facts.steps[i].streams_output = true;
@@ -824,7 +805,7 @@ mod tests {
         facts.sinks[2] = None;
         facts.sinks[3] = None;
 
-        let t = tick(&s, &request(&[0, 2], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0, 2], 5), &facts);
         assert_eq!(t.states[3], StepState::Waiting(Wait::Upstream(2)));
         assert!(started(&t).contains(&4), "{t:?}");
     }
@@ -832,15 +813,15 @@ mod tests {
     /// A render that is about to start will rewrite what the index would
     /// read, so the index lets it go first rather than running twice.
     #[test]
-    fn a_consumer_waits_for_a_producer_held_only_by_its_budget() {
+    fn a_consumer_waits_for_a_producer_held_only_by_a_lock() {
         let mut s = chain();
-        s.steps[1].class = Class::Cpu;
+        s.steps[1].locks = vec![(CPU, Hold::Shared)];
         let mut facts = all_fresh(&s, 1);
         facts.sinks[0] = Some("v0-new".into());
         facts.steps[2].last_success = None;
-        let budgets = Budgets { cpu: 0, ..BUDGETS };
-        let t = tick(&s, &request(&[1], 5), &facts, &budgets);
-        assert_eq!(t.states[1], StepState::Waiting(Wait::Budget(Class::Cpu)));
+        s.locks[CPU].slots = 0;
+        let t = tick(&s, &request(&[1], 5), &facts);
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Lock(CPU)));
         assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
     }
 
@@ -856,12 +837,12 @@ mod tests {
         run(&mut facts, 1, 6);
         facts.sinks[1] = Some("v1-sealed".into());
 
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
 
         s.steps[2].pins_reads = true;
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(started(&t), vec![2], "a pinned reader reads each seal");
     }
 
@@ -873,12 +854,12 @@ mod tests {
         facts.sinks[0] = Some("v0-new".into());
         run(&mut facts, 2, 6);
 
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[1], StepState::Waiting(Wait::Reader(2)));
 
         s.steps[2].pins_reads = true;
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(started(&t), vec![1], "a pinned reader holds nobody back");
     }
 
@@ -892,11 +873,11 @@ mod tests {
         facts.sinks[0] = None;
         facts.steps[0].last_success = None;
         let intent = request(&[0], 5);
-        let c0 = start_of(&tick(&s, &intent, &facts, &BUDGETS), 0);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
         run(&mut facts, 0, 6);
         finish(&mut facts, 0, c0, Err(()));
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.states[1], StepState::Blocked(0));
         assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 0 })]);
@@ -907,32 +888,50 @@ mod tests {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         facts.sinks[0] = None;
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
         assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 1 })]);
     }
 
     #[test]
-    fn a_paused_step_never_starts_and_does_not_hold_its_request_open() {
+    fn a_turned_off_step_never_starts_and_does_not_hold_its_request_open() {
         let s = chain();
         let facts = all_fresh(&s, 1);
         let mut intent = request(&[0], 5);
-        intent.paused.insert(0);
+        intent.turned_off.insert(0);
 
-        let t = tick(&s, &intent, &facts, &BUDGETS);
+        let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
-        assert_eq!(t.states[0], StepState::Paused);
+        assert_eq!(t.states[0], StepState::Off);
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
     }
 
+    /// A source stopped by turning it off, and turned on while its request is
+    /// still open, runs again: a stopped run is neither a failure nor a
+    /// run. Before, it counted as both, and the request closed failed.
     #[test]
-    fn pausing_a_running_step_stops_it() {
+    fn a_step_stopped_by_a_turn_off_runs_again_on_turn_on() {
+        let s = chain();
+        let mut facts = all_fresh(&s, 1);
+        let intent = request(&[0], 5);
+        let c0 = start_of(&tick(&s, &intent, &facts), 0);
+        run(&mut facts, 0, 6);
+        finish(&mut facts, 0, c0, Err(()));
+        facts.steps[0].last_attempt.as_mut().unwrap().stopped = true;
+
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![0], "{t:?}");
+        assert!(t.closed.is_empty());
+    }
+
+    #[test]
+    fn turning_off_a_running_step_stops_it() {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         run(&mut facts, 0, 6);
         let mut intent = request(&[0], 5);
-        intent.paused.insert(0);
-        assert_eq!(tick(&s, &intent, &facts, &BUDGETS).stops, vec![0]);
+        intent.turned_off.insert(0);
+        assert_eq!(tick(&s, &intent, &facts).stops, vec![0]);
     }
 
     #[test]
@@ -940,7 +939,7 @@ mod tests {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         run(&mut facts, 0, 6);
-        let t = tick(&s, &Intent::default(), &facts, &BUDGETS);
+        let t = tick(&s, &Intent::default(), &facts);
         assert_eq!(t.stops, vec![0]);
         assert_eq!(t.states[0], StepState::Running);
     }
@@ -951,7 +950,7 @@ mod tests {
         //                     ├→ index 4
         // slack 2 → render 3 ┘
         let mut s = shape(&[&[], &[0], &[], &[2], &[1, 3]]);
-        s.steps[4].class = Class::Index;
+        s.steps[4].locks = vec![(INDEX, Hold::Shared)];
         let mut facts = all_fresh(&s, 1);
         run(&mut facts, 4, 6);
         let both = Intent {
@@ -965,63 +964,87 @@ mod tests {
                     opened: Seq(5),
                 },
             ],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         };
-        assert!(tick(&s, &both, &facts, &BUDGETS).stops.is_empty());
+        assert!(tick(&s, &both, &facts).stops.is_empty());
 
         let slack_only = Intent {
             requests: vec![both.requests[1].clone()],
-            paused: BTreeSet::new(),
+            turned_off: BTreeSet::new(),
         };
-        let t = tick(&s, &slack_only, &facts, &BUDGETS);
+        let t = tick(&s, &slack_only, &facts);
         assert!(t.stops.is_empty(), "{t:?}");
         assert!(!started(&t).contains(&0), "gmail is nobody's any more");
         assert_eq!(t.states[0], StepState::Idle);
     }
 
     #[test]
-    fn a_budget_holds_the_steps_past_it() {
-        let s = shape(&[&[], &[], &[]]);
+    fn a_lock_holds_the_steps_past_its_slots() {
+        let mut s = shape(&[&[], &[], &[]]);
+        s.locks[NETWORK].slots = 2;
         let facts = all_fresh(&s, 1);
-        let budgets = Budgets {
-            network: 2,
-            ..BUDGETS
-        };
-        let t = tick(&s, &request(&[0, 1, 2], 5), &facts, &budgets);
+        let t = tick(&s, &request(&[0, 1, 2], 5), &facts);
         assert_eq!(started(&t), vec![0, 1]);
-        assert_eq!(
-            t.states[2],
-            StepState::Waiting(Wait::Budget(Class::Network))
-        );
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Lock(NETWORK)));
         assert!(t.closed.is_empty());
     }
 
     #[test]
-    fn a_running_step_counts_against_its_budget() {
-        let s = shape(&[&[], &[]]);
+    fn a_running_step_counts_against_its_locks() {
+        let mut s = shape(&[&[], &[]]);
+        s.locks[NETWORK].slots = 1;
         let mut facts = all_fresh(&s, 1);
         run(&mut facts, 0, 3);
-        let budgets = Budgets {
-            network: 1,
-            ..BUDGETS
-        };
-        let t = tick(&s, &request(&[0, 1], 5), &facts, &budgets);
+        let t = tick(&s, &request(&[0, 1], 5), &facts);
         assert!(t.starts.is_empty(), "{t:?}");
-        assert_eq!(
-            t.states[1],
-            StepState::Waiting(Wait::Budget(Class::Network))
-        );
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Lock(NETWORK)));
     }
 
+    /// A lock of one slot is a mutex: two sources that share an account's
+    /// quota never run together, whatever their budget allows.
     #[test]
-    fn two_writers_of_one_sink_take_turns() {
-        let mut s = shape(&[&[], &[], &[0]]);
-        s.steps[1].writes = 0;
-        s.sink_count = 3;
+    fn a_named_mutex_keeps_its_holders_apart_and_nobody_else() {
+        let mut s = shape(&[&[], &[], &[]]);
+        s.locks.push(LockShape {
+            name: "quota".into(),
+            slots: 1,
+        });
+        let quota = s.locks.len() - 1;
+        for i in [0, 1] {
+            s.steps[i].locks.push((quota, Hold::Shared));
+        }
         let facts = all_fresh(&s, 1);
-        let t = tick(&s, &request(&[0, 1], 5), &facts, &BUDGETS);
-        assert_eq!(started(&t), vec![0]);
-        assert_eq!(t.states[1], StepState::Waiting(Wait::Sink(0)));
+        let t = tick(&s, &request(&[0, 1, 2], 5), &facts);
+        assert_eq!(started(&t), vec![0, 2]);
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Lock(quota)));
+    }
+
+    /// Exclusive takes every slot: it waits for every shared holder, and
+    /// every shared holder waits for it.
+    #[test]
+    fn an_exclusive_holder_runs_alone() {
+        let mut s = shape(&[&[], &[], &[]]);
+        s.locks.push(LockShape {
+            name: "gpu".into(),
+            slots: 3,
+        });
+        let gpu = s.locks.len() - 1;
+        s.steps[0].locks.push((gpu, Hold::Shared));
+        s.steps[1].locks.push((gpu, Hold::Exclusive));
+        s.steps[2].locks.push((gpu, Hold::Shared));
+
+        let mut facts = all_fresh(&s, 1);
+        run(&mut facts, 0, 3);
+        let t = tick(&s, &request(&[0, 1, 2], 5), &facts);
+        assert_eq!(t.states[1], StepState::Waiting(Wait::Lock(gpu)));
+        assert_eq!(started(&t), vec![2], "shared holders share");
+
+        let mut facts = all_fresh(&s, 1);
+        run(&mut facts, 1, 3);
+        let t = tick(&s, &request(&[0, 1, 2], 5), &facts);
+        assert!(t.starts.is_empty(), "{t:?}");
+        assert_eq!(t.states[0], StepState::Waiting(Wait::Lock(gpu)));
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Lock(gpu)));
     }
 
     #[test]
@@ -1029,7 +1052,7 @@ mod tests {
         let mut s = chain();
         let facts = all_fresh(&s, 1);
         s.steps[1].fingerprint = "fp1-edited".into();
-        let t = tick(&s, &request(&[1], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(started(&t), vec![1]);
     }
 
@@ -1038,19 +1061,8 @@ mod tests {
         let s = shape(&[&[], &[0], &[], &[2]]);
         let mut facts = all_fresh(&s, 1);
         facts.steps[3].last_success = None;
-        let t = tick(&s, &request(&[0], 5), &facts, &BUDGETS);
+        let t = tick(&s, &request(&[0], 5), &facts);
         assert_eq!(started(&t), vec![0]);
         assert_eq!(t.states[3], StepState::Stale);
-    }
-
-    /// strum and serde spell these independently, and both will be read
-    /// back: serde from the config, strum from the run store.
-    #[test]
-    fn class_as_str_matches_the_serde_spelling() {
-        for &v in Class::VARIANTS {
-            let json = serde_json::to_string(&v).unwrap();
-            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
-            assert_eq!(Class::parse(v.as_str()), Some(v));
-        }
     }
 }

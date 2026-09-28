@@ -2,7 +2,7 @@
 //! a session id, a record uuid, a tool-use id — and Claude Code mints
 //! them unique across every machine, so the scope is provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::ClaudeCode;
@@ -21,28 +21,14 @@ pub const KIND_BLOCK: &str = "content_block";
 /// `date_ms` is the item's `date_ms`, so the stamp in the id is the
 /// row's; a transcript's id carries none, its row's stamp being
 /// derived from its items.
-fn identity(
-    source_id: &str,
-    entity_kind: &'static str,
-    natural_key: String,
-    date_ms: Option<i64>,
-) -> Identity {
-    Identity::mint(
-        ID_NAMESPACE,
-        source_id,
-        None,
-        entity_kind,
-        natural_key,
-        STAMP_PRECISION.stored_ms(date_ms),
-    )
-}
+const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 /// A transcript's document: the session, or one subagent's transcript
 /// within it (`<session_id>#<agent_id>`, the raw store's transcript id).
 pub fn transcript(source_id: &str, session_id: &str, agent_id: Option<&str>) -> Identity {
     match agent_id {
-        None => identity(source_id, KIND_SESSION, session_id.to_string(), None),
-        Some(a) => identity(
+        None => IDS.mint(source_id, KIND_SESSION, session_id.to_string(), None),
+        Some(a) => IDS.mint(
             source_id,
             KIND_AGENT_TRANSCRIPT,
             composite_key(&[session_id, a]),
@@ -52,7 +38,7 @@ pub fn transcript(source_id: &str, session_id: &str, agent_id: Option<&str>) -> 
 }
 
 pub fn record(source_id: &str, record_uuid: &str, date_ms: Option<i64>) -> Identity {
-    identity(source_id, KIND_RECORD, record_uuid.to_string(), date_ms)
+    IDS.mint(source_id, KIND_RECORD, record_uuid.to_string(), date_ms)
 }
 
 pub fn thinking_block(
@@ -61,7 +47,7 @@ pub fn thinking_block(
     block_index: usize,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_THINKING,
         composite_key(&[record_uuid, &block_index.to_string()]),
@@ -75,7 +61,7 @@ pub fn tool_use(
     tool_use_id: &str,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_USE,
         composite_key(&[record_uuid, tool_use_id]),
@@ -89,7 +75,7 @@ pub fn tool_result(
     tool_use_id: &str,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_TOOL_RESULT,
         composite_key(&[record_uuid, tool_use_id]),
@@ -103,7 +89,7 @@ pub fn block_fallback(
     block_index: usize,
     date_ms: Option<i64>,
 ) -> Identity {
-    identity(
+    IDS.mint(
         source_id,
         KIND_BLOCK,
         composite_key(&[record_uuid, &block_index.to_string()]),

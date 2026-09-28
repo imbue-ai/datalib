@@ -24,7 +24,7 @@
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
-// `qmd_index` is deliberately not in this config: its sink is an FTS
+// The qmd steps are deliberately not in this config: their sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.
@@ -34,6 +34,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   pipelineRow,
+  readRow,
   searchAndSettle,
   settleRow,
   settleRunner,
@@ -100,12 +101,12 @@ async function writeConfig(page: Page, text: string) {
 /// One reading of the Pipeline rows this spec watches — each row's
 /// status word and its Activity text — so "at once" means one reading.
 async function readRows(page: Page, ids: readonly string[]) {
-  const status: Record<string, string | null> = {};
+  const status: Record<string, string> = {};
   const activity: Record<string, string> = {};
   for (const id of ids) {
-    status[id] = await statusOf(page, id);
-    const chips = pipelineRow(page, id).locator('[col-id="activity"] .tg-chips');
-    activity[id] = (await chips.count()) ? ((await chips.first().getAttribute("title")) ?? "") : "";
+    const drawn = await readRow(page, id);
+    status[id] = drawn.status;
+    activity[id] = drawn.activity;
   }
   return { status, activity };
 }

@@ -157,6 +157,23 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     bulk_upsert_bookkeeping(tx, T::TABLE, rows.iter().map(|r| r.id()), now).await
 }
 
+/// [`bulk_upsert_in_tx`] in a transaction of its own, stamped now.
+pub async fn bulk_upsert<T: BulkUpsertable>(pool: &sqlx::SqlitePool, rows: &[T]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let table = T::TABLE;
+    let now = IsoOffsetTimestamp::now_local();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin {table} tx"))?;
+    bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit {table} tx"))
+}
+
 /// The entity-table half of [`bulk_upsert_in_tx`], WITHOUT the paired
 /// `<t>_bookkeeping` stamp. Use this for tables that deliberately have
 /// no bookkeeping sidecar — e.g. `datalib-etl-fsindex`, where the

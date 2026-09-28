@@ -6,33 +6,14 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::router;
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "request-log-test-token";
+use crate::support::{state, TEST_TOKEN};
+
 const CARD: &str = "0192f6a0-0000-7000-8000-000000000000";
 const CAUSE: &str = datalib_http::loop_guard::CAUSE_HEADER;
-
-async fn state(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
 
 async fn send(root: &Path, uri: &str, with_token: bool) -> (StatusCode, Vec<u8>) {
     send_with(root, uri, with_token, &[]).await

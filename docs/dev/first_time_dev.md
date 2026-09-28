@@ -67,7 +67,7 @@ there is no codegen step.
     │   ├── core/             query engine + deeplink grammar
     │   ├── etl/              shared render/load framework
     │   ├── etl/providers/*/  per-provider download/render crates
-    │   ├── qmd_indexer/      qmd search index binary
+    │   ├── qmd_indexer/      the qmd index's operations, over qmd's SDK
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
     │   └── http/             axum binary
@@ -239,15 +239,22 @@ their install scripts run.
 
 ### QMD search index (default-on, incremental)
 
-The `qmd_index` step rebuilds the qmd search index over `<root>`
-after the markdown tree is rendered + loaded. The indexer
-(`datalib/backend/qmd_indexer/`) shells out to the qmd CLI from the
-staged runtime tree (above) — after `datalib_qmd_models` has put the
-pinned, sha256-verified GGUFs in place, so qmd never fetches a model
-itself — with `XDG_CACHE_HOME=<root>/unified_index/qmd_index` (the step's own tree), so the index lands at `<root>/unified_index/qmd_index/qmd/index.sqlite`
-(the scan root stays `<root>` over the `*/render_markdown/**/*.md` mask), alongside the per-stanza
-`<name>/render_markdown/` trees and `unified_index/grid_index/db.doltlite_db`. This is what the search bar's hybrid / vector
-queries hit (see `datalib/backend/unified_index/src/qmd/`).
+Three kinds of step build the qmd search index. Each source's
+`keyword_index` registers the source's qmd collection and brings its
+keyword index in line with its rendered tree; its `embed` embeds what
+that collection is missing, after putting the pinned, sha256-verified
+embedding model in place through `datalib_qmd_models`, so qmd never
+fetches a model itself. `unified_index/qmd_aggregator` reads every
+source's pair, so it runs after them: it retires the collection of any
+source it does not name and reports what each holds. All three drive qmd's
+SDK from the staged runtime tree (above) through
+`datalib/backend/qmd_indexer/`, with
+`XDG_CACHE_HOME=<root>/unified_index/qmd_index`, so the one index lands
+at `<root>/unified_index/qmd_index/qmd/index.sqlite` (each collection
+scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
+alongside the per-stanza `<name>/render_markdown/` trees and
+`unified_index/grid_index/db.doltlite_db`. This is what the search bar's
+hybrid / vector queries hit (see `datalib/backend/unified_index/src/qmd/`).
 
 Design notes:
 
@@ -258,8 +265,9 @@ Design notes:
   orphaned content is cleaned.
 - **First run is slow** — embedding all chunks for a fresh `<root>` takes
   several minutes on CPU (a one-time cost, roughly 5–10 minutes per thousand
-  unembedded chunks). qmd streams a live progress bar to stderr; `qmd embed`
-  is resumable, so Ctrl-C and re-run is safe. Once the backlog drains,
+  unembedded chunks). Each `embed` step reports its progress in bytes; an
+  embed is resumable, so stopping and re-running is safe, and turning one
+  source's `embed` off leaves the rest running. Once the backlog drains,
   re-runs are no-ops (a couple of seconds).
 - **Models cache**: qmd's embedding model (~300 MB) is shared across data
   roots via a symlink at `<root>/qmd/models -> ~/.cache/qmd/models` (qmd's

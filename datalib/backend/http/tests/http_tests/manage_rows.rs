@@ -4,47 +4,27 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use datalib_core::app_store::AppStore;
-use datalib_http::applets::AppletRegistry;
-use datalib_http::{router, ApiToken, AppState};
+use datalib_http::{router, AppState};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use tower::ServiceExt;
 
-const TEST_TOKEN: &str = "manage-rows-test-token";
-
-async fn state(root: &Path) -> AppState {
-    state_of(root).await
-}
-
-async fn state_of(root: &Path) -> AppState {
-    let root = Arc::new(root.to_path_buf());
-    let app = AppStore::open(root.as_path())
-        .await
-        .expect("open app stores");
-    AppState {
-        root: root.clone(),
-        sync: datalib_http::supervisor::SyncControl::new(root.clone()),
-        app: Arc::new(app),
-        root_tx: tokio::sync::broadcast::channel(16).0,
-        usage: Default::default(),
-        newer_root: Vec::new(),
-        api_token: ApiToken::from_value(TEST_TOKEN, root.as_path()),
-        applets: Arc::new(AppletRegistry::from_data_root(&root, None)),
-    }
-}
+use crate::support::{state, TEST_TOKEN};
 
 async fn get_rows(root: &Path) -> serde_json::Value {
     rows_of(state(root).await).await
 }
 
 async fn rows_of(state: AppState) -> serde_json::Value {
+    rows_at(state, "/api/manage/rows").await
+}
+
+async fn rows_at(state: AppState, uri: &str) -> serde_json::Value {
     let app = router(state);
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/manage/rows")
+                .uri(uri)
                 .header("x-datalib-token", TEST_TOKEN)
                 .body(Body::empty())
                 .unwrap(),
@@ -127,7 +107,6 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         [
             "identity",
             "actions",
-            "identity",
             "status",
             "chips",
             "chips",
@@ -154,6 +133,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(system["kind"], "system");
     assert_eq!(system["path"], serde_json::json!(["system"]));
     assert_eq!(system["name"]["label"], "System");
+    assert_eq!(system["name"]["icon"], "system");
     assert_eq!(system["type"], serde_json::Value::Null);
     assert_eq!(system["status"]["key"], "");
     let actions = system["actions"].as_array().unwrap();
@@ -188,6 +168,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(slack["type"]["id"], "slack");
     assert_eq!(slack["type"]["label"], "Slack");
     assert_eq!(slack["type"]["icon"], "slack");
+    // The Name cell leads with the type's mark; its label is the hover.
+    assert_eq!(slack["name"]["icon"], "slack");
+    assert_eq!(slack["name"]["detail"], "Slack");
     assert_eq!(slack["path"], serde_json::json!(["group:slack"]));
     assert_eq!(slack["status"]["key"], "never_run");
     assert_eq!(slack["status"]["from"], serde_json::Value::Null);
@@ -217,11 +200,17 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // A step's Browse is its group's: the same button, just as enabled.
     assert_eq!(render["actions"][0], slack["actions"][0]);
     assert_eq!(ingest["actions"][0], slack["actions"][0]);
-    assert_eq!(render["actions"][1]["enabled"], false);
-    assert!(render["actions"][1]["disabled_reason"]
+    // A render that has never run is out of date: Sync reruns it alone,
+    // and says which source to sync for fresh data.
+    assert_eq!(
+        render["seeds"],
+        serde_json::json!(["slack/render_markdown"])
+    );
+    assert_eq!(render["actions"][1]["enabled"], true, "{render}");
+    assert!(render["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("Run slack/ingest"));
+        .contains("sync slack/ingest"));
 
     // The applet shares its group's id; the group's key keeps them apart.
     let applet = &rows["unified_index"];
@@ -253,16 +242,21 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     // The index group browses as the projection over every source.
     assert_eq!(index["actions"][0]["label"], "Browse every source");
     assert_eq!(index["actions"][0]["enabled"], true);
-    assert!(index["actions"][1]["disabled_reason"]
+    // With no source step, the index group syncs its own steps, which
+    // have never run.
+    assert_eq!(index["actions"][1]["enabled"], true, "{index}");
+    assert!(index["actions"][1]["hint"]
         .as_str()
         .unwrap()
-        .contains("none of this group's steps"));
+        .contains("out-of-date steps"));
     assert!(applet["actions"][0]["disabled_reason"]
         .as_str()
         .unwrap()
         .contains("no rows of its own"));
-    // The index group mirrors nothing, so it has no type to show.
+    // The index group mirrors nothing, so it has no type; its mark is
+    // the search it serves.
     assert_eq!(index["type"], serde_json::Value::Null);
+    assert_eq!(index["name"]["icon"], "search");
 }
 
 /// A finished run: the step rows read the record, and the group reads
@@ -458,6 +452,43 @@ function = \"ingest\"
         .contains("no render step"));
     // Its step says the same, not something of its own.
     assert_eq!(rows["photos/ingest"]["actions"][0], photos["actions"][0]);
+}
+
+/// A download step's row names its raw store once the file exists —
+/// what Browse opens in the desktop app — and no other row names one.
+#[tokio::test]
+async fn a_download_step_names_its_raw_store_once_it_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    let ingest = tmp.path().join("slack/ingest");
+    std::fs::create_dir_all(&ingest).unwrap();
+    std::fs::create_dir_all(tmp.path().join("slack/render_markdown")).unwrap();
+    std::fs::write(
+        tmp.path()
+            .join("slack/render_markdown/indexed_markdown.doltlite_db"),
+        b"CTLD",
+    )
+    .unwrap();
+    let uri = "/api/manage/rows?refresh=1";
+
+    let before = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    assert_eq!(
+        before["slack/ingest"]["raw_store_path"],
+        serde_json::Value::Null
+    );
+
+    std::fs::write(ingest.join("entities.doltlite_db"), b"CTLD").unwrap();
+    let rows = by_key(&rows_at(state(tmp.path()).await, uri).await);
+    let named: Vec<(&String, &serde_json::Value)> = rows
+        .iter()
+        .filter(|(_, r)| !r["raw_store_path"].is_null())
+        .collect();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert_eq!(named[0].0, "slack/ingest");
+    assert_eq!(
+        Path::new(named[0].1["raw_store_path"].as_str().unwrap()),
+        ingest.join("entities.doltlite_db")
+    );
 }
 
 #[tokio::test]

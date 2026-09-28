@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the Slack provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl::entity_store::CasEntityStore;
 use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -9,10 +9,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::BlobCas;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
@@ -39,39 +37,27 @@ pub struct TsBounds {
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
+    store: CasEntityStore,
     /// Optional plain-text mirror of every upsert. `None` = tape
     /// disabled (the default); cloned `RawDb`s share the same tape
     /// via `Arc`.
     tape: Option<Arc<EventTape>>,
 }
 
+impl std::ops::Deref for RawDb {
+    type Target = CasEntityStore;
+
+    fn deref(&self) -> &CasEntityStore {
+        &self.store
+    }
+}
+
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&datalib_etl::blob_cas::cas_path_for(db_path)).await?;
         Ok(Self {
-            pool,
-            cas,
+            store: CasEntityStore::open(db_path, &full_ddl()).await?,
             tape: None,
         })
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
     }
 
     pub fn attach_event_tape(&mut self, tape: Arc<EventTape>) {
@@ -86,7 +72,7 @@ impl RawDb {
         let scope = format!("slack:sweep:{key}");
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(&scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select manifest sweep marker")?;
         let Some(row) = row else { return Ok(None) };
@@ -103,7 +89,7 @@ impl RawDb {
     pub async fn record_manifest_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("slack:sweep:{key}");
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        dr::upsert_scope_state(&self.pool, &scope, &now)
+        dr::upsert_scope_state(self.pool(), &scope, &now)
             .await
             .context("record manifest sweep marker")?;
         Ok(())
@@ -135,7 +121,7 @@ impl RawDb {
                 .map(String::from),
         };
         let payloads: Vec<(&str, &Value)> = vec![(team_id, payload)];
-        bulk_upsert_with_tape(&self.pool, self.tape_ref(), &[row], &payloads).await
+        bulk_upsert_with_tape(self.pool(), self.tape_ref(), &[row], &payloads).await
     }
 
     pub async fn cached_team_id(&self) -> Result<Option<String>> {
@@ -144,7 +130,7 @@ impl RawDb {
              LEFT JOIN workspaces_bookkeeping b ON b.id = w.id \
              ORDER BY b.fetched_at_utc DESC LIMIT 1",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("select cached team_id")?;
         Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
@@ -153,7 +139,7 @@ impl RawDb {
     pub async fn load_workspace(&self) -> Result<Option<Value>> {
         let row =
             sqlx::query("SELECT json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
-                .fetch_optional(&self.pool)
+                .fetch_optional(self.pool())
                 .await
                 .context("select workspace")?;
         let Some(row) = row else { return Ok(None) };
@@ -213,7 +199,7 @@ impl RawDb {
         let volatile_pairs: Vec<(&str, &Value)> =
             volatile_store.iter().map(|(id, v)| (*id, v)).collect();
         bulk_upsert_with_tape_split(
-            &self.pool,
+            self.pool(),
             self.tape_ref(),
             &rows,
             &tape_pairs,
@@ -223,7 +209,7 @@ impl RawDb {
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "users").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "users").await
     }
 
     // ── channels ────────────────────────────────────────────────────
@@ -284,7 +270,7 @@ impl RawDb {
         let volatile_pairs: Vec<(&str, &Value)> =
             volatile_store.iter().map(|(id, v)| (*id, v)).collect();
         bulk_upsert_with_tape_split(
-            &self.pool,
+            self.pool(),
             self.tape_ref(),
             &rows,
             &tape_pairs,
@@ -294,7 +280,7 @@ impl RawDb {
     }
 
     pub async fn load_channels(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "channels").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "channels").await
     }
 
     pub async fn channels_for_fetch(
@@ -320,7 +306,7 @@ impl RawDb {
         // Audited: `sql` is a static base with further `&'static str` clauses
         // appended by the `members_only` / `include_archived` flags.
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select channels_for_fetch")?;
         Ok(rows
@@ -347,7 +333,7 @@ impl RawDb {
     /// this runs before the walk on every DM-enabled run.
     pub async fn user_directory(&self) -> Result<Vec<UserDirectoryEntry>> {
         let rows = sqlx::query("SELECT id, name, real_name, display_name FROM users")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select user_directory")?;
         Ok(rows
@@ -420,7 +406,7 @@ impl RawDb {
             .filter_map(|p| Some((p.row.id_and_payload.id.as_str(), p.volatile.as_ref()?)))
             .collect();
         bulk_upsert_with_tape_split(
-            &self.pool,
+            self.pool(),
             self.tape_ref(),
             &rows,
             &tape_pairs,
@@ -455,7 +441,7 @@ impl RawDb {
         .bind(channel_id)
         .bind(oldest_ts)
         .bind(latest_ts)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .with_context(|| format!("list stored messages in {channel_id} window"))?;
 
@@ -484,7 +470,7 @@ impl RawDb {
         seen_ids: &HashSet<String>,
     ) -> Result<usize> {
         let gone = datalib_etl::prune::prune_scope(
-            &self.pool,
+            self.pool(),
             "messages",
             &[("thread_root_uuid", thread_root_uuid)],
             seen_ids,
@@ -505,7 +491,7 @@ impl RawDb {
     /// `cas_objects` is untouched: the bytes may be referenced elsewhere,
     /// and orphans there are a garbage-collection problem, not this one.
     async fn delete_messages(&self, ids: &[String]) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin delete messages")?;
+        let mut tx = self.pool().begin().await.context("begin delete messages")?;
         for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
             let mut placeholders = String::new();
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -535,7 +521,7 @@ impl RawDb {
              WHERE payload IS NOT NULL
              ORDER BY channel_id, ts",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select messages")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -567,7 +553,7 @@ impl RawDb {
             "SELECT channel_id, MIN(ts) AS min_ts, MAX(ts) AS max_ts \
              FROM messages GROUP BY channel_id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select ts_bounds_by_channel")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -600,7 +586,7 @@ impl RawDb {
             latest_reply: latest_reply.map(String::from),
         };
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
+        let mut tx = self.pool().begin().await.context("begin replies_page tx")?;
         bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
         tx.commit().await.context("commit replies_page tx")?;
         Ok(())
@@ -611,7 +597,7 @@ impl RawDb {
             "SELECT channel_id, thread_ts, latest_reply FROM replies_pages
              WHERE latest_reply IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select latest_reply_by_thread")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -654,7 +640,7 @@ impl RawDb {
         let volatile_pairs: Vec<(&str, &Value)> =
             volatile_store.iter().map(|(id, v)| (*id, v)).collect();
         bulk_upsert_with_tape_split(
-            &self.pool,
+            self.pool(),
             self.tape_ref(),
             &rows,
             &tape_pairs,
@@ -672,7 +658,7 @@ impl RawDb {
              LEFT JOIN channel_read_states_bookkeeping b ON b.id = r.id \
              WHERE r.payload IS NOT NULL ORDER BY r.id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select channel_read_states")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -715,10 +701,10 @@ impl RawDb {
         }
         let keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
         if !rows.is_empty() {
-            bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await?;
+            bulk_upsert_with_tape(self.pool(), self.tape_ref(), &rows, &tape_pairs).await?;
         }
         let gone = datalib_etl::prune::prune_scope(
-            &self.pool,
+            self.pool(),
             "bookmarks",
             &[("channel_id", channel_id)],
             &keep,
@@ -737,14 +723,14 @@ impl RawDb {
              WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') \
              UNION SELECT channel_id FROM bookmarks",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select channels with a bookmarks tab")?;
         Ok(ids.into_iter().collect())
     }
 
     pub async fn load_bookmarks(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "bookmarks").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "bookmarks").await
     }
 
     /// Store a complete `saved.list` walk and drop the stored items it no
@@ -779,11 +765,11 @@ impl RawDb {
         if !rows.is_empty() {
             let pairs: Vec<(&str, &Value)> =
                 tape_pairs.iter().map(|(id, v)| (id.as_str(), *v)).collect();
-            bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &pairs).await?;
+            bulk_upsert_with_tape(self.pool(), self.tape_ref(), &rows, &pairs).await?;
         }
 
         let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, item_id FROM saved_items")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select saved_items")?;
         let mut keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
@@ -793,13 +779,13 @@ impl RawDb {
                 .filter(|(_, item_id)| !in_scope.contains(item_id))
                 .map(|(id, _)| id.clone()),
         );
-        let gone = datalib_etl::prune::prune_scope(&self.pool, "saved_items", &[], &keep).await?;
+        let gone = datalib_etl::prune::prune_scope(self.pool(), "saved_items", &[], &keep).await?;
         datalib_etl::prune::record("slack saved items", stored.len(), gone.len());
         Ok(gone.len())
     }
 
     pub async fn load_saved_items(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "saved_items").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "saved_items").await
     }
 
     // ── attachments (per-provider CAS edge) ─────────────────────────
@@ -811,7 +797,7 @@ impl RawDb {
     /// behind preceding multi-MB CAS commits on the single-connection
     /// doltlite pool.
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
-        datalib_etl::blob_cas::load_blake3_index(&self.pool, "slack_attachments", "file_id").await
+        datalib_etl::blob_cas::load_blake3_index(self.pool(), "slack_attachments", "file_id").await
     }
 }
 

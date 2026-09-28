@@ -421,6 +421,10 @@ fn build_grid_row(
         // an event is nearly always last edited before it happens. The
         // edit stamp is on the page; the row carries only when it happens.
         .modified_at(None)
+        // Newest-first means most recently changed, and the start can be
+        // years ahead. Every event has one of these in practice: Google
+        // always sends `updated`, and RFC 5545 requires `DTSTAMP`.
+        .touched_at(event.modified_at.clone().or_else(|| event.created.clone()))
         .author(
             event
                 .organizer
@@ -433,7 +437,7 @@ fn build_grid_row(
         .conversation_name(Some(title))
         .conversation_uuid(event.event_uuid.clone())
         .entire_chat(format!("/chat/{}", event.event_uuid))
-        .text(text.join("\n"))
+        .body(text.join("\n"))
         .qmd_path(Some(md_rel.to_string()))
         .source_url(event.source_url.clone())
         .upstream_id(Some(event.upstream_id.clone()))
@@ -676,10 +680,15 @@ mod tests {
             row.modified_at, None,
             "an edit before the event would sort after it"
         );
+        assert_eq!(
+            row.touched_at.as_deref(),
+            Some("2026-09-02T16:00:00+00:00"),
+            "newest-first sorts an event by its last edit, not its start"
+        );
         assert_eq!(row.author.as_deref(), Some("Jean-Luc Picard"));
         assert_eq!(row.channel.as_deref(), Some("Bridge"));
-        assert!(row.text.contains("Weekly on Monday and Thursday"));
-        assert!(row.text.contains("troi@enterprise.test"));
+        assert!(row.preview.contains("Weekly on Monday and Thursday"));
+        assert!(row.preview.contains("troi@enterprise.test"));
     }
 
     #[test]

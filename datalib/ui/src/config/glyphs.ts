@@ -40,9 +40,9 @@ export const STATUS_GLYPHS: Record<string, string> = {
   // av/stop_circle — told to stop, and did. Not a failure, and not
   // done: it runs again next time.
   stopped: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4 14H8V8h8v8z",
-  // av/pause_circle_filled — held by a person or an agent until resumed.
-  paused:
-    "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z",
+  // toggle/toggle_off — turned off by a person or an agent, the same
+  // mark as the row's switch in that position.
+  off: "M17 7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h10c2.76 0 5-2.24 5-5s-2.24-5-5-5zM7 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z",
   // action/hourglass_empty — due to run, and not started.
   queued:
     "M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z",
@@ -61,6 +61,15 @@ export const STATUS_GLYPHS: Record<string, string> = {
   never_run:
     "M7 11v2h10v-2H7zm5-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",
 };
+
+/// Icons for the buttons beside a filesystem path.
+export const PATH_GLYPHS = {
+  // file/folder_open — show where it lives.
+  reveal:
+    "M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z",
+  // content/content_copy
+  copy: "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z",
+} as const;
 
 /// Build a `<svg>` carrying one path, sized for a table cell.
 export function glyphSvg(path: string, label: string, size = 16): SVGSVGElement {

@@ -1,16 +1,12 @@
 //! Open + non-DDL data-manipulation for the JMAP raw store.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
-use datalib_etl::blob_cas::{self, BlobCas};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::doltlite_raw::{self as dr};
 
@@ -27,35 +23,9 @@ pub fn state_scope(account_id: &str, type_name: &str) -> String {
 
 // RawDb
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
     // ── state tokens ────────────────────────────────────────────────
 
     pub async fn load_state(&self, account_id: &str, type_name: &str) -> Result<Option<String>> {
@@ -71,33 +41,33 @@ impl RawDb {
     pub async fn load_scope(&self, scope: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
             .bind(scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select state token")?;
         Ok(row.and_then(|r| r.try_get::<String, _>("last_seen_at_utc").ok()))
     }
 
     pub async fn save_scope(&self, scope: &str, token: &str) -> Result<()> {
-        dr::upsert_scope_state(&self.pool, scope, token).await
+        dr::upsert_scope_state(self.pool(), scope, token).await
     }
 
     // ── loads (consumed by render) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "accounts").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "accounts").await
     }
 
     pub async fn load_mailboxes(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "mailboxes").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "mailboxes").await
     }
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, datalib_etl::pin::Reads::Own, "threads").await
+        dr::load_payloads(self.pool(), datalib_etl::pin::Reads::Own, "threads").await
     }
 
     pub async fn thread_email_counts(&self) -> Result<HashMap<String, i64>> {
         let rows = sqlx::query("SELECT id, email_count FROM threads")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select thread_email_counts")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -119,7 +89,7 @@ impl RawDb {
              FROM emails
              ORDER BY thread_id, received_at, id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select emails")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -158,7 +128,7 @@ impl RawDb {
     pub async fn load_email_joins(&self) -> Result<EmailJoins> {
         let mut mailboxes: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, mailbox_id FROM email_mailboxes")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load email_mailboxes")?
         {
@@ -170,7 +140,7 @@ impl RawDb {
         }
         let mut keywords: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, keyword FROM email_keywords")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("load email_keywords")?
         {
@@ -189,7 +159,7 @@ impl RawDb {
 
     pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
         let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select known_email_ids")?;
         let mut out = HashSet::with_capacity(rows.len());
@@ -208,7 +178,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin delete mailboxes tx")?;
@@ -232,7 +202,11 @@ impl RawDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin delete emails tx")?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin delete emails tx")?;
         for id in ids {
             for sql in [
                 "DELETE FROM email_mailboxes WHERE email_id = ?",
@@ -263,7 +237,7 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("loaded_blob_ids")?;
         let mut out = HashMap::with_capacity(rows.len());

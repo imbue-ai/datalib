@@ -69,31 +69,29 @@ In normal day-to-day edits to Rust code, none of these actions re-run.
 
 ## Upgrading doltlite
 
-A version lives in **four** places and they must all move together:
+A version lives in **three** places and they must all move together:
 
 | # | Location |
 |---|----------|
 | 1 | `MODULE.bazel` → `http_archive(name = "doltlite_amalgamation")` — the library |
 | 2 | `MODULE.bazel` → `http_archive(name = "doltlite_autoconf")` — the CLI's `shell.c` |
 | 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
-| 4 | `datalib/docker/Dockerfile` → `DOLTLITE_CLI_VERSION` — the container's debug-shell `.deb` |
 
 and two files ride along: `LICENSE.md` and `APACHE_LICENSE`, upstream's
 notices at the pinned version, which every release ships under
 `licenses/doltlite/` (DoltLite is Apache-2.0). Neither archive carries
 them, so re-fetch both from the release's tag when you bump.
 
-**Nothing mechanically verifies that these four agree — check them by
-hand.** `:cli_version_test` reads like it does this, and its comments
-say so, but the check is circular: the CLI prints the version it was
+`//tools:version_pins_test` checks that the three agree.
+`:cli_version_test` does not, whatever its comments say; the check is
+circular: the CLI prints the version it was
 compiled with (`-DDOLTLITE_VERSION`, from #3), and the test compares
 that against #3 again. Setting `DOLTLITE_VERSION = "0.11.52"` while
 both archives are on 0.11.53 passes. What the test *does* genuinely
 catch is worth keeping — that the CLI links and runs at all, and that
 its dolt-SQL surface is real (it exercises `dolt_commit` and
 `dolt_log`, so a shell accidentally linked against stock SQLite fails).
-It just isn't a pin-drift guard. Pin #4 has drifted before, sitting at
-0.11.8 while the library was on 0.11.13.
+It just isn't a pin-drift guard.
 
 Steps:
 
@@ -115,27 +113,22 @@ Steps:
 5. Bump the `DOLTLITE_VERSION` constant at the top of `BUILD.bazel`.
    It feeds `-DDOLTLITE_VERSION` into both the library and the CLI, so
    there's only one to change.
-6. Bump `DOLTLITE_CLI_VERSION` in `datalib/docker/Dockerfile`: a `.deb`
-   from the same upstream release, pinned to the linked library on
-   purpose so the SQL surface in the container's debug shell matches
-   what the binary observes.
-7. Re-grep to confirm all four moved — this is the only thing standing
-   between you and a silent mismatch:
-   ```sh
-   grep -rn '0\.11\.' MODULE.bazel third-party/doltlite/BUILD.bazel \
-       datalib/docker/Dockerfile
-   ```
-8. `bazelisk test //third-party/doltlite:cli_version_test` — confirms
-   the CLI links and its dolt-SQL surface works against the new
-   engine. Then `bazelisk build //...` for everything downstream.
+6. `bazelisk test //tools:version_pins_test
+   //third-party/doltlite:cli_version_test` — the pins agree, and the
+   CLI links and its dolt-SQL surface works against the new engine.
+   Then `bazelisk test //...`: every store open goes through the new
+   engine, and `//datalib/backend/etl:doltlite_two_process_test` is
+   what says a reader still costs the writer nothing.
 
 Before bumping, check whether the chunk-store format moved: grep
 `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. The open path
 hard-rejects any mismatch (`SQLITE_NOTADB`, "written by an incompatible
 doltlite version") with no migration path, so a bump there orphans every
 existing `.doltlite_db` on disk rather than merely needing a rebuild.
-It has been `12` from 0.11.13 through 0.11.53; 0.11.40 froze 12 as the
-beta compatibility boundary.
+It has been `12` from 0.11.13 through 0.50.12, and upstream freezes 12
+for the DoltLite beta (`doc/doltlite/storage-format.md`): every version-12 file
+stays readable and writable by later version-12 builds. So a bump that
+stays on 12 needs no store migration.
 
 Also worth a moment: a bump can move the *SQL surface's* semantics
 without touching the storage format, and the tests that notice are the
@@ -144,9 +137,15 @@ report `0` for a newly created **empty** table (it had been `1` through
 0.11.51) — correct, but it moved a lightroom assertion from 113 tables
 to the 38 that actually hold rows. If a bump fails a count assertion,
 check whether upstream got *more* right before assuming a regression.
+And by 0.50.12 doltlite registers the per-table modules (`dolt_at_<table>` and
+friends) on first use rather than at open, so `pragma_module_list`
+stopped listing them; `etl/src/pin.rs` had used that list to decide
+what a commit holds, and every store open failed until it asked by
+reading instead.
 
-No code or wiring changes needed unless the doltlite public API shifts
-(it's a SQLite fork, so it shouldn't).
+The C API does not move (it is a SQLite fork), so a bump needs no
+wiring changes; the code changes it needs come from semantic shifts
+like the two above.
 
 ## Files in this package
 

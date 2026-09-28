@@ -30,6 +30,18 @@ rust_test(
     ],
 )
 
+# Same arrangement for `src/raw_store.rs`: what Browse may open a raw
+# store with, and the path check that keeps the page to stores inside
+# the data root. Nothing in it may reference `tauri`.
+rust_test(
+    name = "raw_store_test",
+    size = "small",
+    srcs = ["src/raw_store.rs"],
+    crate_root = "src/raw_store.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
 # The Node runtime that ships inside the .app, copied out of the
 # rules_nodejs toolchain repo so it lands at a predictable
 # `bazel-bin/datalib/tauri/` path — the same convention

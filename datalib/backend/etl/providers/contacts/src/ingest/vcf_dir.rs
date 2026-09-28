@@ -48,7 +48,7 @@ pub struct FetchSummary {
 /// `file_checkpoint` scope for the local-`.vcf` resume cursor. One
 /// contacts DB serves one source, so a single feed name suffices; each
 /// `.vcf` file is namespaced by its canonical path within the scope.
-const CHECKPOINT_SCOPE: &str = "carddav/vcf";
+const CHECKPOINT_SCOPE: &str = "contacts/vcf";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = opts.db.clone();
@@ -76,7 +76,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     summary.errors += scan.errors.len();
     for e in &scan.errors {
-        warn!(event = "carddav_vcf_walk_error", path = %e.path.display(), error = %e.error, "an entry of the vcf directory could not be walked");
+        warn!(event = "contacts_vcf_walk_error", path = %e.path.display(), error = %e.error, "an entry of the vcf directory could not be walked");
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
@@ -97,7 +97,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Err(e) => {
                 summary.errors += 1;
                 warn!(
-                    event = "carddav_vcf_ingest_failed",
+                    event = "contacts_vcf_ingest_failed",
                     path = %f.path.display(),
                     error = %e,
                     "a vcf file could not be ingested"
@@ -111,7 +111,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // store. `None` is a reader, which never reaches this path.
     if let Some(cas) = db.cas() {
         if let Err(e) = super::photos::lift_photos_to_cas(&db, cas).await {
-            warn!(event = "carddav_vcf_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
+            warn!(event = "contacts_vcf_photo_lift_failed", error = %e, "a photo could not be lifted out of its vCard");
         }
     }
     Ok(summary)
@@ -190,7 +190,7 @@ fn contact_uid(
         .unwrap_or_default();
     if given.trim().is_empty() && family.trim().is_empty() {
         warn!(
-            event = "carddav_vcf_nameless_contact",
+            event = "contacts_vcf_nameless_contact",
             path = %file.display(),
             index = idx,
             "vCard has no UID and no name; keying on file position — \
@@ -203,7 +203,7 @@ fn contact_uid(
         vcard_fn(block).unwrap_or_else(|| format!("{given} {family}").trim().to_string());
     if let Some(prev) = synth_seen.insert(uid.clone(), display_name.clone()) {
         warn!(
-            event = "carddav_vcf_synth_uid_collision",
+            event = "contacts_vcf_synth_uid_collision",
             path = %file.display(),
             uid = %uid,
             name = %display_name,

@@ -3,8 +3,9 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, processes, runs, snapshot, versions, LogQuery, LogRow, MetricRow,
-    Process, ProcessLogWriter, Retention, RunWriter, StepRunRow, StorePart,
+    log_after, log_query, process_log_after, processes, runs, snapshot, versions, LogCursor,
+    LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter, StepRunRow,
+    StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -179,6 +180,48 @@ async fn log_after_resumes_from_a_sequence_number() {
     assert_eq!(rest[0].msg, "line 4");
 }
 
+/// A panel opens on the newest lines and pages back from the oldest one it
+/// holds; every page reads oldest first, and the first line of the log
+/// has nothing before it.
+#[tokio::test]
+async fn the_newest_lines_come_first_and_pages_read_back_from_them() {
+    let td = tempfile::tempdir().unwrap();
+    let keep = Retention {
+        max_runs: 100,
+        max_age_days: 36500,
+        ..Retention::default()
+    };
+    let w = RunWriter::start(td.path(), "run-1", "run-1", None, keep).unwrap();
+    for msg in ["one", "two", "three", "four", "five"] {
+        w.log(line("a", "info", msg));
+    }
+    // Dropping the writer flushes it.
+    drop(w);
+    let read = |cursor: LogCursor| {
+        let root = td.path().to_path_buf();
+        async move {
+            let q = LogQuery {
+                q: "",
+                cursor,
+                limit: 2,
+            };
+            let lines = log_query(&root, &q).await.unwrap();
+            (
+                lines.iter().map(|l| l.msg.clone()).collect::<Vec<_>>(),
+                lines.first().map(|l| l.seq),
+            )
+        }
+    };
+    let (newest, oldest_held) = read(LogCursor::Newest).await;
+    assert_eq!(newest, ["four", "five"]);
+    let (before, first) = read(LogCursor::Before(oldest_held.unwrap())).await;
+    assert_eq!(before, ["two", "three"]);
+    let (earlier, first) = read(LogCursor::Before(first.unwrap())).await;
+    assert_eq!(earlier, ["one"]);
+    let (nothing, _) = read(LogCursor::Before(first.unwrap())).await;
+    assert!(nothing.is_empty());
+}
+
 /// One step's lines across runs come back in run order with the run each
 /// line belongs to, the same `seq` cursor tails them, and a `-run:` term
 /// drops one run's lines.
@@ -191,12 +234,8 @@ async fn log_query_spans_runs_and_reads_terms() {
                 log_query(
                     &root,
                     &LogQuery {
-                        run: None,
-                        process: None,
-                        step: Some(step),
-                        attempt: None,
-                        q: "",
-                        after_seq,
+                        q: &format!("step:{step}"),
+                        cursor: LogCursor::After(after_seq),
                         limit,
                     },
                 )
@@ -229,12 +268,8 @@ async fn log_query_spans_runs_and_reads_terms() {
     let not_first = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: Some("a"),
-            attempt: None,
-            q: "-run:run-1 sec",
-            after_seq: 0,
+            q: "step:a -run:run-1 sec",
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -245,12 +280,8 @@ async fn log_query_spans_runs_and_reads_terms() {
     let refused = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "author:thad",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -521,10 +552,8 @@ async fn the_snapshot_carries_two_recent_samples_per_series_and_the_last_log_tim
         w.log(line("a", "info", "first"));
         // The first value has to reach the store before the second is
         // published, or the two coalesce in the writer's batch and the
-        // series gets one sample. Waited for, not slept for: the
-        // writer's first flush follows an open that a loaded runner can
-        // stretch past any interval chosen here.
-        wait_for_metric(td.path(), "a", "rows", 1).await;
+        // series gets one sample.
+        w.flush().await;
         // Inside the sample floor: the second value is the run's last,
         // which the final flush samples.
         w.metric(MetricRow {
@@ -577,51 +606,32 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     );
 }
 
-async fn wait_for_log_line(root: &std::path::Path, msg: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let all = log_query(
-            root,
-            &LogQuery {
-                run: None,
-                process: None,
-                step: None,
-                attempt: None,
-                q: "",
-                after_seq: 0,
-                limit: 100,
-            },
-        )
-        .await
-        .unwrap_or_default();
-        if all.iter().any(|l| l.msg == msg) {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "log line {msg:?} never reached the store"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+/// What a writer holds is readable the moment `flush` returns, not a
+/// timer tick later.
+#[tokio::test]
+async fn a_flushed_line_is_readable_at_once() {
+    let td = tempfile::tempdir().unwrap();
+    let server =
+        ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).unwrap();
+    for msg in ["one", "two"] {
+        server.log(LogRow {
+            ts_utc: T0.into(),
+            level: "info".into(),
+            msg: msg.into(),
+            ..Default::default()
+        });
+        server.flush().await;
+        let all = process_log_after(td.path(), 0, 100).await;
+        assert_eq!(all.last().map(|l| l.msg.as_str()), Some(msg), "{all:#?}");
     }
-}
-
-async fn wait_for_metric(root: &std::path::Path, step: &str, name: &str, value: i64) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let snap = snapshot(root).await;
-        if snap
-            .metrics
-            .iter()
-            .any(|m| m.step == step && m.name == name && m.value == value)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "metric {step}/{name}={value} never reached the store"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    let w = start(td.path(), "run-1");
+    w.metric(metric("a", "rows", 3));
+    w.flush().await;
+    let snap = snapshot(td.path()).await;
+    assert_eq!(
+        snap.metrics.iter().map(|m| m.value).collect::<Vec<_>>(),
+        [3]
+    );
 }
 
 /// The server's lines share the table with the runs': no `run_id`, the
@@ -648,11 +658,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         ..Default::default()
     });
     // The line has to be in the file before the runs' are, or `seq`
-    // does not read in the order things happened. The server writer
-    // flushes on a timer after opening the store, and on a loaded CI
-    // runner that can take longer than any sleep chosen here, so wait
-    // for the row itself.
-    wait_for_log_line(td.path(), "ready").await;
+    // does not read in the order things happened.
+    server.flush().await;
     {
         let w =
             RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", None, keep).unwrap();
@@ -682,12 +689,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -735,12 +738,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let servers_only = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -753,12 +752,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let loud = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "min_level:warn",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -773,12 +768,8 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     let one_build = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "commit:f2068",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -824,12 +815,8 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )
@@ -859,7 +846,7 @@ async fn a_process_is_pruned_only_once_nothing_names_it() {
             msg: "ancient".into(),
             ..Default::default()
         });
-        wait_for_log_line(td.path(), "ancient").await;
+        server.flush().await;
     }
     let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
         .await
@@ -917,12 +904,8 @@ async fn process_lines_past_the_cap_go_oldest_first() {
     let all = log_query(
         td.path(),
         &LogQuery {
-            run: None,
-            process: None,
-            step: None,
-            attempt: None,
             q: "process:http",
-            after_seq: 0,
+            cursor: LogCursor::After(0),
             limit: 100,
         },
     )

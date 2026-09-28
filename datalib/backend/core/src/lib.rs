@@ -8,13 +8,11 @@ pub mod disk;
 pub mod repo;
 pub mod store;
 
-/// The data-root layout and the bundled-Node resolver moved down into
-/// `datalib_runtime`, a crate with no dependencies, so that
-/// `qmd_indexer_bin` can link them without dragging this crate (and its
-/// 160 rdeps) into the digest of the fixture's embedding action. See
-/// `datalib_runtime`'s crate docs. Re-exported here so every existing
+/// The data-root layout and the bundled-Node resolver live in
+/// `datalib_runtime`, a crate with no dependencies, so small crates can
+/// link them without this one. Re-exported here so every
 /// `datalib_core::layout::…` / `datalib_core::node_runtime::…` call site
-/// still resolves.
+/// resolves.
 pub use datalib_runtime::{layout, node_runtime};
 
 #[cfg(test)]

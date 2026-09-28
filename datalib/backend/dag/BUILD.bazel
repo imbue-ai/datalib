@@ -28,7 +28,6 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/parent_watch:datalib_parent_watch",
-        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
@@ -45,8 +44,8 @@ rust_library(
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
+        "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
-        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -57,6 +56,7 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tokio",
+        "@datalib_crates//:walkdir",
     ],
 )
 
@@ -122,6 +122,35 @@ rust_test(
 )
 
 
+# One process reading or writing `system/supervisor.sqlite` as one of its
+# real users does; seven of them at once are `supervisor_contention_test`.
+rust_binary(
+    name = "supervisor_store_worker",
+    testonly = True,
+    srcs = ["tests/supervisor_store_worker/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_dag",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "supervisor_contention_test",
+    srcs = ["tests/supervisor_contention.rs"],
+    crate_root = "tests/supervisor_contention.rs",
+    data = [":supervisor_store_worker"],
+    edition = "2021",
+    env = {"STORE_WORKER": "$(rootpath :supervisor_store_worker)"},
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
 # Live end-to-end golden: drives the real pipeline (this runner +
 # //datalib/backend/datalib_step) against real provider APIs, and snapshots the
 # produced data tree. The config, the file-based source data, and the golden
@@ -165,6 +194,7 @@ rust_test(
     ],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
@@ -196,5 +226,37 @@ build_test(
     name = "manual_targets_build",
     targets = [
         ":manual_e2e_live_sync_golden",
+    ],
+)
+
+# A step that does only what it is told over a FIFO, for the harness.
+rust_binary(
+    name = "puppet",
+    testonly = True,
+    srcs = ["tests/puppet/main.rs"],
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# Suite 1: does the loop manage processes correctly? Puppet steps, the
+# loop in-process under the one idle host, a person at the controls.
+rust_test(
+    name = "supervisor_harness_test",
+    size = "small",
+    srcs = glob(["tests/supervisor_harness/*.rs"]),
+    crate_root = "tests/supervisor_harness/main.rs",
+    data = [":puppet"],
+    edition = "2021",
+    env = {"PUPPET": "$(rootpath :puppet)"},
+    deps = [
+        ":datalib_dag",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )

@@ -439,7 +439,7 @@ fn book_grid_row(
         .conversation_name(Some(book_title(&book.n)))
         .conversation_uuid(bk_uuid.to_string())
         .entire_chat(format!("/chat/{bk_uuid}"))
-        .text(book_text_for_grid(book))
+        .body(book_text_for_grid(book))
         .qmd_path(Some(format!(
             "{}/index.md",
             book_dir_rel(stanza, &book.n).display()
@@ -482,7 +482,7 @@ fn chapter_grid_row(
         .conversation_name(Some(conversation_name(&book.n, &chapter.n, edition)))
         .conversation_uuid(ch_uuid.to_string())
         .entire_chat(format!("/chat/{ch_uuid}"))
-        .text(chapter_text_for_grid(chapter, edition))
+        .body(chapter_text_for_grid(chapter, edition))
         .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci_u}/",
@@ -534,7 +534,7 @@ fn section_grid_row(
         .conversation_uuid(ch_uuid.to_string())
         .message_index(Some(idx))
         .entire_chat(format!("/chat/{ch_uuid}"))
-        .text(text.to_string())
+        .body(text.to_string())
         .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci}.{si}/",

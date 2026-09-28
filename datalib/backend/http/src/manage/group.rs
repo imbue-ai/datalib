@@ -68,14 +68,14 @@ pub struct ChildStatus {
 }
 
 /// The status a group row shows, and which child it is read from.
-/// Running if any child is running; paused if any child is; failed if
-/// any child failed; stopped if any child was; otherwise the last step
-/// in pipeline order
+/// Running if any child is running; off if any child is; queued if
+/// any child is; failed if any child failed; stopped if any child was;
+/// otherwise the last step in pipeline order
 /// — the one whose state says how far the group's data got. A group
 /// with only applets reads its last applet. `children` must already be
 /// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
-    for key in ["running", "paused", "failed", "stopped"] {
+    for key in ["running", "off", "queued", "failed", "stopped"] {
         if let Some(child) = children.iter().find(|c| c.status.key == key) {
             return Some(read(child));
         }
@@ -222,19 +222,19 @@ mod tests {
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
             step("u/grid_index", &["a/render_markdown"]),
-            step("u/qmd_index", &["a/render_markdown"]),
+            step("u/qmd_aggregator", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_index"]);
+        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_aggregator"]);
     }
 
     #[test]
     fn pipeline_order_trails_the_applets_which_are_never_scheduled() {
         let out = pipeline_order(&[
             applet("u"),
-            step("u/qmd_index", &[]),
+            step("u/qmd_aggregator", &[]),
             step("u/grid_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/qmd_index", "u/grid_index", "u"]);
+        assert_eq!(ids(&out), ["u/qmd_aggregator", "u/grid_index", "u"]);
     }
 
     #[test]
@@ -296,15 +296,29 @@ mod tests {
         assert_eq!(got.1, "s/render_markdown");
     }
 
+    /// A source added while another source's sync runs: its ingest waits
+    /// for that sync to end and its render has never run. The row said
+    /// "Never run" beside a Stop button, with nothing to say why.
+    #[test]
+    fn group_status_is_queued_while_an_earlier_step_waits_to_run() {
+        let got = group_status(&[
+            child("s/ingest", "queued", Step, None),
+            child("s/render_markdown", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "queued");
+        assert_eq!(got.1, "s/ingest");
+    }
+
     #[test]
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
             child("u/grid_index", "succeeded", Step, None),
-            child("u/qmd_index", "skipped_up_to_date", Step, None),
+            child("u/qmd_aggregator", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
         .unwrap();
-        assert_eq!(got.1, "u/qmd_index");
+        assert_eq!(got.1, "u/qmd_aggregator");
     }
 
     #[test]

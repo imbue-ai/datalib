@@ -13,6 +13,8 @@ pub struct SearchRow {
     /// `/api/chat/{markdown_uuid}` when the user clicks the row.
     pub markdown_uuid: Option<String>,
     pub message_index: Option<usize>,
+    /// The Contents cell: the row's `preview`, or for a free-text hit the
+    /// words qmd matched.
     pub snippet: String,
     pub sender: String,
     /// Null when the row has no source-side timestamp (e.g. contacts
@@ -44,13 +46,10 @@ pub struct SearchRow {
     pub source: String,
     /// The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
     pub provider: String,
-    /// `source` and `source_id`, resolved for the grid's Provider and
-    /// Source columns: the configured source's own mark and label where
-    /// the config says which it is (Gmail, not Mail), the group's name
-    /// rather than its id. Filled by the applet, which reads the
-    /// config; absent from a repo's raw answer.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_ref: Option<datalib_columns::Identity>,
+    /// `source_id`, resolved for the grid's Source column: the group's
+    /// name rather than its id, led by the configured source's own mark
+    /// (Gmail, not Mail). Filled by the applet, which reads the config;
+    /// absent from a repo's raw answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<datalib_columns::Identity>,
     /// The **id** of the configured source this row came from: the
@@ -98,8 +97,8 @@ pub struct SearchRow {
     /// For a modified row, the columns that differ, `|`-joined.
     pub diff_changed_columns: Option<String>,
     /// QMD-routed rank score for this row, when the search went through qmd.
-    /// `None` for pure structured queries (no free text) and for the SQL-LIKE
-    /// fallback path. Surfaced to the UI as a sortable "Score" column.
+    /// `None` for a query of structured terms alone. Surfaced to the UI as
+    /// a sortable "Score" column.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
 }

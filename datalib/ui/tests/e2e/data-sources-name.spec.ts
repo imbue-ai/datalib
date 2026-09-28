@@ -1,6 +1,7 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   expandGroup,
   groupRow,
@@ -27,12 +28,11 @@ const renderToggle = (page: Page) =>
   wizard(page).locator(
     '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
   );
-/// The Rendering section's second toggle: whether this source's
-/// markdown is named by `unified_index/qmd_index`, and so reachable by
-/// semantic search.
+/// The Rendering section's second toggle: whether this source has its
+/// own qmd steps, and so is reachable by free-text search.
 const qmdToggle = (page: Page) =>
   wizard(page).locator(
-    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for semantic search")) input.wiz-bool',
+    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for free-text search")) input.wiz-bool',
   );
 
 /// The `inputs` one fan-in declares, read out of the config text.
@@ -255,7 +255,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   expect(after).toContain('group = "no-render"');
 });
 
-test("semantic search is a choice, and only the qmd fan-in feels it", async ({ page }) => {
+test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
   // Embedding is the slow part of a sync, so a source can be rendered
   // and gridded without being embedded. The grid index is not a
   // choice — a source missing from it is missing from the table.
@@ -270,7 +270,8 @@ test("semantic search is a choice, and only the qmd fan-in feels it", async ({ p
   await expect(editor).toHaveValue(/rows-only\/render_markdown/);
   const added = await editor.inputValue();
   expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
-  expect(fanInInputs(added, "qmd_index")).not.toContain("rows-only/render_markdown");
+  expect(fanInInputs(added, "qmd_aggregator")).not.toContain("rows-only/keyword_index");
+  expect(added).not.toContain("rows-only/keyword_index");
 
   // Reopening reads the answer back off the config, not off a default.
   await expandGroup(page, "rows-only");
@@ -287,8 +288,17 @@ test("semantic search is a choice, and only the qmd fan-in feels it", async ({ p
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
   const saved = await editor.inputValue();
-  expect(fanInInputs(saved, "qmd_index")).toContain("rows-only/render_markdown");
-  // Added once, however many times the source is saved.
+  expect(fanInInputs(saved, "qmd_aggregator")).toEqual(
+    expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
+  );
+  expect(saved).toContain(
+    'group = "rows-only"\nfunction = "keyword_index"\ninputs = ["rows-only/render_markdown"]',
+  );
+  expect(saved).toContain(
+    'group = "rows-only"\nfunction = "embed"\ninputs = ["rows-only/keyword_index"]',
+  );
+  // Added once, however many times the source is saved: in the grid
+  // index and as the keyword index's input.
   expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
 });
 
@@ -417,10 +427,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the two steps under it.
+  // The confirm says what goes: the group and the four steps under it —
+  // ingest, render, and the source's keyword index and embeddings.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("2 steps");
+    expect(d.message()).toContain("4 steps");
     void d.accept();
   });
   await pickRowMenu(
@@ -432,7 +443,80 @@ test("deleting the group takes every step under it", async ({ page }) => {
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
   await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
-  // The `[[groups]]` entry, both `[[steps]]`, and any fan-in reference:
+  // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);
+});
+
+/// The data root: the directory the served config lives in.
+async function dataRoot(request: APIRequestContext): Promise<string> {
+  const { path } = (await (await request.get("/api/config")).json()) as { path: string };
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
+/// A comparison of the fixture's Slack, written straight into the config
+/// with a tree on disk, as "Compare two versions…" and its first sync leave
+/// one. No inputs, so saving it syncs nothing.
+async function addComparison(page: Page, root: string, id: string, name: string) {
+  mkdirSync(`${root}/${id}/render_markdown`, { recursive: true });
+  writeFileSync(`${root}/${id}/render_markdown/indexed_markdown.doltlite_db`, "");
+  await page
+    .locator(".m2-editor")
+    .fill(
+      `${original}\n[[groups]]\nid = "${id}"\nname = "${name}"\ntype = "diff"\nsource = "slack"\n\n` +
+        `[[steps]]\ngroup = "${id}"\nfunction = "render_markdown"\n\n` +
+        `[steps.params.diff]\nfrom = "a"\nto = "b"\n`,
+    );
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await openManager(page);
+}
+
+const removeDialog = (page: Page) => page.getByRole("dialog", { name: "Remove" });
+
+test("removing a comparison deletes its computed changes, checked by default", async ({
+  page,
+  request,
+}) => {
+  const root = await dataRoot(request);
+  await addComparison(page, root, "slack-changes", "Slack changes");
+
+  await pickRowMenu(
+    page,
+    groupRow(page, "slack-changes"),
+    "Remove from config, with everything under it",
+    removeDialog(page),
+  );
+  await expect(removeDialog(page)).toContainText('Remove the comparison "Slack changes"');
+  await expect(removeDialog(page).getByRole("checkbox")).toBeChecked();
+  await removeDialog(page).getByRole("button", { name: "Remove" }).click();
+
+  await expect(
+    page.getByText(/Removed Slack changes\. The computed changes are deleted/),
+  ).toBeVisible();
+  await expect(groupRow(page, "slack-changes")).toHaveCount(0);
+  await expect.poll(() => existsSync(`${root}/slack-changes`)).toBe(false);
+});
+
+test("a comparison removed with the box unchecked keeps its tree", async ({ page, request }) => {
+  const root = await dataRoot(request);
+  await addComparison(page, root, "slack-kept", "Slack kept");
+  try {
+    await pickRowMenu(
+      page,
+      groupRow(page, "slack-kept"),
+      "Remove from config, with everything under it",
+      removeDialog(page),
+    );
+    await removeDialog(page).getByRole("checkbox").uncheck();
+    await removeDialog(page).getByRole("button", { name: "Remove" }).click();
+
+    await expect(page.getByText("Removed Slack kept.", { exact: true })).toBeVisible();
+    await expect(groupRow(page, "slack-kept")).toHaveCount(0);
+    expect(existsSync(`${root}/slack-kept/render_markdown/indexed_markdown.doltlite_db`)).toBe(
+      true,
+    );
+  } finally {
+    rmSync(`${root}/slack-kept`, { recursive: true, force: true });
+  }
 });

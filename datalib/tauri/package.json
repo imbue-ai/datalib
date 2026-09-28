@@ -5,6 +5,6 @@
   "//": "Pins the Tauri CLI that build-signed-app.sh runs (`pnpm exec tauri build`) through pnpm-lock.yaml, so the signing job resolves nothing from the registry at signing time with the Developer ID certificate in its environment; a bare `pnpm dlx @tauri-apps/cli@2` picked whatever 2.x was current that day. Installed with --frozen-lockfile --ignore-scripts: the CLI's platform binary is an integrity-pinned optional dependency, not an install script.",
   "packageManager": "pnpm@11.25.0",
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4"
+    "@tauri-apps/cli": "2.11.5"
   }
 }

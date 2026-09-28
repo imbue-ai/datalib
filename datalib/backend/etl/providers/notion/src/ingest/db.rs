@@ -1,33 +1,19 @@
 //! Doltlite-backed raw store for the Notion provider.
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use datalib_etl::blob_cas::{self, BlobCas, CasEdgeRow as _};
+use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{full_ddl, NotionAttachmentRow};
 
-/// Handle on the raw-store sqlite file. Cheap to clone via the pool.
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    cas: BlobCas,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// a pin belongs to a connection, not to a call, because the
-    /// `pinned_<table>` views it installs live on that connection.
-    pin: Option<datalib_etl::pin::Pin>,
-}
+datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl());
 
 /// One row for [`RawDb::upsert_pages`]. `payload` is `None` for a
 /// discovery upsert that records a page exists without clobbering a
@@ -93,85 +79,11 @@ pub struct CommentUpsert {
 }
 
 impl RawDb {
-    /// Open this store to *read* it, for the render pass.
-    ///
-    /// The download step owns this store; render only reads it. An ordinary
-    /// [`Self::open`] would discard the downloader's in-flight rows,
-    /// reconcile the schema and commit on the way in — three writes to a
-    /// file this caller does not own. See
-    /// `datalib_etl::doltlite_raw::open_reader`.
-    ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
-    /// **`None` means the store cannot be read**, not that it is empty —
-    /// no commit to pin, or a build without the dolt extensions. See the
-    /// plan's "The sink contract".
-    pub async fn open_reader(db_path: &Path) -> Result<Option<Self>> {
-        Self::open_reader_at(db_path, None).await
-    }
-
-    /// A reader pinned at `commit`, or at HEAD when `None`; `None` back
-    /// when nothing is committed.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        // Pinned at open, views installed: a reader cannot read the
-        // working set by forgetting to.
-        let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        let pin = reader.pin().clone();
-        let pool = reader.pool().clone();
-        Ok(Some(Self {
-            pool,
-            cas: BlobCas::open_reader(&blob_cas::cas_path_for(db_path)).await?,
-            pin: Some(pin),
-        }))
-    }
-
-    /// How this handle reads content. Every content query goes through
-    /// it, so a reader cannot accidentally read the working set.
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self {
-            pool,
-            cas,
-            pin: None,
-        })
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    pub fn cas(&self) -> &BlobCas {
-        &self.cas
-    }
-
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
     pub async fn page_states(&self) -> Result<std::collections::HashMap<String, PageState>> {
         let rows = sqlx::query(
             "SELECT id, last_edited_time, payload IS NOT NULL AS has_payload FROM pages",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select page_states")?;
         let mut out = std::collections::HashMap::with_capacity(rows.len());
@@ -191,7 +103,7 @@ impl RawDb {
     }
 
     pub async fn ensure_id(&self, table: &str, id: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin ensure_id tx")?;
+        let mut tx = self.pool().begin().await.context("begin ensure_id tx")?;
         dr::ensure_object_row(&mut tx, table, id).await?;
         tx.commit().await.context("commit ensure_id tx")?;
         Ok(())
@@ -206,7 +118,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin pages tx")?;
+        let mut tx = self.pool().begin().await.context("begin pages tx")?;
         for r in rows {
             let sql = if r.payload.is_some() {
                 "INSERT INTO pages (id, parent_type, parent_id, in_trash, created_time, last_edited_time, url, payload)
@@ -262,7 +174,11 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin page_markdown tx")?;
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .context("begin page_markdown tx")?;
         for r in rows {
             sqlx::query(
                 "INSERT INTO page_markdown (id, markdown, truncated, unresolved_block_ids, source_last_edited_time)
@@ -291,7 +207,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin comments tx")?;
+        let mut tx = self.pool().begin().await.context("begin comments tx")?;
         for r in rows {
             sqlx::query(
                 "INSERT INTO comments (id, discussion_id, parent_type, parent_id, page_id, created_time, last_edited_time, payload)
@@ -326,7 +242,7 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin users tx")?;
+        let mut tx = self.pool().begin().await.context("begin users tx")?;
         for (id, name, payload) in rows {
             sqlx::query(
                 "INSERT INTO users (id, name, payload) VALUES (?, ?, jsonb(?))
@@ -350,7 +266,7 @@ impl RawDb {
     /// has never seen.
     pub async fn known_user_ids(&self) -> Result<HashSet<String>> {
         let rows = sqlx::query("SELECT id FROM users WHERE payload IS NOT NULL")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select known user ids")?;
         Ok(rows
@@ -366,7 +282,7 @@ impl RawDb {
             "SELECT id, name FROM {} WHERE name IS NOT NULL",
             self.reads().table("users")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select user names")?;
         let mut out = HashMap::new();
@@ -385,7 +301,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin comment_anchors tx")?;
@@ -419,7 +335,7 @@ impl RawDb {
 
     pub async fn known_anchor_ids(&self) -> Result<HashSet<String>> {
         let rows = sqlx::query("SELECT id FROM comment_anchors")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select known anchor ids")?;
         Ok(rows
@@ -436,7 +352,7 @@ impl RawDb {
             "SELECT id, plain_text FROM {} WHERE plain_text IS NOT NULL AND plain_text <> ''",
             self.reads().table("comment_anchors")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select comment anchors")?;
         let mut out = HashMap::new();
@@ -453,7 +369,7 @@ impl RawDb {
 
     pub async fn record_page_error(&self, id: &str, err: &str) -> Result<()> {
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin record_page_error tx")?;
@@ -463,11 +379,11 @@ impl RawDb {
     }
 
     pub async fn failed_page_ids(&self) -> Result<Vec<String>> {
-        dr::failed_ids(&self.pool, "pages").await
+        dr::failed_ids(self.pool(), "pages").await
     }
 
     pub async fn load_pages(&self) -> Result<Vec<Value>> {
-        dr::load_payloads(&self.pool, self.reads(), "pages").await
+        dr::load_payloads(self.pool(), self.reads(), "pages").await
     }
 
     /// Child pages linked from `page_id`'s stored body.
@@ -479,7 +395,7 @@ impl RawDb {
     pub async fn stored_child_pages(&self, page_id: &str) -> Result<Vec<String>> {
         let row = sqlx::query("SELECT markdown FROM page_markdown WHERE id = ?")
             .bind(page_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select stored markdown for child discovery")?;
         let Some(row) = row else {
@@ -496,7 +412,7 @@ impl RawDb {
             "SELECT id, markdown FROM {} ORDER BY id",
             self.reads().table("page_markdown")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select page_markdown")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -518,7 +434,7 @@ impl RawDb {
             "SELECT json(payload) AS payload, page_id FROM {} WHERE payload IS NOT NULL ORDER BY id",
             self.reads().table("comments")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select comments")?;
         let mut out = Vec::with_capacity(rows.len());
@@ -543,7 +459,7 @@ impl RawDb {
             "SELECT id, page_id, ref_id, blake3 FROM {} ORDER BY page_id, ref_id",
             self.reads().table("notion_attachments")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select notion_attachments for render")?;
         Ok(rows
@@ -569,7 +485,7 @@ impl RawDb {
              WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
         )
         .bind(ref_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("notion_attachments skip-check")?;
         Ok(row.is_some())
@@ -586,7 +502,7 @@ impl RawDb {
         content_type: Option<&str>,
         bytes: &[u8],
     ) -> Result<String> {
-        let hash = self.cas.put(bytes, content_type).await?;
+        let hash = self.cas().put(bytes, content_type).await?;
         let edge = NotionAttachmentRow {
             id: NotionAttachmentRow::pk_recipe(block_id, ref_id),
             page_id: block_id.to_string(),
@@ -595,7 +511,7 @@ impl RawDb {
         };
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .context("begin notion_attachments tx")?;
@@ -616,7 +532,7 @@ impl RawDb {
             blake3: None,
         };
         let now = datalib_time::IsoOffsetTimestamp::now_local();
-        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        let mut tx = self.pool().begin().await.context("begin blob error tx")?;
         datalib_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())

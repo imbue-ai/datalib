@@ -91,6 +91,46 @@ pub struct ColumnSpec {
     /// decides what an edit does.
     #[serde(default)]
     pub editable: bool,
+    /// How the producer's search bar filters on this column, where it
+    /// can: a cell's value becomes a term the viewer writes into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<ColumnSearch>,
+}
+
+/// The key a term on this column starts with (`author:`), and the row
+/// field whose value the term names: the uuid behind a name, the id
+/// behind a label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSearch {
+    pub key: String,
+    pub field: String,
+}
+
+/// What a paged grid reads of its rows beyond their columns: the field
+/// that names a row, the document a selected row opens, and what free
+/// text in its search bar matches.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RowsSpec {
+    pub row_key: &'static str,
+    pub document: DocumentLink,
+    pub free_text: FreeTextMatch,
+}
+
+/// The document a row opens: the first of `fields` the row has a value
+/// in, at the section `anchor` names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DocumentLink {
+    pub fields: &'static [&'static str],
+    pub anchor: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreeTextMatch {
+    /// qmd ranks the rows: they come in its order, best first.
+    Qmd,
+    /// A substring of some of the columns; the rows keep their order.
+    Like,
 }
 
 fn yes() -> bool {
@@ -106,6 +146,7 @@ impl ColumnSpec {
             description: None,
             default_visible: true,
             editable: false,
+            search: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -234,12 +275,20 @@ pub struct Action {
     pub id: String,
     pub label: String,
     pub enabled: bool,
+    /// The enabled button's hover: what pressing it does, in a sentence.
+    /// `label` alone when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// The disabled button's hover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
     /// Drawn as something to think twice about.
     #[serde(default)]
     pub danger: bool,
+    /// Drawn as an on/off switch in this position rather than a button;
+    /// pressing it asks for the other one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
 }
 
 #[cfg(test)]

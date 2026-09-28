@@ -1,7 +1,8 @@
 //! Long-lived `qmd mcp` subprocess.
 
+use crate::qmd::lex::{has_lex_syntax, strip_lex_syntax};
 use crate::qmd::mapping::{CollectionScope, QmdHit, QueryMode};
-use crate::qmd::runner::{has_lex_syntax, strip_lex_syntax, strip_uri, DEFAULT_QMD_VERSION};
+use crate::qmd::DEFAULT_QMD_VERSION;
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
@@ -69,8 +70,7 @@ impl QmdDaemon {
     }
 
     /// Run a search. On any I/O error the child is torn down so the next
-    /// call respawns cleanly; the caller decides whether to fall back to
-    /// the CLI path.
+    /// call respawns cleanly.
     pub fn search(
         &self,
         mode: QueryMode,
@@ -98,8 +98,8 @@ impl QmdDaemon {
         let res = (|| -> Result<Vec<QmdHit>> {
             // The index may be absent (no sync yet) or freshly rebuilt.
             // Its mtime both gates the search and tells `ensure_started`
-            // whether the live child is stale. A missing index is a
-            // normal fallback signal, not a daemon failure.
+            // whether the live child is stale. A missing index is an
+            // answer ("sync to build it"), not a daemon failure.
             let idx = qmd_index_path(&self.cfg.qmd_root);
             let index_mtime = std::fs::metadata(&idx)
                 .and_then(|m| m.modified())
@@ -144,9 +144,7 @@ impl QmdDaemon {
 
 /// Build the MCP `searches` JSON array for a given user query and mode.
 /// Extracted so the lex/vec routing is unit-testable without spawning
-/// the daemon. See [`crate::qmd::runner::has_lex_syntax`] /
-/// [`crate::qmd::runner::strip_lex_syntax`] for the shared rules used
-/// by the CLI fallback path.
+/// the daemon. The lex rules are [`crate::qmd::lex`]'s.
 fn build_daemon_searches(mode: QueryMode, q: &str) -> serde_json::Value {
     let lex_has_syntax = has_lex_syntax(q);
     let vec_text = if lex_has_syntax {
@@ -378,6 +376,18 @@ fn parse_query_response(resp: &serde_json::Value) -> Result<Vec<QmdHit>> {
     Ok(out)
 }
 
+/// A hit's `qmd://<collection>/<path>` as the `<path>` a grid row's
+/// `qmd_path` holds.
+pub fn strip_uri(uri: &str) -> &str {
+    let Some(after_scheme) = uri.strip_prefix("qmd://") else {
+        return uri;
+    };
+    match after_scheme.find('/') {
+        Some(i) => &after_scheme[i + 1..],
+        None => after_scheme,
+    }
+}
+
 fn teardown(state: &mut DaemonState) {
     state.stdin = None;
     state.stdout = None;
@@ -399,6 +409,16 @@ impl Drop for QmdDaemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_uri_handles_collection_prefix() {
+        assert_eq!(strip_uri("qmd://mirror/foo/bar.qmd"), "foo/bar.qmd");
+        assert_eq!(strip_uri("qmd://other/x"), "x");
+        // A collection alone has no path under it.
+        assert_eq!(strip_uri("qmd://mirror"), "mirror");
+        // Not a qmd URI — left alone.
+        assert_eq!(strip_uri("plain/path"), "plain/path");
+    }
 
     #[test]
     fn parses_query_response() {
@@ -507,6 +527,12 @@ mod tests {
             s,
             serde_json::json!([{"type": "vec", "query": "earl grey"}])
         );
+    }
+
+    #[test]
+    fn an_escaped_quote_stays_inside_its_phrase() {
+        let v = build_daemon_searches(QueryMode::Hybrid, r#""a \"quoted\" word" tea"#);
+        assert_eq!(v[1]["query"], r#"a \"quoted\" word tea"#);
     }
 
     #[test]

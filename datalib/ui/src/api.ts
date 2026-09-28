@@ -1,6 +1,7 @@
 // Thin fetch wrapper for the Datalib HTTP API.
 
 import type { FeedbackContext } from "./feedback/context";
+import { ApiError, errorDetail } from "./apiError";
 import { pushToast } from "./toasts";
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
@@ -44,10 +45,9 @@ export type SearchRow = {
   source: string;
   // The `grid_rows.provider` tag behind `source` (`slack`, `claude`).
   provider: string;
-  // `source` and `source_id` resolved for the grid's Provider and
-  // Source columns, by the applet from the config: the configured
-  // source's own mark (Gmail, not Mail) and the group's name.
-  provider_ref?: Identity;
+  // `source_id` resolved for the grid's Source column, by the applet
+  // from the config: the group's name, led by the configured source's
+  // own mark (Gmail, not Mail).
   source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
   // directory under the data root (the first segment of its qmd_path).
@@ -86,8 +86,8 @@ export type SearchRow = {
   diff_status: DiffStatus | null;
   // For a modified row, the columns whose value differs, `|`-joined.
   diff_changed_columns: string | null;
-  // QMD rank score. Present when the row came from a qmd-routed search;
-  // omitted (undefined) for pure structured queries and the LIKE fallback.
+  // QMD rank score. Present when the row came from a free-text (qmd)
+  // search; omitted for a query of structured terms alone.
   score?: number;
 };
 
@@ -95,25 +95,47 @@ export type SearchRow = {
 // keys (free_text, filters, resolved_type, …) that we ignore; typing
 // only what we consume keeps the contract narrow.
 export type QueryEcho = {
-  // Set when the qmd-routed search failed and the backend fell back to
-  // the SQL LIKE path. The UI surfaces this as a banner so users see
-  // degraded search rather than silently get worse results.
+  // Set when a free-text search failed in qmd; the response then has no
+  // rows, and the grid says why in a banner.
   qmd_error?: string | null;
   [key: string]: unknown;
 };
 
-export type SearchResponse = {
-  query_echo: QueryEcho;
+/// What a paged grid reads of its rows beyond their columns — see
+/// `datalib_columns::RowsSpec`.
+export type RowsSpec = {
+  // The field that names a row.
+  row_key: string;
+  // The document a selected row opens: the first of `fields` the row has
+  // a value in, at the section its `anchor` field names.
+  document: { fields: string[]; anchor: string };
+  // qmd ranks free text, best first; `like` matches a substring and keeps
+  // the rows' order.
+  free_text: "qmd" | "like";
+};
+
+/// One page of a paged table's rows: the search's, or the problems'.
+export type RowsResponse<Row> = RowsSpec & {
+  // Only the search has one.
+  query_echo?: QueryEcho;
   // The columns the rows carry, typed — see `ColumnSpec`.
   columns: ColumnSpec[];
-  rows: SearchRow[];
-  total_estimated: number;
+  // One page of the rows, from `offset`.
+  rows: Row[];
+  // Every row the search holds, not just this page's.
+  total: number;
+  // Where the next page starts; null when this one reaches the end.
+  next_offset: number | null;
+  // The index commit the search was read at; null with no index yet.
+  at: string | null;
   // Backend-side errors that don't fail the response — e.g. the
   // structured-search SQL errored and we returned zero rows rather than
   // surface a 500. `api.ts` raises each as a toast so the user sees
   // them; the field is omitted when empty (serde `skip_serializing_if`).
   errors?: string[];
 };
+
+export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
 
 // QMDs are write-only output. The backend ships the body verbatim
 // (frontmatter stripped) and the UI runs markdown-it on it. Per-section
@@ -290,6 +312,59 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_INDEX}/docs`, signal);
 }
 
+// --- The embedding map ------------------------------------------------------
+// `unified_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_index/map.rs). Hand-kept in step with it.
+
+/// The step that writes the map, as `config.toml` composes its id.
+export const EMBEDDING_MAP_STEP = "unified_index/embedding_map";
+
+export type MapPoint = {
+  markdown_uuid: string;
+  x: number;
+  y: number;
+  title: string;
+  /// The provider as the configured source's own mark names it (Gmail).
+  provider: string;
+  /// The source as `config.toml` names it.
+  source: string;
+  source_id: string;
+  kind: string;
+  created_at: string | null;
+  account: string;
+  channel: string;
+};
+
+export type EmbeddingMapResponse = {
+  /// False until the step has written a map.
+  present: boolean;
+  made_at: string | null;
+  seed: { kept: number; near_neighbours: number; fresh: number } | null;
+  /// Documents qmd has not embedded yet, so not on the map.
+  unembedded: number;
+  /// Points whose document the grid no longer has.
+  unplaced: number;
+  points: MapPoint[];
+  errors?: string[];
+};
+
+export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
+  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_INDEX}/embedding_map`, signal);
+  for (const e of r.errors ?? []) pushToast(e);
+  return r;
+}
+
+/// The documents a filter matches, in the grid's search-bar grammar.
+export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
+  const params = new URLSearchParams({ q });
+  const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
+    `${UNIFIED_INDEX}/embedding_map/matches?${params.toString()}`,
+    signal,
+  );
+  for (const e of r.errors ?? []) pushToast(e);
+  return new Set(r.markdown_uuids);
+}
+
 // --- qmd index state -------------------------------------------------------
 export type QmdDocState = {
   indexed: boolean | null;
@@ -368,28 +443,35 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
   return getJson<AccountsMap>("/api/accounts", signal);
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+// `toast: false` is for a caller that shows the failure where it happened.
+type GetOptions = { toast?: boolean };
+
+async function getJson<T>(
+  url: string,
+  signal?: AbortSignal,
+  { toast = true }: GetOptions = {},
+): Promise<T> {
   let r: Response;
   try {
     r = await fetch(url, { signal });
   } catch (e) {
     // Network error / aborted before headers. Don't toast on abort
     // (caller-initiated cancellation, e.g. debounced search supersession).
-    if ((e as { name?: string }).name !== "AbortError") {
+    if (toast && (e as { name?: string }).name !== "AbortError") {
       pushToast(`${url}: ${(e as Error).message}`);
     }
     throw e;
   }
   if (!r.ok) {
-    let detail = "";
+    let body = "";
     try {
-      detail = (await r.text()).trim();
+      body = await r.text();
     } catch {
       // ignore
     }
-    const msg = detail ? `${url} → ${r.status}: ${detail}` : `${url} → ${r.status}`;
-    pushToast(msg);
-    throw new Error(msg);
+    const err = new ApiError(url, r.status, errorDetail(body));
+    if (toast) pushToast(err.message);
+    throw err;
   }
   return (await r.json()) as T;
 }
@@ -400,13 +482,46 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   return h;
 }
 
-export async function fetchSearch(
+/// Which page of a search, and in what order: `sort` is a column id and
+/// a direction (`created_at:desc`), or none for newest first (qmd's rank
+/// for free text). `through` names a row the page must reach, however
+/// far past `offset` it is. `within` narrows it to one group,
+/// `[[column, value], …]` as JSON.
+export type SearchPageSpec = {
+  offset?: number;
+  sort?: string | null;
+  through?: string | null;
+  within?: string | null;
+};
+
+export const SEARCH = `${UNIFIED_INDEX}/search`;
+
+export function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
+  options: GetOptions = {},
+  spec: SearchPageSpec = {},
 ): Promise<SearchResponse> {
+  return fetchRows<SearchRow>(SEARCH, q, limit, signal, options, spec) as Promise<SearchResponse>;
+}
+
+/// A page of the table `url` serves: `/search`, or another table that
+/// pages the way it does.
+export async function fetchRows<Row>(
+  url: string,
+  q: string,
+  limit = 200,
+  signal?: AbortSignal,
+  options: GetOptions = {},
+  spec: SearchPageSpec = {},
+): Promise<RowsResponse<Row>> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  const r = await getJson<SearchResponse>(`${UNIFIED_INDEX}/search?${params.toString()}`, signal);
+  if (spec.offset) params.set("offset", String(spec.offset));
+  if (spec.sort) params.set("sort", spec.sort);
+  if (spec.through) params.set("through", spec.through);
+  if (spec.within) params.set("within", spec.within);
+  const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
   // as its own toast — the dedupe window in `pushToast` keeps repeated
@@ -414,6 +529,39 @@ export async function fetchSearch(
   if (r.errors && r.errors.length > 0) {
     for (const e of r.errors) pushToast(e);
   }
+  return r;
+}
+
+/// One group of a table's rows: its value in each grouped column, how
+/// many rows it holds, and its newest row, which its labels are read from.
+export type RowGroup<Row> = { values: (string | null)[]; count: number; sample: Row };
+
+export type GroupsResponse<Row = SearchRow> = {
+  groups: RowGroup<Row>[];
+  // More groups than one answer carries; the rest are left out.
+  truncated: boolean;
+  at: string | null;
+  // Only the search has one.
+  qmd_error?: string | null;
+  errors: string[];
+};
+
+/// The groups the rows of `url` (the search's, by default) fall into by
+/// `by`, grid column ids outermost first and comma-joined
+/// (`source_ref,kind`), each with its true count.
+export async function fetchGroups<Row = SearchRow>(
+  q: string,
+  by: string,
+  signal?: AbortSignal,
+  url: string = SEARCH,
+): Promise<GroupsResponse<Row>> {
+  const params = new URLSearchParams({ q, by });
+  const r = await getJson<GroupsResponse<Row>>(`${url}/groups?${params.toString()}`, signal, {
+    toast: false,
+  });
+  for (const e of r.errors) pushToast(e);
+  if (r.truncated)
+    pushToast("There are more groups than the grid can show; the rest are left out.");
   return r;
 }
 
@@ -438,7 +586,7 @@ export type Diagnostic = {
   // is null for problems raised after loading, where the array position
   // has already shifted and the id is the identity.
   entry: {
-    kind: "group" | "step" | "applet";
+    kind: "group" | "step" | "applet" | "lock";
     index: number | null;
     id: string | null;
   } | null;
@@ -600,17 +748,6 @@ export type DagStepProgress = {
   log_age_secs: number | null;
   updated_at_utc: string;
 };
-
-// The fraction a step's `done` / `queued` pair describes, or null when
-// the step has not said how much is ahead of it — a bar drawn from an
-// invented total claims more than we know.
-export function progressFraction(p: DagStepProgress | null | undefined): number | null {
-  if (!p) return null;
-  const done = p.metrics.done;
-  const queued = p.metrics.queued;
-  if (done == null || queued == null || done + queued <= 0) return null;
-  return Math.max(0, Math.min(1, done / (done + queued)));
-}
 
 // What a step is doing, or did, in one run — the runner's own
 // vocabulary (`RunState` in datalib/backend/dag/src/run_state.rs).
@@ -793,6 +930,9 @@ export type ColumnSpec = {
   description?: string;
   default_visible: boolean;
   editable: boolean;
+  // How the producer's search bar filters on this column: the key a term
+  // starts with, and the row field holding the value it names.
+  search?: { key: string; field: string };
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -847,8 +987,12 @@ export type Action = {
   id: string;
   label: string;
   enabled: boolean;
+  /// The enabled button's hover: what pressing it does.
+  hint?: string | null;
   disabled_reason?: string | null;
   danger?: boolean;
+  /// Drawn as an on/off switch in this position rather than a button.
+  on?: boolean | null;
 };
 
 /// One row of the Manage screen's tree, as `GET /api/manage/rows`
@@ -887,11 +1031,12 @@ export type ManageRow = {
   reveal_blocked: string | null;
   /// The open request this row is being run for: what Stop stops.
   stop_request_id: string | null;
-  /// Who paused this step, while it is paused.
-  paused_by: string | null;
+  /// Who turned this step off, while it is off.
+  turned_off_by: string | null;
   last_run_id: string;
   live_run_id: string | null;
   reveal_path: string | null;
+  raw_store_path: string | null;
 };
 
 export type ManageResponse = {
@@ -1014,18 +1159,26 @@ export async function stopRequest(id: string): Promise<void> {
   await post(`/api/requests/${encodeURIComponent(id)}/stop`);
 }
 
-export async function pauseStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/pause`);
+export async function turnOffStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_off`);
 }
 
-export async function resumeStep(id: string): Promise<void> {
-  await post(`/api/steps/${encodeURIComponent(id)}/resume`);
+export async function turnOnStep(id: string): Promise<void> {
+  await post(`/api/steps/${encodeURIComponent(id)}/turn_on`);
 }
 
 /// Empty what the targets wrote, keeping the history, and sync what reads
 /// them; answers once they are empty. Refused while a sync runs.
 export async function resetSteps(targets: string[]): Promise<void> {
   await post("/api/reset", { targets });
+}
+
+/// Delete the trees of groups already gone from the config, and forget
+/// their steps ran. "queued" when a sync in progress holds the delete
+/// until it is over.
+export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
+  const r = await post("/api/purge", { groups });
+  return r.status === 202 ? "queued" : "done";
 }
 
 // --- The run store -----------------------------------------------------------
@@ -1140,26 +1293,21 @@ export function fetchRuns(
 // `seq` is monotone across runs.
 export function fetchLog(
   opts: {
-    run?: string;
-    // The lines one process wrote, by id: a launch of the server, or
-    // the runner.
-    process?: string;
-    step?: string;
-    // With `step`: the lines about one attempt of it.
-    attempt?: number;
+    // The search, what the panel's pickers narrow it to included:
+    // `run:`, `process_id:`, `step:`, `attempt:`.
     q?: string;
+    // The lines after this `seq` (the tail), or the newest before it (an
+    // older page); neither is the newest lines.
     afterSeq?: number;
+    beforeSeq?: number;
     limit?: number;
   },
   signal?: AbortSignal,
 ): Promise<RunLogLine[]> {
   const params = new URLSearchParams();
-  if (opts.run) params.set("run", opts.run);
-  if (opts.process) params.set("process", opts.process);
-  if (opts.step) params.set("step", opts.step);
-  if (opts.attempt != null) params.set("attempt", String(opts.attempt));
   if (opts.q) params.set("q", opts.q);
   if (opts.afterSeq != null) params.set("after_seq", String(opts.afterSeq));
+  if (opts.beforeSeq != null) params.set("before_seq", String(opts.beforeSeq));
   if (opts.limit != null) params.set("limit", String(opts.limit));
   return fetchLogLines(`/api/log?${params.toString()}`, signal);
 }

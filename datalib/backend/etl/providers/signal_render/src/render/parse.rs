@@ -15,7 +15,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 /// SQL projection from Signal's `chat_item_attachments` edge to its
-/// CAS blake3. Consumed by [`BlobBundle::load`].
+/// CAS blake3. Consumed by [`BlobBundle::load_many`].
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
@@ -221,24 +221,22 @@ async fn parse_async(
     };
 
     // Per-bucket BlobBundle: each bucket gets its own bag of
-    // attachment bytes loaded in two queries. Render walks them
+    // attachment bytes, all of them loaded together. Render walks them
     // synchronously.
     if let Some(cas_pool) = cas_pool.as_ref() {
-        for bucket in &mut docs {
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut refs: Vec<&str> = Vec::new();
-            for item in &bucket.items {
-                for att in &item.attachments {
-                    if seen.insert(att.ref_id.clone()) {
-                        refs.push(att.ref_id.as_str());
-                    }
-                }
+        let refs = docs.iter().enumerate().map(|(i, bucket)| {
+            let refs = bucket
+                .items
+                .iter()
+                .flat_map(|item| item.attachments.iter().map(|att| att.ref_id.as_str()));
+            (i, refs)
+        });
+        let mut blobs =
+            BlobBundle::load_many(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await?;
+        for (i, bucket) in docs.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                bucket.blobs = b;
             }
-            if refs.is_empty() {
-                continue;
-            }
-            bucket.blobs =
-                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs).await?;
         }
     }
 

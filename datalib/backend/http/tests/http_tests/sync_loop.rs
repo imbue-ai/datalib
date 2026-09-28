@@ -232,6 +232,115 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A Sync pressed while the same sync is open is that sync: the POST
+/// answers with the open request rather than opening a second, which the
+/// loop would run once more when the first ends.
+#[tokio::test]
+async fn a_sync_of_steps_already_syncing_is_the_sync_already_open() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(
+        root.join("config.toml"),
+        source(root, "a", HELD) + &source(root, "b", HELD),
+    )
+    .unwrap();
+    let state = server(root).await;
+
+    let first = sync(&state, "a/out").await;
+    assert_eq!(sync(&state, "a/out").await, first);
+    let both = call(
+        &state,
+        "POST",
+        "/api/requests",
+        Some(serde_json::json!({ "roots": ["a/out", "b/out"] })),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(both, first, "other steps are another sync");
+    let open = call(&state, "GET", "/api/requests", None).await;
+    let open: Vec<&serde_json::Value> = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["state"] == "open")
+        .collect();
+    assert_eq!(open.len(), 2, "{open:?}");
+
+    std::fs::write(root.join("release"), "").unwrap();
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
+/// Waits until the loop's record and requests satisfy `ready`, looking
+/// again each time a commit is announced, never on a timer.
+async fn when(
+    store: &datalib_dag::supervisor::store::Store,
+    heard: &mut datalib_dag::supervisor::announce::Listener,
+    what: &str,
+    ready: impl Fn(
+        &datalib_dag::supervisor::record::Record,
+        &[datalib_dag::supervisor::store::RequestRow],
+    ) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let record = store.load_record().await.unwrap();
+        let requests = store.recent_requests(100).await.unwrap();
+        if ready(&record, &requests) {
+            return;
+        }
+        tokio::time::timeout_at(deadline, heard.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {what} within 30s"));
+    }
+}
+
+fn running(record: &datalib_dag::supervisor::record::Record, step: &str) -> bool {
+    record
+        .steps
+        .get(step)
+        .and_then(|s| s.state)
+        .is_some_and(|k| k.as_str() == "running")
+}
+
+/// A source added to `config.toml` on disk mid-sync, by the app's editor,
+/// an agent or a person, starts beside the sync already running: the
+/// server's watch sees the file move and tells the loop, which takes the
+/// new config on. The whole chain, the platform's file events included.
+#[tokio::test]
+async fn a_source_added_on_disk_mid_sync_starts_beside_the_running_one() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
+    let state = server(root).await;
+    let store = datalib_dag::supervisor::store::Store::open(root)
+        .await
+        .unwrap();
+    let mut heard = datalib_dag::supervisor::announce::Listener::new(&store, "test");
+
+    let a = sync(&state, "a/out").await;
+    when(&store, &mut heard, "a to run", |r, _| running(r, "a/out")).await;
+    // As an editor or an agent writes it: a temp file renamed into place.
+    let tmp = root.join("config.tmp");
+    std::fs::write(&tmp, source(root, "a", HELD) + &source(root, "b", HELD)).unwrap();
+    std::fs::rename(&tmp, root.join("config.toml")).unwrap();
+    let b = sync(&state, "b/out").await;
+    when(&store, &mut heard, "b to run beside a", |r, _| {
+        running(r, "b/out") && running(r, "a/out")
+    })
+    .await;
+
+    std::fs::write(root.join("release"), "").unwrap();
+    when(&store, &mut heard, "both syncs to finish", |_, requests| {
+        [&a, &b]
+            .iter()
+            .all(|id| requests.iter().any(|r| &&r.id == id && r.closed.is_some()))
+    })
+    .await;
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Whether a pid still names a live process. Signal 0 checks without
 /// sending anything.
 fn alive(pid: i32) -> bool {
@@ -240,7 +349,7 @@ fn alive(pid: i32) -> bool {
 }
 
 /// A step that will not stop: it ignores its SIGINT, spawns a child of
-/// its own — the shape of `qmd_index` running `node qmd embed` — and
+/// its own — the shape of `embed` running qmd under node — and
 /// otherwise runs forever.
 const DEAF: &str = r#"
     trap '' INT
@@ -354,10 +463,11 @@ async fn a_config_the_loop_cannot_read_refuses_the_request_and_says_why() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
-/// A pause made while nothing syncs reaches the row at once, saying who;
-/// a sync of it then closes without running it, and a resume lifts it.
+/// A step turned off while nothing syncs reads off at once, saying who;
+/// a sync of it then closes without running it, and turning it on lifts
+/// that.
 #[tokio::test]
-async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
+async fn a_step_turned_off_reads_off_and_does_not_run() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
     std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
@@ -366,51 +476,138 @@ async fn a_pause_reads_on_the_row_and_keeps_the_step_from_running() {
     call(
         &state,
         "POST",
-        "/api/steps/a%2Fout/pause",
+        "/api/steps/a%2Fout/turn_off",
         Some(serde_json::json!({ "by": "claude" })),
     )
     .await;
-    until(
-        "the row to read paused",
-        Duration::from_secs(10),
-        || async { row(&state, "a/out").await["status"]["key"] == "paused" },
-    )
+    until("the row to read off", Duration::from_secs(10), || async {
+        row(&state, "a/out").await["status"]["key"] == "off"
+    })
     .await;
-    let paused = row(&state, "a/out").await;
-    assert_eq!(paused["paused_by"], "claude", "{paused}");
-    assert_eq!(paused["status"]["detail"], "paused by claude", "{paused}");
-    // The row's button is Resume, and so is its group's: every step
-    // under it is paused.
+    let turned_off = row(&state, "a/out").await;
+    assert_eq!(turned_off["turned_off_by"], "claude", "{turned_off}");
+    assert_eq!(turned_off["status"]["label"], "Off", "{turned_off}");
     assert_eq!(
-        action(&paused, "resume")["label"],
-        "Resume (paused by claude)"
+        turned_off["status"]["detail"], "turned off by claude",
+        "{turned_off}"
     );
+    // The row's switch reads off, and so does its group's: every step
+    // under it is off.
+    let switch = action(&turned_off, "in_syncs");
+    assert_eq!(switch["on"], false, "{turned_off}");
+    assert!(switch["hint"]
+        .as_str()
+        .unwrap()
+        .contains("claude turned it off"));
     let group = row(&state, "group:a").await;
-    assert_eq!(group["paused_by"], "claude", "{group}");
-    assert_eq!(action(&group, "resume")["enabled"], true, "{group}");
+    assert_eq!(group["turned_off_by"], "claude", "{group}");
+    assert_eq!(action(&group, "in_syncs")["on"], false, "{group}");
+    assert_eq!(action(&group, "in_syncs")["enabled"], true, "{group}");
 
     let id = sync(&state, "a/out").await;
     until("the request to close", Duration::from_secs(30), || async {
         request(&state, &id).await["state"] == "done"
     })
     .await;
-    assert!(!started(root, "a"), "a paused step ran");
+    assert!(!started(root, "a"), "a step turned off ran");
 
-    call(&state, "POST", "/api/steps/a%2Fout/resume", None).await;
+    call(&state, "POST", "/api/steps/a%2Fout/turn_on", None).await;
+    until("the row to read on", Duration::from_secs(10), || async {
+        let r = row(&state, "a/out").await;
+        r["status"]["key"] == "never_run"
+            && r["turned_off_by"].is_null()
+            && r["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == "in_syncs" && a["on"] == true)
+    })
+    .await;
+    state.sync.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A step and one that reads it, each counting its runs in a file named
+/// for its function. `version` goes on the reader's argv, so changing it
+/// changes the reader's fingerprint and nothing else.
+fn chain(root: &Path, version: &str) -> String {
+    let script = |function: &str| {
+        let path = root.join(format!("{function}.sh"));
+        std::fs::write(
+            &path,
+            format!(
+                "mkdir -p \"$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP\"\n\
+                 echo run >> \"$DATALIB_DAG_DATA_ROOT/runs-{function}\"\n"
+            ),
+        )
+        .unwrap();
+        path.display().to_string()
+    };
+    format!(
+        "[[groups]]\nid = \"a\"\n\n\
+         [[steps]]\ngroup = \"a\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\n\
+         [[steps]]\ngroup = \"a\"\nfunction = \"derived\"\ncommand = \"/bin/sh {} {version}\"\n\
+         inputs = [\"a/out\"]\n",
+        script("out"),
+        script("derived"),
+    )
+}
+
+fn runs(root: &Path, function: &str) -> usize {
+    std::fs::read_to_string(root.join(format!("runs-{function}"))).map_or(0, |s| s.lines().count())
+}
+
+/// Sync on a step that reads another used to be disabled outright, so a
+/// render whose code moved could only rerun behind a fresh download. It
+/// is offered once the step is out of date, and reruns it alone.
+#[tokio::test]
+async fn a_derived_step_out_of_date_syncs_alone() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("config.toml"), chain(root, "v1")).unwrap();
+    let state = server(root).await;
+
+    let id = sync(&state, "a/out").await;
     until(
-        "the row to read unpaused",
-        Duration::from_secs(10),
-        || async {
-            let r = row(&state, "a/out").await;
-            r["status"]["key"] == "never_run"
-                && r["paused_by"].is_null()
-                && r["actions"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|a| a["id"] == "pause")
-        },
+        "the first sync to close",
+        Duration::from_secs(30),
+        || async { request(&state, &id).await["state"] == "done" },
     )
     .await;
+    assert_eq!((runs(root, "out"), runs(root, "derived")), (1, 1));
+    until(
+        "the derived step's Sync to read up to date",
+        Duration::from_secs(10),
+        || async { action(&row(&state, "a/derived").await, "sync")["enabled"] == false },
+    )
+    .await;
+    let up_to_date = row(&state, "a/derived").await;
+    assert!(
+        action(&up_to_date, "sync")["disabled_reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Up to date"),
+        "{up_to_date}"
+    );
+
+    std::fs::write(root.join("config.toml"), chain(root, "v2")).unwrap();
+    until(
+        "the derived step's Sync to read out of date",
+        Duration::from_secs(10),
+        || async { action(&row(&state, "a/derived").await, "sync")["enabled"] == true },
+    )
+    .await;
+
+    let id = sync(&state, "a/derived").await;
+    until(
+        "the second sync to close",
+        Duration::from_secs(30),
+        || async { request(&state, &id).await["state"] == "done" },
+    )
+    .await;
+    assert_eq!(
+        (runs(root, "out"), runs(root, "derived")),
+        (1, 2),
+        "the derived step reran and its input did not"
+    );
     state.sync.shutdown(Duration::from_secs(5)).await;
 }

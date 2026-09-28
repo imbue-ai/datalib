@@ -1,28 +1,16 @@
 //! Doltlite-backed raw store for the `calendar` provider.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
-use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{full_ddl, AccountRow, CalendarRow, GoogleEventRow, IcsObjectRow};
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-    /// The commit every content read resolves against, or `None` for the
-    /// download step reading back what it just wrote. Set once, at open:
-    /// the `pinned_<table>` views it installs live on that connection.
-    pin: Option<datalib_etl::pin::Pin>,
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 /// The account row, for render.
 #[derive(Debug, Clone, Default)]
@@ -59,56 +47,13 @@ pub struct LoadedGoogleEvent {
 }
 
 impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool, pin: None })
-    }
-
-    /// A reader pinned at `commit`, or at HEAD when `None`.
-    ///
-    /// **`None` back means the store cannot be read**, not that it holds
-    /// no events: render sweeps every document a pass does not name, so
-    /// an empty read would delete the whole calendar.
-    pub async fn open_reader_at(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
-        let Some(reader) = dr::open_reader(db_path, commit).await? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            pool: reader.pool().clone(),
-            pin: Some(reader.pin().clone()),
-        }))
-    }
-
-    pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
-        self.pin.as_ref()
-    }
-
-    fn reads(&self) -> datalib_etl::pin::Reads<'_> {
-        match self.pin.as_ref() {
-            Some(p) => datalib_etl::pin::Reads::At(p),
-            None => datalib_etl::pin::Reads::Own,
-        }
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
-    /// Release the store and wait for the connection to go away.
-    /// Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
     async fn upsert<T: BulkUpsertable>(&self, rows: &[T], what: &str) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self
-            .pool
+            .pool()
             .begin()
             .await
             .with_context(|| format!("begin {what} tx"))?;
@@ -134,7 +79,7 @@ impl RawDb {
     pub async fn sync_token(&self, calendar_id: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT sync_token FROM calendars WHERE id = ?")
             .bind(calendar_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.pool())
             .await
             .context("select sync_token")?;
         Ok(row
@@ -148,7 +93,7 @@ impl RawDb {
         sqlx::query("UPDATE calendars SET sync_token = ? WHERE id = ?")
             .bind(token)
             .bind(calendar_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .context("update sync_token")?;
         Ok(())
@@ -166,7 +111,7 @@ impl RawDb {
             "SELECT href, uid FROM ics_objects WHERE calendar_id = ? AND href IS NOT NULL",
         )
         .bind(calendar_id)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select ics hrefs")?;
         Ok(rows
@@ -179,7 +124,7 @@ impl RawDb {
         let uids: Vec<String> =
             sqlx::query_scalar("SELECT uid FROM ics_objects WHERE calendar_id = ?")
                 .bind(calendar_id)
-                .fetch_all(&self.pool)
+                .fetch_all(self.pool())
                 .await
                 .context("select ics uids")?;
         Ok(uids.into_iter().collect())
@@ -205,7 +150,7 @@ impl RawDb {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT event_id FROM google_events WHERE calendar_id = ?")
                 .bind(calendar_id)
-                .fetch_all(&self.pool)
+                .fetch_all(self.pool())
                 .await
                 .context("select google event ids")?;
         Ok(ids.into_iter().collect())
@@ -225,7 +170,7 @@ impl RawDb {
             )
             .bind(calendar_id)
             .bind(series)
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .context("select google occurrences")?;
             out.extend(ids);
@@ -249,7 +194,7 @@ impl RawDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin delete tx")?;
+        let mut tx = self.pool().begin().await.context("begin delete tx")?;
         for id in ids {
             // Audited: `table` is a `&'static str` at every callsite.
             sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -279,7 +224,7 @@ impl RawDb {
             "SELECT id, method, server_url, login FROM {} ORDER BY id LIMIT 1",
             self.reads().table("accounts")
         )))
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool())
         .await
         .context("select account")?;
         Ok(row.map(|r| LoadedAccount {
@@ -296,7 +241,7 @@ impl RawDb {
             "SELECT id, display_name, time_zone FROM {} ORDER BY id",
             self.reads().table("calendars")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select calendars")?;
         Ok(rows
@@ -319,7 +264,7 @@ impl RawDb {
              FROM {} ORDER BY id",
             self.reads().table("ics_objects")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select ics_objects")?;
         Ok(rows
@@ -341,7 +286,7 @@ impl RawDb {
             "SELECT id, calendar_id, json(payload) AS payload FROM {} ORDER BY id",
             self.reads().table("google_events")
         )))
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .context("select google_events")?;
         let mut out = Vec::with_capacity(rows.len());

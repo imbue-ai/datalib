@@ -112,9 +112,8 @@ pub async fn run(
     }
 
     // Never fail the step here: the download itself has completed and
-    // committed. A version we cannot read is a reason to fall back to
-    // the runner's hash, not to throw away hours of successful work and
-    // block every downstream step.
+    // committed. A version we cannot read costs its consumers a run they
+    // may not have needed, not hours of successful work.
     match raw_store_version(&planned.raw_path).await {
         Ok(Some(version)) => Ok(vec![OutputClaim {
             path: tree_rel.to_string(),
@@ -125,32 +124,23 @@ pub async fn run(
             rows: None,
         }]),
         // Stock-sqlite dev build, or nothing materialized yet: no
-        // version we can vouch for, so let the runner hash instead.
+        // version we can vouch for, so every success reads as new.
         Ok(None) => Ok(vec![]),
         Err(e) => {
             tracing::warn!(
                 error = %format!("{e:#}"),
-                "could not read the raw store version;                  the runner will content-hash the tree instead"
+                "could not read the raw store version; every step reading it runs again"
             );
             Ok(vec![])
         }
     }
 }
 
-async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
-    use datalib_etl::doltlite_raw::head_commit_at_path;
-    let entities = head_commit_at_path(&datalib_etl::raw_layout::entities_db(raw_dir))
+/// The entities store's head, spelled as a seal spells it. Every edge row
+/// names bytes the blob CAS already holds, so the entities store's commit
+/// is the whole of what a render can read.
+pub(crate) async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
+    datalib_etl::doltlite_raw::head_commit_at_path(&datalib_etl::raw_layout::entities_db(raw_dir))
         .await
-        .context("entities head")?;
-    let blobs = head_commit_at_path(&datalib_etl::raw_layout::blobs_db(raw_dir))
-        .await
-        .context("blobs head")?;
-    if entities.is_none() && blobs.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(format!(
-        "entities:{} blobs:{}",
-        entities.as_deref().unwrap_or("-"),
-        blobs.as_deref().unwrap_or("-")
-    )))
+        .context("entities head")
 }

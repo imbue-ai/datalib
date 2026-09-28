@@ -11,20 +11,20 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Bucket, Buckets, RenderProfile,
-};
-use datalib_etl_chat_common::types::{
-    ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
-};
+use datalib_etl_chat_common::render::RenderProfile;
+use datalib_etl_chat_common::types::{ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use datalib_etl_chat_common::{render_changed, RenderTarget};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_id::Identity;
 use serde_json::Value;
 
 use datalib_etl_codex::ingest::parse::is_typed_message;
 use datalib_etl_codex::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
+
+use datalib_etl_agent_sessions_render::{
+    canonicalize, clamp, details, fenced, iso_to_ms, item, json_is_empty, project_of, str_of,
+};
 
 use crate::ids;
 
@@ -43,6 +43,8 @@ fn profile() -> RenderProfile {
         render_version: RENDER_VERSION,
     }
 }
+
+pub use datalib_etl_chat_common::RenderOutcome;
 
 #[allow(clippy::too_many_arguments)]
 pub fn render(
@@ -86,66 +88,20 @@ pub fn render(
     // thread still has to declare their buckets empty so the documents
     // go.
     let all_chats = build_chats(source_id, &transcripts, &records, max_tool_result_bytes);
-
-    let mut outcome = RenderOutcome {
-        new_head: scan.new_head.clone(),
-        scan_elapsed: scan.scan_elapsed,
-        ..Default::default()
-    };
-    let by_uuid: HashMap<&str, &str> = all_chats
-        .iter()
-        .map(|c| (c.chat_uuid.as_str(), c.id.as_str()))
-        .collect();
-    let narrowed = range.narrow_by(scan.render.as_ref(), |key| {
-        by_uuid.get(key).map(|id| id.to_string())
-    });
-    // The bucket key is minted from the raw id alone, so a thread the
-    // diff names as deleted is still declared — with no documents,
-    // which is what removes the ones it had.
-    outcome.buckets = narrowed
-        .render
-        .iter()
-        .flatten()
-        .map(|tid| ids::thread(source_id, tid).uuid)
-        .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
-            key,
-            inputs: Vec::new(),
-        })
-        .collect();
-    let chats: Vec<NormalizedChat> = match &narrowed.render {
-        None => all_chats,
-        Some(changed) => {
-            let before = all_chats.len();
-            let kept: Vec<NormalizedChat> = all_chats
-                .into_iter()
-                .filter(|c| changed.contains(&c.id))
-                .collect();
-            outcome.skipped = before.saturating_sub(kept.len());
-            kept
-        }
-    };
-    let s = cc_render_all(
+    render_changed(
         &profile(),
-        &chats,
-        out_root,
-        source_id,
+        all_chats,
+        scan,
+        range,
+        |id| ids::thread(source_id, id).uuid,
         &HashMap::new(),
-        progress,
-        on_doc_complete,
-    )?;
-    outcome.rendered = s.docs_rendered;
-    outcome.buckets.extend(s.buckets);
-    Ok(outcome)
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RenderOutcome {
-    pub rendered: usize,
-    pub skipped: usize,
-    pub new_head: Option<String>,
-    pub scan_elapsed: Option<std::time::Duration>,
-    pub buckets: Buckets,
+        RenderTarget {
+            out_root,
+            source_id,
+            progress,
+            on_doc_complete,
+        },
+    )
 }
 
 /// One raw line: its row id, the thread, its number, the line.
@@ -637,53 +593,6 @@ fn output_text(output: Option<&Value>) -> (String, bool) {
     }
 }
 
-fn item(
-    id: Identity,
-    author_id: &str,
-    author_display: String,
-    date_ms: Option<i64>,
-    text: String,
-    kind_label: &str,
-    is_aside: bool,
-) -> NormalizedChatItem {
-    NormalizedChatItem {
-        message_uuid: id.uuid,
-        author_id: author_id.to_string(),
-        author_display,
-        date_ms,
-        text: (!text.trim().is_empty()).then_some(text),
-        kind: ItemKind::Text,
-        attachments: Vec::new(),
-        reactions: Vec::new(),
-        system_note: None,
-        source_url: None,
-        kind_label: Some(kind_label.to_string()),
-        source_ref: Some(UpstreamRef::new(id.entity_kind, id.natural_key)),
-        is_aside,
-        unread: false,
-        problems: Vec::new(),
-    }
-}
-
-fn details(summary: &str, body: &str) -> String {
-    if body.trim().is_empty() {
-        format!("<details><summary>{summary}</summary>\n\n</details>")
-    } else {
-        format!("<details><summary>{summary}</summary>\n\n{body}\n\n</details>")
-    }
-}
-
-fn fenced(s: &str) -> String {
-    if s.trim().is_empty() {
-        return String::new();
-    }
-    // A fence longer than any run of backticks in the body, so a tool
-    // output that itself contains ``` cannot close it early.
-    let longest = s.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}\n{}\n{fence}", s.trim_end())
-}
-
 /// A tool's arguments arrive as a string holding JSON; show it
 /// pretty-printed with sorted keys when it is, verbatim when it is not.
 fn fenced_json_or_text(s: &str, max_bytes: usize) -> String {
@@ -694,69 +603,6 @@ fn fenced_json_or_text(s: &str, max_bytes: usize) -> String {
         }
         Ok(_) => String::new(),
         Err(_) => fenced(&clamp(s, max_bytes)),
-    }
-}
-
-/// Cut on a char boundary and say what was cut.
-pub fn clamp(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n\n… [{} more bytes not shown; raise max_tool_result_bytes and re-render to see them]",
-        &s[..end],
-        s.len() - end
-    )
-}
-
-/// The last path component of the working directory: what a person
-/// would call the project.
-fn project_of(cwd: &str) -> String {
-    cwd.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(cwd)
-        .to_string()
-}
-
-fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
-    v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
-}
-
-fn iso_to_ms(s: &str) -> Option<i64> {
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
-}
-
-fn json_is_empty(v: &Value) -> bool {
-    match v {
-        Value::Object(m) => m.is_empty(),
-        Value::Array(a) => a.is_empty(),
-        Value::String(s) => s.is_empty(),
-        Value::Null => true,
-        _ => false,
-    }
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
     }
 }
 
@@ -985,34 +831,9 @@ mod tests {
     }
 
     #[test]
-    fn long_tool_results_are_cut_and_say_so() {
-        let s = "x".repeat(100);
-        let out = clamp(&s, 10);
-        assert!(out.starts_with("xxxxxxxxxx\n"));
-        assert!(out.contains("90 more bytes"));
-        assert_eq!(clamp("short", 10), "short");
-        let e = "é".repeat(10);
-        assert!(clamp(&e, 3).starts_with("é\n"));
-    }
-
-    #[test]
-    fn a_fence_outlasts_backticks_in_the_body() {
-        let f = fenced("a\n```\nb");
-        assert!(f.starts_with("````\n"), "{f}");
-        assert!(f.ends_with("\n````"), "{f}");
-    }
-
-    #[test]
     fn arguments_that_are_not_json_are_shown_verbatim() {
         assert!(fenced_json_or_text("{\"a\":1}", 1024).starts_with("```json"));
         assert!(fenced_json_or_text("not json", 1024).starts_with("```\nnot json"));
         assert_eq!(fenced_json_or_text("{}", 1024), "");
-    }
-
-    #[test]
-    fn project_is_the_last_path_component() {
-        assert_eq!(project_of("/Users/picard/src/enterprise"), "enterprise");
-        assert_eq!(project_of("/Users/picard/src/enterprise/"), "enterprise");
-        assert_eq!(project_of("/"), "/");
     }
 }

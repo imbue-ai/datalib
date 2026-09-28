@@ -111,7 +111,7 @@ pub async fn run(
     // The dolt commit hash is a faithful content version: HEAD only
     // advances when rows actually changed. Without doltlite
     // (stock-sqlite dev builds) there is no hash and we report nothing,
-    // so the runner hashes the index instead.
+    // so every success reads as new.
     match version {
         Some(version) => Ok(vec![OutputClaim {
             path: out_rel(),

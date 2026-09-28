@@ -1,7 +1,8 @@
 //! The server's side of the supervisor loop (`docs/dev/plans/supervisor.md`
 //! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
-//! whenever a request is open, and between busy periods settles a pause
-//! or a resume into the record and runs a reset.
+//! whenever a request is open, and between busy periods settles a step
+//! turned off or on into the record, runs a reset and deletes a removed
+//! group's tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -9,9 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datalib_dag::config::ConfigCheck;
+use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::scheduler::ResetTarget;
+use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::record::Record;
+use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::{EventSink, Runner};
 use tokio::sync::{oneshot, watch, Notify, OnceCell};
@@ -23,6 +27,25 @@ struct Reset {
     done: oneshot::Sender<Result<(), String>>,
 }
 
+/// Groups gone from the config whose trees someone asked to delete,
+/// waiting for the loop to be idle.
+struct Purge {
+    groups: Vec<String>,
+    by: String,
+    done: oneshot::Sender<Result<(), String>>,
+}
+
+/// Whether a purge ran, or waits behind the sync in progress.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PurgeAnswer {
+    Done,
+    Queued,
+}
+
+/// How long a purge's answer waits for the loop before it says "queued":
+/// long enough for an idle loop, far short of a sync.
+const PURGE_WAIT: Duration = Duration::from_secs(5);
+
 /// How the rest of the server reaches the loop: whether a sync is
 /// running, where to write intent, and how to stop it all.
 #[derive(Clone)]
@@ -30,12 +53,12 @@ pub struct SyncControl {
     root: Arc<PathBuf>,
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
-    wake: Arc<Notify>,
-    /// The handlers' own connection. Never the loop's: the loop notices
-    /// new rows by `PRAGMA data_version`, which a write on its own
-    /// connection does not move.
+    /// For what no announcement carries: a reset, queued in memory.
+    nudge: Arc<Notify>,
+    /// The handlers' own connection, beside the loop's.
     mailbox: Arc<OnceCell<Store>>,
     resets: Arc<Mutex<Vec<Reset>>>,
+    purges: Arc<Mutex<Vec<Purge>>>,
     stop: Arc<watch::Sender<bool>>,
     exited: Arc<watch::Sender<bool>>,
 }
@@ -47,9 +70,10 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
-            wake: Arc::new(Notify::new()),
+            nudge: Arc::new(Notify::new()),
             mailbox: Arc::new(OnceCell::new()),
             resets: Arc::new(Mutex::new(Vec::new())),
+            purges: Arc::new(Mutex::new(Vec::new())),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
         }
@@ -70,11 +94,6 @@ impl SyncControl {
         self.mailbox
             .get_or_try_init(|| Store::open(&self.root))
             .await
-    }
-
-    /// Something for the loop to look at: a request, a pause, a reset.
-    pub fn wake(&self) {
-        self.wake.notify_one();
     }
 
     /// Empty what `targets` wrote (`docs/dev/plans/supervisor.md` §2.10),
@@ -101,10 +120,41 @@ impl SyncControl {
                 by: by.to_string(),
                 done,
             });
-        self.wake();
+        self.nudge.notify_one();
         answer
             .await
             .unwrap_or_else(|_| Err("the server stopped before the reset ran".into()))
+    }
+
+    /// Delete the trees of `groups`, which the config no longer names, and
+    /// forget their steps ever ran, so a group re-added under the same id
+    /// starts from nothing. Checked against the config at once; run once
+    /// no step is running, which a sync in progress defers.
+    pub async fn purge(&self, groups: &[String], by: &str) -> Result<PurgeAnswer, String> {
+        if !self.runs_the_loop.load(Ordering::SeqCst) {
+            return Err(
+                "another process is running syncs on this root; delete once it is done".into(),
+            );
+        }
+        let checked = load_config(&self.root)?;
+        if let Some(why) = purge_refusal(&checked.cfg, groups) {
+            return Err(why);
+        }
+        let (done, answer) = oneshot::channel();
+        self.purges
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Purge {
+                groups: groups.to_vec(),
+                by: by.to_string(),
+                done,
+            });
+        self.nudge.notify_one();
+        match tokio::time::timeout(PURGE_WAIT, answer).await {
+            Ok(Ok(result)) => result.map(|()| PurgeAnswer::Done),
+            Ok(Err(_)) => Err("the server stopped before the delete ran".into()),
+            Err(_) => Ok(PurgeAnswer::Queued),
+        }
     }
 
     /// Stop the loop's steps (SIGINT each, and their requests stay open
@@ -130,10 +180,6 @@ pub struct HostConfig {
     pub now: Option<String>,
 }
 
-/// How often an idle host looks for intent nobody woke it for: a request
-/// or a pause a `datalib-dag` client wrote.
-const IDLE_POLL: Duration = Duration::from_secs(1);
-
 pub async fn run(cfg: HostConfig) {
     let control = cfg.control.clone();
     host(&cfg).await;
@@ -152,7 +198,9 @@ async fn host(cfg: &HostConfig) {
             return;
         }
     };
-    let Some(_lock) = take_the_lock(cfg, &mut stop).await else {
+    let mut listener = Listener::new(&store, "the server's loop");
+    let Some(_lock) = take_the_lock(cfg, &mut listener, &mut stop).await else {
+        store.close().await;
         return;
     };
     cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
@@ -169,61 +217,75 @@ async fn host(cfg: &HostConfig) {
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
+    host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
+    store.close().await;
+}
 
-    // The pauses the record was last settled against; `None` until the
-    // first settle, which also clears what a dead loop left running.
-    let mut settled: Option<BTreeMap<String, String>> = None;
-    while !*stop.borrow() {
-        let resets =
-            std::mem::take(&mut *cfg.control.resets.lock().unwrap_or_else(|e| e.into_inner()));
+struct ServerPeriods<'a> {
+    cfg: &'a HostConfig,
+}
+
+impl host::Periods for ServerPeriods<'_> {
+    async fn busy_period(&mut self, store: &Store) {
+        serve_period(self.cfg, store).await;
+    }
+
+    async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
+        settle(&self.cfg.control.root, store).await
+    }
+
+    async fn idle_work(&mut self, store: &Store) {
+        let resets = std::mem::take(
+            &mut *self
+                .cfg
+                .control
+                .resets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         for reset in resets {
-            let result = run_reset(cfg, &store, &reset.targets, &reset.by).await;
+            let result = run_reset(self.cfg, store, &reset.targets, &reset.by).await;
             let _ = reset.done.send(result);
         }
-        let open = match store.open_requests().await {
-            Ok(open) => open,
-            Err(e) => {
-                tracing::error!("supervisor: could not read the open requests: {e:#}");
-                Vec::new()
+        let purges = std::mem::take(
+            &mut *self
+                .cfg
+                .control
+                .purges
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        for purge in purges {
+            let result = run_purge(&self.cfg.control.root, store, &purge.groups).await;
+            match &result {
+                Ok(()) => tracing::info!(
+                    groups = ?purge.groups,
+                    by = %purge.by,
+                    "supervisor: deleted the removed groups' trees"
+                ),
+                Err(why) => tracing::error!(
+                    groups = ?purge.groups,
+                    by = %purge.by,
+                    "supervisor: could not delete the removed groups' trees: {why}"
+                ),
             }
-        };
-        if open.iter().any(|r| r.stop_requested_by.is_none()) {
-            serve_period(cfg, &store).await;
-            continue;
-        }
-        // Asked to stop before any loop took them on: closed where they
-        // stand, since a busy period for them would do nothing.
-        for request in open {
-            if let Err(e) = store
-                .close_request(&request.id, RequestOutcome::Stopped, None)
-                .await
-            {
-                tracing::error!(request = %request.id, "supervisor: could not close it: {e:#}");
-            }
-        }
-        match store.paused().await {
-            Ok(paused) if settled.as_ref() != Some(&paused) => {
-                settle(&root, &store).await;
-                settled = Some(paused);
-            }
-            Ok(_) => {}
-            Err(e) => tracing::error!("supervisor: could not read the pauses: {e:#}"),
-        }
-        tokio::select! {
-            _ = cfg.control.wake.notified() => {}
-            _ = tokio::time::sleep(IDLE_POLL) => {}
-            _ = stop.changed() => {}
+            // Nobody may be waiting: an answer that timed out said "queued".
+            let _ = purge.done.send(result);
         }
     }
-    store.close().await;
+
+    async fn nudged(&self) {
+        self.cfg.control.nudge.notified().await;
+    }
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`
 /// runs the loop, and serves the UI's requests too.
 async fn take_the_lock(
     cfg: &HostConfig,
+    listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
-) -> Option<datalib_dag::lock::FileLock> {
+) -> Option<datalib_dag::lock::RunnerLock> {
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(&cfg.control.root) {
@@ -246,7 +308,7 @@ async fn take_the_lock(
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep(IDLE_POLL) => {}
+            _ = listener.next() => {}
             _ = stop.changed() => return None,
         }
     }
@@ -279,16 +341,23 @@ fn extra_path() -> Vec<PathBuf> {
     crate::user_bin_dir().into_iter().collect()
 }
 
-/// One tick with nothing open, so a pause or a resume made while the loop
+/// One tick with nothing open, so a step turned off or on while the loop
 /// is idle reaches the record, and so do the steps a dead loop left
 /// running.
-async fn settle(root: &Path, store: &Store) {
+async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> {
     let checked = match load_config(root) {
         Ok(checked) => checked,
-        Err(why) => return tracing::warn!("supervisor: cannot settle the record: {why}"),
+        Err(why) => {
+            tracing::warn!("supervisor: cannot settle the record: {why}");
+            return None;
+        }
     };
-    if let Err(e) = Runner::new(root).settle(&checked.graph, store).await {
-        tracing::error!("supervisor: could not settle the record: {e:#}");
+    match Runner::new(root).settle(&checked.graph, store).await {
+        Ok(turned_off) => Some(turned_off),
+        Err(e) => {
+            tracing::error!("supervisor: could not settle the record: {e:#}");
+            None
+        }
     }
 }
 
@@ -298,8 +367,9 @@ fn now(cfg: &HostConfig) -> String {
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
 }
 
-/// One busy period: the config loaded once, a run opened, and the loop
-/// served until no request it can place is open.
+/// One busy period: a run opened, and the loop served until no request
+/// it can place is open. The loop re-reads the config as it goes; the
+/// step environment is the one built here.
 async fn serve_period(cfg: &HostConfig, store: &Store) {
     let root = cfg.control.root.clone();
     let checked = match load_config(&root) {
@@ -328,7 +398,10 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
     let runner = Runner::new(root.as_path())
         .sink(sink)
         .child_env(env.vars)
-        .stop_on(cfg.control.stop.subscribe());
+        .stop_on(cfg.control.stop.subscribe())
+        .reload_from(Arc::new(ConfigFile::new(
+            datalib_dag::config::root_config_path(&root),
+        )));
 
     cfg.control.busy.store(true, Ordering::SeqCst);
     tracing::info!(run = %run_id, "supervisor: a sync started");
@@ -402,6 +475,68 @@ async fn run_reset(
             .map_err(|e| format!("could not sync what follows the reset: {e:#}"))?;
     }
     Ok(())
+}
+
+/// A purge, between busy periods. The config is read again, since it may
+/// have changed since the purge was asked for.
+async fn run_purge(root: &Path, store: &Store, groups: &[String]) -> Result<(), String> {
+    let checked = load_config(root)?;
+    if let Some(why) = purge_refusal(&checked.cfg, groups) {
+        return Err(why);
+    }
+    for group in groups {
+        match tokio::fs::remove_dir_all(root.join(group)).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("delete {group}/: {e}")),
+        }
+    }
+    let saved = store
+        .load_record()
+        .await
+        .map_err(|e| format!("load the record: {e:#}"))?;
+    store
+        .save_record(&saved, &forget_groups(&saved, groups))
+        .await
+        .map_err(|e| format!("forget the groups' steps: {e:#}"))
+}
+
+/// Why the trees of `groups` may not be deleted, or `None`. Each must be
+/// an id a config could name as a group — so `<root>/<id>` is that
+/// group's tree and nothing else — and one `cfg` no longer names.
+fn purge_refusal(cfg: &DagConfig, groups: &[String]) -> Option<String> {
+    if groups.is_empty() {
+        return Some("no groups to delete".into());
+    }
+    if let Some(bad) = groups
+        .iter()
+        .find(|g| !datalib_dag::config::usable_group_id(g))
+    {
+        return Some(format!("{bad:?} is not a group id"));
+    }
+    let named: BTreeSet<&str> = cfg
+        .groups
+        .iter()
+        .map(|g| g.id.as_str())
+        .chain(cfg.steps.iter().map(|s| tree_group(&s.id)))
+        .collect();
+    groups
+        .iter()
+        .find(|g| named.contains(g.as_str()))
+        .map(|g| format!("the config still has {g:?}; remove it from the config first"))
+}
+
+/// The record without the steps that write under `groups`.
+fn forget_groups(record: &Record, groups: &[String]) -> Record {
+    let mut next = record.clone();
+    next.steps
+        .retain(|step, _| !groups.iter().any(|g| g == tree_group(step)));
+    next
+}
+
+/// The group directory a step id writes under: its first segment.
+fn tree_group(step_id: &str) -> &str {
+    step_id.split('/').next().unwrap_or(step_id)
 }
 
 /// What a reset syncs next. A step that reads something is rebuilt from
@@ -500,5 +635,96 @@ mod tests {
         control.busy.store(true, Ordering::SeqCst);
         let err = control.reset(&["a/ingest".into()], "ui").await.unwrap_err();
         assert!(err.contains("a sync is running"), "{err}");
+    }
+
+    /// A root whose config has one group, `keep`, with one step.
+    fn root_keeping_one_group() -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(
+            datalib_dag::config::root_config_path(td.path()),
+            "[[groups]]\nid = \"keep\"\n[[steps]]\ngroup = \"keep\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        td
+    }
+
+    /// A purge deletes a directory under the data root, so it takes only
+    /// a group id — never a path, never `system` — and never a group the
+    /// config still runs.
+    #[test]
+    fn a_purge_takes_only_a_group_the_config_no_longer_names() {
+        let td = root_keeping_one_group();
+        let cfg = load_config(td.path()).unwrap().cfg;
+        let refusal = |groups: &[&str]| {
+            let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
+            purge_refusal(&cfg, &groups)
+        };
+        assert_eq!(refusal(&["gone"]), None);
+        assert!(refusal(&[]).is_some());
+        assert!(refusal(&["gone", "keep"])
+            .unwrap()
+            .contains("still has \"keep\""));
+        for bad in ["", "..", "system", "a/b", "../elsewhere"] {
+            assert!(
+                refusal(&[bad]).unwrap().contains("not a group id"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Guards the trap a bare `rm -r` sets: a group re-added under the same
+    /// id with the same definition read as up to date, and wrote nothing,
+    /// because the record still said its step had succeeded.
+    #[tokio::test]
+    async fn a_purge_deletes_the_tree_and_forgets_its_steps() {
+        use datalib_dag::supervisor::record::StepRecord;
+        let td = root_keeping_one_group();
+        let root = td.path();
+        for tree in ["gone/render_markdown", "keep/raw"] {
+            std::fs::create_dir_all(root.join(tree)).unwrap();
+            std::fs::write(root.join(tree).join("store.db"), "x").unwrap();
+        }
+        let store = Store::open(root).await.unwrap();
+        let succeeded = || StepRecord {
+            version: Some("v1".into()),
+            succeeded: true,
+            fingerprint: "fp".into(),
+            ..Default::default()
+        };
+        let seeded = Record {
+            steps: BTreeMap::from([
+                ("gone/render_markdown".into(), succeeded()),
+                ("keep/raw".into(), succeeded()),
+            ]),
+            current_run: None,
+        };
+        store
+            .save_record(&Record::default(), &seeded)
+            .await
+            .unwrap();
+
+        run_purge(root, &store, &["gone".into()]).await.unwrap();
+
+        assert!(!root.join("gone").exists());
+        assert!(root.join("keep/raw/store.db").exists());
+        let steps: Vec<String> = store
+            .load_record()
+            .await
+            .unwrap()
+            .steps
+            .into_keys()
+            .collect();
+        assert_eq!(steps, ["keep/raw"]);
+        // A tree already gone is not an error: the record still needs forgetting.
+        run_purge(root, &store, &["gone".into()]).await.unwrap();
+        store.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_purge_is_refused_when_another_process_runs_the_loop() {
+        let td = root_keeping_one_group();
+        let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
+        let err = control.purge(&["gone".into()], "ui").await.unwrap_err();
+        assert!(err.contains("another process"), "{err}");
     }
 }

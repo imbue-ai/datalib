@@ -534,14 +534,14 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
           }"
         >
           <div
-            class="tree-node-chrome"
-            :class="{ 'tree-node-chrome--title': !devMode }"
+            class="tree-node-chrome card-chrome"
+            :class="{ 'card-chrome--title': !devMode }"
             @pointerdown="(e) => onChromeDown(node, e)"
           >
             <textarea
               v-if="devMode"
               v-auto-grow
-              class="tree-node-source"
+              class="tree-node-source card-source"
               rows="1"
               :value="node.source"
               spellcheck="false"
@@ -549,7 +549,9 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
               @input="growSourceBox($event.target as HTMLTextAreaElement)"
               @keydown.enter.exact.prevent="commitSource(node, $event)"
             />
-            <div v-else class="tree-node-title">
+            <!-- Not an interactive element, so the chrome's grab-to-move drag
+                 (onChromeDown) works across it. -->
+            <div v-else class="tree-node-title card-title">
               {{ displayTitle(node.source, node.title) }}
             </div>
             <CardControls :source="node.source" :ctx="ctxFor(node)" />
@@ -579,6 +581,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   </div>
 </template>
 
+<style scoped src="./cardChrome.css"></style>
 <style scoped>
 .tree-root {
   display: flex;
@@ -654,70 +657,16 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   transition: none;
 }
 .tree-node-chrome {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
   /* Extra top padding: a grab strip for moving the node without
      misclicking into the source textarea. */
   padding: 0.85rem 0.5rem 0.3rem;
-  border-bottom: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
   cursor: grab;
 }
 .tree-node-chrome:active {
   cursor: grabbing;
 }
-.tree-node-chrome:focus-within {
-  background: rgba(99, 102, 241, 0.18);
-}
-/* Non-dev: accent-washed title bar, title inked in the accent (see
-   MillerView for the mixing rationale); the grab-to-move cursor and
-   behavior are unchanged. */
-.tree-node-chrome--title {
-  background: color-mix(in srgb, var(--datalib-accent) 16%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--datalib-accent) 55%, transparent);
-  color: color-mix(in srgb, var(--datalib-accent) 70%, var(--datalib-fg));
-}
 .tree-node-source {
-  flex: 1 1 auto;
   cursor: text;
-  font:
-    12px/1.5 ui-monospace,
-    Menlo,
-    monospace;
-  padding: 0.2rem 0.4rem;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: inherit;
-  min-width: 0;
-  resize: none;
-  overflow: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  box-sizing: border-box;
-  display: block;
-}
-.tree-node-source:focus {
-  outline: none;
-}
-/* Non-dev chrome: the card's human-readable title where the source
-   box would be. Styled as a heading (proportional, semibold) so it
-   reads as a title, not code; the 18px line box matches the source
-   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar.
-   Not an interactive element, so the chrome's grab-to-move drag
-   (onChromeDown) works across it. */
-.tree-node-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  padding: 0.2rem 0.4rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tree-node-card {
   flex: 1 1 auto;

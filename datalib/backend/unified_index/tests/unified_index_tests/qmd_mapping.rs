@@ -5,7 +5,6 @@ use std::path::Path;
 
 use datalib_schema::grid_rows::GridRow;
 use datalib_unified_index::qmd::mapping::norm_path;
-use datalib_unified_index::qmd::runner::parse_stdout;
 use datalib_unified_index::qmd::{GridIndex, GridRowRef, QmdHit};
 
 // Fixture construction
@@ -18,6 +17,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         source_label: provider.into(),
         created_at: Some("2369-04-14T10:00:00+00:00".into()),
         modified_at: None,
+        touched_at: None,
         is_document: false,
         author: None,
         account: None,
@@ -29,7 +29,8 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         conversation_uuid: uuid.into(),
         message_index: None,
         entire_chat: format!("/chat/{uuid}"),
-        text: String::new(),
+        preview: String::new(),
+        content_hash: String::new(),
         qmd_path: Some(qmd_path.into()),
         source_url: None,
         git_sha: None,
@@ -145,27 +146,18 @@ fn make_fixture(_root: &Path) -> Rendered {
     r
 }
 
-/// Build a qmd stdout fixture that `parse_stdout` will consume.
-///
-/// The path is wrapped in the same `qmd://mirror/...` URI the real CLI
-/// emits, lowercased + `[_-]+` collapsed the way qmd's indexer does.
-fn fake_stdout(hits: &[(&str, &str)]) -> String {
-    let entries: Vec<serde_json::Value> = hits
-        .iter()
-        .map(|(path, snippet)| {
-            serde_json::json!({
-                "file": format!("qmd://mirror/{}", norm_path(path)),
-                "score": 0.9,
-                "snippet": snippet,
-                "docid": "d",
-                "title": "t",
-            })
+/// The hits qmd would answer with: each at a document's path, spelled the
+/// way qmd's indexer spells it (lowercased, `[_-]+` collapsed).
+fn fake_hits(hits: &[(&str, &str)]) -> Vec<QmdHit> {
+    hits.iter()
+        .map(|(path, snippet)| QmdHit {
+            path: norm_path(path),
+            score: 0.9,
+            snippet: snippet.to_string(),
+            docid: "d".into(),
+            title: "t".into(),
         })
-        .collect();
-    format!(
-        "qmd: ready [0/3]\n{}\n",
-        serde_json::to_string(&entries).unwrap()
-    )
+        .collect()
 }
 
 // Tests
@@ -202,8 +194,7 @@ fn line_resolves_to_single_message_row() {
 
     // `@@ -<second-anchor>,4 @@` → the matched line is on the 2nd message div.
     let snip = format!("@@ -{},4 @@ (0 before, 3 after)\n## Assistant", anchors[1]);
-    let stdout = fake_stdout(&[(chat, snip.as_str())]);
-    let hits = parse_stdout(&stdout).unwrap();
+    let hits = fake_hits(&[(chat, snip.as_str())]);
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].uuid, "30000002-1701-4d00-8000-000000030002");
@@ -221,11 +212,10 @@ fn path_fallback_returns_all_rows_for_doc() {
     // whole document surfaces.
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
-    let stdout = fake_stdout(&[(
+    let hits = fake_hits(&[(
         "render_markdown/claude/acct/llm_chats/c001__klingon_diplomacy.md",
         "no anchors here",
     )]);
-    let hits = parse_stdout(&stdout).unwrap();
     let rows = idx.rows_for_hits(&hits);
     let uuids: std::collections::HashSet<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
     assert_eq!(uuids.len(), 3);
@@ -243,11 +233,10 @@ fn thread_hit_returns_comment_rows_not_container() {
     let rendered = make_fixture(tmp.path());
     let idx = GridIndex::new(tmp.path(), rendered.grid_rows());
 
-    let stdout = fake_stdout(&[(
+    let hits = fake_hits(&[(
         "render_markdown/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
         "water temperature drift",
     )]);
-    let hits = parse_stdout(&stdout).unwrap();
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| r.kind != "GitHub PR"));
@@ -286,7 +275,7 @@ fn hits_for_row_reverse_mapping() {
     let s_target = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[1]);
     let s_other = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[0]);
     let s_diff = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[1]);
-    let stdout = fake_stdout(&[
+    let hits = fake_hits(&[
         // Same doc, line lands in the target (2nd) message → matches.
         (pr_thread, s_target.as_str()),
         // Same doc, line lands in a *different* message → must NOT match.
@@ -299,7 +288,6 @@ fn hits_for_row_reverse_mapping() {
             s_diff.as_str(),
         ),
     ]);
-    let hits = parse_stdout(&stdout).unwrap();
     let back = idx.hits_for_row(&target, &hits);
     assert_eq!(back.len(), 2, "target-line hit + whole-doc fallback");
 }

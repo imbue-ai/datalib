@@ -2,7 +2,7 @@
 //!
 //! Bytes live once in `cas_objects`, keyed by blake3; each provider declares
 //! its own `(owning_id, ref_id, blake3)` edge table. Download fills a bundle,
-//! parse loads one document's refs in two queries, and render consumes an
+//! parse loads every document's bundle in one pass, and render consumes an
 //! already-loaded bag of bytes. See the crate README.
 //!
 //! One payload can reach a bundle under two refs with different metadata, so
@@ -10,6 +10,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -405,52 +406,60 @@ impl BlobBundle {
 
     // ── parse side ───────────────────────────────────────────────────
 
-    pub async fn load(
+    /// A bundle for each key that names at least one ref. Every key's refs
+    /// go into one query: the edge table is read through a `pinned_*` view,
+    /// which uses no index, so a query per bucket is a full scan per bucket.
+    pub async fn load_many<K, R>(
         refs_pool: &SqlitePool,
         cas_pool: &SqlitePool,
         projection_sql_template: &str,
-        ref_ids: &[&str],
-    ) -> Result<Self> {
-        if ref_ids.is_empty() {
-            return Ok(Self::new());
+        refs_by_key: impl IntoIterator<Item = (K, R)>,
+    ) -> Result<HashMap<K, Self>>
+    where
+        K: Eq + Hash + Clone,
+        R: IntoIterator,
+        R::Item: Into<String>,
+    {
+        let mut out: HashMap<K, Self> = HashMap::new();
+        let mut keys_by_ref: HashMap<String, Vec<K>> = HashMap::new();
+        for (key, refs) in refs_by_key {
+            for r in refs {
+                let keys = keys_by_ref.entry(r.into()).or_default();
+                if keys.last() != Some(&key) {
+                    keys.push(key.clone());
+                }
+                out.entry(key.clone()).or_default();
+            }
         }
-        // Stage 1: ref_id → (blake3, content_type, upstream_name).
-        // The template may use `{placeholders}` more than once (e.g.
-        // email's UNION ALL over `emails` and `email_attachments`
-        // wants the same IN-list twice); we bind the ref_ids once
-        // per occurrence so the binding order matches the SQL.
-        let placeholders = std::iter::repeat_n("?", ref_ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
+        if keys_by_ref.is_empty() {
+            return Ok(out);
+        }
+
+        // Stage 1: ref_id → (blake3, content_type, upstream_name). The
+        // template may name `{placeholders}` more than once (email's UNION
+        // ALL does); each gets the whole list.
+        let ref_ids = serde_json::to_string(&keys_by_ref.keys().collect::<Vec<_>>())?;
         let occurrences = projection_sql_template.matches("{placeholders}").count();
-        let sql = projection_sql_template.replace("{placeholders}", &placeholders);
+        let sql =
+            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)");
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the template is
         // caller-supplied, but every caller passes a module-level `const &str`
         // literal (`*_PROJECTION*` in the providers); the only substitution is
-        // `{placeholders}` -> a `?,?,?` run sized from `ref_ids.len()`.
+        // `{placeholders}` -> a fixed `json_each` over one bound parameter.
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for _ in 0..occurrences {
-            for r in ref_ids {
-                q = q.bind(*r);
-            }
+            q = q.bind(&ref_ids);
         }
         let rows = q
             .fetch_all(refs_pool)
             .await
-            .context("BlobBundle::load projection")?;
-        if rows.is_empty() {
-            return Ok(Self::new());
-        }
-        // Build a temporary (blake3 → entries-pointing-at-it) map so a
-        // single CAS query covers the whole set even if multiple
-        // ref_ids dedupe to one blake3.
+            .context("BlobBundle::load_many projection")?;
         struct PendingEntry {
             ref_id: String,
             content_type: Option<String>,
             upstream_name: Option<String>,
         }
         let mut pending_by_blake3: HashMap<String, Vec<PendingEntry>> = HashMap::new();
-        let mut blake3_set: Vec<String> = Vec::with_capacity(rows.len());
         for r in &rows {
             let Ok(ref_id) = r.try_get::<String, _>("ref_id") else {
                 continue;
@@ -458,64 +467,55 @@ impl BlobBundle {
             let Ok(blake3) = r.try_get::<String, _>("blake3") else {
                 continue;
             };
-            let content_type: Option<String> = r.try_get("content_type").ok().flatten();
-            let upstream_name: Option<String> = r.try_get("upstream_name").ok().flatten();
-            if !pending_by_blake3.contains_key(&blake3) {
-                blake3_set.push(blake3.clone());
-            }
             pending_by_blake3
                 .entry(blake3)
                 .or_default()
                 .push(PendingEntry {
                     ref_id,
-                    content_type,
-                    upstream_name,
+                    content_type: r.try_get("content_type").ok().flatten(),
+                    upstream_name: r.try_get("upstream_name").ok().flatten(),
                 });
         }
-        if pending_by_blake3.is_empty() {
-            return Ok(Self::new());
-        }
-        // Stage 2: cas_objects bytes for every blake3 we found.
-        let cas_placeholders = std::iter::repeat_n("?", blake3_set.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let cas_sql = format!(
-            "SELECT blake3, bytes, content_type \
-               FROM cas_objects WHERE blake3 IN ({cas_placeholders})"
-        );
-        // Audited: static template; `cas_placeholders` is a `?,?,?` run built from
-        // `blake3_set.len()`, and every hash is bound.
-        let mut cq = sqlx::query(sqlx::AssertSqlSafe(cas_sql));
-        for h in &blake3_set {
-            cq = cq.bind(h);
-        }
-        let cas_rows = cq
+        drop(rows);
+
+        // Stage 2: the bytes, a chunk at a time, each handed out before the
+        // next is read. `blake3` is `cas_objects`' key and the CAS is read
+        // unpinned, so a chunk is an index lookup, not a scan.
+        let hashes: Vec<String> = pending_by_blake3.keys().cloned().collect();
+        for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
+            let cas_rows = sqlx::query(
+                "SELECT blake3, bytes, content_type FROM cas_objects \
+                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(chunk)?)
             .fetch_all(cas_pool)
             .await
-            .context("BlobBundle::load cas_objects")?;
-        let mut bundle = Self::new();
-        for cr in &cas_rows {
-            let Ok(blake3) = cr.try_get::<String, _>("blake3") else {
-                continue;
-            };
-            let bytes: Vec<u8> = cr.try_get("bytes").unwrap_or_default();
-            let cas_ct: Option<String> = cr.try_get("content_type").ok().flatten();
-            let Some(entries) = pending_by_blake3.remove(&blake3) else {
-                continue;
-            };
-            for entry in entries {
-                bundle.by_ref.insert(
-                    entry.ref_id,
-                    Blob {
-                        blake3: blake3.clone(),
-                        bytes: bytes.clone(),
-                        content_type: entry.content_type.or_else(|| cas_ct.clone()),
-                        upstream_name: entry.upstream_name,
-                    },
-                );
+            .context("BlobBundle::load_many cas_objects")?;
+            for cr in &cas_rows {
+                let Ok(blake3) = cr.try_get::<String, _>("blake3") else {
+                    continue;
+                };
+                let Some(entries) = pending_by_blake3.remove(&blake3) else {
+                    continue;
+                };
+                let bytes: Vec<u8> = cr.try_get("bytes").unwrap_or_default();
+                let cas_ct: Option<String> = cr.try_get("content_type").ok().flatten();
+                for entry in entries {
+                    for key in &keys_by_ref[&entry.ref_id] {
+                        out.entry(key.clone()).or_default().by_ref.insert(
+                            entry.ref_id.clone(),
+                            Blob {
+                                blake3: blake3.clone(),
+                                bytes: bytes.clone(),
+                                content_type: entry.content_type.clone().or_else(|| cas_ct.clone()),
+                                upstream_name: entry.upstream_name.clone(),
+                            },
+                        );
+                    }
+                }
             }
         }
-        Ok(bundle)
+        Ok(out)
     }
 
     // ── render side (sync) ───────────────────────────────────────────
@@ -655,10 +655,9 @@ pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
         )
     }
 
-    /// Index on `(ref_column, blake3)` — supports the skip-check
-    /// "have we ever stored this ref's bytes" without a full scan,
-    /// and the per-thread `BlobBundle::load` projection's
-    /// `WHERE ref_id IN (…) AND blake3 IS NOT NULL`.
+    /// Index on `(ref_column, blake3)` — supports the download's skip-check
+    /// "have we ever stored this ref's bytes" without a full scan. Render
+    /// reads the table through a `pinned_*` view, which cannot use it.
     fn by_ref_index_ddl() -> String {
         format!(
             "CREATE INDEX IF NOT EXISTS {table}_by_{ref_c} ON {table}({ref_c}, blake3)",
@@ -1199,8 +1198,11 @@ mod tests {
         }
     }
 
+    /// One read serves every key: each gets the refs it named and nothing
+    /// else, a ref two keys share reaches both, and a template naming
+    /// `{placeholders}` twice gets the list in both places.
     #[tokio::test(flavor = "multi_thread")]
-    async fn bundle_load_round_trips_through_cas() {
+    async fn bundle_load_many_round_trips_through_cas() {
         let d = tempdir().unwrap();
         let cas_path = d.path().join("cas.blobs.doltlite_db");
         let cas = BlobCas::open(&cas_path).await.unwrap();
@@ -1249,23 +1251,42 @@ mod tests {
             .unwrap();
         }
 
-        let bundle = BlobBundle::load(
+        // `{placeholders}` twice, as email's UNION ALL has it: each gets
+        // the whole list.
+        let bundles = BlobBundle::load_many(
             &refs_pool,
             cas.pool(),
-            "SELECT file_id AS ref_id, blake3, \
-                    NULL AS content_type, upstream_name \
-               FROM attachments \
-              WHERE file_id IN ({placeholders})",
-            &["a", "b", "missing"],
+            "SELECT file_id AS ref_id, blake3, NULL AS content_type, upstream_name \
+               FROM attachments WHERE file_id IN ({placeholders}) AND file_id = 'a' \
+             UNION ALL \
+             SELECT file_id AS ref_id, blake3, NULL AS content_type, upstream_name \
+               FROM attachments WHERE file_id IN ({placeholders}) AND file_id <> 'a'",
+            [
+                ("one", vec!["a", "b", "missing"]),
+                ("two", vec!["b"]),
+                ("absent", vec!["missing"]),
+                ("none", vec![]),
+            ],
         )
         .await
         .unwrap();
-        assert_eq!(bundle.len(), 2);
-        let a = bundle.get("a").expect("a present");
+        let one = &bundles["one"];
+        assert_eq!(one.len(), 2);
+        let a = one.get("a").expect("a present");
         assert_eq!(a.bytes, b"alpha");
         // content_type comes from CAS when projection doesn't supply it
         assert_eq!(a.content_type.as_deref(), Some("image/png"));
         assert_eq!(a.upstream_name.as_deref(), Some("alpha.png"));
-        assert!(bundle.get("missing").is_none());
+        assert!(one.get("missing").is_none());
+        assert_eq!(
+            bundles["two"].get("b").map(|b| b.bytes.as_slice()),
+            Some(&b"beta"[..]),
+            "a ref two keys name reaches both"
+        );
+        assert!(bundles["absent"].is_empty(), "named refs, found none");
+        assert!(
+            !bundles.contains_key("none"),
+            "a key that names no ref gets no bundle"
+        );
     }
 }

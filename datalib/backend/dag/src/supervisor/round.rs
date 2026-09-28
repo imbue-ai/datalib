@@ -8,18 +8,19 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::announce::{Listener, CONFIG_CHANGED};
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store};
 use super::tick::{
-    tick, Attempt, Class, Consumed, Facts, Intent, Outcome, Request, Running, Seq, Shape,
+    tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
 use crate::artifact::ArtifactPath;
 use crate::events::{Event, StepProgress};
 use crate::graph::Graph;
 use crate::scheduler::{
-    invoke_with_retry, mark_running, new_run_id, now_stamp, resolve_outputs, step_summary,
-    QueueLedger, RunReport, Runner, StepReport, StepStatus,
+    fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp, reported_version,
+    step_summary, QueueLedger, RunReport, Runner, StepReport, StepStatus,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepOutcome, StopSignal};
 use crate::supervisor::record::{CurrentRun, Record};
@@ -55,7 +56,78 @@ impl Ended {
     }
 }
 
-type Done = (usize, u32, Result<StepOutcome, StepError>, Consumed);
+/// What the loop holds for one step through a round. A config swap
+/// carries it to the step's place in the new graph.
+#[derive(Default)]
+struct Slot {
+    /// Whether an open request has wanted it this round.
+    ever_in_scope: bool,
+    last_wanted: LastWanted,
+    live: Option<Live>,
+    ended: Option<Ended>,
+    warned_not_streaming: bool,
+    /// What the round's report says of it.
+    status: Option<StepStatus>,
+    attempts: u32,
+    error: Option<String>,
+}
+
+impl Slot {
+    fn remapped(mut self, to_new: &HashMap<usize, usize>) -> Slot {
+        self.live = self.live.map(|l| Live {
+            consumed: remap_consumed(l.consumed, to_new),
+            ..l
+        });
+        self
+    }
+}
+
+/// A step's state the last time a request wanted it, as far as what its
+/// row settles on once none does. A step it was blocked on is named, so
+/// no index goes stale when the config is swapped.
+#[derive(Default)]
+enum LastWanted {
+    #[default]
+    Unwanted,
+    Off,
+    Waiting,
+    Blocked(String),
+    Other,
+}
+
+impl LastWanted {
+    fn of(graph: &Graph, state: Row) -> LastWanted {
+        match state {
+            Row::Idle | Row::Stale => LastWanted::Unwanted,
+            Row::Off => LastWanted::Off,
+            Row::Waiting(_) => LastWanted::Waiting,
+            Row::Blocked(on) => LastWanted::Blocked(graph.steps[on].id.clone()),
+            _ => LastWanted::Other,
+        }
+    }
+
+    /// A step turned off took no part: none.
+    fn settles(&self, cancelled: bool) -> Option<StepStatus> {
+        Some(match self {
+            LastWanted::Off => return None,
+            LastWanted::Waiting if cancelled => StepStatus::Failed {
+                kind: FailureKind::Cancelled,
+            },
+            LastWanted::Blocked(on) => StepStatus::Blocked { on: on.clone() },
+            _ => StepStatus::SkippedUpToDate,
+        })
+    }
+}
+
+/// An invocation in flight.
+struct Live {
+    invocation: String,
+    consumed: Consumed,
+    /// Taken when the loop tells it to stop: what ends then was asked to.
+    stop: Option<watch::Sender<bool>>,
+}
+
+type Done = (String, u32, Result<StepOutcome, StepError>);
 
 /// The record as the loop holds it, beside the one it last saved: a save
 /// writes the difference.
@@ -80,14 +152,17 @@ impl<'a> Recorded<'a> {
     }
 }
 
-/// Where the loop's requests and pauses come from: the store, read again
+/// Where the loop's requests and switches come from: the store, read again
 /// whenever another process writes to it.
 struct Mailbox<'a> {
     store: &'a Store,
     seen: Option<i64>,
-    /// Requests naming a step this loop's graph lacks, left for the next
-    /// loop: it loads the config again, and may know them. Each with the
-    /// roots this graph lacks.
+    /// Whether the store has been read once: a request open before that
+    /// was open before the loop loaded its graph.
+    started: bool,
+    /// Requests naming a step this loop's graph lacks, set aside until a
+    /// config that has it is taken on, by this loop or the next. Each with
+    /// the roots this graph lacks.
     deferred: BTreeMap<String, Vec<String>>,
 }
 
@@ -98,11 +173,6 @@ struct Open {
     request: Request,
     scope: Vec<bool>,
 }
-
-/// How often a loop with steps running looks for new rows. A loop with
-/// nothing running is not waiting on anything else, so it looks at the
-/// same pace.
-const MAILBOX_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// A request for every source, served until it closes: what a test that
 /// is not about requests wants of the loop.
@@ -130,6 +200,7 @@ impl Runner {
         let mut mailbox = Mailbox {
             store,
             seen: None,
+            started: false,
             deferred: BTreeMap::new(),
         };
         let plan: Vec<String> = graph
@@ -161,26 +232,23 @@ impl Runner {
         });
         record.save(&state).await?;
 
-        let n = graph.steps.len();
-        let shape = shape_of(graph);
+        // Made before the first look at the mailbox, so a row written
+        // after that look is heard.
+        let mut listener = Listener::new(store, "the loop").backstop(self.backstop);
+        let mut current = graph.clone();
+        // The host loaded the config before this period began, and it may
+        // have moved since; after that, only when it is said to have.
+        let mut config_moved = true;
+        let mut next_graph: Option<Graph> = None;
+        let mut said_waiting_to_swap = false;
+        let mut shape = shape_of(graph, &self.lock_slots);
         let mut facts = facts_of(graph, &state);
         let mut open: Vec<Open> = Vec::new();
-        let mut paused: BTreeMap<usize, String> = BTreeMap::new();
-        let mut ever_in_scope = vec![false; n];
+        let mut turned_off: BTreeMap<usize, String> = BTreeMap::new();
         let mut seq = 0u64;
-
-        let mut status: Vec<Option<StepStatus>> = vec![None; n];
-        let mut attempts_taken = vec![0u32; n];
-        let mut errors: Vec<Option<String>> = vec![None; n];
+        let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
         let mut changed_now: HashMap<String, bool> = HashMap::new();
-        let mut ended: Vec<Option<Ended>> = (0..n).map(|_| None).collect();
-        let mut stops: Vec<Option<watch::Sender<bool>>> = (0..n).map(|_| None).collect();
-        let mut invocations: Vec<Option<String>> = vec![None; n];
-        let mut warned_not_streaming = vec![false; n];
-        let mut queue = QueueLedger::new(n);
-        // Each step's state the last time a request wanted it, which is
-        // what its row settles on once none does.
-        let mut last_states: Vec<Row> = vec![Row::Idle; n];
+        let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
         let mut stop_rx = self.stop.clone();
 
@@ -188,9 +256,9 @@ impl Runner {
             graph,
             &mut mailbox,
             &mut open,
-            &mut paused,
+            &mut turned_off,
             &mut seq,
-            &mut ever_in_scope,
+            &mut slots,
         )
         .await?;
 
@@ -199,25 +267,149 @@ impl Runner {
         let mut set: JoinSet<Done> = JoinSet::new();
 
         loop {
+            if !cancelled && std::mem::take(&mut config_moved) {
+                // One that does not load is waited out on the graph the
+                // loop has; the Manage screen already says it is broken.
+                if let Some(Ok(next)) = self.reload.as_ref().map(|s| s.load()) {
+                    next_graph = Some(next);
+                }
+            }
+            if let Some(next) = next_graph.take().filter(|_| !cancelled) {
+                let roots: BTreeSet<usize> = open
+                    .iter()
+                    .flat_map(|o| o.request.roots.iter().copied())
+                    .collect();
+                let still_needed: Vec<&str> = current
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, s)| {
+                        (facts.steps[i].running.is_some() || roots.contains(&i))
+                            && !next.by_id.contains_key(&s.id)
+                    })
+                    .map(|(_, s)| s.id.as_str())
+                    .collect();
+                if !still_needed.is_empty() {
+                    // Not interrupted: a step dropped by a config saved
+                    // mid-edit would lose hours of download to a typo.
+                    if !std::mem::replace(&mut said_waiting_to_swap, true) {
+                        for id in &still_needed {
+                            self.note(
+                                id,
+                                "the config no longer has this step; this sync takes the \
+                                 config on once it is done with it"
+                                    .into(),
+                            );
+                        }
+                    }
+                    next_graph = Some(next);
+                } else if !same_graph(&current, &next) {
+                    said_waiting_to_swap = false;
+                    let old = std::mem::replace(&mut current, next);
+                    let graph = &current;
+                    let from_old: Vec<Option<usize>> = graph
+                        .steps
+                        .iter()
+                        .map(|s| old.by_id.get(&s.id).copied())
+                        .collect();
+                    let to_new: HashMap<usize, usize> = from_old
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(new, o)| Some(((*o)?, new)))
+                        .collect();
+                    // A step the new graph lacks, done but for what it
+                    // reads settling, is done now, under the graph it ran in.
+                    for (i, s) in slots.iter_mut().enumerate() {
+                        if to_new.contains_key(&i) {
+                            continue;
+                        }
+                        if let Some(e) = s.ended.take() {
+                            self.finish(
+                                &old,
+                                &mut state,
+                                &mut s.status,
+                                i,
+                                e.status,
+                                e.error,
+                                e.exit,
+                                e.attempts,
+                            );
+                        }
+                    }
+                    shape = shape_of(graph, &self.lock_slots);
+                    slots = carry(&mut slots, &from_old)
+                        .into_iter()
+                        .map(|s| s.remapped(&to_new))
+                        .collect();
+                    queue.remap(&from_old);
+                    // The record holds everything the facts are made of
+                    // but what is in flight, which carries over.
+                    let before = std::mem::replace(&mut facts, facts_of(graph, &state));
+                    for (f, o) in facts.steps.iter_mut().zip(&from_old) {
+                        let Some(was) = o.map(|o| &before.steps[o]) else {
+                            continue;
+                        };
+                        f.running = was.running.clone();
+                        f.streams_output = was.streams_output;
+                        f.last_attempt = was.last_attempt.clone().map(|a| Attempt {
+                            consumed: remap_consumed(a.consumed, &to_new),
+                            ..a
+                        });
+                    }
+                    // Every root is in the new graph: a swap waits until it is.
+                    for o in open.iter_mut() {
+                        for r in o.request.roots.iter_mut() {
+                            *r = to_new[r];
+                        }
+                        o.scope = downstream_of(graph, &o.request.roots);
+                        for (slot, &s) in slots.iter_mut().zip(&o.scope) {
+                            slot.ever_in_scope |= s;
+                        }
+                    }
+                    turned_off = turned_off_in(graph, store).await?;
+                    // Read the requests again: one left for want of a step
+                    // this graph has is taken on now.
+                    mailbox.seen = None;
+                    let mut added = Vec::new();
+                    for (i, o) in from_old.iter().enumerate() {
+                        let id = &graph.steps[i].id;
+                        match o {
+                            None => {
+                                added.push(id.clone());
+                                self.note(id, "added to the config during this sync".into());
+                            }
+                            Some(o) if old.fingerprints[*o] != graph.fingerprints[i] => {
+                                self.note(id, "changed in the config during this sync".into())
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    if !added.is_empty() {
+                        self.sink.emit(&Event::RunPlan { steps: added });
+                    }
+                }
+            }
+            let graph = &current;
             if !cancelled {
                 self.refresh(
                     graph,
                     &mut mailbox,
                     &mut open,
-                    &mut paused,
+                    &mut turned_off,
                     &mut seq,
-                    &mut ever_in_scope,
+                    &mut slots,
                 )
                 .await?;
             }
             let intent = Intent {
                 requests: open.iter().map(|o| o.request.clone()).collect(),
-                paused: paused.keys().copied().collect(),
+                turned_off: turned_off.keys().copied().collect(),
             };
-            let t = tick(&shape, &intent, &facts, &self.budgets);
-            for (i, st) in t.states.iter().enumerate() {
-                if !matches!(st, Row::Idle | Row::Stale) {
-                    last_states[i] = *st;
+            let t = tick(&shape, &intent, &facts);
+            for (slot, &st) in slots.iter_mut().zip(&t.states) {
+                match LastWanted::of(graph, st) {
+                    LastWanted::Unwanted => {}
+                    wanted => slot.last_wanted = wanted,
                 }
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
@@ -225,15 +417,15 @@ impl Runner {
             // A step between passes has not settled either, so the index
             // behind a render that is waiting on its download's next seal
             // keeps reading Running too, not just the render.
-            let mut unsettled = vec![false; n];
+            let mut unsettled = vec![false; slots.len()];
             for &i in &graph.topo {
                 let upstream = graph.deps_in_order(i).any(|p| unsettled[p]);
                 unsettled[i] = matches!(t.states[i], Row::Running | Row::Waiting(_))
-                    || (ended[i].is_some() && upstream);
+                    || (slots[i].ended.is_some() && upstream);
             }
 
-            for (i, slot) in ended.iter_mut().enumerate() {
-                let Some(e) = slot.as_mut() else { continue };
+            for (i, s) in slots.iter_mut().enumerate() {
+                let Some(e) = s.ended.as_mut() else { continue };
                 let again = starting.contains(&i);
                 let upstream_busy = graph.deps_in_order(i).any(|p| unsettled[p]);
                 if (again || upstream_busy) && !e.pass_ended {
@@ -245,13 +437,13 @@ impl Runner {
                     });
                 }
                 if again {
-                    *slot = None;
+                    s.ended = None;
                 } else if !upstream_busy {
-                    let e = slot.take().expect("checked above");
+                    let e = s.ended.take().expect("checked above");
                     self.finish(
                         graph,
                         &mut state,
-                        &mut status,
+                        &mut s.status,
                         i,
                         e.status,
                         e.error,
@@ -261,28 +453,33 @@ impl Runner {
                 }
             }
 
-            // A step no open request wants any more, and with nothing of
-            // its own left to finish, says so now rather than when the
-            // loop ends, which may be a long sync of some other source
-            // away.
-            for i in 0..n {
-                let unwanted = matches!(t.states[i], Row::Idle | Row::Stale);
-                if ever_in_scope[i] && status[i].is_none() && ended[i].is_none() && unwanted {
-                    let Some(st) = settled(graph, &last_states, i, cancelled) else {
-                        continue;
-                    };
-                    if st == StepStatus::SkippedUpToDate {
-                        queue.cleared(graph, i, &*self.sink);
-                    }
-                    self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
+            // A step with nothing of its own left to finish says so now
+            // rather than when the loop ends, which may be a long sync of
+            // some other source away: one no open request wants any more,
+            // and one up to date with nothing above it that could still
+            // change what it reads.
+            let mut above_unsettled = vec![false; slots.len()];
+            for &i in &graph.topo {
+                above_unsettled[i] = graph
+                    .deps_in_order(i)
+                    .any(|p| unsettled[p] || above_unsettled[p]);
+            }
+            for (i, s) in slots.iter_mut().enumerate() {
+                let done = match t.states[i] {
+                    Row::Idle | Row::Stale => true,
+                    Row::Fresh => !above_unsettled[i],
+                    _ => false,
+                };
+                if s.ended.is_none() && done {
+                    self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
                 }
             }
 
             // A request closing now is closed after the save below, and a
             // reader that sees it closed must find no step still serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            let held: Vec<bool> = ended.iter().map(Option::is_some).collect();
-            record_states(graph, &mut state, &t, &held, &paused, |i| {
+            let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
+            record_states(graph, &shape, &mut state, &t, &held, &turned_off, |i| {
                 let mut serving = open
                     .iter()
                     .enumerate()
@@ -295,8 +492,7 @@ impl Runner {
                 let i = start.step;
                 seq += 1;
                 facts.steps[i].running = Some(Running { started: Seq(seq) });
-                let (tx, rx) = watch::channel(false);
-                stops[i] = Some(tx);
+                let (stop, rx) = watch::channel(false);
                 let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
                 let started_at = now_stamp();
                 mark_running(&mut state, &graph.steps[i].id, &started_at);
@@ -311,21 +507,25 @@ impl Runner {
                     started_at_utc: started_at,
                 };
                 store.open_invocation(&invocation).await?;
-                invocations[i] = Some(invocation.id);
+                slots[i].live = Some(Live {
+                    invocation: invocation.id,
+                    consumed: start.consumed,
+                    stop: Some(stop),
+                });
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
                 let child_env = self.child_env.clone();
-                let consumed = start.consumed;
+                let id = graph.steps[i].id.clone();
                 set.spawn(async move {
                     let (attempts, res) =
                         invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
-                    (i, attempts, res, consumed)
+                    (id, attempts, res)
                 });
             }
             for &i in &t.stops {
-                if let Some(tx) = stops[i].take() {
-                    let _ = tx.send(true);
+                if let Some(stop) = slots[i].live.as_mut().and_then(|l| l.stop.take()) {
+                    let _ = stop.send(true);
                 }
             }
             record.save(&state).await?;
@@ -341,11 +541,16 @@ impl Runner {
                 store.close_request(&closed.id, outcome, step).await?;
             }
             if open.is_empty() && set.is_empty() {
+                // A config waiting on what just ended may bring requests
+                // of its own, which this loop takes on rather than the next.
+                if next_graph.is_some() {
+                    continue;
+                }
                 break;
             }
-            let polling = !cancelled;
+            let listening = !cancelled;
             anyhow::ensure!(
-                !set.is_empty() || polling,
+                !set.is_empty() || listening,
                 "the round is open with nothing running and nothing to start: {:?}",
                 t.states
             );
@@ -356,7 +561,7 @@ impl Runner {
                 biased;
                 Some(signal) = checkpoints.recv() => {
                     self.on_signal(graph, signal, &mut facts, &mut state, &mut changed_now,
-                        &mut queue, &mut warned_not_streaming).await;
+                        &mut queue, &mut slots).await;
                 }
                 Some(()) = wait_for_stop(&mut stop_rx), if !cancelled => {
                     // The host is going: stop what runs and take nothing
@@ -365,37 +570,44 @@ impl Runner {
                     cancelled = true;
                     open.clear();
                 }
-                _ = tokio::time::sleep(MAILBOX_POLL), if polling => {}
+                heard = listener.next(), if listening => {
+                    config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
+                }
                 joined = set.join_next() => {
-                    let (i, attempts, res, consumed) = joined
+                    let (id, attempts, res) = joined
                         .expect("a live task implies a joinable one")
                         .context("step task panicked")?;
-                    stops[i] = None;
+                    // A graph that drops a running step waits for it.
+                    let i = graph.by_id[&id];
+                    let live = slots[i].live.take().expect("a joined step was started");
                     let started = facts.steps[i].running.take().map(|r| r.started).unwrap_or(Seq(0));
-                    let e = self.on_ended(graph, i, attempts, res, &consumed, &mut facts,
+                    let e = self.on_ended(graph, i, attempts, res, &live, &mut facts,
                         &mut state, &mut changed_now, &mut queue).await;
                     facts.steps[i].last_attempt = Some(Attempt {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
-                        consumed,
+                        // Asked to stop, and it did: one that says it
+                        // failed has failed, whatever it was asked.
+                        stopped: live.stop.is_none()
+                            && e.status.state() == crate::run_state::RunState::Stopped,
+                        consumed: live.consumed,
                     });
-                    attempts_taken[i] = e.attempts;
-                    errors[i] = e.error.clone();
-                    if let Some(id) = invocations[i].take() {
-                        store.close_invocation(&id, &e.as_end()).await?;
-                    }
-                    ended[i] = Some(e);
+                    store.close_invocation(&live.invocation, &e.as_end()).await?;
+                    slots[i].attempts = e.attempts;
+                    slots[i].error = e.error.clone();
+                    slots[i].ended = Some(e);
                     record.save(&state).await?;
                 }
             }
         }
 
-        for (i, slot) in ended.iter_mut().enumerate() {
-            if let Some(e) = slot.take() {
+        let graph = &current;
+        for (i, s) in slots.iter_mut().enumerate() {
+            if let Some(e) = s.ended.take() {
                 self.finish(
                     graph,
                     &mut state,
-                    &mut status,
+                    &mut s.status,
                     i,
                     e.status,
                     e.error,
@@ -403,25 +615,22 @@ impl Runner {
                     e.attempts,
                 );
             }
-        }
-        for i in 0..n {
-            if status[i].is_some() || !ever_in_scope[i] {
-                continue;
-            }
-            let Some(st) = settled(graph, &last_states, i, cancelled) else {
-                continue;
-            };
-            if st == StepStatus::SkippedUpToDate {
-                queue.cleared(graph, i, &*self.sink);
-            }
-            self.finish(graph, &mut state, &mut status, i, st, None, None, 0);
+            self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
         }
         let at_rest = Intent {
             requests: Vec::new(),
-            paused: paused.keys().copied().collect(),
+            turned_off: turned_off.keys().copied().collect(),
         };
-        let t = tick(&shape, &at_rest, &facts, &self.budgets);
-        record_states(graph, &mut state, &t, &vec![false; n], &paused, |_| None);
+        let t = tick(&shape, &at_rest, &facts);
+        record_states(
+            graph,
+            &shape,
+            &mut state,
+            &t,
+            &vec![false; slots.len()],
+            &turned_off,
+            |_| None,
+        );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
             run.finished_at = Some(now_stamp());
@@ -440,9 +649,9 @@ impl Runner {
                 let changed = changed_now.get(&path).copied().unwrap_or(false);
                 Some(StepReport {
                     id: graph.steps[i].id.clone(),
-                    status: status[i].clone()?,
-                    attempts: attempts_taken[i],
-                    error: errors[i].clone(),
+                    status: slots[i].status.clone()?,
+                    attempts: slots[i].attempts,
+                    error: slots[i].error.clone(),
                     outputs: vec![(path, now, changed)],
                 })
             })
@@ -454,7 +663,7 @@ impl Runner {
         Ok(report)
     }
 
-    /// Bring `open` and `paused` up to what the mailbox says. A request
+    /// Bring `open` and `turned_off` up to what the mailbox says. A request
     /// the loop has not seen before is opened now, so only an invocation
     /// started after this counts as serving it.
     #[allow(clippy::too_many_arguments)]
@@ -463,14 +672,14 @@ impl Runner {
         graph: &Graph,
         mailbox: &mut Mailbox<'_>,
         open: &mut Vec<Open>,
-        paused: &mut BTreeMap<usize, String>,
+        turned_off: &mut BTreeMap<usize, String>,
         seq: &mut u64,
-        ever_in_scope: &mut [bool],
+        slots: &mut [Slot],
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
             let scope = downstream_of(graph, &roots);
-            for (i, &reached) in scope.iter().enumerate() {
-                ever_in_scope[i] |= reached;
+            for (slot, &reached) in slots.iter_mut().zip(&scope) {
+                slot.ever_in_scope |= reached;
             }
             *seq += 1;
             open.push(Open {
@@ -485,6 +694,7 @@ impl Runner {
         let Mailbox {
             store,
             seen,
+            started,
             deferred,
         } = mailbox;
         {
@@ -496,9 +706,9 @@ impl Runner {
                 // Open before this loop loaded its graph, or so near it
                 // that the config it names cannot be newer than the one
                 // loaded.
-                let first = seen.is_none();
+                let first = !std::mem::replace(started, true);
                 *seen = Some(version);
-                let rows = store.open_requests().await?;
+                let (rows, all_turned_off) = store.mailbox().await?;
                 deferred.retain(|id, _| {
                     rows.iter()
                         .any(|r| &r.id == id && r.stop_requested_by.is_none())
@@ -533,8 +743,8 @@ impl Runner {
                                     step: unknown.clone(),
                                     level: crate::events::LogLevel::Info,
                                     msg: format!(
-                                        "request {} names a step the config this loop loaded \
-                                         does not have; leaving it for the next loop",
+                                        "request {} names a step this loop's graph does not \
+                                         have; waiting for a config that has it",
                                         row.id
                                     ),
                                     ts: None,
@@ -564,35 +774,49 @@ impl Runner {
                             .await?;
                         continue;
                     }
+                    deferred.remove(&row.id);
                     let roots = row.roots.iter().map(|r| graph.by_id[r]).collect();
                     admit(row.id, roots, open);
                 }
-                *paused = paused_in(graph, store).await?;
+                *turned_off = turned_off_of(graph, &all_turned_off);
             }
         }
         Ok(())
     }
 
     /// One tick with no request open, its states saved: for a host whose
-    /// loop is idle when a pause or a resume lands, or that has just taken
+    /// loop is idle when a step is turned off or on, or that has just taken
     /// the lock from a loop that died with steps running.
-    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<()> {
+    /// The switches it recorded, as the store held them: a host compares
+    /// the switches it finds later with these, not with any it read before.
+    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<BTreeMap<String, String>> {
         let mut record = Recorded::load(store).await?;
         let mut state = record.saved.clone();
-        let paused = paused_in(graph, store).await?;
+        let all = store.turned_off().await?;
+        let turned_off = turned_off_of(graph, &all);
         let intent = Intent {
             requests: Vec::new(),
-            paused: paused.keys().copied().collect(),
+            turned_off: turned_off.keys().copied().collect(),
         };
-        let t = tick(
-            &shape_of(graph),
-            &intent,
-            &facts_of(graph, &state),
-            &self.budgets,
-        );
+        let shape = shape_of(graph, &self.lock_slots);
+        let t = tick(&shape, &intent, &facts_of(graph, &state));
         let held = vec![false; graph.steps.len()];
-        record_states(graph, &mut state, &t, &held, &paused, |_| None);
-        record.save(&state).await
+        record_states(graph, &shape, &mut state, &t, &held, &turned_off, |_| None);
+        record.save(&state).await?;
+        Ok(all)
+    }
+
+    fn note(&self, step: &str, msg: String) {
+        self.sink.emit(&Event::Log {
+            step: step.to_string(),
+            level: crate::events::LogLevel::Info,
+            msg,
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        });
     }
 
     fn ctx_for(
@@ -630,31 +854,46 @@ impl Runner {
         }
     }
 
-    /// The version of what step `i` has published, read from its stores.
-    /// `None` for a tree with no store, whose version is what the step
-    /// reports. Not qualified with the step's fingerprint, as a reported
-    /// version is: a commit names content, and a definition change that
-    /// rewrites nothing leaves nothing new to read.
-    async fn read_sink(&self, graph: &Graph, i: usize) -> Option<String> {
-        let tree = self.data_root.join(graph.steps[i].output().as_str());
-        match crate::sink::read_version(&tree).await {
-            Ok(v) => v,
-            Err(e) => {
-                self.sink.emit(&Event::Log {
-                    step: graph.steps[i].id.clone(),
-                    level: crate::events::LogLevel::Warn,
-                    msg: format!(
-                        "could not read its stores' heads, using the step's report: {e:#}"
-                    ),
-                    ts: None,
-                    stream: None,
-                    target: None,
-                    thread: None,
-                    fields: None,
-                });
-                None
-            }
+    /// A step a request wanted, with no row of its own yet and nothing
+    /// left to finish, takes the one its last state settles on.
+    fn settle_row(
+        &self,
+        graph: &Graph,
+        state: &mut Record,
+        queue: &mut QueueLedger,
+        s: &mut Slot,
+        i: usize,
+        cancelled: bool,
+    ) {
+        if !s.ever_in_scope || s.status.is_some() {
+            return;
         }
+        let Some(st) = s.last_wanted.settles(cancelled) else {
+            return;
+        };
+        if st == StepStatus::SkippedUpToDate {
+            queue.cleared(graph, i, &*self.sink);
+        }
+        self.finish(graph, state, &mut s.status, i, st, None, None, 0);
+    }
+
+    /// Once per invocation that reported no version: what that costs its
+    /// consumers, where a person reading the run's log will see it.
+    fn say_unversioned(&self, spec: &crate::step::StepSpec) {
+        self.sink.emit(&Event::Log {
+            step: spec.id.clone(),
+            level: crate::events::LogLevel::Info,
+            msg: format!(
+                "reported no version for {}, so every step reading it runs again; a \
+                 version derived from what it wrote lets them skip when nothing changed",
+                spec.output().as_str()
+            ),
+            ts: None,
+            stream: None,
+            target: None,
+            thread: None,
+            fields: None,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -666,7 +905,7 @@ impl Runner {
         state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
-        warned_not_streaming: &mut [bool],
+        slots: &mut [Slot],
     ) {
         use crate::step::StepSignal;
         let (step, version, rows) = match signal {
@@ -693,12 +932,11 @@ impl Runner {
         if facts.steps[p].running.is_none() {
             return;
         }
-        // The commit `main` is at now, which is at least the one the step
-        // announced: it publishes before it says so.
-        let qualified = match self.read_sink(graph, p).await {
-            Some(read) => read,
-            None => format!("{}:{}", graph.fingerprints[p], version),
-        };
+        let fingerprint = slots[p]
+            .live
+            .as_ref()
+            .map_or(&graph.fingerprints[p], |l| &l.consumed.fingerprint);
+        let qualified = format!("{fingerprint}:{version}");
         let out = graph.steps[p].output().as_str().to_string();
         let moved = facts.sinks[p].as_deref() != Some(qualified.as_str());
         facts.sinks[p] = Some(qualified.clone());
@@ -712,8 +950,8 @@ impl Runner {
                 rows,
             });
         }
-        if !facts.steps[p].streams_output && !warned_not_streaming[p] {
-            warned_not_streaming[p] = true;
+        if !facts.steps[p].streams_output && !slots[p].warned_not_streaming {
+            slots[p].warned_not_streaming = true;
             self.sink.emit(&Event::Log {
                 step,
                 level: crate::events::LogLevel::Warn,
@@ -736,14 +974,15 @@ impl Runner {
         i: usize,
         attempts: u32,
         res: Result<StepOutcome, StepError>,
-        consumed: &Consumed,
+        live: &Live,
         facts: &mut Facts,
         state: &mut Record,
         changed_now: &mut HashMap<String, bool>,
         queue: &mut QueueLedger,
     ) -> Ended {
         let spec = &graph.steps[i];
-        let fingerprint = &graph.fingerprints[i];
+        let consumed = &live.consumed;
+        let fingerprint = &consumed.fingerprint;
         let prior = state.steps.get(&spec.id).and_then(|s| s.version.clone());
         let exit = match &res {
             Ok(o) => o.exit,
@@ -756,40 +995,22 @@ impl Runner {
             attempts,
             pass_ended: false,
         };
-        // Read after every invocation, whatever it reported and however it
-        // ended: a writer's open publishes a commit its crashed predecessor
-        // left, so even a step that failed at once can move its sink.
-        let read = self.read_sink(graph, i).await;
+        let path = spec.output().as_str().to_string();
         match res {
             Ok(outcome) => {
-                let resolved = match &read {
-                    Some(v) => check_reported(spec, &outcome.outputs)
-                        .map(|()| vec![(spec.output().as_str().to_string(), v.clone())]),
-                    None => resolve_outputs(
-                        &self.data_root,
-                        spec,
-                        fingerprint,
-                        &outcome.outputs,
-                        &*self.sink,
-                    ),
-                };
-                let resolved = match resolved {
-                    Ok(r) => r,
+                let v = match reported_version(spec, fingerprint, &outcome.outputs) {
+                    Ok(Some(v)) => v,
+                    Ok(None) => {
+                        self.say_unversioned(spec);
+                        fresh_version(fingerprint, &live.invocation)
+                    }
                     Err(e) => return failed(FailureKind::Data, format!("{e:#}")),
                 };
-                let mut changed = 0usize;
-                for (path, v) in &resolved {
-                    let moved = prior.as_ref() != Some(v);
-                    changed += moved as usize;
-                    facts.sinks[i] = Some(v.clone());
-                    changed_now.insert(path.clone(), moved);
-                    let rows = outcome
-                        .outputs
-                        .iter()
-                        .find(|o| o.path.as_str() == path)
-                        .and_then(|o| o.rows);
-                    queue.sealed(graph, i, v, rows, &*self.sink);
-                }
+                let moved = prior.as_ref() != Some(&v);
+                facts.sinks[i] = Some(v.clone());
+                changed_now.insert(path, moved);
+                let rows = outcome.outputs.first().and_then(|o| o.rows);
+                queue.sealed(graph, i, &v, rows, &*self.sink);
                 let consumed_paths = paths_of(graph, consumed);
                 queue.consumed(
                     graph,
@@ -800,12 +1021,14 @@ impl Runner {
                 );
                 let entry = state.steps.entry(spec.id.clone()).or_default();
                 entry.reads = consumed_paths.into_iter().collect();
-                entry.version = resolved.into_iter().next().map(|(_, v)| v);
+                entry.version = Some(v);
                 entry.succeeded = true;
                 entry.fingerprint = fingerprint.clone();
                 facts.steps[i].last_success = Some(consumed.clone());
                 Ended {
-                    status: StepStatus::Succeeded { changed },
+                    status: StepStatus::Succeeded {
+                        changed: moved as usize,
+                    },
                     error: None,
                     exit,
                     attempts,
@@ -813,30 +1036,13 @@ impl Runner {
                 }
             }
             Err(step_err) => {
-                // What a failed step committed, its consumers read
-                // (plans/supervisor.md §2.5). A store's `main` holds only
-                // what was published; without a store, only what the step
-                // reported, since an unreported tree may be mid-write.
-                if let Some(v) = read {
-                    let path = spec.output().as_str().to_string();
+                // What a failed or stopped step reports it committed, its
+                // consumers read (plans/supervisor.md §2.5). One that reports
+                // nothing moves nothing: its tree may be mid-write.
+                if let Ok(Some(v)) = reported_version(spec, fingerprint, &step_err.outputs) {
                     changed_now.insert(path, prior.as_ref() != Some(&v));
                     facts.sinks[i] = Some(v.clone());
                     state.steps.entry(spec.id.clone()).or_default().version = Some(v);
-                } else if !step_err.outputs.is_empty() {
-                    if let Ok(resolved) = resolve_outputs(
-                        &self.data_root,
-                        spec,
-                        fingerprint,
-                        &step_err.outputs,
-                        &*self.sink,
-                    ) {
-                        let entry = state.steps.entry(spec.id.clone()).or_default();
-                        for (path, v) in resolved {
-                            changed_now.insert(path, prior.as_ref() != Some(&v));
-                            facts.sinks[i] = Some(v.clone());
-                            entry.version = Some(v);
-                        }
-                    }
                 }
                 failed(step_err.kind, format!("{:#}", step_err.error))
             }
@@ -844,33 +1050,15 @@ impl Runner {
     }
 }
 
-/// A step reports only on the tree it writes; the version itself is read
-/// from the store.
-fn check_reported(
-    spec: &crate::step::StepSpec,
-    reported: &[crate::step::ArtifactState],
-) -> Result<()> {
-    let output = spec.output();
-    for r in reported {
-        anyhow::ensure!(
-            r.path.as_str() == output.as_str(),
-            "step {:?} reported on {:?}, but a step writes only the tree its id names ({:?})",
-            spec.id,
-            r.path.as_str(),
-            output.as_str()
-        );
-    }
-    Ok(())
+/// Step index → who turned it off, for the steps this graph has.
+async fn turned_off_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
+    Ok(turned_off_of(graph, &store.turned_off().await?))
 }
 
-/// Step index → who paused it, for the steps this graph has.
-async fn paused_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, String>> {
-    Ok(store
-        .paused()
-        .await?
-        .into_iter()
-        .filter_map(|(id, by)| Some((*graph.by_id.get(&id)?, by)))
-        .collect())
+fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usize, String> {
+    all.iter()
+        .filter_map(|(id, by)| Some((*graph.by_id.get(id)?, by.clone())))
+        .collect()
 }
 
 /// Write what the tick made of each step into its record. A step between
@@ -879,48 +1067,58 @@ async fn paused_in(graph: &Graph, store: &Store) -> Result<BTreeMap<usize, Strin
 /// run for.
 fn record_states(
     graph: &Graph,
+    shape: &Shape,
     state: &mut Record,
     t: &Tick,
     held: &[bool],
-    paused: &BTreeMap<usize, String>,
+    turned_off: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Option<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
         let st = if held[i] { Row::Running } else { st };
-        let paused_by = paused.get(&i).cloned();
+        let turned_off_by = turned_off.get(&i).cloned();
         let detail = match st {
-            Row::Running if t.stops.contains(&i) => Some(match &paused_by {
-                Some(by) => format!("stopping: paused by {by}"),
+            Row::Running if t.stops.contains(&i) => Some(match &turned_off_by {
+                Some(by) => format!("stopping: turned off by {by}"),
                 None => "stopping: no open request wants it".to_string(),
             }),
-            Row::Paused => paused_by.as_ref().map(|by| format!("paused by {by}")),
+            Row::Off => turned_off_by
+                .as_ref()
+                .map(|by| format!("turned off by {by}")),
             Row::Blocked(p) => Some(format!(
                 "{} has published nothing and is not going to run",
                 id(p)
             )),
             Row::Waiting(Wait::Upstream(p)) => Some(format!("waiting for {}", id(p))),
-            // Today each step writes the sink its own index names.
-            Row::Waiting(Wait::Sink(s)) => Some(format!("waiting for another writer of {}", id(s))),
             Row::Waiting(Wait::Reader(r)) => Some(format!(
                 "waiting for {}, which reads what this writes",
                 id(r)
             )),
-            Row::Waiting(Wait::Budget(class)) => {
-                Some(format!("waiting for a free {} slot", class.as_str()))
+            Row::Waiting(Wait::Lock(l)) => {
+                let holders: Vec<&str> = (0..t.states.len())
+                    .filter(|&j| t.states[j] == Row::Running)
+                    .filter(|&j| shape.steps[j].locks.iter().any(|&(h, _)| h == l))
+                    .map(id)
+                    .collect();
+                Some(format!(
+                    "waiting for lock {}, held by {}",
+                    shape.locks[l].name,
+                    holders.join(", ")
+                ))
             }
             _ => None,
         };
         let entry = state.steps.entry(id(i).to_string()).or_default();
         entry.state = Some(st.into());
         entry.state_detail = detail;
-        entry.paused_by = paused_by;
+        entry.turned_off_by = turned_off_by;
         entry.request = serving(i);
     }
 }
 
-/// A step this loop's graph lacks reads as waiting while a request left
-/// for the next loop names it, and as nothing once none does.
+/// A step this loop's graph lacks reads as waiting while a request the
+/// loop has set aside names it, and as nothing once none does.
 fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String, Vec<String>>) {
     for root in deferred.values().flatten() {
         state.steps.entry(root.clone()).or_default();
@@ -935,27 +1133,10 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
             .map(|(r, _)| r.clone());
         st.state = request.as_ref().map(|_| super::tick::StateKind::Waiting);
         st.state_detail = request.as_ref().map(|_| {
-            "waiting for the sync in progress to end: it loaded the config before this \
-             step was in it"
-                .to_string()
+            "waiting for the sync in progress to take on a config that has this step".to_string()
         });
         st.request = request;
     }
-}
-
-/// What a step's row settles on once no open request wants it and it has
-/// nothing of its own left to finish. A paused step took no part: none.
-fn settled(graph: &Graph, last_states: &[Row], i: usize, cancelled: bool) -> Option<StepStatus> {
-    Some(match last_states[i] {
-        Row::Paused => return None,
-        Row::Waiting(_) if cancelled => StepStatus::Failed {
-            kind: FailureKind::Cancelled,
-        },
-        Row::Blocked(on) => StepStatus::Blocked {
-            on: graph.steps[on].id.clone(),
-        },
-        _ => StepStatus::SkippedUpToDate,
-    })
 }
 
 /// Resolves when a stop has been asked for; never, with no stop wired.
@@ -970,31 +1151,83 @@ async fn wait_for_stop(rx: &mut Option<watch::Receiver<bool>>) -> Option<()> {
     Some(())
 }
 
+/// `v` over a new graph: `from_old[i]` is where step `i` of the new graph
+/// was in the old one. A step new to the graph starts from nothing.
+fn carry<T: Default>(v: &mut [T], from_old: &[Option<usize>]) -> Vec<T> {
+    from_old
+        .iter()
+        .map(|o| o.map(|o| std::mem::take(&mut v[o])).unwrap_or_default())
+        .collect()
+}
+
+fn remap_consumed(c: Consumed, to_new: &HashMap<usize, usize>) -> Consumed {
+    Consumed {
+        fingerprint: c.fingerprint,
+        reads: c
+            .reads
+            .into_iter()
+            .filter_map(|(p, v)| Some((*to_new.get(&p)?, v)))
+            .collect(),
+    }
+}
+
+/// The same steps in the same places, each with the same definition and
+/// held apart the same way: nothing a swap would move. When a step may
+/// run is not in its fingerprint, so it is compared here.
+fn same_graph(a: &Graph, b: &Graph) -> bool {
+    let when = |g: &Graph| -> Vec<_> {
+        g.steps
+            .iter()
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    s.streams_output,
+                    s.reads_pinned,
+                    s.locks.clone(),
+                )
+            })
+            .collect()
+    };
+    a.fingerprints == b.fingerprints && a.locks == b.locks && when(a) == when(b)
+}
+
 /// Today's graph as the tick sees it: each step writes the sink its own
-/// index names, and reads the sinks of the steps it names as inputs.
-fn shape_of(graph: &Graph) -> Shape {
+/// index names, reads the sinks of the steps it names as inputs, and holds
+/// its named locks, sized as the config declares them unless `slots` (the
+/// host's `--parallelism`) says otherwise.
+fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
+    let locks: Vec<LockShape> = graph
+        .locks
+        .iter()
+        .map(|l| LockShape {
+            name: l.name.clone(),
+            slots: slots.get(&l.name).copied().unwrap_or(l.slots),
+        })
+        .collect();
+    let lock_ix = |name: &str| {
+        locks
+            .iter()
+            .position(|l| l.name == name)
+            .unwrap_or_else(|| panic!("the loader declares every lock a step holds: {name}"))
+    };
     let steps = graph
         .steps
         .iter()
         .enumerate()
         .map(|(i, spec)| StepShape {
-            writes: i,
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
-            class: if spec.inputs.is_empty() {
-                Class::Network
-            } else if spec.group_type.is_none() {
-                Class::Index
-            } else {
-                Class::Cpu
-            },
+            locks: super::locks::held_by(spec)
+                .iter()
+                .map(|(name, hold)| (lock_ix(name), *hold))
+                .collect(),
         })
         .collect();
     Shape {
         steps,
-        sink_count: graph.steps.len(),
         topo: graph.topo.clone(),
+        locks,
     }
 }
 
@@ -1071,7 +1304,9 @@ mod tests {
     use super::*;
     use crate::step::{StepRun, StepSpec};
     use crate::supervisor::record::StepRecord;
+    use crate::supervisor::reload::GraphSource;
     use crate::supervisor::tick::StateKind;
+    use crate::EventSink;
 
     /// Wait for what the next assertion is about, with a deadline that
     /// names what never came.
@@ -1230,11 +1465,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_paused_step_is_not_started_and_its_request_closes() {
+    async fn a_turned_off_step_is_not_started_and_its_request_closes() {
         let f = fixture();
         f.go.store(true, Ordering::SeqCst);
         let other = Store::open(f.root.path()).await.unwrap();
-        other.pause("a/raw", "claude").await.unwrap();
+        other.turn_off("a/raw", "claude").await.unwrap();
         let id = other
             .open_request(&["a/raw".into(), "b/raw".into()], "ui")
             .await
@@ -1247,8 +1482,8 @@ mod tests {
             .await
             .steps["a/raw"]
             .clone();
-        assert_eq!(a.state, Some(StateKind::Paused));
-        assert_eq!(a.paused_by.as_deref(), Some("claude"));
+        assert_eq!(a.state, Some(StateKind::Off));
+        assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
         assert_eq!(a.last_run, None, "a step it skipped took no part");
         assert_eq!(a.last_success_at, None);
     }
@@ -1265,6 +1500,235 @@ mod tests {
         let row = other.request(&id).await.unwrap().unwrap();
         assert_eq!(row.closed, Some(Some(RequestOutcome::Failed)));
         assert_eq!(row.failed_step.as_deref(), Some("gone/raw"));
+    }
+
+    /// A config a test rewrites while the loop runs.
+    struct Swappable(std::sync::Mutex<Graph>);
+
+    impl Swappable {
+        fn new(graph: &Graph) -> Arc<Self> {
+            Arc::new(Self(std::sync::Mutex::new(graph.clone())))
+        }
+
+        fn set(&self, specs: Vec<StepSpec>) {
+            *self.0.lock().unwrap() = Graph::build(specs).unwrap();
+        }
+    }
+
+    impl GraphSource for Swappable {
+        fn load(&self) -> Result<Graph> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+    }
+
+    /// What the server does when its watch sees `config.toml` move.
+    fn announce_config(root: &std::path::Path) {
+        use crate::supervisor::announce::{announce, listeners_dir, CONFIG_CHANGED, FROM_SERVER};
+        announce(&listeners_dir(root), FROM_SERVER, CONFIG_CHANGED);
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<Event>>);
+
+    impl EventSink for Recorder {
+        fn emit(&self, event: &Event) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    impl Recorder {
+        fn logged(&self, step: &str, text: &str) -> bool {
+            self.0.lock().unwrap().iter().any(
+                |e| matches!(e, Event::Log { step: s, msg, .. } if s == step && msg.contains(text)),
+            )
+        }
+    }
+
+    struct Three {
+        root: tempfile::TempDir,
+        runs: [Arc<AtomicU32>; 3],
+        go: Arc<AtomicBool>,
+        events: Arc<Recorder>,
+    }
+
+    impl Three {
+        fn new() -> Self {
+            Self {
+                root: tempfile::tempdir().unwrap(),
+                runs: std::array::from_fn(|_| Arc::new(AtomicU32::new(0))),
+                go: Arc::new(AtomicBool::new(false)),
+                events: Arc::default(),
+            }
+        }
+
+        fn step(&self, k: usize) -> StepSpec {
+            let id = ["a/raw", "b/raw", "c/raw"][k];
+            let stopped = Arc::new(AtomicBool::new(false));
+            source(id, self.runs[k].clone(), self.go.clone(), stopped)
+        }
+
+        fn runs(&self, k: usize) -> u32 {
+            self.runs[k].load(Ordering::SeqCst)
+        }
+
+        fn serve(
+            &self,
+            graph: Graph,
+            config: Arc<Swappable>,
+        ) -> tokio::task::JoinHandle<Result<RunReport>> {
+            let root = self.root.path().to_path_buf();
+            let events = self.events.clone();
+            tokio::spawn(async move {
+                let store = Store::open(&root).await?;
+                let report = Runner::new(&root)
+                    .sink(events)
+                    .reload_from(config)
+                    .serve(&graph, &store)
+                    .await;
+                store.close().await;
+                report
+            })
+        }
+    }
+
+    /// The calendars on 2026-09-24: added to the config during a long gmail
+    /// sync, they read Queued until it ended. The loop re-reads the config
+    /// and starts them beside it.
+    #[tokio::test]
+    async fn a_source_added_to_the_config_mid_loop_starts_at_once() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph, config.clone());
+        until("a to start", || t.runs(0) == 1).await;
+
+        config.set(vec![t.step(0), t.step(1), t.step(2)]);
+        announce_config(t.root.path());
+        let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
+        until("c to start while a runs", || t.runs(2) == 1).await;
+        assert_eq!(outcome(&other, &first).await, None, "a is still going");
+
+        t.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        for id in [&first, &later] {
+            assert_eq!(outcome(&other, id).await, Some(Some(RequestOutcome::Done)));
+        }
+        assert_eq!((t.runs(0), t.runs(1)), (1, 0));
+    }
+
+    /// A config saved mid-edit can drop a step that is downloading. It is
+    /// not interrupted: the loop keeps its graph until the step ends, and
+    /// what the new config adds waits with it.
+    #[tokio::test]
+    async fn a_config_that_drops_a_running_step_is_taken_on_once_it_ends() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
+        let config = Swappable::new(&graph);
+        let other = Store::open(t.root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = t.serve(graph, config.clone());
+        until("a to start", || t.runs(0) == 1).await;
+
+        config.set(vec![t.step(1), t.step(2)]);
+        announce_config(t.root.path());
+        let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
+        let c = until_recorded(t.root.path(), "c/raw", "waiting", |st| {
+            st.state == Some(StateKind::Waiting)
+        })
+        .await;
+        assert_eq!(c.request.as_deref(), Some(later.as_str()));
+        assert_eq!(t.runs(2), 0, "c waits for the step the config dropped");
+
+        t.go.store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert_eq!(
+            outcome(&other, &first).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        assert_eq!(
+            outcome(&other, &later).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        assert_eq!(t.runs(2), 1);
+    }
+
+    /// A step edited while it runs finishes on the definition it started
+    /// with, and its record says so: the next busy period reads that
+    /// record, and the new definition must read as out of date there too.
+    /// The request that still wants it then runs it again under the new one.
+    #[tokio::test]
+    async fn a_step_edited_while_it_runs_records_what_it_ran_and_runs_again() {
+        let root = tempfile::tempdir().unwrap();
+        let runs = Arc::new(AtomicU32::new(0));
+        let gates = [
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ];
+        let step = |code_version: &'static str| {
+            let (runs, gates) = (runs.clone(), gates.clone());
+            StepSpec::new(
+                "a/raw",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (runs, gates) = (runs.clone(), gates.clone());
+                    async move {
+                        let run = runs.fetch_add(1, Ordering::SeqCst) as usize;
+                        while !gates[run.min(1)].load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        std::fs::write(dir.join("f"), code_version).unwrap();
+                        Ok(StepOutcome::default())
+                    }
+                }),
+            )
+            .code_version(code_version)
+        };
+        let graph = Graph::build(vec![step("1")]).unwrap();
+        let ran_with = graph.fingerprints[0].clone();
+        let config = Swappable::new(&graph);
+        let events = Arc::new(Recorder::default());
+        let other = Store::open(root.path()).await.unwrap();
+        let first = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let running = {
+            let (root, config, events) =
+                (root.path().to_path_buf(), config.clone(), events.clone());
+            tokio::spawn(async move {
+                let store = Store::open(&root).await?;
+                let report = Runner::new(&root)
+                    .sink(events)
+                    .reload_from(config)
+                    .serve(&graph, &store)
+                    .await;
+                store.close().await;
+                report
+            })
+        };
+        until("a to start", || runs.load(Ordering::SeqCst) == 1).await;
+
+        config.set(vec![step("2")]);
+        announce_config(root.path());
+        let edited = config.load().unwrap().fingerprints[0].clone();
+        assert_ne!(edited, ran_with);
+        until("the loop to take the edit on", || {
+            events.logged("a/raw", "changed in the config")
+        })
+        .await;
+        gates[0].store(true, Ordering::SeqCst);
+        until("a to run again", || runs.load(Ordering::SeqCst) == 2).await;
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(record.steps["a/raw"].fingerprint, ran_with);
+
+        gates[1].store(true, Ordering::SeqCst);
+        running.await.unwrap().unwrap();
+        assert_eq!(
+            outcome(&other, &first).await,
+            Some(Some(RequestOutcome::Done))
+        );
+        let record = crate::supervisor::record::recorded(root.path()).await;
+        assert_eq!(record.steps["a/raw"].fingerprint, edited);
     }
 
     /// A step's record as the loop last saved it, once `ready` holds.
@@ -1389,38 +1853,39 @@ mod tests {
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }
 
-    /// A pause landing while no loop runs reaches the rows only through a
+    /// A turn-off landing while no loop runs reaches the rows only through a
     /// tick; `settle` is that tick, with no request open.
     #[tokio::test]
-    async fn a_pause_while_the_loop_is_idle_reads_once_settled() {
+    async fn a_turn_off_while_the_loop_is_idle_reads_once_settled() {
         let f = fixture();
         let store = Store::open(f.root.path()).await.unwrap();
         let runner = Runner::new(f.root.path());
-        store.pause("a/raw", "claude").await.unwrap();
+        store.turn_off("a/raw", "claude").await.unwrap();
         runner.settle(&f.graph, &store).await.unwrap();
         let a = crate::supervisor::record::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
-        assert_eq!(a.state, Some(StateKind::Paused));
-        assert_eq!(a.paused_by.as_deref(), Some("claude"));
-        assert_eq!(a.state_detail.as_deref(), Some("paused by claude"));
+        assert_eq!(a.state, Some(StateKind::Off));
+        assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
+        assert_eq!(a.state_detail.as_deref(), Some("turned off by claude"));
 
-        store.resume("a/raw").await.unwrap();
+        store.turn_on("a/raw").await.unwrap();
         runner.settle(&f.graph, &store).await.unwrap();
         let a = crate::supervisor::record::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
         assert_eq!(
-            (a.state, a.paused_by, a.state_detail),
+            (a.state, a.turned_off_by, a.state_detail),
             (Some(StateKind::Stale), None, None)
         );
     }
 
-    /// A source added to the config while a loop runs is not in the graph
-    /// that loop loaded. Its request waits for the next loop, which loads
-    /// the config again, rather than failing as a step that does not exist.
+    /// A loop with nowhere to re-read its graph cannot take on a source
+    /// added to the config while it runs. Its request waits for the next
+    /// loop, which loads the config again, rather than failing as a step
+    /// that does not exist.
     #[tokio::test]
     async fn a_request_the_loop_cannot_place_mid_loop_is_left_for_the_next() {
         let f = fixture();

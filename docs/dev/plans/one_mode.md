@@ -132,7 +132,7 @@ them off.
    source holds nothing — and a consumer of it deletes accordingly.
    The only thing a consumer skips is a store it *cannot read*: no
    file, no commit, no doltlite extension. That is P1 of the
-   [sink contract](streaming_steps_plan.md#the-sink-contract), and it
+   [sink contract](completed/streaming_steps_plan.md#the-sink-contract), and it
    is the one guard that stays.
 
 Two things stop being modes:

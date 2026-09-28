@@ -157,11 +157,10 @@ fn scan(tree: &Path) -> (Channels, Vec<String>) {
     let mut by_channel: Channels = BTreeMap::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    // One query, where this used to walk the whole rendered tree,
-    // read every `*.grid_rows.json`, and parse each one as untyped
-    // JSON. The renderer writes its rows into the source's
-    // `indexed_markdown.doltlite_db` now, so the six columns this card
-    // needs are a `SELECT`.
+    // One query: the renderer writes its rows into the source's
+    // `indexed_markdown.doltlite_db`, so the six columns this card needs
+    // are a `SELECT`. A message's `preview` is already one line and
+    // capped, which is what a thread's label wants.
     let store_path = datalib_etl_render::indexed_markdown::path_for(tree);
     if !store_path.is_file() {
         // No store: either nothing has rendered yet (the card shows its
@@ -229,7 +228,7 @@ fn read_rows(
         let pool = reader.pool();
         let rows = sqlx::query(
             "SELECT channel, markdown_uuid, message_index, \
-                        IFNULL(created_at, ''), IFNULL(author, ''), text \
+                        IFNULL(created_at, ''), IFNULL(author, ''), preview \
                  FROM pinned_grid_rows \
                  WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
         )
@@ -251,21 +250,6 @@ fn read_rows(
         reader.close().await;
         Ok(out)
     })
-}
-
-/// One line for a row label, trimmed so a long paste does not fill the
-/// card.
-fn preview(text: &str) -> String {
-    let line = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let mut out: String = line.chars().take(200).collect();
-    if line.chars().count() > 200 {
-        out.push('…');
-    }
-    out
 }
 
 fn channels_response(tree: &Path, workspace: &str) -> ChannelsResponse {
@@ -295,7 +279,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
                     markdown_uuid: md.clone(),
                     author: t.author.clone(),
                     created_at: t.when_raw.clone(),
-                    text: preview(&t.text),
+                    text: t.text.clone(),
                     // Everything after the opening message.
                     replies: t.messages.saturating_sub(1),
                 })
@@ -507,7 +491,7 @@ mod tests {
                 .message_index(index)
                 .conversation_uuid(md)
                 .entire_chat(format!("/chat/{md}"))
-                .text(text)
+                .body(text)
                 .markdown_uuid(Some(md.to_string()))
                 .build()
                 .unwrap()
@@ -560,7 +544,7 @@ mod tests {
             .created_at(msgs.first().map(|m| m.3.to_string()))
             .conversation_uuid(md)
             .entire_chat(format!("/chat/{md}"))
-            .text("")
+            .body("")
             .markdown_uuid(Some(md.to_string()))
             .build()
             .unwrap();
@@ -577,7 +561,7 @@ mod tests {
                     .message_index(Some(*index))
                     .conversation_uuid(md)
                     .entire_chat(format!("/chat/{md}"))
-                    .text(*text)
+                    .body(*text)
                     .markdown_uuid(Some(md.to_string()))
                     .build()
                     .unwrap()
@@ -817,14 +801,5 @@ mod tests {
         let resp = channels_response(tmp.path(), "ws");
         assert!(resp.channels.is_empty());
         assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
-    }
-
-    #[test]
-    fn long_previews_are_trimmed_to_one_line() {
-        assert_eq!(preview("first\nsecond"), "first");
-        assert_eq!(preview("   \n  real  \n"), "real");
-        let long = "x".repeat(400);
-        let out = preview(&long);
-        assert!(out.chars().count() <= 201 && out.ends_with('…'), "{out}");
     }
 }

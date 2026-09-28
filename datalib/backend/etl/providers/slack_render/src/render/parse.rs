@@ -23,7 +23,7 @@ use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_RE
 use super::{ts_to_iso, Channel, Message, User, Workspace};
 
 /// SQL projection that maps a Slack `file_id` to its CAS blake3.
-/// Used by [`BlobBundle::load`] from the per-thread load below.
+/// Used by [`BlobBundle::load_many`] from the per-thread load below.
 const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT file_id AS ref_id, MAX(blake3) AS blake3,
            NULL AS content_type, NULL AS upstream_name
@@ -244,14 +244,16 @@ async fn parse_doltlite_async(
     // Per-thread BlobBundle: walk each thread's messages for `files[]`
     // and bulk-load the bytes from `slack_attachments` + `cas_objects`.
     if let Some(cas_pool) = cas_pool.as_ref() {
-        for bucket in &mut threads {
-            let refs = collect_attachment_ref_ids(&bucket.messages);
-            if refs.is_empty() {
-                continue;
+        let refs = threads
+            .iter()
+            .enumerate()
+            .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
+        let mut blobs =
+            BlobBundle::load_many(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, refs).await?;
+        for (i, bucket) in threads.iter_mut().enumerate() {
+            if let Some(b) = blobs.remove(&i) {
+                bucket.blobs = b;
             }
-            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
-            bucket.blobs =
-                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
         }
     }
 

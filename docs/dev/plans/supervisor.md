@@ -1,11 +1,14 @@
 # The supervisor: steps as managed processes, not as a batch run
 
-**Status: chosen over the join (2026-09-23); slices 0–5 are built —
+**Status: chosen over the join (2026-09-23); slices 0–5, 4d and 7 are built —
 `datalib-dag` and the server run one loop over requests in
 `system/supervisor.sqlite`, a Manage row reads the loop's record and
-carries Sync, Stop, Pause and Reset — and 6–7 are not.** This is the alternative to
-[`join_running_sync.md`](join_running_sync.md), which patches the runner
-we have. Both start from the same measurement (§0 there). This one asks
+carries Sync, Stop, Pause and Reset, and the dag README describes the
+loop as it is. Slice 6, shared sinks, is put off (2026-09-24), which is
+why this file is still a plan.** This was the alternative to the join
+(`join_running_sync.md`, deleted once this was built; git has it at
+`1071ddac`), which patched the runner we had. Both started from the
+same measurement (§0 there). This one asks
 what we would build if the UI's needs came first. §1 describes the tree
 as it stands at `b216a993`, after #600 and #606 (a writer's `open`
 discards the working set; a stop ends a download at its next consistent
@@ -107,7 +110,7 @@ Checked against the tree. Most of the storage-side work is done.
   streaming design's whole safety argument: "a missed notification
   must make a consumer slow, not wrong" — doltlite is a log of states,
   so a consumer that reads at any committed version is right
-  ([`streaming_steps.md` § The rule](streaming_steps.md)).
+  ([`streaming_steps.md` § The rule](completed/streaming_steps.md)).
 - **Versions are content-derived and compared for equality**, and a
   dolt commit hash is the canonical one. A version already belongs to
   the *output*; the scheduler just happens to learn it from the one
@@ -126,7 +129,7 @@ Checked against the tree. Most of the storage-side work is done.
   seals per provider boundary for claude, chatgpt, slack and email
   (Gmail and JMAP), and `render → grid_index` runs an index pass per
   seal, with a seal that lands mid-pass owed exactly one more
-  (`streaming_steps_plan.md` slices 6–7). On the root this doc was
+  (`completed/streaming_steps_plan.md` slices 6–7). On the root this doc was
   measured on, `grid_index` passed at 22:06 and 22:10 while the Gmail
   ingest was still running. What is serialized is one index *pass* at a
   time, and a pass is a delta.
@@ -726,7 +729,7 @@ supervisor cannot know its shape.
 
 ## 4. How it compares to the join
 
-| | join (`join_running_sync.md`) | supervisor |
+| | join (`join_running_sync.md`, at `1071ddac`) | supervisor |
 |---|---|---|
 | a source started mid-sync | joins the run | just starts |
 | Stop | per run | per step |
@@ -845,8 +848,8 @@ last.
    - A request for a step the loaded config lacks is left open for the
      next busy period, which loads the config again, when it arrives
      mid-period; one open as a period starts still fails. So a source
-     *added* to the config while a sync runs waits for that sync; one
-     the config already had starts beside it.
+     *added* to the config while a sync runs waited for that sync; one
+     the config already had started beside it. **4d below undoes this.**
    - The loop tells its host when it takes a request on and when it is
      done with one (`RequestEvent`). A stopped request is done once the
      steps only it wanted have exited, so a job reads Stopping until
@@ -930,6 +933,18 @@ last.
      //...` or `bazelisk test //datalib/ui:e2e_test`; the hermetic line's
      `-external` filter drops it. Run it before pushing.
 
+   **4d. Reload while running.** *Built*, after the calendars of
+   2026-09-24 read Queued for the length of a gmail sync. The loop
+   re-reads the config on every mailbox poll (`supervisor/reload.rs`)
+   and carries its state to the new graph by step id, so §2.3's "a
+   source added mid-sync starts now" holds. §3's rules, as built: a
+   running step finishes on its old definition and records it, so the
+   new one runs it again; a step the config drops is *not* interrupted
+   — the loop keeps its graph until nothing running or open needs that
+   step, since a config saved mid-edit would otherwise cost a download.
+   A request for a step no config the loop has taken on names is still
+   set aside for the next period.
+
    **4c. Rows read the supervisor.** *Built.* What the build did beyond,
    or instead of, the brief below:
    - A row at rest (`idle`, `stale`, `failed`) shows its last outcome
@@ -982,12 +997,13 @@ last.
    early on an empty store. A reset records the store's new version
    rather than forgetting it, so its readers see it move. The help text
    is rewritten around rows.
-6. **Shared sinks.** `writes`/`reads` in the config with the defaults
+6. **Shared sinks.** *Put off (2026-09-24); not built.* `writes`/`reads` in the config with the defaults
    of §2.1, the loader allowing two steps to name one sink, and the
    first provider that uses it: the email import beside the live pull.
    The reason §2.1 exists, landed last because everything before it is
    needed for it to be safe.
-7. **Docs.** The dag README is rewritten around the tick;
-   `step_protocol.md` gains `DATALIB_READS`; `streaming_steps*.md` move
-   to `completed/` with a line saying the supervisor subsumed them;
-   `join_running_sync.md` is deleted.
+7. **Docs.** *Built.* The dag README is rewritten around the tick;
+   `step_protocol.md` had gained `DATALIB_READS` with slice 3;
+   `streaming_steps*.md` moved to `completed/` with a banner saying the
+   supervisor subsumed their scheduling half; `join_running_sync.md` is
+   deleted.

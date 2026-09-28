@@ -120,6 +120,8 @@ pub enum Retired {
     /// A group `type` spelled for the method (`slack_api`), or an
     /// ingest step whose params still say `sync` / `common.input_path`.
     TypesAndMethodTables,
+    /// A `qmd_index` fan-in, from before `qmd_aggregator` (`qmd_steps.rs`).
+    QmdIndex,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

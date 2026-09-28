@@ -17,7 +17,7 @@ the web and desktop packagings run. `datalib-http`, `datalib-dag`,
 `datalib-step` and the two latchkey curl binaries are Bazel-built (fully
 cached) and shipped under the
 .app's `Contents/Resources/binaries/`; see `tauri.conf.json`'s
-`beforeBuildCommand` + `bundle.resources` and `resolve_http_bin` in
+`beforeBuildCommand` + `bundle.resources` and `resolve_bundled` in
 `src/main.rs`. Port handshake: the child gets
 `DATALIB_BIND=127.0.0.1:0` and `--url-file <tmp>` and announces its
 bound URL there; the shell polls for the file, opens the window, and

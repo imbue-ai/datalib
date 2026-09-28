@@ -4,7 +4,10 @@
 > doltlite, grab a release from
 > <https://github.com/thadd3us/sqlitebrowser/releases>. The CLI recipes
 > below all still apply; the GUI is just nicer for exploring schema and
-> running ad-hoc SELECTs.
+> running ad-hoc SELECTs. In the desktop app, Browse on a download step
+> opens its `entities.doltlite_db` read-only: in that build (`-R`) when
+> it is what opens `.doltlite_db` files, otherwise in the bundled shell
+> (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
 
 
 Our raw ETL captures (under `<data_root>/<name>/raw/`) and the per-mirror
@@ -162,10 +165,12 @@ HEAD — see [Operational notes](#operational-notes). A non-empty
 run is mid-flight (or recently was); what you see there will be thrown
 away, not committed.
 
-Don't run it against a store a sync is writing right now, even with
-`-readonly`: `dolt_status` from a second connection fails the writer's
-in-flight `dolt_commit` with `commit conflict` and loses the rows behind
-it (#400, upstream dolthub/doltlite#2832). Wait for the step to finish.
+With `-readonly` it is safe against a store a sync is writing right
+now: `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
+in `doltlite_two_process_test` holds it to that. Before doltlite 0.50.10
+it failed the writer's `dolt_commit` and lost the rows behind it (#400,
+dolthub/doltlite#2832): check `doltlite --version` before pointing an
+older shell at a live store.
 
 ### What changed between two commits
 
@@ -319,6 +324,10 @@ doltlite :memory: "SELECT name FROM pragma_function_list WHERE name LIKE 'dolt_%
 doltlite :memory: "SELECT name FROM pragma_module_list WHERE name LIKE 'dolt_%' ORDER BY name;"
 ```
 
+The per-table modules (`dolt_at_<table>`, `dolt_diff_<table>`,
+`dolt_history_<table>`) are registered the first time a statement names
+them, so the second list leaves them out until something has.
+
 The common-use subset:
 
 | Symbol | Kind | Notes |
@@ -340,6 +349,14 @@ The common-use subset:
 | `dolt_commit_ancestors` | vtab | the commit DAG. |
 
 ## Operational notes
+
+### Doltlite upgrades and the file format
+
+Upstream freezes chunk-store format 12 for the DoltLite beta: every
+version-12 file stays readable and writable by later version-12 builds.
+So a doltlite bump that stays on 12 needs no store migration.
+`third-party/doltlite/README.md` § "Upgrading doltlite" says how to
+check a new release's format before bumping.
 
 ### `sqlite3_open_v2` is loop-bound — build doltlite at `-O2`
 

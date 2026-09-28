@@ -73,23 +73,28 @@ need_runfile() {
 # Under `bazel test` the parent *is* TEST_TMPDIR, which bazel wipes on
 # the target's next run, so only the `bazel run` case prunes here.
 RUNS_KEPT=3
+# A run dir can hold directories without u+w — `rsync -a` below carries
+# bazel's output modes into `stage/dist/` — and `rm -rf` cannot empty those.
+remove_tree() { chmod -R u+w "$1" 2>/dev/null; rm -rf "$1"; }
 SCRATCH_PARENT="${TEST_TMPDIR:-${TMPDIR:-/tmp}}"
 # `date -u`: the prune below sorts on this name, and a local clock runs
 # backwards for an hour at a DST fall-back.
 DATALIB_TEST_E2E_RUN_DIR="$(mktemp -d "$SCRATCH_PARENT/datalib-e2e-run.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
 export DATALIB_TEST_E2E_RUN_DIR
 if [[ -z "${TEST_TMPDIR:-}" && -z "${DATALIB_TEST_E2E_KEEP_ROOTS:-}" ]]; then
-  # The names carry a timestamp, so a plain sort is oldest-first.
+  # The names carry a timestamp, so a plain sort is oldest-first. The
+  # prune is housekeeping: a dir it cannot remove (another worktree's
+  # run still writing into it, say) is worth a warning, not the run.
   drop=$(( $(ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | wc -l) - RUNS_KEPT ))
   ls -d "$SCRATCH_PARENT"/datalib-e2e-run.* 2>/dev/null | sort | while IFS= read -r stale; do
     (( drop-- > 0 )) || break
-    rm -rf "$stale"
+    remove_tree "$stale" || echo "WARNING: could not prune $stale; carrying on" >&2
   done
 fi
 
 # Fires on the early-exit paths only, for the `exec` reason above. Those
 # are setup failures, with nothing in the run dir worth keeping.
-cleanup() { rm -rf "$DATALIB_TEST_E2E_RUN_DIR"; return 0; }
+cleanup() { remove_tree "$DATALIB_TEST_E2E_RUN_DIR"; return 0; }
 trap cleanup EXIT
 
 # Which browser engines to provision. Both by default: the suite has a

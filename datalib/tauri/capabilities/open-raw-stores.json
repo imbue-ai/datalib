@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "open-raw-stores",
+  "description": "Lets Browse on a download step open that source's raw store (`ui/src/desktop.ts::openRawStore` → `open_raw_store` in src/main.rs): read-only in DB Browser for SQLite when that is the file's handler, otherwise in the bundled doltlite shell in Terminal. The command takes a path from the page and checks it is a `.doltlite_db` under the data root the app opened (`src/raw_store.rs::check_store`); it does not grant `opener:allow-open-path`, which would launch any file's default application writable. The `remote` block is REQUIRED for the same reason as in reveal-local-files.json, with the trailing `/**` load-bearing.",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/**",
+      "http://localhost:*/**"
+    ]
+  },
+  "permissions": [
+    "allow-open-raw-store"
+  ]
+}

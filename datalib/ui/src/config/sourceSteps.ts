@@ -81,10 +81,17 @@ export type ConfiguredGroup = {
 };
 
 /// The label for a grouped step that wrote no `name` of its own.
-function groupedName(group: ConfiguredGroup, id: string, phase: StepPhase): string {
+function groupedName(
+  group: ConfiguredGroup,
+  id: string,
+  fn: string | null,
+  phase: StepPhase,
+): string {
   if (!group.name) return defaultName(id);
   if (phase === "ingest") return group.name;
   if (phase === "render") return `${group.name} (render markdown)`;
+  if (fn === "keyword_index") return `${group.name} (keyword index)`;
+  if (fn === "embed") return `${group.name} (embeddings)`;
   return defaultName(id);
 }
 
@@ -95,7 +102,10 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   ingest: "ingest",
   render_markdown: "render",
   grid_index: "index",
-  qmd_index: "index",
+  qmd_aggregator: "index",
+  keyword_index: "index",
+  embed: "index",
+  embedding_map: "index",
 };
 
 /// A step's phase, from its function. A step outside any group has no
@@ -109,7 +119,8 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_index/grid_index": "Unified Index (table)",
-  "unified_index/qmd_index": "Unified Index (QMD)",
+  "unified_index/qmd_aggregator": "Unified Index (QMD)",
+  "unified_index/embedding_map": "Unified Index (map)",
   unified_index: "Unified Index (Applet)",
 };
 
@@ -232,7 +243,7 @@ export function listSteps(text: string): ConfiguredStep[] {
         name:
           name ??
           (groupEntry
-            ? groupedName(groupEntry, id, phase)
+            ? groupedName(groupEntry, id, fn, phase)
             : id
               ? defaultName(id)
               : `step ${i + 1}`),
@@ -829,10 +840,14 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// The fan-in steps that consume rendered markdown, by function: the
-/// SQL index the grid reads, and the qmd collections semantic search
-/// reads. A source can be in one and not the other.
-export type FanInFunction = "grid_index" | "qmd_index";
+/// The fan-in steps, by function: the SQL index the grid reads, which
+/// consumes rendered markdown; the qmd aggregator, which runs after each
+/// source's own qmd steps; and the map, which reads the aggregator. A
+/// source can be in one and not another.
+export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map";
+
+/// The fan-ins a render step feeds.
+const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
 
 /// One `[[steps]]` table and its body: up to the next line opening a
 /// table — its own `[steps.params…]` sub-table, or the next entry.
@@ -845,13 +860,13 @@ const INPUTS_ARRAY = /(inputs\s*=\s*\[)([^\]]*)(\])/;
 
 /// Is this step body a fan-in — filed under the `unified_index` group,
 /// or, for a custom step, writing an `unified_index/…` id — and, when
-/// `only` names one, that particular one?
-function isFanIn(body: string, only?: FanInFunction): boolean {
+/// `only` names some, one of those?
+function isFanIn(body: string, only?: FanInFunction[]): boolean {
   const verbatim = /id\s*=\s*"unified_index\/([^"]*)"/.exec(body);
   if (!verbatim && !/group\s*=\s*"unified_index"/.test(body)) return false;
   if (!only) return true;
   const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? verbatim?.[1];
-  return fn === only;
+  return only.includes(fn as FanInFunction);
 }
 
 /// Rewrite the `inputs` of the fan-ins `only` selects — all of them
@@ -859,7 +874,7 @@ function isFanIn(body: string, only?: FanInFunction): boolean {
 /// in theirs, exactly as written.
 function editFanInInputs(
   text: string,
-  only: FanInFunction | undefined,
+  only: FanInFunction[] | undefined,
   edit: (ids: string[]) => string[],
 ): string {
   return text.replace(STEP_TABLE, (whole, head: string, body: string) => {
@@ -877,46 +892,112 @@ function editFanInInputs(
   });
 }
 
-/// Wire a render step into the fan-ins that consume rendered markdown —
-/// every one, or just the one `only` names.
+/// Wire a step into fan-ins: a render step into the two that consume
+/// rendered markdown, or into just the one `only` names — which is how
+/// an embed step reaches the map.
 ///
 /// The fan-ins name their inputs by id, so a source added without this renders
 /// happily and is never indexed — invisible in search, with nothing on screen
 /// to say why.
-export function wireIntoFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only, (ids) =>
-    ids.includes(quote(renderStepId)) ? ids : [...ids, quote(renderStepId)],
+export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
+    ids.includes(quote(stepId)) ? ids : [...ids, quote(stepId)],
   );
 }
 
-/// Drop a render step from the fan-ins' inputs. The mirror of
-/// [`wireIntoFanIns`]: an input naming a step that no longer exists is
-/// a config the runner refuses outright, so deleting a source has to
-/// take its edges with it.
-export function unwireFromFanIns(text: string, renderStepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only, (ids) => ids.filter((t) => t !== quote(renderStepId)));
-}
-
-/// Does the fan-in `fn` name this render step — that is, does this
-/// source reach that index? A config with no such step answers false,
-/// which is what it is: nothing indexes this source that way.
-export function fanInNames(
-  steps: ConfiguredStep[],
-  fn: FanInFunction,
-  renderStepId: string,
-): boolean {
-  return steps.some(
-    (s) => s.kind === "step" && fanInFunctionOf(s) === fn && s.inputs.includes(renderStepId),
+/// Drop a step from the fan-ins' inputs — every fan-in's, or the one
+/// `only` names. The mirror of [`wireIntoFanIns`]: an input naming a
+/// step that no longer exists costs the step that names it, so deleting
+/// a source has to take its edges with it.
+export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunction): string {
+  return editFanInInputs(text, only ? [only] : undefined, (ids) =>
+    ids.filter((t) => t !== quote(stepId)),
   );
 }
 
 /// Which fan-in a step is, or null for a step that is not one. A
 /// grouped step says so with `group` + `function`; a custom step filed
 /// outside any group says it in the id it writes.
-function fanInFunctionOf(step: ConfiguredStep): string | null {
+export function fanInFunctionOf(step: ConfiguredStep): string | null {
   if (step.group === "unified_index") return step.function;
   const [group, fn] = step.id.split("/");
   return step.group === null && group === "unified_index" ? (fn ?? null) : null;
+}
+
+/// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
+/// which reads its render, and its embeddings, which read the keyword
+/// index.
+export function buildQmdSteps(group: string): { id: string; body: string }[] {
+  const keywordId = `${group}/keyword_index`;
+  const block = (fn: string, inputs: string[]) => ({
+    id: `${group}/${fn}`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ninputs = [${inputs.map(quote).join(", ")}]`,
+  });
+  return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
+}
+
+/// Give a source its qmd steps — those it lacks — and a place in the
+/// aggregator's inputs; or, with `searched` false, take both away. Only
+/// where the config has the aggregator: search is off without one, and
+/// the aggregator is what retires a source's collection once it goes.
+export function setQmdSteps(text: string, group: string, searched: boolean): string {
+  const steps = buildQmdSteps(group);
+  const all = listSteps(text);
+  const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
+  if (searched && aggregated) {
+    const missing = steps.filter((b) => !all.some((s) => s.id === b.id));
+    let next = missing.length ? appendSource(text, missing.map((b) => b.body).join("\n\n")) : text;
+    for (const b of steps) next = wireIntoFanIns(next, b.id, "qmd_aggregator");
+    return next;
+  }
+  const ids = new Set(steps.map((b) => b.id));
+  let next = removeSteps(
+    text,
+    all.filter((s) => ids.has(s.id)),
+  );
+  for (const b of steps) next = unwireFromFanIns(next, b.id, "qmd_aggregator");
+  return next;
+}
+
+/// What has to leave the config with `ids`: every step that reads one of
+/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
+/// source's own qmd steps — search is off without it, and nothing would
+/// retire what they index.
+export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
+  const aggregatorGoes = all.some(
+    (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
+  );
+  const qmdSteps = aggregatorGoes
+    ? all.filter(
+        (s) =>
+          s.kind === "step" &&
+          !ids.includes(s.id) &&
+          (s.function === "keyword_index" || s.function === "embed"),
+      )
+    : [];
+  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
+  return [...qmdSteps, ...readers];
+}
+
+/// Every step that reads one of `ids`, directly or through another, other
+/// than a fan-in: a fan-in loses the input instead (`unwireFromFanIns`).
+/// Removing a step without these leaves each naming an input that is
+/// gone, which the loader drops it for.
+export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
+  const gone = new Set(ids);
+  const out: ConfiguredStep[] = [];
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const s of all) {
+      if (s.kind !== "step" || gone.has(s.id) || fanInFunctionOf(s) !== null) continue;
+      if (s.inputs.some((i) => gone.has(i))) {
+        gone.add(s.id);
+        out.push(s);
+        grew = true;
+      }
+    }
+  }
+  return out;
 }
 
 /// Append entries to the config text. Always at the end: the DAG

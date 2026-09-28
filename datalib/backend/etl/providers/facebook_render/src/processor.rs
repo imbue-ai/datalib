@@ -3,7 +3,7 @@
 //! rendered through the shared chat or contact renderer.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,7 +21,7 @@ use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::processor::{RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 use serde_json::Value;
 
 use crate::activity::{build_comments, build_reactions, comments_profile, reactions_profile};
@@ -34,13 +34,11 @@ pub fn plan_render(
     ctx: PlanContext,
     config: FacebookRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
-    Ok(vec![Box::new(FacebookRender {
-        id: format!("facebook/{name}/render"),
-        raw_path,
-        name,
-    })])
+    Ok(plan_source_render(
+        ctx,
+        config.common.raw_path(),
+        FacebookRender,
+    ))
 }
 
 /// Whose export this is: the configured source it renders under, the
@@ -183,17 +181,14 @@ pub fn render_source(
 
             let mut blobs = HashMap::new();
             if let Some(cas) = db.cas() {
-                for chat in posts.iter().chain(&albums).chain(&comments) {
-                    let refs = attachment_refs(chat);
-                    if refs.is_empty() {
-                        continue;
-                    }
-                    let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
-                    let bundle = BlobBundle::load(db.pool(), cas.pool(), MEDIA_PROJECTION, &refs)
-                        .await
-                        .with_context(|| format!("load media for {}", chat.id))?;
-                    blobs.insert(chat.id.clone(), bundle);
-                }
+                let refs = posts
+                    .iter()
+                    .chain(&albums)
+                    .chain(&comments)
+                    .map(|chat| (chat.id.clone(), attachment_refs(chat)));
+                blobs = BlobBundle::load_many(db.pool(), cas.pool(), MEDIA_PROJECTION, refs)
+                    .await
+                    .context("load media")?;
             }
             let head = pin.commit().to_string();
             db.close().await;
@@ -322,32 +317,26 @@ fn attachment_refs(chat: &NormalizedChat) -> Vec<String> {
     refs
 }
 
-struct FacebookRender {
-    id: String,
-    raw_path: PathBuf,
-    name: String,
-}
+struct FacebookRender;
 
 #[async_trait]
-impl RenderProcessor for FacebookRender {
-    fn id(&self) -> &str {
-        &self.id
-    }
+impl SourceRender for FacebookRender {
+    const PROVIDER: &'static str = "facebook";
 
-    fn render_version(&self) -> Option<u32> {
-        Some(RENDER_VERSION)
+    fn render_version(&self) -> u32 {
+        RENDER_VERSION
     }
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params()
     }
 
-    async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
+    async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let mut on_doc = |md| ctx.emit_doc(md);
         let source = Source {
-            raw_dir: &self.raw_path,
+            raw_dir: raw_path,
             out_dir: ctx.root,
-            name: &self.name,
+            name: ctx.name,
             range: ctx.raw_range(),
         };
         let outcome =
@@ -356,12 +345,7 @@ impl RenderProcessor for FacebookRender {
         // the rendered ones, with what they read — in that order, so a
         // bucket no feed rendered ends declared with nothing and its
         // documents go.
-        for bucket in &outcome.buckets {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
-        }
-        if let Some(head) = outcome.new_head.as_deref() {
-            ctx.consumed(head);
-        }
+        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

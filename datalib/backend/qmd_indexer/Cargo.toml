@@ -9,10 +9,6 @@ license.workspace = true
 name = "datalib_qmd_indexer"
 path = "src/lib.rs"
 
-[[bin]]
-name = "datalib-qmd-indexer"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 datalib-runtime = { path = "../runtime" }

@@ -1,5 +1,5 @@
 //! The steering verbs, each run as its own process the way an agent at a
-//! shell runs them: `status`, `stop`, `pause`, `resume` write a row and
+//! shell runs them: `status`, `stop`, `turn-off`, `turn-on` write a row and
 //! return, and the loop — here another `datalib-dag` — acts on it.
 
 use std::path::Path;
@@ -28,7 +28,9 @@ fn root_with_a_source() -> tempfile::TempDir {
 fn dag(root: &Path, args: &[&str]) -> Output {
     let mut cmd = Command::new(dag_bin());
     match args.split_first() {
-        Some((verb, rest)) if ["status", "stop", "pause", "resume"].contains(verb) => {
+        Some((verb, rest))
+            if ["status", "stop", "turn-off", "turn-on", "pause", "resume"].contains(verb) =>
+        {
             cmd.arg(verb).arg(root.join("config.toml")).args(rest)
         }
         _ => cmd.arg(root.join("config.toml")).args(args),
@@ -49,27 +51,33 @@ fn wait_for(what: &str, ready: impl Fn() -> bool) {
 }
 
 #[test]
-fn a_paused_source_does_not_run_until_it_is_resumed() {
+fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
     let td = root_with_a_source();
     let root = td.path();
     std::fs::write(root.join("go"), "").unwrap();
 
-    let out = dag(root, &["pause", "a/src", "--by", "claude"]);
+    let out = dag(root, &["turn-off", "a/src", "--by", "claude"]);
     assert!(out.status.success(), "{out:?}");
     assert!(
-        stdout(&dag(root, &["status"])).contains("paused a/src  by claude"),
-        "status names the pause and who made it"
+        stdout(&dag(root, &["status"])).contains("off a/src  by claude"),
+        "status names the step turned off and who did it"
     );
 
     let out = dag(root, &["--sync", "a/src"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert!(!root.join("a/src/started").exists(), "a paused step ran");
+    assert!(
+        !root.join("a/src/started").exists(),
+        "a step turned off ran"
+    );
 
-    let out = dag(root, &["resume", "a/src"]);
-    assert!(stdout(&out).contains("which claude had paused"), "{out:?}");
+    let out = dag(root, &["turn-on", "a/src"]);
+    assert!(
+        stdout(&out).contains("which claude had turned off"),
+        "{out:?}"
+    );
     let out = dag(root, &["--sync", "a/src"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert!(root.join("a/src/started").exists(), "resumed, it runs");
+    assert!(root.join("a/src/started").exists(), "turned on, it runs");
 }
 
 #[test]
@@ -104,6 +112,7 @@ fn a_sync_is_stopped_from_another_shell_by_its_request_id() {
     );
 }
 
+/// `pause` is what `turn-off` was called, and a person may still type it.
 #[test]
 fn a_verb_on_a_step_the_config_lacks_says_which_steps_it_has() {
     let td = root_with_a_source();

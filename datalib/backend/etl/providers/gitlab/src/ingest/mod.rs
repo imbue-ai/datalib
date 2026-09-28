@@ -5,7 +5,6 @@
 //! design rationale.
 
 pub mod canonicalize;
-pub mod client;
 pub mod db;
 pub mod schema_raw;
 
@@ -13,16 +12,21 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::download_run::DownloadRun;
-use datalib_etl::http::LatchkeySettings;
-use datalib_time::IsoOffsetTimestamp;
+use async_trait::async_trait;
+use datalib_etl::http::{default_retryability, HttpService, LatchkeySettings};
+use datalib_etl_forge_ingest_common::{
+    get_change_request, sync, walk_children, Forge, ForgeClient, Listed, SyncOptions,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
+use sqlx::SqlitePool;
 
-pub use client::{GitLabClient, GitLabError, BASE, PER_PAGE};
+pub use datalib_etl_forge_ingest_common::PER_PAGE;
 pub use db::{
     block_on_load_all, db_path_for, LoadedDiscussion, LoadedMergeRequest, LoadedRaw, RawDb,
 };
+
+pub const BASE: &str = "https://gitlab.com/api/v4";
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";
@@ -89,205 +93,131 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-// The `since` policy — including the widened-window exception — is
-// shared with github in `datalib_etl::scope_state`. GitLab's
-// `updated_after` takes the RFC 3339 form it returns verbatim, so
-// there's nothing to adapt here.
-use datalib_etl::scope_state::since_for_scope;
-
 pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
     let rest = web_url.strip_prefix("https://gitlab.com/")?;
     let (path, _) = rest.split_once("/-/")?;
     Some(path.to_string())
 }
 
-async fn fetch_self(client: &GitLabClient, db: &RawDb) -> Result<i64> {
-    let (data, _) = client.get(&format!("{BASE}/user")).await?;
-    let obj = data.as_object().context("/user returned non-object")?;
-    let id = obj.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-    db.upsert_self_identity(&data).await?;
-    Ok(id)
+struct Gitlab<'a> {
+    db: &'a RawDb,
 }
 
-async fn search_mrs(
-    client: &GitLabClient,
-    scope: &str,
-    user_id: i64,
-    since: Option<&str>,
-) -> Result<Vec<Value>> {
-    let scope_param = if scope == "reviewer" {
-        format!("reviewer_id={user_id}")
-    } else {
-        format!("scope={scope}")
-    };
-    let mut url = format!(
-        "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
-    );
-    if let Some(s) = since {
-        url.push_str(&format!("&updated_after={}", urlencoding::encode(s)));
+#[async_trait]
+impl Forge for Gitlab<'_> {
+    type Summary = FetchSummary;
+    const ITEM: &'static str = "MR";
+    const SIGIL: char = '!';
+    const SCOPE_CONFIG_KEY: &'static str = "gitlab:download";
+
+    fn pool(&self) -> &SqlitePool {
+        self.db.pool()
     }
-    Ok(client.paginate(&url).await?)
-}
 
-async fn discover_mrs(
-    client: &GitLabClient,
-    user_id: i64,
-    scopes: &[String],
-    state: &HashMap<String, String>,
-    refresh_window_days: u32,
-    full: bool,
-    prior: Option<&Value>,
-) -> Result<Discovery> {
-    // Per-(proj, iid) we keep the *latest* `updated_at` we saw across
-    // scopes — search/scope/reviewer can each surface the same MR with
-    // (in principle) different freshness; take the newest.
-    let mut by_key: HashMap<(String, u32), String> = HashMap::new();
-    let mut new_state: HashMap<String, String> = Default::default();
-    let mut failed_scopes = 0usize;
-    for scope in scopes {
-        let since = since_for_scope(state, scope, refresh_window_days, full, prior);
-        tracing::info!(scope, since, "searching MRs");
-        let results = match search_mrs(client, scope, user_id, since.as_deref()).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(scope, error = %e, "search failed; skipping scope");
-                failed_scopes += 1;
-                continue;
-            }
+    fn self_url(&self) -> String {
+        format!("{BASE}/user")
+    }
+
+    async fn store_self(&self, me: &Value) -> Result<()> {
+        self.db.upsert_self_identity(me).await
+    }
+
+    /// `reviewer` is not a `scope` GitLab takes: it is a filter on the
+    /// user's own id.
+    async fn search(
+        &self,
+        client: &ForgeClient,
+        scope: &str,
+        me: &Value,
+        since: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        let scope_param = if scope == "reviewer" {
+            let user_id = me.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            format!("reviewer_id={user_id}")
+        } else {
+            format!("scope={scope}")
         };
-        for item in &results {
-            let Some(proj) = item
-                .get("web_url")
-                .and_then(|v| v.as_str())
-                .and_then(project_full_path_from_web_url)
-            else {
-                continue;
-            };
-            let iid = item.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
-            if iid == 0 {
-                continue;
-            }
-            let updated_at = item
+        let mut url = format!(
+            "{BASE}/merge_requests?{scope_param}&state=all&per_page={PER_PAGE}&order_by=updated_at&sort=desc"
+        );
+        if let Some(s) = since {
+            url.push_str(&format!("&updated_after={}", urlencoding::encode(s)));
+        }
+        Ok(client.paginate(&url).await?)
+    }
+
+    fn listed(&self, item: &Value) -> Option<Listed> {
+        let container = item
+            .get("web_url")
+            .and_then(|v| v.as_str())
+            .and_then(project_full_path_from_web_url)?;
+        let number = item.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+        (number > 0).then(|| Listed {
+            container,
+            number: number as u32,
+            updated_at: item
                 .get("updated_at")
                 .and_then(|v| v.as_str())
-                .map(str::to_owned)
-                .unwrap_or_default();
-            let key = (proj, iid as u32);
-            match by_key.get(&key) {
-                Some(existing) if existing.as_str() >= updated_at.as_str() => {}
-                _ => {
-                    by_key.insert(key, updated_at);
-                }
-            }
-        }
-        new_state.insert(
-            scope.clone(),
-            IsoOffsetTimestamp::now_local().to_rfc3339_secs(),
-        );
-        tracing::info!(scope, count = results.len(), "scope done");
-    }
-    let mut out: Vec<DiscoveredMr> = by_key
-        .into_iter()
-        .map(|((proj, iid), updated_at)| DiscoveredMr {
-            proj,
-            iid,
-            updated_at,
+                .unwrap_or_default()
+                .to_string(),
         })
-        .collect();
-    // Stable order for deterministic logs / progress.
-    out.sort_by(|a, b| (a.proj.as_str(), a.iid).cmp(&(b.proj.as_str(), b.iid)));
-    Ok(Discovery {
-        keys: out,
-        new_state,
-        failed_scopes,
-    })
-}
-
-/// Outcome of a discovery pass. See github's identical struct for why
-/// `failed_scopes` gates recording the config blob.
-struct Discovery {
-    keys: Vec<DiscoveredMr>,
-    new_state: HashMap<String, String>,
-    failed_scopes: usize,
-}
-
-/// A (proj, iid) pair surfaced by `discover_mrs`, carrying the listing's
-/// `updated_at` so the per-MR loop can skip detail fetches when the
-/// local copy is already current.
-#[derive(Debug, Clone)]
-pub(crate) struct DiscoveredMr {
-    pub proj: String,
-    pub iid: u32,
-    /// `updated_at` from the listing response. Empty string if the
-    /// listing didn't include it (defensive — newest doesn't beat
-    /// nothing, so we'll always refetch in that edge case).
-    pub updated_at: String,
-}
-
-async fn fetch_one_mr(
-    client: &GitLabClient,
-    db: &RawDb,
-    proj: &str,
-    iid: u32,
-    summary: &mut FetchSummary,
-) -> Result<()> {
-    let pid = urlencoding::encode(proj);
-    let mr_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}");
-    let (mr_data, _) = match client.get(&mr_url).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(proj, iid, error = %e, "MR meta failed; skipping");
-            return Ok(());
-        }
-    };
-    if !mr_data.is_object() {
-        tracing::error!(proj, iid, "MR returned non-object");
-        return Ok(());
     }
-    db.upsert_merge_request(proj, iid, &mr_data).await?;
-    summary.new_mrs += 1;
 
-    // The endpoint returns this MR's *whole* discussion list, so a
-    // discussion we hold that it did not mention was deleted on GitLab.
-    // Only true when the walk succeeded: `unwrap_or_default` would turn a
-    // failed request into an empty list, which is indistinguishable from
-    // "every thread was deleted" and would wipe the MR's whole history.
-    let disc_url =
-        format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-    let discussions = match client.paginate(&disc_url).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(
-                event = "gitlab_discussion_list_failed",
-                proj, iid, error = %e,
-                "could not list this MR's discussions; leaving what we already hold alone",
-            );
+    async fn any_stored(&self) -> Result<bool> {
+        self.db.any_merge_requests().await
+    }
+
+    async fn stored_updated_at(&self) -> Result<HashMap<(String, u32), String>> {
+        self.db.merge_request_updated_ats().await
+    }
+
+    async fn fetch_one(
+        &self,
+        client: &ForgeClient,
+        cr: &Listed,
+        summary: &mut FetchSummary,
+    ) -> Result<()> {
+        let (proj, iid) = (cr.container.as_str(), cr.number);
+        let pid = urlencoding::encode(proj);
+        let mr_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}");
+        let Some(mr_data) = get_change_request(client, &mr_url, "MR", cr).await else {
             return Ok(());
-        }
-    };
-    db.upsert_discussions(proj, iid, &discussions).await?;
-    summary.new_discussions += discussions.len();
-    summary.pruned += db.prune_mr_discussions(proj, iid, &discussions).await?;
-    Ok(())
-}
+        };
+        self.db.upsert_merge_request(proj, iid, &mr_data).await?;
+        summary.new_mrs += 1;
 
-/// Scope key for this provider's [`datalib_etl::scope_config`] blob.
-/// Discovery scopes share one record because `refresh_window_days` is a
-/// single workspace-wide knob; the per-scope cursors it interacts with
-/// stay in `sync_scope_state`.
-const SCOPE_CONFIG_KEY: &str = "gitlab:download";
+        // The endpoint returns this MR's *whole* discussion list, so a
+        // discussion we hold that it did not mention was deleted on
+        // GitLab.
+        let disc_url =
+            format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
+        let Some(discussions) = walk_children(client, &disc_url, cr, "discussions").await else {
+            return Ok(());
+        };
+        self.db.upsert_discussions(proj, iid, &discussions).await?;
+        summary.new_discussions += discussions.len();
+        summary.pruned += self
+            .db
+            .prune_mr_discussions(proj, iid, &discussions)
+            .await?;
+        Ok(())
+    }
 
-/// The subset of [`FetchOptions`] that decides which data lands on disk.
-/// `max_mrs` / `targets` / `full_sync` are per-run knobs and one-off
-/// overrides, so recording them would make a smoke run read as a config
-/// change to the next real sync.
-fn scope_config_blob(refresh_window_days: u32) -> Value {
-    datalib_etl::scope_state::refresh_window_blob(refresh_window_days)
+    fn record_skipped(&self, summary: &mut FetchSummary) {
+        summary.skipped_unchanged_mrs += 1;
+    }
+
+    fn record_requests(&self, summary: &mut FetchSummary, requests: u64) {
+        summary.requests = requests;
+    }
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let _ = datalib_etl::latchkey::ensure_curl_router();
-    let db = opts.db.clone();
+    let client = ForgeClient::new(
+        HttpService::Gitlab,
+        default_retryability,
+        opts.latchkey.clone(),
+    );
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,
@@ -295,122 +225,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "targets": opts.targets,
         "full_sync": opts.full_sync,
     });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
-
-    // Diff the scope-affecting params against the ones that produced the
-    // current cursors. `None` (fresh store, or one written before
-    // `sync_scope_config` existed) means no adjustment — see the module
-    // docs on `scope_config`.
-    let scope_cfg = scope_config_blob(opts.refresh_window_days);
-    let prior_scope_cfg =
-        datalib_etl::scope_config::load_or_none(db.pool(), SCOPE_CONFIG_KEY).await;
-
-    let client = GitLabClient::with_latchkey(opts.latchkey.clone());
-    let mut summary = FetchSummary::default();
-    // Whether discovery actually covered every scope this run. Only then
-    // has the run satisfied `refresh_window_days`; see `scope_config`.
-    let discovery_complete = std::sync::atomic::AtomicBool::new(true);
-
-    let work = async {
-        let user_id = fetch_self(&client, &db).await?;
-
-        let had_mrs = db.any_merge_requests().await?;
-        let mr_keys: Vec<DiscoveredMr> = if !opts.targets.is_empty() {
-            // Explicit targets: no listing call, no `updated_at` to
-            // compare against — always fetch. Discovery is skipped, so
-            // this run says nothing about a widened window.
-            discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
-            opts.targets
-                .iter()
-                .cloned()
-                .map(|(proj, iid)| DiscoveredMr {
-                    proj,
-                    iid,
-                    updated_at: String::new(),
-                })
-                .collect()
-        } else {
-            let state = db.load_scope_state().await?;
-            let discovered = discover_mrs(
-                &client,
-                user_id,
-                &opts.scopes,
-                &state,
-                opts.refresh_window_days,
-                opts.full_sync || !had_mrs,
-                prior_scope_cfg.as_ref(),
-            )
-            .await?;
-            if discovered.failed_scopes > 0 {
-                discovery_complete.store(false, std::sync::atomic::Ordering::Relaxed);
-            }
-            for (k, v) in &discovered.new_state {
-                db.upsert_scope_state(k, v).await?;
-            }
-            discovered.keys
-        };
-        let mr_keys: Vec<DiscoveredMr> = if let Some(cap) = opts.max_mrs {
-            mr_keys.into_iter().take(cap).collect()
-        } else {
-            mr_keys
-        };
-        tracing::info!(count = mr_keys.len(), "MRs to fetch");
-
-        // Bulk-load every (proj, iid)→updated_at we already have a
-        // payload for. One scan, then per-MR comparison is O(1). This
-        // is what lets a Ctrl-C'd previous run resume cheaply: the
-        // listing still shows all 210, but we skip the N we already
-        // fully fetched.
-        let local_updated: HashMap<(String, u32), String> = if opts.full_sync {
-            HashMap::new()
-        } else {
-            db.merge_request_updated_ats().await?
-        };
-
-        opts.progress.set_length(Some(mr_keys.len() as u64));
-        for d in &mr_keys {
-            opts.progress.inc(1);
-            opts.progress.set_message(&format!("{}!{}", d.proj, d.iid));
-            // Skip if the local copy's `updated_at` matches the
-            // listing's. Empty `updated_at` from discovery (targets
-            // mode or a listing item missing the field) falls through
-            // to the unconditional fetch.
-            if !d.updated_at.is_empty() {
-                if let Some(local) = local_updated.get(&(d.proj.clone(), d.iid)) {
-                    if local.as_str() == d.updated_at.as_str() {
-                        summary.skipped_unchanged_mrs += 1;
-                        if opts.sleep_between > Duration::ZERO {
-                            tokio::time::sleep(opts.sleep_between).await;
-                        }
-                        continue;
-                    }
-                }
-            }
-            if let Err(e) = fetch_one_mr(&client, &db, &d.proj, d.iid, &mut summary).await {
-                tracing::error!(proj = %d.proj, iid = d.iid, error = %e, "MR fetch failed; skipping");
-            }
-            if opts.sleep_between > Duration::ZERO {
-                tokio::time::sleep(opts.sleep_between).await;
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-
-    let result = work.await;
-    summary.requests = client.request_count();
-    // Record the config only once this run has actually satisfied it. A
-    // skipped scope or a targets-only run leaves the prior blob in place
-    // so the next run re-plans the widening.
-    datalib_etl::scope_config::store_if_satisfied(
-        db.pool(),
-        SCOPE_CONFIG_KEY,
-        &scope_cfg,
-        result.is_ok() && discovery_complete.load(std::sync::atomic::Ordering::Relaxed),
+    sync(
+        &Gitlab { db: &opts.db },
+        &client,
+        SyncOptions {
+            scopes: &opts.scopes,
+            refresh_window_days: opts.refresh_window_days,
+            max_items: opts.max_mrs,
+            targets: &opts.targets,
+            full_sync: opts.full_sync,
+            sleep_between: opts.sleep_between,
+            progress: &opts.progress,
+            run_config,
+        },
     )
-    .await;
-    run.finish(&result, &summary).await;
-    result?;
-    Ok(summary)
+    .await
 }
 
 pub fn parse_mr_ref(s: &str) -> Result<(String, u32)> {
@@ -457,61 +286,5 @@ mod tests {
             ),
             Some("generally-intelligent/generally_intelligent".to_string())
         );
-    }
-
-    // `since_for_scope` policy tests live in
-    // `datalib_etl::scope_state` now that the implementation is
-    // shared — gitlab just re-exports the helper.
-}
-
-#[cfg(test)]
-mod scope_config_tests {
-    use super::*;
-    use datalib_etl::scope_state::REFRESH_WINDOW_KEY;
-    use serde_json::json;
-
-    #[test]
-    fn blob_records_only_the_refresh_window() {
-        // Per-run budgets and one-off overrides must stay out: a
-        // `--max-mrs 5` smoke run must not read as a config change to
-        // the next real sync.
-        // `max_mrs` / `full_sync` are per-run overrides; only the
-        // window reaches the blob, so passing it alone is the point.
-        let blob = scope_config_blob(30);
-        assert_eq!(blob, json!({ REFRESH_WINDOW_KEY: 30 }));
-    }
-
-    #[test]
-    fn blob_round_trips_into_the_since_policy() {
-        // The blob this provider writes is the same shape
-        // `since_for_scope` reads back — the pairing the whole scheme
-        // depends on.
-        let blob = scope_config_blob(30);
-        let mut state = std::collections::HashMap::new();
-        state.insert("s".to_string(), "2026-06-01T00:00:00Z".to_string());
-        // Unchanged window: cursor stands.
-        assert_eq!(
-            datalib_etl::scope_state::since_for_scope(&state, "s", 30, false, Some(&blob))
-                .as_deref(),
-            Some("2026-06-01T00:00:00Z")
-        );
-        // Widened to unbounded: filter dropped entirely.
-        assert_eq!(
-            datalib_etl::scope_state::since_for_scope(&state, "s", 0, false, Some(&blob)),
-            None
-        );
-    }
-
-    #[test]
-    fn discovery_is_incomplete_when_a_scope_fails() {
-        // The blob is one row for every scope, so recording it after a
-        // partial discovery would lose the widening for the scopes that
-        // never searched.
-        let d = Discovery {
-            keys: Vec::new(),
-            new_state: Default::default(),
-            failed_scopes: 1,
-        };
-        assert!(d.failed_scopes > 0, "must block recording");
     }
 }

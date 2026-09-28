@@ -78,9 +78,9 @@ pub struct StepRecord {
     /// What the loop's last tick made of it; `None` for a step no loop
     /// has ticked, or a word this build does not know.
     pub state: Option<StateKind>,
-    /// What it waits on or is blocked by, or who paused it: a sentence.
+    /// What it waits on or is blocked by, or who turned it off: a sentence.
     pub state_detail: Option<String>,
-    pub paused_by: Option<String>,
+    pub turned_off_by: Option<String>,
     /// The open request it is being run for, the oldest if several are.
     pub request: Option<String>,
 }
@@ -152,7 +152,7 @@ pub(super) const DDL: [&str; 5] = [
         tz_offset TEXT,
         state TEXT,
         state_detail TEXT,
-        paused_by TEXT,
+        turned_off_by TEXT,
         request TEXT
     )",
     // The version each tree was last published at, by its path (a
@@ -183,7 +183,7 @@ pub(super) const DDL: [&str; 5] = [
 pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 4] = [
     ("steps", "state", "TEXT"),
     ("steps", "state_detail", "TEXT"),
-    ("steps", "paused_by", "TEXT"),
+    ("steps", "turned_off_by", "TEXT"),
     ("steps", "request", "TEXT"),
 ];
 
@@ -289,7 +289,7 @@ impl Store {
                     .as_deref()
                     .and_then(StateKind::parse),
                 state_detail: r.try_get("state_detail")?,
-                paused_by: r.try_get("paused_by")?,
+                turned_off_by: r.try_get("turned_off_by")?,
                 request: r.try_get("request")?,
             };
             steps.insert(id, state);
@@ -353,7 +353,7 @@ impl Store {
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
                          last_attempts, last_error, last_success_at_utc, tz_offset, state, \
-                         state_detail, paused_by, request) \
+                         state_detail, turned_off_by, request) \
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
@@ -370,7 +370,7 @@ impl Store {
                     .bind(offset)
                     .bind(st.state.map(StateKind::as_str))
                     .bind(&st.state_detail)
-                    .bind(&st.paused_by)
+                    .bind(&st.turned_off_by)
                     .bind(&st.request)
                     .execute(&mut *tx)
                     .await?;
@@ -403,6 +403,7 @@ impl Store {
             }
         }
         tx.commit().await?;
+        self.announce("record saved");
         Ok(())
     }
 
@@ -431,6 +432,7 @@ impl Store {
         .bind(&started.tz_offset)
         .execute(self.pool())
         .await?;
+        self.announce(&format!("invocation opened {}", row.id));
         Ok(())
     }
 
@@ -450,6 +452,7 @@ impl Store {
         .bind(id)
         .execute(self.pool())
         .await?;
+        self.announce(&format!("invocation closed {id}"));
         Ok(())
     }
 
@@ -468,7 +471,42 @@ impl Store {
         .execute(self.pool())
         .await?
         .rows_affected();
+        self.announce("abandoned invocations closed");
         Ok(closed)
+    }
+
+    /// Every invocation the loop recorded, oldest first, each with how it
+    /// ended once it has.
+    pub async fn invocations(&self) -> Result<Vec<(InvocationRow, Option<InvocationEnd>)>> {
+        let rows = sqlx::query(
+            "SELECT id, step, run_id, started_at_utc, outcome, failure_kind, error, attempts, \
+             exit_code, signal FROM invocations ORDER BY rowid",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let row = InvocationRow {
+                    id: r.try_get("id")?,
+                    step: r.try_get("step")?,
+                    run_id: r.try_get("run_id")?,
+                    started_at_utc: r.try_get("started_at_utc")?,
+                };
+                let outcome: Option<String> = r.try_get("outcome")?;
+                let end = match outcome {
+                    None => None,
+                    Some(outcome) => Some(InvocationEnd {
+                        outcome,
+                        failure_kind: r.try_get("failure_kind")?,
+                        error: r.try_get("error")?,
+                        attempts: r.try_get::<Option<i64>, _>("attempts")?.unwrap_or(0) as u32,
+                        exit_code: r.try_get("exit_code")?,
+                        signal: r.try_get("signal")?,
+                    }),
+                };
+                Ok((row, end))
+            })
+            .collect()
     }
 
     /// The processes the loop started and has not seen end.
@@ -543,7 +581,7 @@ mod tests {
                     last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
                     state: Some(StateKind::Waiting),
                     state_detail: Some("waiting for x/raw".into()),
-                    paused_by: Some("claude".into()),
+                    turned_off_by: Some("claude".into()),
                     request: Some("req-1".into()),
                 },
             )]),

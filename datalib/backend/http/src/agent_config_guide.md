@@ -32,16 +32,15 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `function` it performs there and the `inputs` it reads; its id is
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. A step with no `command` is a built-in one (the
-functions `ingest`, `render_markdown`, `grid_index` and `qmd_index`,
-run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
+functions `ingest`, `render_markdown`, `keyword_index`, `embed`,
+`grid_index`, `qmd_aggregator` and `embedding_map`, run by `datalib-step`); a custom step names a shell `command`. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
 applets see `docs/dev/applets.md`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter. A step
-with no `inputs` is a **source step** (what a sync can target); every
-source's rendered markdown feeds the two fan-in steps under the
-`unified_index` group:
+with no `inputs` is a **source step** (where a sync normally starts); every
+source feeds the two fan-in steps under the `unified_index` group:
 
 ```toml
 # One source = a group with a `type`, plus an ingest step and a
@@ -59,16 +58,32 @@ group = "slack"
 function = "ingest"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
-[steps.params]
-sync = {}
+# The one table under it names how the data is reached: `api` is the
+# product's own API, and an empty one takes the provider's defaults.
+[steps.params.api]
 
 [[steps]]
 group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
-# The shared fan-in steps every source's rendered markdown feeds. Add a
-# source's render step id to both `inputs` lists.
+# The source's own part of free-text search: its keyword index, then
+# its embeddings (the slow one). Leave both out, here and in
+# `qmd_aggregator` below, to keep it out of search.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+inputs = ["slack/keyword_index"]
+
+# The shared fan-in steps. Add a source's render step id to
+# `grid_index`'s inputs, and its `keyword_index` and `embed` to
+# `qmd_aggregator`'s, which runs after them and drops from search any
+# source it does not name.
 [[groups]]
 id = "unified_index"
 
@@ -79,8 +94,8 @@ inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_index"
-function = "qmd_index"
-inputs = ["slack/render_markdown"]
+function = "qmd_aggregator"
+inputs = ["slack/keyword_index", "slack/embed"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
@@ -179,5 +194,7 @@ so the shared index steps pick it up.
   produces (`{ok, error, steps: [{id, command, inputs, outputs,
   deps}]}`), in topological order — use it to confirm the wiring you
   intended.
-- `GET <origin>/api/sync/sources` lists the source steps a sync can
-  target, as derived from the saved config.
+- `GET <origin>/api/sync/sources` lists the source steps, as derived
+  from the saved config. A sync may name any step: a source step always
+  runs, any other only if it is out of date, and nothing upstream of it
+  runs.
