@@ -15,10 +15,10 @@ pub const DEFAULT_QMD_VERSION: &str = "2.8.3";
 /// `qmd/index.sqlite` under whatever `XDG_CACHE_HOME` it is given, and
 /// it is given [`QMD_DIR`](crate::layout::QMD_DIR) (see [`qmd_cache_home`]):
 /// one file every qmd step writes, one collection per source.
-pub const QMD_INDEX_REL: &str = "unified_index/qmd_index/qmd/index.sqlite";
+pub const QMD_INDEX_REL: &str = "unified_index/qmd_aggregator/qmd/index.sqlite";
 
 /// The `XDG_CACHE_HOME` the qmd CLI runs with for a data root: the
-/// qmd index's directory, `<root>/unified_index/qmd_index`.
+/// qmd index's directory, `<root>/unified_index/qmd_aggregator`.
 pub fn qmd_cache_home(root: &Path) -> PathBuf {
     crate::layout::qmd_dir(root)
 }

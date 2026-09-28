@@ -84,6 +84,10 @@ mod tests {
         );
         assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
         assert_eq!(
+            Function::QmdAggregator.as_str(),
+            datalib_core::layout::QMD_DIR
+        );
+        assert_eq!(
             Function::EmbeddingMap.as_str(),
             datalib_unified_index::embedding_map::DIR
         );

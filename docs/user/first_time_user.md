@@ -423,7 +423,7 @@ faster.
 │   └── …
 ├── unified_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.doltlite_db   #   grid rows + markdowns + edges
-│   └── qmd_index/qmd/index.sqlite  #   the semantic search index
+│   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
@@ -500,7 +500,7 @@ the `INDEX_PATH` env var:
 
 ```sh
 rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_index/qmd_index/qmd/index.sqlite \
+INDEX_PATH=~/datalib/unified_index/qmd_aggregator/qmd/index.sqlite \
     "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
 ```
 

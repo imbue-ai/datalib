@@ -191,7 +191,7 @@ mod tests {
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
             "unified_index/grid_index/db.doltlite_db",
-            "unified_index/qmd_index/qmd/index.sqlite",
+            "unified_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
         for f in files {

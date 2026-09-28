@@ -235,8 +235,8 @@ source's pair, so it runs after them: it retires the collection of any
 source it does not name and reports what each holds. All three drive qmd's
 SDK from the staged runtime tree (above) through
 `datalib/backend/qmd_indexer/`, with
-`XDG_CACHE_HOME=<root>/unified_index/qmd_index`, so the one index lands
-at `<root>/unified_index/qmd_index/qmd/index.sqlite` (each collection
+`XDG_CACHE_HOME=<root>/unified_index/qmd_aggregator`, so the one index lands
+at `<root>/unified_index/qmd_aggregator/qmd/index.sqlite` (each collection
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
 alongside the per-source `<group>/render_markdown/` trees and
 `unified_index/grid_index/db.doltlite_db`. This is what the search bar's
@@ -257,7 +257,7 @@ Design notes:
   source's `embed` off leaves the rest running. Once the backlog drains,
   re-runs are no-ops (a couple of seconds).
 - **Models cache**: qmd's embedding model (~300 MB) is shared across data
-  roots via a symlink at `<root>/unified_index/qmd_index/qmd/models ->
+  roots via a symlink at `<root>/unified_index/qmd_aggregator/qmd/models ->
   ~/.cache/qmd/models` (qmd's own default, `$XDG_CACHE_HOME/qmd/models`
   when that is set, so a standalone `qmd` run shares the same cache).
   Override with `datalib-step --models-dir`; `datalib-step pull-models`

@@ -28,6 +28,7 @@ rust_binary(
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/query:datalib_query",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/unified_index:datalib_unified_index",
         "@datalib_crates//:anyhow",

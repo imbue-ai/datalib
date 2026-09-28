@@ -8,7 +8,7 @@ computation: the `embedding_map` function in `datalib-step`
 result, and the `unified_index` applet serves it joined to the grid.
 
 ```
-unified_index/qmd_index/qmd/index.sqlite     qmd's chunk vectors
+unified_index/qmd_aggregator/qmd/index.sqlite     qmd's chunk vectors
         │  datalib_unified_index::qmd::vectors — one unit vector per document
         ▼
 datalib_embedding_map::layout                 this crate

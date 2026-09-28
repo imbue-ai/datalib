@@ -8,12 +8,12 @@
 # Produces, under <out-root>:
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   unified_index/grid_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
-#   unified_index/qmd_index/qmd/index.sqlite QMD index (from qmd-index.tar).
+#   unified_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
 #   unified_index/qmd_models/          the qmd GGUFs this target carries,
 #                                      linked in from bazel outputs (all
 #                                      three, or the embedding model alone
 #                                      — see the two targets in BUILD.bazel).
-#   unified_index/qmd_index/qmd/models -> ../../qmd_models
+#   unified_index/qmd_aggregator/qmd/models -> ../../qmd_models
 #   config.toml                        { data_root }, every source as a
 #                                      render-only group, the two fan-ins,
 #                                      and the `unified_index` applet the
@@ -61,7 +61,7 @@ mkdir -p "$OUT_ROOT"
 # Both archives are rooted at `qmd/` (the genrule's staging dir name);
 # strip that one component so the per-stanza markdown trees land at
 # `<root>/<stanza>/render_markdown/...` and the index at
-# `<root>/unified_index/qmd_index/qmd/`, where the backend's scanners look.
+# `<root>/unified_index/qmd_aggregator/qmd/`, where the backend's scanners look.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
@@ -124,13 +124,13 @@ EOF
 #     into every root. Same assumption the applet `command` above already
 #     makes — a runfiles path outlives the run that wrote it, up to a
 #     `bazel clean`.
-#   * `unified_index/qmd_index/qmd/models` has to be a SYMLINK, not the directory
+#   * `unified_index/qmd_aggregator/qmd/models` has to be a SYMLINK, not the directory
 #     itself. A later sync against this root calls
 #     `qmd_indexer::ensure_models_symlink`, which errors out when it
 #     finds a real directory at that path. So the real directory is a
 #     sibling and the expected path points at it.
 MODELS_DIR="$OUT_ROOT/unified_index/qmd_models"
-mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_index/qmd"
+mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd"
 EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""
 if [[ -z "$src" || ! -s "$src" ]]; then
@@ -149,7 +149,7 @@ for entry in \
   fi
   ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
 done
-ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_index/qmd/models"
+ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_index/qmd_aggregator/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
 # directory the `fsindex` (Unison-style) scanner can index; nothing renders it

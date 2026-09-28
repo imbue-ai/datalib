@@ -78,6 +78,7 @@ pub fn serve(port: u16) -> Result<()> {
         .context("build tokio runtime")?;
     rt.block_on(async move {
         let root = Arc::new(root);
+        move_legacy_qmd_dir(&root);
         // Warm the shared model cache before the first search rather
         // than during it. This used to run in `datalib-http`'s main,
         // which is the last place that still knew what qmd was.
@@ -146,6 +147,22 @@ async fn require_gateway(
             r#"{"error":"this port answers only to the datalib gateway"}"#,
         ))
         .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+fn move_legacy_qmd_dir(root: &std::path::Path) {
+    use datalib_runtime::legacy_qmd_dir::{move_to_aggregator_dir, Outcome};
+    match move_to_aggregator_dir(root) {
+        Ok(Outcome::NothingToMove) => {}
+        Ok(Outcome::Moved { from, to }) => {
+            tracing::info!(from = %from.display(), to = %to.display(), "moved the qmd index");
+        }
+        Ok(Outcome::LeftBeside { old }) => {
+            tracing::warn!(old = %old.display(), "an old qmd index sits beside the one in use; delete it");
+        }
+        // Search answers from whatever is at the new path; the next qmd
+        // step tries the move again and fails loudly.
+        Err(e) => tracing::error!(error = %e, "could not move the qmd index to its new directory"),
+    }
 }
 
 fn ensure_models(root: &std::path::Path) {

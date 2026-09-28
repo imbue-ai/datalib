@@ -30,7 +30,7 @@ index), and, for a searched source, `<group>/keyword_index` and
 index. `unified_index/qmd_aggregator` runs after every source's pair
 and keeps the search index to the sources it names. A step's function
 is the directory it writes (the qmd steps are the exception: they all
-write the one index file under `unified_index/qmd_index/`):
+write the one index file under `unified_index/qmd_aggregator/`):
 
 ```
 <data_root>/
@@ -42,7 +42,7 @@ write the one index file under `unified_index/qmd_index/`):
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
-│   └── qmd_index/qmd/index.sqlite  # semantic search index
+│   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
     ├── runs/runs.sqlite            # every run's step states, log lines and metrics (plain SQLite)
@@ -295,7 +295,7 @@ Pick the surface that fits the question:
 
   ```sh
   rt=$(echo ~/.cache/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
-  INDEX_PATH=<data_root>/unified_index/qmd_index/qmd/index.sqlite \
+  INDEX_PATH=<data_root>/unified_index/qmd_aggregator/qmd/index.sqlite \
       "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:

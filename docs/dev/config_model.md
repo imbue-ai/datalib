@@ -105,8 +105,8 @@ same id and definition would read as up to date and write nothing.
   reads them finds them from the data root alone.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
-  the one qmd index file in `unified_index/qmd_index` (a directory no
-  step is named for), each source's steps to its own collection. The
+  the one qmd index file in `unified_index/qmd_aggregator`, the
+  aggregator's tree, each source's steps to its own collection. The
   runner cannot see that file as shared, so they hold one-slot locks
   instead (below).
 - A group's `type` names the thing mirrored, never the way it is

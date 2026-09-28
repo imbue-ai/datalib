@@ -353,7 +353,7 @@ qmd is not: a free-text search waits at most 20 seconds on it
 (`QMD_ANSWER_DEADLINE`), then asks it for a Node diagnostic report,
 logs what the report says it was doing, stops it, and answers with a
 `qmd_error`. The next search starts a fresh qmd. The reports are kept,
-the newest twenty, in `unified_index/qmd_index/reports/` under the data
+the newest twenty, in `unified_index/qmd_aggregator/reports/` under the data
 root.
 
 The gateway forwards an applet's stderr line by line as it arrives and

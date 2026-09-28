@@ -129,7 +129,7 @@ doc_test_after() {
             assert_rows "Picard" 1
             ;;
         demo-index)
-            docker exec datalib-demo test -s /opt/datalib/demo/unified_index/qmd_index/qmd/index.sqlite
+            docker exec datalib-demo test -s /opt/datalib/demo/unified_index/qmd_aggregator/qmd/index.sqlite
             assert_rows "warp%20core" 1
             ;;
         demo-sql|own-sql)
@@ -140,7 +140,7 @@ doc_test_after() {
             # root. A container that leaves it unreadable (root-owned
             # 0700, the umask leak of #469) fails here and nowhere else.
             for f in unified_index/grid_index/db.doltlite_db \
-                     unified_index/qmd_index/qmd/index.sqlite; do
+                     unified_index/qmd_aggregator/qmd/index.sqlite; do
                 if ! test -s "$DATA_ROOT/$f"; then
                     echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2
                     ls -laR "$DATA_ROOT" >&2 || true

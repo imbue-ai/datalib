@@ -114,7 +114,9 @@ fn a_keyword_update_registers_its_own_collection() {
 
     index.keyword_index(&["sickbay"], &quiet).unwrap();
     assert_eq!(by_name(&index), [("sickbay".into(), 1, 1)]);
-    let yml = root.path().join("unified_index/qmd_index/qmd/index.yml");
+    let yml = root
+        .path()
+        .join("unified_index/qmd_aggregator/qmd/index.yml");
     let yml = std::fs::read_to_string(&yml).unwrap();
     assert!(yml.contains("sickbay:"), "{yml}");
     assert!(yml.contains("sickbay/render_markdown/**/*.md"), "{yml}");
@@ -180,7 +182,9 @@ fn registering_retires_every_other_collection_with_its_documents() {
 
     assert_eq!(index.register(&["bridge"]).unwrap(), ["sickbay"]);
     assert_eq!(by_name(&index), [("bridge".into(), 2, 2)]);
-    let yml = root.path().join("unified_index/qmd_index/qmd/index.yml");
+    let yml = root
+        .path()
+        .join("unified_index/qmd_aggregator/qmd/index.yml");
     assert!(!std::fs::read_to_string(yml).unwrap().contains("sickbay"));
 
     // Registered again, it starts from nothing rather than finding its

@@ -5,7 +5,7 @@
 <data_root>/<group>/ingest/blobs.doltlite_db      content-addressed blobs
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
 <data_root>/unified_index/grid_index/db.doltlite_db   grid_rows / markdowns / edges / problems
-<data_root>/unified_index/qmd_index/              the qmd index (plain SQLite inside)
+<data_root>/unified_index/qmd_aggregator/           the qmd index (plain SQLite inside)
 <data_root>/unified_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by

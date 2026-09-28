@@ -38,7 +38,7 @@ pub struct QmdIndexSummary {
 /// Read-only handle on a data root's qmd index.
 ///
 /// Every query here spans the whole index rather than naming a
-/// collection. The index at `unified_index/qmd_index` holds one collection
+/// collection. The index at `unified_index/qmd_aggregator` holds one collection
 /// per source, registered by that source's own qmd steps and pruned by
 /// `qmd_aggregator`, so every row in it is one of ours. Naming a
 /// collection would only create a way to under-report: a source added

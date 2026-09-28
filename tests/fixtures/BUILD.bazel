@@ -404,7 +404,7 @@ py_test(
 # Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
 # so extracting both archives into the same directory (e.g. with
 # `tar -x --strip-components=1`) yields a complete root data directory —
-# markdown tree plus `unified_index/qmd_index/qmd/index.sqlite`.
+# markdown tree plus `unified_index/qmd_aggregator/qmd/index.sqlite`.
 #
 # Caveats:
 #   * Needs NO host `node`, no npm registry access, and no network at

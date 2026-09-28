@@ -1,5 +1,5 @@
 //! The qmd index, one collection per source, in one file
-//! (`unified_index/qmd_index/qmd/index.sqlite`): each source's
+//! (`unified_index/qmd_aggregator/qmd/index.sqlite`): each source's
 //! `keyword_index` and `embed` fill its own collection, and
 //! `unified_index/qmd_aggregator`, which reads all of them, keeps the
 //! collection set to the sources it reads and reports on the whole.
@@ -19,8 +19,8 @@ use datalib_qmd_indexer::{EmbedProgress, Index, Qmd, UpdateProgress};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
-/// The aggregator's id, which nothing but the runner reads: the index it
-/// keeps is where the applet finds it, under `unified_index/qmd_index`.
+/// The aggregator's id, which is also the qmd index's directory
+/// (`layout::QMD_DIR`), so the index's bytes count against this step.
 pub fn aggregator_rel() -> String {
     format!(
         "{}/{}",
@@ -49,6 +49,16 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 }
 
 fn open_index(root: &Path) -> Result<Index> {
+    use datalib_runtime::legacy_qmd_dir::{move_to_aggregator_dir, Outcome};
+    match move_to_aggregator_dir(root).context("move the qmd index to its new directory")? {
+        Outcome::NothingToMove => {}
+        Outcome::Moved { from, to } => {
+            tracing::info!(from = %from.display(), to = %to.display(), "moved the qmd index");
+        }
+        Outcome::LeftBeside { old } => {
+            tracing::warn!(old = %old.display(), "an old qmd index sits beside the one in use; delete it");
+        }
+    }
     Index::open(root, Qmd::pinned()?)
 }
 
