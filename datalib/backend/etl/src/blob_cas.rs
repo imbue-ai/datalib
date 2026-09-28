@@ -9,7 +9,7 @@
 //! filenames dedupe on the content hash rather than on the derived name.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -826,9 +826,9 @@ impl CasEdgeAccumulator {
     /// config said not to. Not a failure, but a warning all the same:
     /// the mirror is missing the file.
     ///
-    /// The bookkeeping is a failure's, which is deliberate — it is what
-    /// makes the blob eligible again if the rule is relaxed. See
-    /// `doltlite_raw::record_object_skipped`.
+    /// The bookkeeping is a failure's, which is deliberate — it keeps
+    /// the blob where a provider's retry pass looks for what did not
+    /// land. See `doltlite_raw::record_object_skipped`.
     pub fn add_skipped(
         &mut self,
         owning_id: &str,
@@ -932,7 +932,20 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .begin()
         .await
         .with_context(|| format!("begin flush_cas_edges {} tx", T::TABLE))?;
-    crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    // Every edge gets its row, but only one that landed is stamped
+    // fetched: the stamp is how a later failure tells a stale copy from a
+    // record that never arrived.
+    crate::bulk::bulk_upsert_entity_in_tx(&mut tx, rows).await?;
+    let not_fetched: HashSet<&str> = errors.iter().map(|e| e.ref_id.as_str()).collect();
+    crate::bulk::bulk_upsert_bookkeeping(
+        &mut tx,
+        T::TABLE,
+        rows.iter()
+            .map(|r| r.id())
+            .filter(|id| !not_fetched.contains(id)),
+        &now,
+    )
+    .await?;
     for problem in errors {
         match problem.reason {
             datalib_problems::Reason::FetchFailed => {
@@ -1294,5 +1307,86 @@ mod tests {
             !bundles.contains_key("none"),
             "a key that names no ref gets no bundle"
         );
+    }
+
+    struct WidgetBlob {
+        id: String,
+        owner: String,
+        blake3: Option<String>,
+    }
+
+    impl crate::bulk::BulkUpsertable for WidgetBlob {
+        const TABLE: &'static str = "widget_blobs";
+        const TYPED_COLUMNS: &'static [&'static str] = &["owner", "blake3"];
+        const PAYLOAD_COLUMN: Option<&'static str> = None;
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn bind_into<'q>(
+            &'q self,
+            q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+        ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
+            q.bind(&self.id).bind(&self.owner).bind(&self.blake3)
+        }
+    }
+
+    async fn flush_widget_blobs(pool: &SqlitePool, cas: &BlobCas, acc: &CasEdgeAccumulator) {
+        acc.flush(pool, cas, |owner, ref_id, blake3| WidgetBlob {
+            id: format!("{owner}#{ref_id}"),
+            owner: owner.to_string(),
+            blake3: blake3.map(String::from),
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn fetch_problem(pool: &SqlitePool, id: &str) -> (String, String) {
+        sqlx::query_as("SELECT severity, outcome FROM problems WHERE scope_key = ?")
+            .bind(format!("widget_blobs:{id}"))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A blob that never landed is dropped, an error; one that landed on
+    /// an earlier flush and failed now is stale, a warning. The flush
+    /// used to stamp every edge fetched before recording its failure, so
+    /// both read as warnings.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_blob_is_an_error_until_it_has_landed_once() {
+        let d = tempdir().unwrap();
+        let pool = crate::doltlite_raw::open(
+            &d.path().join("x.doltlite_db"),
+            &[
+                "CREATE TABLE IF NOT EXISTS widget_blobs \
+                 (id TEXT PRIMARY KEY, owner TEXT, blake3 TEXT)",
+                &crate::doltlite_raw::bookkeeping_ddl_for("widget_blobs"),
+            ],
+        )
+        .await
+        .unwrap();
+        let cas = BlobCas::open(&d.path().join("x.blobs.doltlite_db"))
+            .await
+            .unwrap();
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_failed("w1", "never", "HTTP 500");
+        acc.add_fetched("w1", "landed", b"bytes".to_vec(), None, None);
+        flush_widget_blobs(&pool, &cas, &acc).await;
+        assert_eq!(
+            fetch_problem(&pool, "w1#never").await,
+            ("error".to_string(), "dropped".to_string())
+        );
+
+        let mut acc = CasEdgeAccumulator::new();
+        acc.add_failed("w1", "landed", "HTTP 500");
+        flush_widget_blobs(&pool, &cas, &acc).await;
+        assert_eq!(
+            fetch_problem(&pool, "w1#landed").await,
+            ("warning".to_string(), "ok".to_string())
+        );
+
+        cas.close().await;
+        pool.close().await;
     }
 }

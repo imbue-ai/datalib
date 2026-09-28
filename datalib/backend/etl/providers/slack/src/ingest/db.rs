@@ -799,6 +799,37 @@ impl RawDb {
     pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
         datalib_etl::blob_cas::load_blake3_index(self.pool(), "slack_attachments", "file_id").await
     }
+
+    /// Every attachment whose last attempt left it without bytes — a
+    /// failed fetch or a size skip, which both set `last_error` — with
+    /// the payload of the message that carries it.
+    pub async fn unfetched_attachments(&self) -> Result<Vec<UnfetchedAttachment>> {
+        let rows = sqlx::query(
+            "SELECT a.id, a.message_uuid, a.file_id, b.attempt_count, \
+                    m.channel_id, json(m.payload) AS payload \
+             FROM slack_attachments a \
+             JOIN slack_attachments_bookkeeping b ON b.id = a.id \
+             LEFT JOIN messages m ON m.id = a.message_uuid \
+             WHERE b.last_error IS NOT NULL \
+             ORDER BY m.channel_id, a.id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select unfetched slack_attachments")?;
+        rows.iter()
+            .map(|r| {
+                let payload: Option<String> = r.try_get("payload")?;
+                Ok(UnfetchedAttachment {
+                    id: r.try_get("id")?,
+                    message_uuid: r.try_get("message_uuid")?,
+                    file_id: r.try_get("file_id")?,
+                    attempts: r.try_get("attempt_count")?,
+                    channel_id: r.try_get("channel_id")?,
+                    message: payload.as_deref().map(serde_json::from_str).transpose()?,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Participant ids out of one conversation payload. An `im` names
@@ -867,6 +898,18 @@ pub struct MessageInput {
     pub user_id: Option<String>,
     /// Raw Slack message JSON, byte-for-byte.
     pub payload: Value,
+}
+
+/// An attachment an earlier run did not land. `channel_id` and `message`
+/// are `None` once the message that carried it is gone from the store.
+#[derive(Debug, Clone)]
+pub struct UnfetchedAttachment {
+    pub id: String,
+    pub message_uuid: String,
+    pub file_id: String,
+    pub attempts: i64,
+    pub channel_id: Option<String>,
+    pub message: Option<Value>,
 }
 
 /// One row's worth of loaded message data — payload plus the columns

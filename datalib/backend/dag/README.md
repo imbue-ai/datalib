@@ -529,10 +529,10 @@ UI silently shows none. `started_at` stays the pinned
 `DATALIB_DAG_NOW`.
 
 The record is the only channel to a reader who did not spawn the run, and the loop
-saves it before it closes a request whose work is done, so a reader that
-sees such a request closed never finds a step still serving it. A
-stopped request is closed as soon as the loop reads the stop; its steps
-let go of it on the next save, and read Stopping until then. `POST /api/requests`
+saves it before it closes a request, whether its work is done or it was
+stopped, so a reader that sees a request closed never finds a step still
+serving it. A step stopped with its request reads Stopping until its
+process has exited. `POST /api/requests`
 opens one request per group its roots belong to, so each source's sync
 has a Stop of its own, and answers only once a step names each new
 request (`Store::taken_on`), so the rows read after a Sync already show

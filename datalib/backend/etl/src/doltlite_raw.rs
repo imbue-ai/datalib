@@ -1877,11 +1877,13 @@ async fn record_object_bookkeeping(
 /// config said not to.
 ///
 /// The bookkeeping is a failed attempt's, deliberately: `last_error`
-/// carries what the rule measured, and it is what puts the record in
-/// [`failed_ids`], so raising the limit picks the file up on the next
-/// run. Only the `problems` row differs: a warning with the rule's own
-/// reason, because nothing failed, but the mirror is still missing a
-/// file a person may want to know about.
+/// carries what the rule measured, and keeps the record among the
+/// unfetched ones ([`failed_ids`]). That alone fetches nothing: only a
+/// provider that tries those records again — Slack's attachment retry —
+/// picks the file up once the limit allows it. Only the `problems` row
+/// differs: a warning with the rule's own reason, because nothing
+/// failed, but the mirror is still missing a file a person may want to
+/// know about.
 pub async fn record_object_skipped(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -2883,8 +2885,7 @@ mod tests {
     /// A record the config told us not to fetch is not a failure. It
     /// reads `warning` / `ok` with the rule's own reason, where a failure
     /// on a never-fetched record reads `error` / `dropped` — and it
-    /// stays in `failed_ids`, which is what picks the file up if the
-    /// limit is raised.
+    /// stays in `failed_ids`, where a provider's retry finds it.
     #[tokio::test]
     async fn a_skip_the_config_asked_for_is_not_a_failed_fetch() {
         use datalib_problems::{Reason, Severity};
@@ -2919,7 +2920,7 @@ mod tests {
         assert_eq!(
             failed_ids(&pool, "widgets").await.unwrap(),
             vec!["w1".to_string()],
-            "a skip stays eligible, so raising the limit picks it up"
+            "a skip stays among the unfetched records"
         );
 
         // And a real failure on the same table still reads as one.

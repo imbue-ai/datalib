@@ -111,7 +111,8 @@ closed_vocabulary! {
         FetchFailed,
         /// The download declined to fetch this record, because a limit
         /// in the config said not to. → a warning: nothing failed, but
-        /// the record is not in the mirror.
+        /// the record is not in the mirror. A provider that retries its
+        /// skips fetches it once the limit allows.
         OverSizeLimit,
         /// A configured entry — a label, a channel, a conversation id —
         /// that upstream does not have. → that entry is not mirrored;

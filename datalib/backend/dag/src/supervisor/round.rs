@@ -164,6 +164,8 @@ struct Mailbox<'a> {
     /// config that has it is taken on, by this loop or the next. Each with
     /// the roots this graph lacks.
     deferred: BTreeMap<String, Vec<String>>,
+    /// Requests asked to stop, closed only once a save has let go of them.
+    stopped: Vec<String>,
 }
 
 /// An open request as the loop holds it: its row's id, the tick's view
@@ -202,6 +204,7 @@ impl Runner {
             seen: None,
             started: false,
             deferred: BTreeMap::new(),
+            stopped: Vec::new(),
         };
         let plan: Vec<String> = graph
             .topo
@@ -475,8 +478,8 @@ impl Runner {
                 }
             }
 
-            // A request closing now is closed after the save below, and a
-            // reader that sees it closed must find no step still serving it.
+            // A request closing now, or stopped, is closed after the save
+            // below: a reader that sees it closed finds no step serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
             let held: Vec<bool> = slots.iter().map(|s| s.ended.is_some()).collect();
             // A step serves a request only while it has work left in it,
@@ -546,6 +549,11 @@ impl Runner {
             }
             record.save(&state).await?;
 
+            for id in std::mem::take(&mut mailbox.stopped) {
+                store
+                    .close_request(&id, RequestOutcome::Stopped, None)
+                    .await?;
+            }
             for &(r, outcome) in t.closed.iter().rev() {
                 let closed = open.remove(r);
                 let (outcome, step) = match outcome {
@@ -712,6 +720,7 @@ impl Runner {
             seen,
             started,
             deferred,
+            stopped,
         } = mailbox;
         {
             {
@@ -734,11 +743,11 @@ impl Runner {
                 for row in rows {
                     let known = open.iter().position(|o| o.id == row.id);
                     if row.stop_requested_by.is_some() {
-                        store
-                            .close_request(&row.id, RequestOutcome::Stopped, None)
-                            .await?;
                         if let Some(k) = known {
                             open.remove(k);
+                        }
+                        if !stopped.contains(&row.id) {
+                            stopped.push(row.id);
                         }
                         continue;
                     }

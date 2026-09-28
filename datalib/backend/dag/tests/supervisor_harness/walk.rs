@@ -8,13 +8,24 @@
 //! runs that many.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use datalib_dag::supervisor::store::RequestOutcome;
 use datalib_dag::supervisor::tick::StateKind;
 
-use crate::harness::{reads, source, Clocks, Harness, Seen};
+use crate::harness::{reads, source, Clocks, Harness, Progress, Seen};
 
+/// At most this many walks at once, which the target's `cpu:4` tag
+/// claims: more than the cores it is given is a test of the scheduler
+/// under overload, where a writer descheduled between its commit and its
+/// announcement for two backstops reads as a miss.
+const AT_ONCE: usize = 4;
+/// All the walks together, well inside the target's 60 s: past it, the
+/// watchdog names every walk still running and what it is waiting for,
+/// rather than leaving a bare TIMEOUT.
+const BUDGET: Duration = Duration::from_secs(40);
 const EPISODES: usize = 4;
 const ACTIONS: usize = 12;
 const STEPS: [&str; 4] = ["a", "b", "c", "d"];
@@ -242,9 +253,7 @@ impl Walk {
     /// A step names only requests still open, and only while it has work
     /// left in them: running, waiting, or up to date with something above
     /// it still moving. The requests are read before the record, since
-    /// the loop saves a step's record before it closes a request whose
-    /// work is done. A stopped one it closes as soon as it reads the stop,
-    /// and the record lets go of it on the next save.
+    /// the loop saves a step's record before it closes a request.
     async fn check_served(&mut self) {
         let requests = self.h.state().await.requests;
         let record = self.h.state().await.record;
@@ -263,9 +272,7 @@ impl Walk {
                 ));
             }
             for id in &st.requests {
-                let closed = requests
-                    .iter()
-                    .any(|r| &r.id == id && r.closed.is_some() && r.stop_requested_by.is_none());
+                let closed = requests.iter().any(|r| &r.id == id && r.closed.is_some());
                 if closed {
                     self.h
                         .fail(&format!("{step} names {id}, which had already closed"));
@@ -339,7 +346,11 @@ impl Walk {
     }
 }
 
-async fn walk(seed: u64) {
+/// Each walk still running, and its harness's progress once it has one.
+type Running = Arc<Mutex<BTreeMap<u64, Option<Arc<Mutex<Progress>>>>>>;
+
+async fn walk(seed: u64, running: Running) {
+    running.lock().unwrap().insert(seed, None);
     let clocks = Clocks {
         stop_grace: Duration::from_millis(20),
         backoff: Duration::ZERO,
@@ -353,6 +364,7 @@ async fn walk(seed: u64) {
     ];
     let mut h = Harness::with(&steps, clocks).await;
     h.context = format!("walk seed {seed} (replay: HARNESS_SEED={seed}): ");
+    running.lock().unwrap().insert(seed, Some(h.progress()));
     let mut w = Walk {
         h,
         rng: Rng(seed),
@@ -381,6 +393,7 @@ async fn walk(seed: u64) {
         w.quiesce().await;
     }
     w.h.finish().await;
+    running.lock().unwrap().remove(&seed);
 }
 
 fn seeds() -> Vec<u64> {
@@ -393,16 +406,15 @@ fn seeds() -> Vec<u64> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn random_walks_keep_every_invariant() {
-    // As many walks at once as the machine has cores: more is a test of
-    // the scheduler under overload, where a writer descheduled between its
-    // commit and its announcement for two backstops reads as a miss.
-    let at_once = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let at_once = std::thread::available_parallelism().map_or(AT_ONCE, |n| n.get().min(AT_ONCE));
+    let running = Running::default();
+    let _watching = watchdog(running.clone());
     let mut set = tokio::task::JoinSet::new();
     for seed in seeds() {
         if set.len() == at_once {
             joined(set.join_next().await);
         }
-        set.spawn(walk(seed));
+        set.spawn(walk(seed, running.clone()));
     }
     while let Some(done) = set.join_next().await {
         joined(Some(done));
@@ -413,4 +425,32 @@ fn joined(done: Option<Result<(), tokio::task::JoinError>>) {
     if let Some(Err(e)) = done {
         std::panic::resume_unwind(e.into_panic());
     }
+}
+
+/// A thread of its own, so it fires even if the walks have wedged the
+/// runtime. It writes to stderr directly, since libtest holds back what a
+/// test prints until the test ends, and a stuck one never does. Dropping
+/// what it returns calls it off.
+fn watchdog(running: Running) -> mpsc::Sender<()> {
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if rx.recv_timeout(BUDGET) != Err(mpsc::RecvTimeoutError::Timeout) {
+            return;
+        }
+        let running = running.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = format!(
+            "the walks outlived their {BUDGET:?} budget; {} still running\n",
+            running.len()
+        );
+        for (seed, progress) in running.iter() {
+            let report = match progress {
+                Some(p) => p.lock().unwrap_or_else(|e| e.into_inner()).report(),
+                None => "setting up its harness".to_string(),
+            };
+            out += &format!("\n=== walk seed {seed} (replay: HARNESS_SEED={seed}) ===\n{report}\n");
+        }
+        let _ = std::io::stderr().write_all(out.as_bytes());
+        std::process::exit(1);
+    });
+    tx
 }
