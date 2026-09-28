@@ -547,6 +547,51 @@ test.describe("steering one source among several", () => {
     expect(when[ingestOf(CLAUDE)], `runner: ${JSON.stringify(when)}`).toBe("running");
   });
 
+  /// Sync everything once opened one request over every source, so a
+  /// Stop on any row stopped them all. Now each source has its own: a
+  /// Stop on one step's row, then on another source's group row, each
+  /// stops that source and nothing else.
+  test("after Sync everything, a Stop on one row stops that source alone", async ({
+    page,
+    request,
+  }) => {
+    await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
+    const written = page.waitForResponse(
+      (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/requests",
+    );
+    await page.getByRole("button", { name: "Sync everything" }).click();
+    const opened = (await (await written).json()) as SyncRequest[];
+    const idOf = (s: Source) => opened.find((r) => r.roots.join() === ingestOf(s))?.id;
+    expect(opened.map((r) => r.roots.join()).sort(), "one sync per source").toEqual(
+      [ingestOf(CHATGPT), ingestOf(CLAUDE)].sort(),
+    );
+    const stateOf = async (s: Source) =>
+      (await requests(request)).find((r) => r.id === idOf(s))?.state;
+    await untilRunning(page, ingestOf(CHATGPT));
+    await untilRunning(page, ingestOf(CLAUDE));
+    await expect(page.getByRole("button", { name: "Stop everything" })).toBeVisible();
+
+    // ── a step's row ─────────────────────────────────────────────────
+    await stopBtn(page, ingestOf(CHATGPT)).click();
+    await expect
+      .poll(() => stateOf(CHATGPT), { timeout: 45_000, intervals: [200] })
+      .toBe("stopped");
+    expect(await stateOf(CLAUDE), `${CLAUDE.id}'s sync after one row's Stop`).toBe("open");
+    await expect
+      .poll(() => statusOf(page, ingestOf(CHATGPT)), { timeout: 45_000, intervals: [200] })
+      .toBe("Stopped");
+    expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
+    await expect(syncBtn(page, ingestOf(CHATGPT))).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop everything" })).toBeVisible();
+
+    // ── a group's row ────────────────────────────────────────────────
+    await stopBtn(page, `group:${CLAUDE.id}`).click();
+    await expect.poll(() => stateOf(CLAUDE), { timeout: 45_000, intervals: [200] }).toBe("stopped");
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible({
+      timeout: 45_000,
+    });
+  });
+
   test("a backlogged step can be turned off, and turned back on", async ({ page }) => {
     // A step switched off on its row is not started, and what reads it
     // waits; the sync of its source runs everything else and closes.
