@@ -2113,6 +2113,78 @@ mod tests {
         );
     }
 
+    /// A step with nothing to do says so once nothing above it can still
+    /// change, not when the sync ends. A skipped step's row settled only
+    /// when the request closed, so it read Running behind the slowest
+    /// source in the sync.
+    #[tokio::test]
+    async fn a_skipped_step_reports_before_a_slower_source_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let rec = Arc::new(Recorder::default());
+        let skipped = |rec: &Recorder, id: &str| {
+            rec.0.lock().unwrap().iter().any(|e| {
+                matches!(e, Event::StepFinish { step, status, .. }
+                    if step == id && *status == RunState::SkippedUpToDate)
+            })
+        };
+        let saw_skip = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let second_run = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let slow = {
+            let (rec, saw, second) = (rec.clone(), saw_skip.clone(), second_run.clone());
+            StepSpec::new(
+                "slow/render",
+                StepRun::in_process(move |ctx: StepCtx| {
+                    let (rec, saw, second) = (rec.clone(), saw.clone(), second.clone());
+                    async move {
+                        if second.load(Ordering::SeqCst) {
+                            // Bounded, so a regression fails rather than hangs.
+                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                            while !skipped(&rec, "fast/keyword")
+                                && std::time::Instant::now() < deadline
+                            {
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                            saw.store(skipped(&rec, "fast/keyword"), Ordering::SeqCst);
+                        }
+                        let dir = ctx.path_str(&ctx.step_id);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                        Ok(StepOutcome {
+                            outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
+                            exit: None,
+                        })
+                    }
+                }),
+            )
+        };
+        let graph = Graph::build(vec![
+            quick("fast/render", &[]),
+            quick("fast/keyword", &["fast/render"]),
+            slow,
+        ])
+        .unwrap();
+
+        let first = runner(root.path()).run(&graph).await.unwrap();
+        assert!(first.steps.iter().all(|s| s.status.is_ok()), "{first:#?}");
+
+        second_run.store(true, Ordering::SeqCst);
+        let mut r = runner(root.path());
+        r.sink = rec.clone();
+        let report = r.run(&graph).await.unwrap();
+        assert!(
+            matches!(
+                report.step("fast/keyword").status,
+                StepStatus::SkippedUpToDate
+            ),
+            "{report:#?}"
+        );
+        assert!(
+            saw_skip.load(Ordering::SeqCst),
+            "fast/keyword was up to date, but said so only after the slow source finished"
+        );
+    }
+
     /// A second run where nothing moved must not run the fan-in at all.
     ///
     /// This is the steady-state case, and it is the one streaming can

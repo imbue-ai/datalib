@@ -453,13 +453,24 @@ impl Runner {
                 }
             }
 
-            // A step no open request wants any more, and with nothing of
-            // its own left to finish, says so now rather than when the
-            // loop ends, which may be a long sync of some other source
-            // away.
+            // A step with nothing of its own left to finish says so now
+            // rather than when the loop ends, which may be a long sync of
+            // some other source away: one no open request wants any more,
+            // and one up to date with nothing above it that could still
+            // change what it reads.
+            let mut above_unsettled = vec![false; slots.len()];
+            for &i in &graph.topo {
+                above_unsettled[i] = graph
+                    .deps_in_order(i)
+                    .any(|p| unsettled[p] || above_unsettled[p]);
+            }
             for (i, s) in slots.iter_mut().enumerate() {
-                let unwanted = matches!(t.states[i], Row::Idle | Row::Stale);
-                if s.ended.is_none() && unwanted {
+                let done = match t.states[i] {
+                    Row::Idle | Row::Stale => true,
+                    Row::Fresh => !above_unsettled[i],
+                    _ => false,
+                };
+                if s.ended.is_none() && done {
                     self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
                 }
             }
