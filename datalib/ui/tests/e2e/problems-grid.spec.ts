@@ -49,8 +49,11 @@ test("a source's problems open in the grid, its filter in the search bar", async
   expect(rows.map((r) => r.problem_uuid).sort()).toEqual(theirs.map((p) => p.problem_uuid).sort());
 });
 
+/// In a short window too: the menu is taller than the room above or below
+/// a row in the middle of it, and must still be reachable end to end.
 test("a severity cell's right-click keeps only its severity", async ({ page, request }) => {
   const [source, theirs] = await busiest(request);
+  await page.setViewportSize({ width: 1280, height: 480 });
   await page.goto("/data_sources");
   await groupRow(page, source).locator('[col-id="problems"]').dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });

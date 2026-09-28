@@ -1567,7 +1567,15 @@ function gridOptions(): GridOption {
       },
     },
     enableContextMenu: true,
-    contextMenu: { commandItems: menuItems, onBeforeMenuShow: scopes.onBeforeMenuShow },
+    contextMenu: {
+      commandItems: menuItems,
+      onBeforeMenuShow: scopes.onBeforeMenuShow,
+      // The grid opens the menu below the row, or above it when there is
+      // more room there, but never shrinks it: taller than both, it ran
+      // off the window and its first entries could not be reached. The
+      // larger side always holds this much; past it, the menu scrolls.
+      maxHeight: "40vh",
+    },
   };
 }
 
