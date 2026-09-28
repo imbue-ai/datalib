@@ -334,7 +334,12 @@ finish between two samples. CI failed about two dozen times on "expected
 Running, got Succeeded". Either hold the step in that state until the
 test lets go — the taped sources replay recorded HTTP, and `hold()` /
 `release()` in the `data-sources-*` specs park every replayed request
-behind a file — or assert the end state instead.
+behind a file — or assert the end state instead. A banner is a passing
+state too: "Queued a sync for …" comes down when its request closes, and
+a sync nothing holds (the local PDF folder) can close before the check
+for the banner first looks. When a banner only stands for something else, wait for that
+thing instead: `start()` in `data-sources-control.spec.ts` waits for the
+`POST /api/requests` response rather than the banner.
 
 **Drive the app, not a gesture, when the gesture is not what is under
 test.** A hand-driven header drag failed 23 times in one day until the
