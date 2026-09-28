@@ -20,6 +20,7 @@ use sqlx::Row;
 
 use super::sentinels::clean_text;
 use datalib_etl_chatgpt::ingest::db::{db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_chatgpt::ingest::image_asset_file_id;
 use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
@@ -283,18 +284,7 @@ fn collect_attachments(m: &Map<String, Value>) -> Vec<OAAttachmentRef> {
         .and_then(|c| c.get("parts"))
         .and_then(Value::as_array)
     {
-        for p in parts {
-            let Some(obj) = p.as_object() else { continue };
-            if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
-                continue;
-            }
-            let Some(ptr) = obj.get("asset_pointer").and_then(Value::as_str) else {
-                continue;
-            };
-            let id = ptr
-                .strip_prefix("sediment://")
-                .or_else(|| ptr.strip_prefix("file-service://"))
-                .unwrap_or(ptr);
+        for id in parts.iter().filter_map(image_asset_file_id) {
             if out.iter().any(|a| a.file_id == id) {
                 continue;
             }
@@ -638,21 +628,9 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
             .and_then(|c| c.get("parts"))
             .and_then(Value::as_array)
         {
-            for p in parts {
-                let Some(obj) = p.as_object() else { continue };
-                if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
-                    continue;
-                }
-                let Some(ptr) = obj.get("asset_pointer").and_then(Value::as_str) else {
-                    continue;
-                };
-                let id = ptr
-                    .strip_prefix("sediment://")
-                    .or_else(|| ptr.strip_prefix("file-service://"))
-                    .unwrap_or(ptr)
-                    .to_string();
-                if seen.insert(id.clone()) {
-                    out.push(id);
+            for id in parts.iter().filter_map(image_asset_file_id) {
+                if seen.insert(id.to_string()) {
+                    out.push(id.to_string());
                 }
             }
         }

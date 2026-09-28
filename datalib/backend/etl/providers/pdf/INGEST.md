@@ -4,42 +4,29 @@ Scans a local directory tree for `*.pdf`, hashes each file, classifies
 it, and records what it is. Conversion to markdown is the **render**
 step's job; this side never produces text.
 
-This document covers what's load-bearing and provider-specific. For the
-framework contracts every provider honors — schema-first, bulk-upsert
-chokepoints, commit lifecycle, what a reset does — see
+Row shapes and the identity argument are in
+[`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs); the contracts
+every provider honors are in
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
-For the row shapes and the identity argument, see
-[`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).
 
-## Relationship to `fsindex`
+## Relationship to `fsindex` and `media`
 
-Both providers scan local trees, and they share the primitives that make
-that fast and correct: blake3 leaf hashing and Unison's
-`(mtime, size, inode, dev)` rescan cursor, both in
-[`datalib_etl::fswalk`](/datalib/backend/etl/src/fswalk.rs). That module
-was factored out of fsindex when this provider needed the second copy;
-fsindex's `hash.rs` and `stamp.rs` are now thin adapters over it.
+The three providers that scan a local tree, how they share the walk and
+why they are separate sources:
+[`../media/INGEST.md`](../media/INGEST.md) §"Relationship to `fsindex`
+and `pdf`".
 
-They are separate **sources** because they answer different questions:
+One difference matters here. A `read(2)` either succeeds for `fsindex` or
+is a real error, but a document can fail for reasons worth retrying (a
+file caught mid-write, a half-synced Dropbox placeholder). So a file
+that could not be identified is identified again on the next scan
+rather than cached as permanently broken, even though the host
+fingerprint cache spares re-hashing it. Pinned by
+`rescan_reuses_hashes_and_is_idempotent` in `tests/pdf_e2e.rs`: a
+rescan hashes nothing and still retries the corrupt fixture.
 
-| | `fsindex` | `pdf` |
-|---|---|---|
-| Question | "what is in this tree?" | "what documents do I have?" |
-| Scale | tens of millions of entries | thousands of documents |
-| Keyed on | path (both tables) | content hash; paths hang off it |
-| Directories | tree-hashed into a Merkle structure | not modelled |
-| Render side | none | markdown + `grid_rows` |
-| Per-item cost | one `stat`, sometimes one `read` | a parse and a conversion |
-
-The last row is why the retry story differs. fsindex's `INGEST.md`
-says, correctly for it, "No retry semantics for transient failures — a
-`read(2)` either succeeds or it's a real error." Here a document can
-fail for reasons that are worth retrying (a file caught mid-write, a
-half-synced Dropbox placeholder), so an unidentifiable file is re-read
-on the next scan rather than cached as permanently broken. That
-behavior is pinned by `rescan_reuses_hashes_and_is_idempotent` in
-`tests/pdf_e2e.rs`, which asserts that exactly the corrupt fixture is
-re-read on an otherwise-unchanged rescan.
+A scan truncates `pdf_paths` up front and rebuilds it, so deletions fall
+out; content already in `pdf_documents` is not identified again.
 
 ## Why no OCR yet
 
@@ -76,21 +63,18 @@ the engine provides:
    0.4% and 26%; a floor around 60% separates them with enormous margin,
    and catches what `ocr_confidence` misses.
 
-The seam for that work is `render::convert::RENDER_VERSION`, which
-participates in the render cache key: bumping it re-renders every
-affected document with no migration.
+The seam for that work is `RENDER_VERSION` in
+`../pdf_render/src/render/convert.rs`: bumping it re-renders every
+document with no migration.
 
 ### `needs_ocr` is a work list, not a verdict on the document
 
 `needs_ocr = 1` means *some* page of a document is unreadable. It does
-not mean the document is skipped, and the two must not be conflated —
-they were, and that was issue #173: the render step selected
-`WHERE needs_ocr = 0`, so a document with one scanned insert among 200
-readable pages rendered nothing at all. Every `Mixed` document has at
-least one unreadable page by definition, so no `Mixed` document ever
-rendered, despite three places in the code saying it should.
+not mean the document is skipped: selecting `WHERE needs_ocr = 0` would
+render no `Mixed` document at all, since every one has an unreadable
+page by definition.
 
-What renders now is decided per page:
+What renders is decided per page:
 
 ```sql
 WHERE has_encoding_issues = 0 AND page_count > ocr_page_count
@@ -108,9 +92,8 @@ grid while costing a qmd embedding each.
 so. A page whose fonts do not decode produces mojibake, which *looks*
 like text — it would be indexed, searched, and shown as if it meant
 something. An absent page is an honest gap; a garbled one is a lie, so
-one such page suppresses the whole document. That is the same
-blast-radius trade #173 rejected for scanned pages, taken the other way
-because the two failures are not comparable.
+one such page suppresses the whole document — the opposite trade from
+scanned pages, because the two failures are not comparable.
 
 Note that the column is populated from the detector's per-page reasons
 (`suspected_garbled_text`: an Identity-H font with no `ToUnicode`, or a
@@ -168,7 +151,7 @@ unreadable as a grid cell either way. The full value stays in
 
 ## Known limitations
 
-- **Browser print chrome is only partly removed.** `render::convert`
+- **Browser print chrome is only partly removed.** `pdf_render`'s `render::convert`
   strips running heads/feet that repeat on their own line, but the
   extractor fuses roughly 80% of them into a body line instead
   (measured: 40 of 48 surviving instances across 4 print-to-PDF
@@ -206,11 +189,9 @@ Two things follow, both deliberate:
   arguably correct (the URL really did change) and cheap at ~6 ms/page,
   but it is worth knowing before relocating a large tree.
 
-The same property made the rows differ between machines for this
-provider, which is why `fixture_db_snapshot` normalizes the displayed
-`source_url` (`stable_source_url`). CI caught this after a first fix
-that normalized only the displayed value and left a hash derived from
-the real one — that hash (`row_set_hash`) is gone since.
+The same property makes the rows differ between machines, which is why
+`fixture_db_snapshot` (in `unified_index`'s tests) normalizes
+`source_url` through `stable_source_url`.
 
 ## Orphaned documents
 
@@ -222,8 +203,7 @@ dropping it would lose when the document was first seen
 every document whose path merely moved.
 
 The consequence is that deleting the last copy of a document leaves an
-unreferenced `pdf_documents` row. That is deliberate for now: the row is
-cheap, it preserves the record that the document was once here, and the
+unreferenced `pdf_documents` row, deliberately: the row is cheap, it preserves the record that the document was once here, and the
 render side ignores it (its join against `pdf_paths` finds nothing).
 Reaping them is a `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM
 pdf_paths)` whenever we decide we want it — but note that doing so
@@ -296,11 +276,9 @@ uv run python tests/fixtures/make_pdf_fixtures.py
 ```
 
 `engineering/hull_survey.pdf` is the `Mixed` case: one text page and
-one image-only page. The corpus had no such document until #173, which
-is why nothing caught the whole-document skip — the one Mixed document
-in the 20-file development corpus cost a single page, so the bug was
-invisible there too. It costs one embedded page, the same as any
-one-page fixture: its second page renders as a note, not as a row.
+one image-only page, pinned by `a_mixed_document_renders_its_readable_pages`.
+It costs one embedded page, the same as any one-page fixture: its
+second page renders as a note, not as a row.
 
 The corpus deliberately includes a byte-identical duplicate pair, a
 same-`DocumentID` revision, a metadata-free document, a mixed

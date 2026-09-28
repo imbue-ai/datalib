@@ -51,22 +51,25 @@ The SSO login is the Connect app's flow (`sso.garmin.com/mobile/api/login`,
 then `/mobile/api/mfa/verifyCode`, then a service ticket exchanged at
 `connectapi.garmin.com/oauth-service/oauth/preauthorized`), ported from
 garth's `sso.py`. The OAuth1 consumer it signs with is the Connect
-Android app's, pinned in `src/auth.rs` rather than fetched from the S3
+mobile app's, pinned in `src/auth.rs` rather than fetched from the S3
 file garth reads it from. When the OAuth1 token itself expires the
 bearer exchange answers 401 and the run fails with the auth hint; log
 in again.
 
-A proper `garmin` service in latchkey, computing the bearer per request
-the way its `set-nocurl` services do, is the right long-term home for
-this; it would move the login into the wizard's Connect button. Not
-done here — it is JavaScript in another repo, then a release and a pin
-bump.
+A `garmin` service in latchkey that computed the bearer per request
+would move this login into the wizard's Connect button; none exists.
 
 ## What one run does
 
-Five walks, each with its own cursor in `sync_scope_state`, all bounded
-below by `api.since` (default: a year before the first run) and above
-by the run's local date:
+Six phases, in this order. The four that walk dates (per-day metrics,
+weigh-ins, activities, wellness bundles) each keep a cursor in
+`sync_scope_state` (`garmin:daily:<metric>`, `garmin:weight`,
+`garmin:activities`, `garmin:wellness`) and resume from it less
+`api.refresh_days` (default 7). Every date walk is bounded below by
+`api.since` (default: a year before the first run) and above by
+`api.until` or the run's local date, whichever is earlier; a past
+`until` fixes the window, so a mirror of a finished stretch stops
+growing.
 
 Every prune below has the same gate, stated once here: **a walk deletes
 what its listing did not name only when the listing was an
@@ -83,14 +86,16 @@ below).
    `garmin_account`; `/device-service/deviceregistration/devices` in
    `garmin_devices`, pruned to the listing when it is one.
 2. **Per-day metrics.** For each metric in `api.metrics` (default: all
-   twenty in `DAILY_METRICS`), one request per calendar day from the
-   metric's cursor less `refresh_days` (default 7) to today, stored
-   verbatim in `garmin_daily` keyed `<metric>#<date>`. A day the
-   endpoint had nothing for (204, 404, `{}` or `[]`) is stored as JSON
-   `null`, so "asked, empty" is distinguishable from "never asked".
-   The cursor advances per day, so a Ctrl-C loses nothing.
+   twenty in `DAILY_METRICS` in `garmin_config`), one request per
+   calendar day through the end of the window, stored verbatim in
+   `garmin_daily` keyed `<metric>#<date>`. A day the endpoint had
+   nothing for (204, 404, `{}` or `[]`) is stored as JSON `null`, so
+   "asked, empty" is distinguishable from "never asked". Days are
+   written and the cursor moved a month (31 days) at a time, so an
+   interrupted run re-fetches at most a month. A day an earlier run
+   failed to fetch is retried first, however far behind the cursor.
 3. **Weigh-ins.** `/weight-service/weight/range/<start>/<end>?includeAll=true`
-   in 90-day chunks from the cursor less `refresh_days`, flattened one
+   in 90-day chunks, flattened one
    row per `samplePk` into `garmin_weigh_ins`. Rows dated inside the
    walked window that the listing did not name are deleted once every
    chunk has answered with a `dailyWeightSummaries` array: only then
@@ -98,10 +103,11 @@ below).
    chunk that did not is skipped, the others still land, and the
    window is neither pruned nor cursored past.
 4. **Activities.** `/activitylist-service/activities/search/activities`
-   paged from `startDate=<cursor − refresh_days>`, one row per
-   `activityId`. An activity whose listing row is new or whose payload
-   differs from the stored one gets its detail
-   (`/activity-service/activity/<id>`) re-fetched; one with no FIT file
+   paged from `startDate=<window start>`, one row per `activityId`. An
+   activity whose listing row is new or whose payload differs from the
+   stored one gets its detail (`/activity-service/activity/<id>`)
+   re-fetched, as does any activity with no detail stored yet, listed
+   this run or not; a listed one with no FIT file
    in the CAS yet gets `/download-service/files/activity/<id>` fetched,
    the one `.fit` inside the zip stored, and an edge row written
    (`activity_files = false` turns that off). Activities dated a full
@@ -120,7 +126,8 @@ below).
    `garmin_items` (keyed `<kind>#<upstream id>`) and pruned to the
    listing when it is one. Workouts and goals are paged
    (`start`/`limit`, `ITEM_PAGE` at a time) to the first short page;
-   the other three answer the whole list in one response.
+   the other three answer the whole list in one response. Gear is
+   skipped when the social profile carries no `profileId`.
 
 ### What a failure leaves
 
@@ -135,7 +142,7 @@ carries downstream and the Manage screen counts:
 
 | what | key | when it clears |
 | --- | --- | --- |
-| a day's metric that could not be fetched | `garmin_daily:<metric>#<date>` | the day fetches inside a later refresh window |
+| a day's metric that could not be fetched | `garmin_daily:<metric>#<date>` | a later run retries the day and it fetches |
 | an activity detail, FIT file or wellness bundle that could not be fetched | `garmin_activity_details:<id>`, `garmin_activity_files:<id>#fit`, `garmin_wellness_files:<date>#wellness_zip` | it fetches |
 | a listing that was not an enumeration | `listing:<devices\|weight\|activities\|personal_records\|gear\|badges\|workouts\|goals>` | the next run in which it lists |
 | a phase that failed wholesale | `phase:<devices\|daily\|weight\|activities\|wellness\|items>` | the next run in which it runs |
@@ -148,8 +155,8 @@ only record.
 
 Inside the per-day walk, a metric that fails ten days in a row is
 abandoned for the run rather than paid for once per day of history;
-the failed days carry the error in their bookkeeping row and are
-re-tried inside the next run's refresh window.
+the failed days carry the error in their bookkeeping row and the next
+run retries them.
 
 ### What a second run costs
 
@@ -162,21 +169,16 @@ The store commits once at the end of the run (and at checkpoints).
 
 Widening `api.since` re-walks every cursor from the new start; the
 `since` each run was walked under is recorded in `sync_scope_config`
-so the widening is detected rather than guessed from the cursors.
-Narrowing it changes nothing already stored.
+(`datalib_etl::scope_config`) so the widening is detected rather than
+guessed from the cursors. Narrowing it changes nothing already stored.
 
 ### What makes a record look changed
 
-Nothing has been declared volatile yet. Measured on the live account
-above: two runs a minute apart over the same five days changed no
-`garmin_daily` row (`dolt_diff_stat` between the two run commits is
-empty for the table and reports 100 modified rows for its bookkeeping
-sidecar, one per re-fetched day), so the per-day payloads at least
-carry no per-fetch stamp. A `lastSyncTimestampGMT` on a device
-row will move as the watch syncs; whether anything else churns is
-still to be measured against an account with a watch on it. The etl
-README's rule applies: a volatile field carries no information, and a
-field that only *looks* like noise is not one.
+No field is declared volatile. Two runs a minute apart over the same
+days changed no `garmin_daily` row (only its bookkeeping sidecar), so
+the per-day payloads carry no per-fetch stamp. A device row's
+`lastSyncTimestampGMT` moves as the watch syncs; whether anything else
+churns has not been measured on an account with a watch.
 
 ## What the provider deliberately does not do
 
@@ -186,7 +188,8 @@ field that only *looks* like noise is not one.
   endpoints, and no per-activity splits, weather or zone breakdowns
   beyond what the detail record carries. Each is one more entry in
   `DAILY_METRICS` or `ITEM_KINDS` when somebody wants it.
-- Only `weigh_ins` are rendered so far; see `../garmin_render/TRANSLATE.md`.
+- Only the weigh-ins and devices are rendered; see
+  [`../garmin_render/TRANSLATE.md`](../garmin_render/TRANSLATE.md).
 - `garmin.cn` accounts are reachable (`login --domain garmin.cn`, and
   the token records its domain) but untested.
 
@@ -208,7 +211,7 @@ field that only *looks* like noise is not one.
   synthesizer writes the weight and activity fixtures for the windows a
   first run and a second run with `refresh_days = 7` ask for; a
   playback run with another value misses.
-- **Verified against one live account (2026-09-14), but a thin one.**
+- **Verified against one live account, but a thin one.**
   Every endpoint answered with the shape the reference code predicts,
   and the weigh-in columns were checked against real manual entries
   (`samplePk`, `weight` in grams, `timestampGMT`, `sourceType`). That

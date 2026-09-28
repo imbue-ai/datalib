@@ -1,58 +1,34 @@
 # GitLab Translate
 
-`gitlab-translate` reads the event-store JSONL written by
-`gitlab-ingest` and emits **one markdown document per merge request**,
-plus that document's `grid_rows`.
+The render step for a `gitlab` source reads the raw store `gitlab-ingest`
+writes and emits **one markdown document per merge request**, plus that
+document's `grid_rows`. The document and its rows are the shared forge
+shape GitHub uses, described in
+[`../github_render/TRANSLATE.md`](../github_render/TRANSLATE.md); this
+crate reads the raw tables into it (`src/render/parse.rs`) and sets the
+GitLab `ForgeProfile` (`src/render/mod.rs`). What differs:
 
 ```
-<root>/<stanza>/render_markdown/<namespace>/<project>/mr-<iid>__<slug>/
-    index.md                # the unified MR doc
-<root>/<stanza>/render_markdown/indexed_markdown.doltlite_db
-                            # its rows: one for the MR + one per note
+<root>/<source_id>/render_markdown/<namespace>/<project>/mr-<iid>/index.md
 ```
 
-## Markdown layout
+- **Front matter** names the MR `project` and `mr_iid`, and its refs
+  `source_branch` and `target_branch`.
+- **Title** is `{title} (!{iid})`.
+- **No Reviews section.** Each discussion is unrolled into its notes.
+  A note with a diff position (`new_path`, else `old_path`) in a
+  discussion that is not an `individual_note` goes under **Inline
+  comments**, grouped by `(path, line)`; every other note is **General
+  discussion**. Every note after a discussion's first is shown as a
+  reply to it. Permalinks are `{mr.web_url}#note_{id}`.
+- **`system: true` notes are dropped** — label changes, draft toggles
+  and the like are GitLab's audit log, not conversation.
+- **Rows**: the MR's own row is `kind = "GitLab MR"`; a note's is
+  `"GitLab Discussion Note"` or `"GitLab Inline Note"`.
 
-1. **Front matter** — provider, project, mr_iid, title, state, author,
-   head/base sha, source/target branches, timestamps.
-2. **Title** — `# {title} (!{iid})` + a "View on GitLab" link + one-line
-   `*{state}* — @{author} — \`{source}\` → \`{target}\``.
-3. **Description** — `merge_request.description` as-is.
-4. **General discussion** — discussions with `individual_note: true` or
-   no `position`, sorted by note `created_at`. Permalinks to
-   `{mr.web_url}#note_{id}`.
-5. **Inline comments** — discussions with a `position` (diff-anchored),
-   grouped by `(position.new_path, position.new_line)`. Replies stay
-   with their parent because every note in a GitLab discussion already
-   carries the same position.
-
-`system: true` notes (label add/remove, WIP toggles, etc.) are dropped
-— they're git audit log, not conversation.
-
-## Rows
-
-Same `RenderedMarkdown { markdown_uuid, rows, .. }` shape as the
-other providers:
-
-- `markdown_uuid` — `datalib_id` over `{project}#{iid}` under the
-  configured source, stamped with the MR's `created_at`. Re-renders
-  that didn't change content produce an identical row set, so the
-  store's commit carries no diff for them.
-- `rows[0]` — the MR row (kind = "GitLab MR").
-- `rows[1..]` — one row per surviving note (General first, then
-  Inline-by-`(path, line)`). `message_index` indexes within the doc;
-  all rows share `qmd_path`, `conversation_uuid`, and `document_uuid`.
-
-## Run it
-
-The translate step is an in-process library (the `render_and_index_md`
-module, called from `datalib-sync`); there is no standalone
-`gitlab-translate` binary and no Bazel target for it. Run a sync to
-exercise it, and rendered docs land under
-`/tmp/gitlab-mirror/<stanza>/render_markdown/...`.
-
-To exercise the renderer in isolation, run its tests:
+## Tests
 
 ```sh
-bazelisk test //datalib/backend/etl/providers/gitlab:gitlab_unittests
+bazelisk test //datalib/backend/etl/providers/gitlab_render:gitlab_render_unittests \
+    //datalib/backend/etl/providers/gitlab:gitlab_tests
 ```

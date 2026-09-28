@@ -5,21 +5,19 @@ playlists, records what each file is, hoists the metadata worth
 querying into typed columns, and computes a second hash over the part
 of each file that is not metadata.
 
-This document covers what's load-bearing and provider-specific. For the
-framework contracts every provider honors — schema-first, bulk-upsert
-chokepoints, commit lifecycle, what a reset does — see
+Row shapes are in [`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs);
+the contracts every provider honors are in
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
-For the row shapes, see
-[`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs).
 
 ## Relationship to `fsindex` and `pdf`
 
-Three providers now scan local trees, and they share the primitives that
-make that fast and correct — blake3 leaf hashing and Unison's
-`(mtime, size, inode, dev)` rescan cursor — via
-[`datalib_etl::fswalk`](/datalib/backend/etl/src/fswalk.rs). That module
-was factored out of `fsindex` when `pdf` needed a second copy; this
-provider is its third user and adds nothing to it.
+All three scan a local tree. `media` and `pdf` walk it through
+[`datalib_etl::fsscan`](/datalib/backend/etl/src/fsscan.rs), which
+hashes only what the host-wide fingerprint cache cannot vouch for
+(`etl/README.md` §"Answering "did it change?" for a file-backed
+source"); `fsindex` has its own walker over the same blake3 and
+Unison-cursor primitives in
+[`datalib_etl::fswalk`](/datalib/backend/etl/src/fswalk.rs).
 
 They are separate **sources** because they answer different questions:
 
@@ -38,15 +36,11 @@ They are separate **sources** because they answer different questions:
 "Download-only" is structural — `processor::plan_render` returns no
 processors — not a flag.
 
-There is no text to render. The obvious thing to build would be a small
-metadata card per item so the qmd index could answer "photos from the
-Yosemite trip", but that decision was deliberately deferred, for two
-reasons. The cheap one: `pdf` renders thousands of documents and a photo
-library is 10⁵–10⁶ items, so the qmd index cost at that scale is an
-unmeasured risk and should be measured before it is taken. The real one:
-a grid of text rows is the wrong surface for this data. It wants
-thumbnails, a map, a time scrubber and an album view — a UI of its own,
-which is separate work.
+There is no text to render. A small metadata card per item would let
+the qmd index answer "photos from the Yosemite trip", but it is not
+built, for two reasons: the qmd index's cost at 10⁵–10⁶ items is
+unmeasured, and a grid of text rows is the wrong surface for this data,
+which wants thumbnails, a map, a time scrubber and an album view.
 
 Nothing here reaches `grid_rows`. Query the store directly; see
 §"Inspecting a scan".
@@ -84,14 +78,11 @@ later is a pure addition: the work list is already a query
 
 ### It is a hint, never a key
 
-Same posture as `pdf`'s `content_blake3`, and for the same reason.
 Re-encode a JPEG at the same quality, run an MP3 through a different
 LAME build, let `optipng` recompress an `IDAT`, and the payload hash
 moves although nothing you can see or hear changed. It **splits where it
-ideally would have merged**.
-
-That direction is chosen: *a false split costs a duplicate row, where a
-false merge would hide a file.* The primary key stays `blake3(bytes)`.
+ideally would have merged** — the direction `pdf`'s `content_blake3`
+takes, for the same reason — so the primary key stays `blake3(bytes)`.
 
 Three rules follow, all load-bearing:
 
@@ -197,8 +188,8 @@ non-audio file, or every video would get a `media_audio` row for the
 sound track inside it and bury the music.
 
 Choosing by container is also what keeps the cost down: a photo library
-no longer opens every JPEG to ask a tag reader a question whose answer
-is always no.
+does not open every JPEG to ask a tag reader a question whose answer is
+always no.
 
 ## Extension decides what to visit; bytes decide what it is
 
@@ -239,13 +230,10 @@ SELECT e.position, e.target_raw, f.blake3
  WHERE e.playlist_id = ? ORDER BY e.position;
 ```
 
-An earlier version stored `resolved_blake3` and a `resolved_count`, and
-both were wrong for the same reason: they are cached join results. They
-cost one database round-trip per entry at scan time, and they go stale
-the moment a track is added or removed without the playlist being
-rescanned — so a playlist would keep claiming a song was missing after
-you restored it. The join is always current and costs nothing to keep
-that way. The step still reports `entries_in_tree=`, which is a fact
+A stored resolved hash or count would be a cached join result: it
+goes stale the moment a track is added or removed without the playlist
+being rescanned, so a playlist would keep claiming a song was missing
+after you restored it. The join is always current. The step still reports `entries_in_tree=`, which is a fact
 about the playlist *text* (how many entries name somewhere inside the
 tree at all) rather than about the disk.
 
@@ -294,12 +282,13 @@ reaching it means a `libc` dependency, which has not seemed worth it.
 iCloud's eviction markers need no handling: they are named
 `.track.mp3.icloud`, so the extension filter never visits them.
 
-## Timestamps: one deviation from the repo convention
+## Capture times are stored as the file wrote them
 
-AGENTS.md requires every stored timestamp to carry its source's UTC
-offset. EXIF's `DateTimeOriginal` has none — it is local wall-clock with
-no zone, and the offset only arrived with EXIF 2.31's
-`OffsetTimeOriginal`, which most cameras still omit.
+A stamp that belongs to the record stays as the source wrote it
+(AGENTS.md §"Timestamp convention"). EXIF's `DateTimeOriginal` has no
+offset — it is local wall-clock with no zone, and the offset only
+arrived with EXIF 2.31's `OffsetTimeOriginal`, which most cameras still
+omit.
 
 So `media_visual.captured_at` carries an offset **when the file supplies
 one** and is naive (`2364-04-13T08:45:00`) when it does not. The
@@ -335,56 +324,43 @@ differencing `DateTimeOriginal` against the UTC `GPSDateStamp` /
 
 ## What a rescan skips, and what it does not
 
-The Unison cursor short-circuits **files**, not directories. Every scan
-walks the whole tree and `stat`s every entry it would index; what it
-skips for an unchanged file is the `read` — and with it the container
-parse, the payload hash and the metadata extraction, which is all of the
-expensive work. A settled tree reports `hashed=0`.
+The fingerprint cache short-circuits **files**, not directories. Every
+scan walks the whole tree and `stat`s every entry it would index; what it
+skips for a file whose stat is unchanged is the `read`. Content already
+in `media_items` is not identified again, so the container parse, the
+payload hash and the metadata extraction — all of the expensive work —
+run once per distinct content. A settled tree reports `hashed=0`.
 
-There is no directory-level short-circuit. `fsindex` has one, built on
-tree-hashing directories into a Merkle structure, and that machinery
-deliberately stayed in `fsindex` when [`fswalk`](/datalib/backend/etl/src/fswalk.rs)
-was factored out: a document provider hashes leaves and stops. So a
-million-file library costs a million `stat` calls per scan — cheap
-(a few seconds) but not zero, and worth knowing before pointing this at
-a tree an order of magnitude larger than that.
+There is no directory-level short-circuit; that is `fsindex`'s Merkle
+tree, and a document provider hashes leaves and stops. So a million-file
+library costs a million `stat` calls per scan — cheap (a few seconds)
+but not zero.
 
 `a_rescan_after_edits_changes_exactly_what_it_should` in
 `tests/media_e2e.rs` pins the accounting: six kinds of edit — a retag, a
 touch-without-edit, a duplicate copy, a new file, a deletion, and a
-shortened playlist — followed by a rescan that reads exactly four files
+shortened playlist — followed by a rescan that hashes exactly five files
 and identifies exactly two new items.
 
 ## Interrupting a scan
 
 The path-keyed tables are reconciled at the **end** of a scan, not
-truncated at the start, and that ordering is the one place this provider
-deliberately departs from `fsindex` and `pdf`.
-
-Truncating up front is simpler and lets deletions fall out for free, but
-it means a scan killed halfway has already thrown away the rescan
-cursors for every file it had not reached — so the next run re-reads
-those files from disk although nothing changed. On a library measured in
-terabytes that is the difference between resuming a scan and restarting
-one.
-
-So nothing is deleted up front. The walk *consumes* the in-memory cache
-— each visited path is removed from it — and whatever remains at the end
-is exactly the set of paths that disappeared. Those rows are deleted by
-id, and the count lands in the step's `removed=` summary.
+truncated at the start as `pdf` does. The scan loads the stored paths
+first; each visited path is taken out of that set, and whatever remains
+at the end is exactly the set of paths that disappeared. Those rows are
+deleted by id, and the count lands in the step's `removed=` summary.
 
 Two things follow:
 
-- **A killed scan keeps its cursors.** A stale `(mtime, size, inode,
-  dev)` is exactly as good a cursor as a fresh one. Only the rows in the
-  unflushed batch — at most `BATCH_SIZE` — are lost. Pinned by
+- **A killed scan deletes nothing.** The path table keeps every row it
+  had, plus the batches the scan flushed (`BATCH_SIZE` rows each), and
+  the next scan reads no bytes for unchanged files. Pinned by
   `a_failed_scan_leaves_the_rescan_cursors_intact` in
   `tests/media_e2e.rs`, which induces the failure with a malformed
-  ignore glob and asserts the next scan reads no bytes.
-- **The staleness window flips direction.** After an interrupted run,
-  rows for since-deleted files linger until a scan completes. That is
-  the safe half of the trade: a row that outlives its file is corrected
-  by the next full scan, where a discarded cursor is a file re-read.
+  ignore glob.
+- **Rows for since-deleted files linger** after an interrupted run,
+  until a scan completes. A row that outlives its file is corrected by
+  the next full scan.
 
 Reconciliation is a **set difference, not a timestamp sweep**. The
 simpler `DELETE … WHERE last_seen_at <> <this run>` looks equivalent and
@@ -414,8 +390,8 @@ dropping them would lose when the item was first seen
 item whose path merely moved.
 
 So deleting the last copy of an item leaves an unreferenced
-`media_items` row. That is deliberate for now: the row is cheap and it
-preserves the record that the item was once here. Reaping them is a
+`media_items` row, deliberately: the row is cheap and it preserves the
+record that the item was once here. Reaping them is a
 `DELETE … WHERE blake3 NOT IN (SELECT blake3 FROM media_files)` whenever
 we want it — noting that doing so discards history a `dolt_diff` would
 otherwise still show. Pinned by
@@ -432,33 +408,22 @@ otherwise still show. Pinned by
 - **No keyword extraction, and no column pretending otherwise.**
   Keywords live in IPTC or XMP, not in the EXIF IFD, so
   `kamadak-exif` cannot reach them — it does not even expose the
-  Windows `XPKeywords` tag. An earlier revision of this provider
-  declared a `keywords` column and threaded it through the row struct
-  without ever assigning it, which is worse than not having it: a
-  column that is structurally always NULL reads as "this library has no
-  keywords". Getting them needs an XMP reader, which is real work and
-  is not done.
-- **Nothing in CI exercises the step-invocation path.** The e2e suite
-  calls `ingest::fetch` directly, so `processor.rs` and the
-  `RawStoreSession` commit around it are covered only by hand-running
-  `datalib-dag`. Render-side providers get that path free from the
-  `ingested_tng` fixture pipeline; download-only ones are not in it, so
-  `fsindex`, `lightroom` and `media` share this gap.
+  Windows `XPKeywords` tag. A column that is structurally always NULL
+  would read as "this library has no keywords". Getting them needs an
+  XMP reader.
+- **Nothing in CI runs the step.** The e2e suite calls `ingest::fetch`
+  directly, so `processor.rs` and the `RawStoreSession` commit around it
+  are covered only by hand-running `datalib-dag`; the `ingested_tng`
+  fixture pipeline runs only sources that render.
   `download_only_sources_plan_a_download_and_no_render` in
-  `datalib_step/src/dispatch.rs` covers the config and planning half of
-  it; actually running the subprocess is still unautomated.
+  `datalib_step/src/dispatch.rs` covers the config and planning half.
 - **`skip_dataless` is not exercised by any test.** Constructing a
   cloud placeholder in a hermetic sandbox means making a file whose
   `st_blocks` is zero, which is filesystem-dependent. The guard is
   simple and the counter makes its effect visible at runtime, but it has
   never been observed firing.
-- **Per-track digests are not stored.** They are computed to build the
-  file's payload hash and then discarded, so "which files share this
-  audio track?" is not a query yet. A `media_streams` table keyed on
-  `(item, track_id)` is what it would take.
 - **A scan interrupted before its first flush loses that batch**, up to
-  `BATCH_SIZE` files. Everything already flushed survives — see
-  §"Interrupting a scan".
+  `BATCH_SIZE` files. Everything already flushed survives.
 
 ## Inspecting a scan
 
@@ -526,12 +491,9 @@ $dl $db "SELECT diff_type, from_id, to_id FROM dolt_diff_media_files
 
 `tests/fixtures/media_tng/` is generated by
 [`//tests/fixtures/make_media_fixtures.py`](/tests/fixtures/make_media_fixtures.py)
-— hand-built bytes rather than encoder output, so the files stay
-reviewable and byte-deterministic (their blake3s are the provider's
-primary keys, so drift there would churn every assertion). The generator
-lives under `tests/fixtures/` rather than beside this provider because
-that is a Python lint root and a provider directory is not — same reason
-`make_pdf_fixtures.py` sits there. Regenerate with:
+— hand-built bytes rather than encoder output, for the reasons
+[`../pdf/INGEST.md`](../pdf/INGEST.md) §"Fixtures" gives for its own
+generator. Regenerate with:
 
 ```sh
 uv run python tests/fixtures/make_media_fixtures.py
@@ -545,14 +507,13 @@ hold *both* kinds of metadata: `holodeck_clip.mp4` (a music video with
 with a recording date), which are what caught the class-chosen reader
 dropping half of each.
 
-Building those two was itself instructive. `lofty` refuses a BMFF file
-outright — "failed to parse Mp4 file", no further detail — if its
-`stsd` sample entry is a stub rather than a real 28-byte
-`AudioSampleEntry`, or if `mdia` has no `hdlr` atom naming the track
-`soun`. Our own parser needs neither (it reads the four-CC and groups by
-`tkhd` track id), so a fixture that satisfied us said nothing about
-whether the library under test could read it. It also carries a byte-identical
-copy in a second folder, an untagged file that must land on the same
+`lofty` refuses a BMFF file outright — "failed to parse Mp4 file", no
+further detail — if its `stsd` sample entry is a stub rather than a
+real 28-byte `AudioSampleEntry`, or if `mdia` has no `hdlr` atom naming
+the track `soun`. Our own parser needs neither, so a fixture has to
+satisfy `lofty` too.
+
+The corpus also carries a byte-identical copy in a second folder, an untagged file that must land on the same
 payload hash as its tagged sibling, a truncated MP3, a file whose
 extension we index and whose bytes we cannot parse, an HLS manifest
 wearing the `.m3u8` extension, a Latin-1 playlist, and a `readme.txt`

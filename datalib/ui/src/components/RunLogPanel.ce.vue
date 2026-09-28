@@ -326,13 +326,15 @@ async function load(fresh: boolean) {
         else bundle!.slickGrid.scrollRowIntoView(got.length - 1);
       } else if (fresh) {
         bundle.dataset = got;
-        atBottom = true;
         bundle.slickGrid.scrollRowIntoView(got.length - 1);
       } else {
         // Appended rather than handed over as a new dataset, which would
         // redraw every row and lose the scroll; only the rows the new
         // lines move are redrawn.
         const { slickGrid, dataView } = bundle;
+        // Follow the tail only while the reader is already at it: a
+        // scroll up to read something must not be yanked back down.
+        const follow = atBottom(slickGrid);
         keepActiveOnRecord(slickGrid, dataView, () => {
           redrawChanged(slickGrid, dataView, () => {
             dataView.beginUpdate();
@@ -340,9 +342,7 @@ async function load(fresh: boolean) {
             dataView.reSort();
             dataView.endUpdate();
           });
-          // Follow the tail only while the reader is already at it: a
-          // scroll up to read something must not be yanked back down.
-          if (atBottom) slickGrid.scrollRowIntoView(slickGrid.getDataLength() - 1);
+          if (follow) slickGrid.scrollRowIntoView(slickGrid.getDataLength() - 1);
         });
       }
     } else if (fresh && bundle) {
@@ -383,11 +383,16 @@ function jumpToEnd(lines: RunLogLine[]) {
   grid.render();
 }
 
-let atBottom = true;
-function onScroll(_e: unknown, args: { grid: SlickGrid }) {
-  const vp = args.grid.getViewportNode();
-  if (!vp) return;
-  atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
+/// Read off the viewport when asked, not kept from the last scroll
+/// event: the grid hears a scroll a frame after it happens, later still
+/// on a busy page, and a line arriving in between would pull a reader
+/// who had just scrolled up back down to the end.
+function atBottom(grid: SlickGrid): boolean {
+  const vp = grid.getViewportNode();
+  return !vp || vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 2 * ROW_HEIGHT;
+}
+
+function onScroll() {
   void loadOlder();
 }
 

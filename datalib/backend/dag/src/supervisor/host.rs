@@ -223,6 +223,19 @@ mod tests {
         }
     }
 
+    fn spawn_host(
+        store: &std::sync::Arc<Store>,
+        mut fake: Fake,
+        mut stop: watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let mut listener =
+                Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
+            run_idle(&store, &mut listener, &mut fake, &mut stop).await;
+        })
+    }
+
     /// Each call `run_idle` makes, in order, bar the idle turns: those
     /// come once per wake, and how many wakes a burst of announcements
     /// makes is not the host's to promise. A busy period holds until
@@ -285,22 +298,15 @@ mod tests {
         let release = Arc::new(tokio::sync::Notify::new());
         let nudge = Arc::new(tokio::sync::Notify::new());
         let queued = Arc::new(AtomicBool::new(false));
-        let (stop_tx, mut stop) = watch::channel(false);
-        let mut fake = Fake {
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
             calls: tx,
             release: release.clone(),
             nudge: nudge.clone(),
             queued: queued.clone(),
             turn_off_in_settle: None,
         };
-        let host = {
-            let store = store.clone();
-            tokio::spawn(async move {
-                let mut listener =
-                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
-                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
-            })
-        };
+        let host = spawn_host(&store, fake, stop);
         let mut next = async |want: &str| expect(&mut calls, want).await;
         next("settle []").await;
 
@@ -335,22 +341,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(root.path()).await.unwrap());
         let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
-        let (stop_tx, mut stop) = watch::channel(false);
-        let mut fake = Fake {
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
             calls: tx,
             release: Arc::new(tokio::sync::Notify::new()),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
             turn_off_in_settle: None,
         };
-        let host = {
-            let store = store.clone();
-            tokio::spawn(async move {
-                let mut listener =
-                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
-                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
-            })
-        };
+        let host = spawn_host(&store, fake, stop);
         expect(&mut calls, "settle []").await;
         announce(&listeners_dir(root.path()), "test", CONFIG_CHANGED);
         expect(&mut calls, "settle []").await;
@@ -371,22 +370,15 @@ mod tests {
         let other = Store::open(root.path()).await.unwrap();
         let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
         let release = Arc::new(tokio::sync::Notify::new());
-        let (stop_tx, mut stop) = watch::channel(false);
-        let mut fake = Fake {
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
             calls: tx,
             release: release.clone(),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
             turn_off_in_settle: None,
         };
-        let host = {
-            let store = store.clone();
-            tokio::spawn(async move {
-                let mut listener =
-                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
-                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
-            })
-        };
+        let host = spawn_host(&store, fake, stop);
         let mut next = async |want: &str| expect(&mut calls, want).await;
         next("settle []").await;
         other.turn_off("a/x", "ui").await.unwrap();
@@ -415,22 +407,15 @@ mod tests {
         let store = Arc::new(Store::open(root.path()).await.unwrap());
         let other = Store::open(root.path()).await.unwrap();
         let (tx, mut calls) = tokio::sync::mpsc::unbounded_channel();
-        let (stop_tx, mut stop) = watch::channel(false);
-        let mut fake = Fake {
+        let (stop_tx, stop) = watch::channel(false);
+        let fake = Fake {
             calls: tx,
             release: Arc::new(tokio::sync::Notify::new()),
             nudge: Arc::new(tokio::sync::Notify::new()),
             queued: Arc::default(),
             turn_off_in_settle: Some("a/x"),
         };
-        let host = {
-            let store = store.clone();
-            tokio::spawn(async move {
-                let mut listener =
-                    Listener::new(&store, "test").backstop(std::time::Duration::from_secs(3600));
-                run_idle(&store, &mut listener, &mut fake, &mut stop).await;
-            })
-        };
+        let host = spawn_host(&store, fake, stop);
         let mut next = async |want: &str| expect(&mut calls, want).await;
         // The first settle looked at no switches and recorded `a/x` off.
         next(r#"settle ["a/x"]"#).await;

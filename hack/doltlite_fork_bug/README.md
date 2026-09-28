@@ -17,14 +17,14 @@ until the child exits.
 
 ## What this reproducer does
 
-`fork_vs_db.c` is a 100-line C program that runs two pthreads:
+`fork_vs_db.c` is a short C program that runs two pthreads:
 
 - **Writer thread**: in a tight loop, `INSERT`s a row through a
   persistent prepared statement, counting `SQLITE_BUSY` returns.
 - **Forker thread**: in a tight loop, `posix_spawn`s `/bin/sleep 0.05`.
   This is exactly the syscall shape Rust's `std::process::Command::spawn()`
-  uses on macOS — and what datalib-sync's `latchkey_curl` HTTP
-  transport does on every HTTPS call.
+  uses on macOS — and what `datalib_etl::http::latchkey_curl` does on
+  every live HTTPS call.
 
 `run.sh` downloads both amalgamations fresh from their canonical
 upstream URLs (verifying sha256), then compiles this same source file
@@ -113,6 +113,13 @@ In order of cost vs. completeness:
    unrelated reasons.
 
 ## Environment
+
+Reproduced against doltlite v0.11.5. `run.sh` fetches that release, not
+the pinned one (`DOLTLITE_VERSION` in `third-party/doltlite/BUILD.bazel`);
+to check a later doltlite, point `DL_URL` and its sha256 in `run.sh` at
+that release. `datalib/backend/etl/tests/doltlite_two_process.rs` still
+relies on this behaviour (its coordinator opens no store so it cannot
+leak the lock into its children).
 
 - macOS (builds with any system clang on any recent macOS or Linux
   with pthread).

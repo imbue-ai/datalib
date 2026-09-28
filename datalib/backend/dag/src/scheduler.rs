@@ -904,6 +904,29 @@ mod tests {
         .input(input)
     }
 
+    // Reads whatever `slack/raw` has written and reports a version derived
+    // from it, so an early pass over a new batch is new output.
+    fn copying_middle() -> StepSpec {
+        StepSpec::new(
+            "slack/rendered",
+            StepRun::in_process(move |ctx: StepCtx| async move {
+                let dir = ctx.path_str(&ctx.step_id);
+                std::fs::create_dir_all(&dir).unwrap();
+                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
+                    .unwrap_or_default();
+                std::fs::write(dir.join("out.txt"), &read).unwrap();
+                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
+                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
+                Ok(StepOutcome {
+                    outputs: vec![ArtifactState::versioned(&pat, version)],
+                    exit: None,
+                })
+            }),
+        )
+        .input("slack/raw")
+        .streams_output()
+    }
+
     /// A step that finishes on the version it last sealed moves nothing, so
     /// the consumer that read that seal does not run a second time. The
     /// loop compares the strings, so a step spells one version one way on
@@ -1126,26 +1149,7 @@ mod tests {
             )
             .streams_output()
         };
-        // Reads whatever the producer has written and reports a version
-        // derived from it, so an early pass over a new batch is new output.
-        let middle = StepSpec::new(
-            "slack/rendered",
-            StepRun::in_process(move |ctx: StepCtx| async move {
-                let dir = ctx.path_str(&ctx.step_id);
-                std::fs::create_dir_all(&dir).unwrap();
-                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
-                    .unwrap_or_default();
-                std::fs::write(dir.join("out.txt"), &read).unwrap();
-                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
-                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
-                Ok(StepOutcome {
-                    outputs: vec![ArtifactState::versioned(&pat, version)],
-                    exit: None,
-                })
-            }),
-        )
-        .input("slack/raw")
-        .streams_output();
+        let middle = copying_middle();
         let graph = Graph::build(vec![
             producer,
             middle,
@@ -1222,24 +1226,7 @@ mod tests {
             )
             .streams_output()
         };
-        let middle = StepSpec::new(
-            "slack/rendered",
-            StepRun::in_process(move |ctx: StepCtx| async move {
-                let dir = ctx.path_str(&ctx.step_id);
-                std::fs::create_dir_all(&dir).unwrap();
-                let read = std::fs::read_to_string(ctx.path_str("slack/raw").join("data.txt"))
-                    .unwrap_or_default();
-                std::fs::write(dir.join("out.txt"), &read).unwrap();
-                let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
-                let version = blake3::hash(read.as_bytes()).to_hex().to_string();
-                Ok(StepOutcome {
-                    outputs: vec![ArtifactState::versioned(&pat, version)],
-                    exit: None,
-                })
-            }),
-        )
-        .input("slack/raw")
-        .streams_output();
+        let middle = copying_middle();
         let graph = Graph::build(vec![
             producer,
             middle,

@@ -43,9 +43,9 @@ pub struct FetchOptions {
     /// Override for the Beeper Texts data directory. Defaults to
     /// [`default_beeper_data_dir`].
     pub beeper_data_dir: Option<PathBuf>,
-    /// Download cached media bytes into the `blobs` table. When
-    /// false, blob rows are pre-seeded with metadata + source URL
-    /// only.
+    /// Copy cached media bytes into the blob CAS. When false, each
+    /// attachment still gets its `beeper_media_attachments` edge, with
+    /// a NULL `blake3`.
     pub media: bool,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).

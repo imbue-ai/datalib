@@ -11,6 +11,8 @@ use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl_macros::RawTable;
 use sqlx::{Sqlite, Transaction};
 
+use super::parse::Sample;
+
 pub const DATA_TABLES: &[&str] = &[
     "airvisual_devices",
     "airvisual_samples",
@@ -88,18 +90,7 @@ pub const SAMPLE_MEASUREMENTS: &[&str] = &[
 pub struct AirvisualSampleRow {
     /// The device's serial — `airvisual_devices.id`.
     pub device_id: String,
-    pub ts_ms: i64,
-    pub pm25_ugm3: Option<f64>,
-    pub pm10_ugm3: Option<f64>,
-    pub pm1_ugm3: Option<f64>,
-    pub aqi_us: Option<f64>,
-    pub aqi_cn: Option<f64>,
-    pub outdoor_aqi_us: Option<f64>,
-    pub outdoor_aqi_cn: Option<f64>,
-    pub temperature_c: Option<f64>,
-    pub humidity_pct: Option<f64>,
-    pub co2_ppm: Option<f64>,
-    pub voc_ppb: Option<f64>,
+    pub sample: Sample,
     /// The history file this row was last read from, relative to the
     /// export path — which of a `corrupt_` / `restored_` pair won.
     pub source_file: String,
@@ -134,18 +125,18 @@ pub async fn upsert_samples(
         for r in chunk {
             q = q
                 .bind(&r.device_id)
-                .bind(r.ts_ms)
-                .bind(r.pm25_ugm3)
-                .bind(r.pm10_ugm3)
-                .bind(r.pm1_ugm3)
-                .bind(r.aqi_us)
-                .bind(r.aqi_cn)
-                .bind(r.outdoor_aqi_us)
-                .bind(r.outdoor_aqi_cn)
-                .bind(r.temperature_c)
-                .bind(r.humidity_pct)
-                .bind(r.co2_ppm)
-                .bind(r.voc_ppb)
+                .bind(r.sample.ts_ms)
+                .bind(r.sample.pm25_ugm3)
+                .bind(r.sample.pm10_ugm3)
+                .bind(r.sample.pm1_ugm3)
+                .bind(r.sample.aqi_us)
+                .bind(r.sample.aqi_cn)
+                .bind(r.sample.outdoor_aqi_us)
+                .bind(r.sample.outdoor_aqi_cn)
+                .bind(r.sample.temperature_c)
+                .bind(r.sample.humidity_pct)
+                .bind(r.sample.co2_ppm)
+                .bind(r.sample.voc_ppb)
                 .bind(&r.source_file);
         }
         q.execute(&mut **tx).await?;

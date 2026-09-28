@@ -2,11 +2,12 @@
 // click, and a shift-click to add a column, sort the whole search; a
 // column dropped on the search bar becomes a term there.
 
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import {
   actOnRowByUuid,
   firstRowUuid,
   gridSettled,
+  SEARCH_MENU,
   SEARCH_ROWS,
   searchHeader,
   searchMenuItem,
@@ -99,4 +100,33 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
   );
   expect(held.length).toBeGreaterThan(0);
   expect(new Set(held)).toEqual(new Set([created]));
+});
+
+/// The top row's right-click asks for the page above it, and the grid
+/// scrolls to hold that row in place when the page lands. The menu
+/// closed on any scroll of the grid, so a page that landed after the
+/// menu opened — as it does on a loaded runner — closed it before Keep
+/// only could be clicked. The page is held here until the menu is open.
+test("a page landing while the menu is open leaves it open", async ({ page }) => {
+  const held: Route[] = [];
+  let holding = true;
+  await page.route("**/applet/unified_index/search?**", (r) => {
+    const offset = Number(new URL(r.request().url()).searchParams.get("offset") ?? 0);
+    if (holding && offset > 0) held.push(r);
+    else void r.continue();
+  });
+  await openGrid(page);
+  const uuid = await firstRowUuid(page);
+  await actOnRowByUuid(
+    page,
+    uuid,
+    (row) => row.locator('[col-id="created_at"]').click({ button: "right", timeout: 3_000 }),
+    "created_at",
+  );
+  await expect(page.locator(SEARCH_MENU)).toBeVisible();
+  expect(held.length, "the page above the top row was asked for").toBeGreaterThan(0);
+  holding = false;
+  for (const r of held.splice(0)) await r.continue();
+  await gridSettled(page);
+  await expect(searchMenuItem(page, /Keep only Created=/)).toBeVisible();
 });

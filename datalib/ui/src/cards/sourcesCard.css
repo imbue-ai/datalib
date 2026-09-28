@@ -94,15 +94,6 @@
 }
 .m2-empty { color: var(--datalib-muted); font-size: 14px; margin-top: 16px; }
 
-/* The sparkline itself, shared by the size column and the status bar.
-   Unscoped along with the rest of this block because the cell renderers
-   build plain DOM.
-
-   `vector-effect: non-scaling-stroke` is load-bearing: the svg is
-   stretched from its 120-unit box to whatever the column is wide, and
-   without it the stroke stretches too — a 1px line drawn as an ellipse
-   two pixels wide horizontally and one vertically. */
-
 .m2-btn {
   padding: 2px 9px;
   border: 1px solid var(--datalib-border);

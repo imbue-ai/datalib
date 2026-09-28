@@ -1,7 +1,7 @@
-//! Provider-owned config schema for the `yolink` source (Program A goal #1).
-//! Schema-only (serde + anyhow), so the orchestrator can name `YolinkConfig`
-//! without linking the provider. Yolink is EXTRACT-ONLY (no render
-//! path); `api`, the live per-device CSV mirror, is its one way in.
+//! Provider-owned config schema for the `yolink` source. Schema-only
+//! (serde + anyhow), so the orchestrator can name `YolinkConfig` without
+//! linking the provider. `api`, the live per-device CSV mirror, is its
+//! one way in; the render (`yolink_render`) takes no knobs of its own.
 
 use datalib_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};

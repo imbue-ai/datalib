@@ -61,9 +61,9 @@ pub enum StampKind {
     /// filesystems), so only `(mtime, size)` are compared. Less safe,
     /// but it is Unison's own behavior on those filesystems.
     NoStamp,
-    /// "The previous run was interrupted mid-hash of this path." Forces
-    /// a rehash regardless of what the triple says. Set before opening
-    /// the file, cleared once the hash is durably written.
+    /// Forces a rehash regardless of what the triple says. Nothing
+    /// writes it; a stored `stamp_kind` this build does not recognise
+    /// reads as this ([`StampKind::from_str_or_rescan`]).
     Rescan,
 }
 

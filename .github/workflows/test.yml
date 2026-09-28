@@ -233,10 +233,11 @@ jobs:
       # dist build uses. On a `push` to main that warms exactly the
       # entries a tag-time release build will hit, because a main push
       # writes the *release* BuildBuddy org (see docs/dev/ci.md § "Two
-      # caches"); a PR run writes the contributor org, which the
-      # release never reads, so there the opt mode buys only the second
-      # thing: tests run against the same binaries we ship, which
-      # catches opt-mode-only behaviors before release.
+      # caches"), and the tests run against the same binaries we ship,
+      # so an opt-mode-only bug reds `main`. A PR run writes the
+      # contributor org, which the release never reads, and adds
+      # `pr-tests` (above), so our own crates build at opt-level 1: a
+      # PR's tests check correctness, not the shipped binaries.
       #
       # `--build_metadata=ROLE=CI` tags the invocation in the BuildBuddy
       # UI so CI runs are filterable from contributor invocations.

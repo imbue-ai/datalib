@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert;
 use datalib_etl::doltlite_raw::{self as dr};
-use datalib_etl_forge_ingest_common::prune_children;
+use datalib_etl_forge_ingest_common::{load_self_identity, prune_children, row_payload};
 
 use super::canonicalize::canonicalize_payload;
 use super::schema_raw::{
@@ -45,19 +45,7 @@ impl RawDb {
     }
 
     pub async fn load_self_identity(&self) -> Result<Option<Value>> {
-        // Audited: the only interpolation is a table name this handle
-        // chose -- a literal, or that literal behind `pinned_`.
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT json(payload) AS payload FROM {} \
-             WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
-            self.reads().table("self_identity")
-        )))
-        .fetch_optional(self.pool())
-        .await
-        .context("select self_identity")?;
-        let Some(row) = row else { return Ok(None) };
-        let payload: Option<String> = row.try_get("payload").ok();
-        Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+        load_self_identity(self.pool(), self.reads()).await
     }
 
     // ── merge_requests ──────────────────────────────────────────────
@@ -84,7 +72,7 @@ impl RawDb {
     // ── loads ───────────────────────────────────────────────────────
 
     pub async fn load_merge_requests(&self) -> Result<Vec<LoadedMergeRequest>> {
-        // Audited: as `load_self_identity`.
+        // Audited: the only interpolation is a table name this handle chose.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
@@ -95,11 +83,7 @@ impl RawDb {
         .context("select merge_requests")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let payload_str: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            let Some(payload) = row_payload(&r) else {
                 continue;
             };
             out.push(LoadedMergeRequest {
@@ -113,7 +97,7 @@ impl RawDb {
     }
 
     pub async fn load_discussions(&self) -> Result<Vec<LoadedDiscussion>> {
-        // Audited: as `load_self_identity`.
+        // Audited: the only interpolation is a table name this handle chose.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
@@ -124,11 +108,7 @@ impl RawDb {
         .context("select discussions")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let payload_str: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            let Some(payload) = row_payload(&r) else {
                 continue;
             };
             out.push(LoadedDiscussion {

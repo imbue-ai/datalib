@@ -2,8 +2,10 @@
 
 Everything a provider needs but should not re-invent: the doltlite-backed
 raw store (`doltlite_raw.rs`, `bulk.rs`), the blob CAS (`blob_cas.rs`), the
-render cursor, the local-tree walker (`fswalk.rs`), and the HTTP/auth
-plumbing under `http.rs`.
+diff scan a render cursor drives (`doltlite_raw::scan_buckets`), the
+local-tree walker and scanner (`fswalk.rs`, `fsscan.rs`), and the HTTP/auth
+plumbing (`http.rs`, `latchkey.rs`). The render side's shared code is
+`render/`.
 
 Provider-specific code does **not** belong here. A provider crate lives in
 `providers/<name>/` and describes only its own tables and its own upserts.
@@ -144,8 +146,8 @@ concurrent `acquire` can decrement it first and wrap it to
 [#3645](https://github.com/launchbadge/sqlx/issues/3645), fixed after
 0.9.0 by #4289). The task never leaves that poll, and dropping the tokio
 runtime waits on its worker forever — a step that has reported its
-outcome and will not exit. That was `render_contract_test`'s CI-only
-stall. `lint_repo.py` check 12 refuses a pool built any other way.
+outcome and will not exit. `lint_repo.py` check 12 refuses a pool
+built any other way.
 
 ### One writer per file, by construction
 
@@ -200,7 +202,7 @@ Doltlite's working set belongs to a *branch* and lives in the file, so
 two connections on `main` share one working set the way two people
 editing one git checkout share a working tree. That is why a second
 writer's `dolt_commit('-Am', …)` captures the first's in-flight rows,
-and it is why a reader on `main` used to see a writer's uncommitted
+and why a reader on the writer's branch would see its uncommitted
 batch — including tables the writer had created but not committed.
 
 So a writer does not work on `main`. `connect_pool` puts every
@@ -271,8 +273,8 @@ next `open` finishes it.
 Two things deliberately stay off this path. `fsindex` keeps one branch
 per scan root and publishes none of them — the reserved branch name is
 the signal, so a connection on any other branch seals without touching
-`main`. And `core/app_store.rs` opens plain sqlx pools, so it never
-enters the scheme at all.
+`main`. And the app stores in `core` open plain sqlx pools
+(`core/src/store.rs`), so they never enter the scheme at all.
 
 `publish_to_main` is public for the one shape `commit_run` cannot
 express: a commit needing an argument of its own, such as the `--date`
@@ -494,7 +496,9 @@ sync_scope_state`) when the change alters what the cursor means. The
 test for a rung is always the same shape: build the store at
 `version - 1` by hand, open with the ladder, assert the rows —
 `app_store.rs`'s `a_store_from_before_the_utc_columns_is_migrated_on_open`
-is the template, and `app_store_migrate.rs` the one ladder in the tree.
+is the template. No provider has a ladder yet; the tree's only rungs
+are the app stores' (`core/src/app_store_migrate.rs`), which
+`AppStore::open` applies itself rather than through `open_migrating`.
 
 The two-pass order is load-bearing. An index over a column introduced by
 a later schema change cannot be created against an older store, so a
@@ -508,9 +512,9 @@ and the table would stay empty until upstream changed, with nothing
 saying why. So either clears every store-wide cursor
 (`sync_scope_state`, `sync_scope_config`, `ingested_files`) and logs
 that it did; the next run walks from the start, and the tables that kept
-their rows absorb it as no-op upserts. Per-row cursors — a sidecar's
-`last_ts_ms`, an address book's `ctag` — live on the table that holds
-them and go with it.
+their rows absorb it as no-op upserts. Per-row cursors — a device
+row's `last_ts_ms`, an address book's `ctag` — live on the table that
+holds them and go with it.
 
 Not checked: a table in the file that no DDL declares. The mirror
 engine writes exactly such tables, so "undeclared" is normal in a store
@@ -556,20 +560,19 @@ the same `grid_rows.uuid` is a correctness emergency — so that path wants the
 generated column list and binds without the `ON CONFLICT` clause, and lets
 the error surface so it can name the other document.
 
-`BulkUpsertable` itself is defined in `datalib_schema::bulk` and re-exported
-here, because `datalib_etl` depends on `datalib_schema` and the render-schema
-structs could not implement a trait that lived in this crate.
+`BulkUpsertable` itself is defined in `datalib_table` (`backend/table/`, a
+crate of its own with only `sqlx` beneath it) and re-exported as
+`datalib_etl::bulk::BulkUpsertable`, because the render-schema structs
+implement it too and this crate must not reach `datalib_schema`.
 
 ## Blob CAS and per-provider edge tables
 
-Each source's raw directory holds two doltlite files: `entities.doltlite_db`
-(entities plus that provider's CAS edge table) and `blobs.doltlite_db` (pure
-CAS). Bytes are keyed by their blake3 hash and stored exactly once in
-`cas_objects`; each provider declares its own `(owning_id, ref_id, blake3)`
-edge table via `#[derive(CasEdgeRow)]` over a four-field struct, in that
-order. The derive reads the second and third field names to emit
-`OWNING_COLUMN` / `REF_COLUMN`, so a provider's `schema_raw.rs` is the struct
-and the attribute and nothing else.
+A source that keeps attachment bytes has two doltlite files in its raw
+directory: `entities.doltlite_db` (entities plus that provider's CAS edge
+table) and `blobs.doltlite_db` (pure CAS). Bytes are keyed by their blake3
+hash and stored exactly once in `cas_objects`; each provider declares its
+own edge table, `(id, <owning>, <ref>, blake3)`, with `#[derive(CasEdgeRow)]`
+([`macros/README.md`](macros/README.md)).
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
 arrive and drains the bundle at end of bucket; parse loads every document's
@@ -613,7 +616,8 @@ host-local cache rather than in the provider's versioned store:
   the files on disk.
 - **It was half the store.** Measured at 100k entries, `files` + `file_stats`
   in one doltlite store is 291 B/row against 148 B/row for `files` alone,
-  because the cursor re-stores the full path as its own primary key.
+  because the cursor re-stores the full path as its own primary key
+  (`providers/fsindex/src/ingest/STORAGE_NOTES.md` has the table).
 
 It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
 door `datalib_runs::store` uses), because losing a cache costs a rehash
@@ -631,27 +635,22 @@ a directory tells you nothing about its parent.
 records appear in `created/`, with an `updated/` record replacing its
 predecessor in place rather than moving it to the end. For an append-only
 stream that is document order, which is what a synthesizer replaying a
-listing endpoint has to reproduce.
+listing endpoint has to reproduce: notion's replayed `/children` listing
+decides `blocks.page_order`, and so the order of the rendered page.
 
-It used to return a `HashMap`, and the ordering was silently whatever Rust's
-per-process hash seed produced. That cost the notion fixture its
-reproducibility: the replayed `/children` listing came back shuffled, the
-downloader's BFS assigned different `blocks.page_order` values every run, and
-the rendered markdown emitted the same blocks in a different order. The bug
-is invisible *within* one process, because the seed is fixed per process — a
-"render twice and compare" test passes against it.
-
-Not a `BTreeMap` either: sorting by key is not document order and would
-silently reshape the page.
+Not a `HashMap`: its order is Rust's per-process hash seed, so a replay
+comes back shuffled — and invisibly, because the seed is fixed within one
+process and a "render twice and compare" test passes against it. Not a
+`BTreeMap` either: sorting by key is not document order and would silently
+reshape the page.
 
 **An unkeyable record is an error, not a skip.** Every `key_of` in this tree
 is built from `unwrap_or_default()` over a few field lookups, so a record
 whose fields don't match yields `""`. Tolerating that loses data twice — every
 unkeyable record collapses onto one entry, and callers then skip the empty
-key, so a whole entity stream reads as "no records". `datalib/backend/etl/providers/gitlab/tests/fixtures/gitlab_api`
-spelled the project path `project_path` while every consumer had moved to
-`project_full_path`; gitlab contributed zero rows for three months with no
-failing test.
+key, so a whole entity stream reads as "no records". A fixture that spells a
+field the old way (`project_path` for gitlab's `project_full_path`) would
+otherwise contribute zero rows with no failing test.
 
 ## Answering "did it change?" for a file-backed source
 
@@ -680,17 +679,16 @@ the same file without colliding. Stamping is per file and inside the caller's
 transaction, so a crash partway through keeps what landed and re-reads only
 the rest.
 
-**Why content and not `(size, mtime)`.** The stat pair was chosen when hashing
-every run was too expensive; the cache removed that cost. What the stat pair
-got wrong was the *false re-ingest* — touching a file (`rsync` without `-t`, a
-restore from backup, re-downloading the same export) re-read and re-parsed the
-whole thing though not one byte had moved.
+**Why content and not `(size, mtime)`.** A cursor on the stat pair
+re-ingests a file that was only *touched* (`rsync` without `-t`, a restore
+from backup, re-downloading the same export), re-reading and re-parsing the
+whole thing though not one byte moved. The cache makes hashing cheap enough
+that the cursor can be the content.
 
 **What it does not fix**, because "content hash" invites the wrong assumption:
 the cache still decides whether to re-hash from Unison's
 `(mtime, size, inode, dev)` cursor, so an edit preserving all four is still
-invisible. That was equally true before — the gain is that the assumption
-lives in one place instead of once per provider.
+invisible — in one place rather than once per provider.
 `an_edit_preserving_the_whole_stat_is_still_invisible` pins it.
 
 **Some files must not be read at all.** A macOS file evicted to iCloud is

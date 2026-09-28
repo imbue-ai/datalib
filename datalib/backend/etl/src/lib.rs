@@ -21,6 +21,7 @@ pub mod entity_store;
 pub mod event_store;
 pub mod event_tape;
 pub mod events;
+pub mod export_files;
 pub mod file_checkpoint;
 pub mod fingerprint_cache;
 pub mod fsscan;

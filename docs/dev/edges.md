@@ -1,95 +1,80 @@
 # `edges` — directed links between source and destination anchors
 
-`edges` is an optional Dolt table that stores directed links between
-documents (or spans inside documents) discovered during ingest. The
-schema is the hand-written `EdgeRow` struct at
+`edges` stores directed links between documents, or between spans
+inside documents. The schema is the `EdgeRow` struct in
 `datalib/backend/schema/src/edges.rs` (DDL via
-`#[derive(PortableTable)]`); the table is created by
-`init_schema` in `datalib/backend/etl/render/src/grid_index.rs` and persists in
-`<root>/unified_index/grid_index/db.doltlite_db` alongside `grid_rows` and
-`markdowns`.
+`#[derive(PortableTable)]`). A renderer returns a document's outgoing
+edges on `RenderedMarkdown::edges`; they are stored in the source's
+render store beside its rows, and the `grid_index` step copies them into
+`<root>/unified_index/grid_index/db.doltlite_db` beside `grid_rows` and
+`markdowns` (`init_schema` in
+`datalib/backend/etl/render/src/grid_index.rs` creates the table).
 
 ## Data model
 
 One row =
 `(src_markdown_uuid, src_anchor_uuid?, dst_markdown_uuid, dst_anchor_uuid?, label?)`.
-The src and dst sides are symmetric: each can be either a whole
-document (anchor is NULL) or a span inside one (anchor is the value
-the renderer baked into the body as `data-section-uuid`). The PK
-(`edge_uuid`) is `datalib_id::edge_id` over the canonical tuple so
-re-ingest is idempotent — the grid_index step deletes-then-inserts
-every edge whose `src_markdown_uuid` matches the doc being re-applied.
-It takes the stamp of its source end (the anchor's, else the
-document's), so the edges a render writes beside a message sort beside
-its row; see `docs/dev/entity_ids.md` § "The layout".
+The src and dst sides are symmetric: each can be a whole document
+(anchor is NULL) or a span inside one (anchor is the value the renderer
+baked into the body as `data-section-uuid`). The primary key
+(`edge_uuid`) is `datalib_id::edge_id` over that tuple, so re-rendering
+is idempotent. A document owns the edges whose `src_markdown_uuid` is
+its own: the `grid_index` step deletes them and inserts the new set
+each time it loads that document. The id carries the stamp of its
+source end; see [`entity_ids.md` § "The layout"](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
 
-## Producers today
+## Producers
 
-- **Perseus** (`datalib/backend/etl/providers/perseus/`) emits two
-  edge flavors per chapter doc:
-  - one doc-level edge to the matching chapter in the other language
-    (replacing the old inline `*Other:* […]` markdown link). The
-    `label` carries the destination's language name ("Greek" /
-    "English") because the UI uses it verbatim as the link text — see
-    "Label conventions" below.
-  - one `bilingual-alignment` edge per bilingual section, anchored on
-    the first-word span on each side — a stand-in for a future
-    word-level alignment pass.
+Only **Perseus** (`datalib/backend/etl/providers/perseus_render/`,
+`chapter_edges`) writes edges, and only for an edition named in an
+`alignment_pairs` entry. Per chapter document it emits:
+
+- one doc-level edge to the same chapter in each counterpart edition.
+  Its `label` is the counterpart edition's short id, which the UI shows
+  as the link text (see "Label conventions").
+- one `bilingual-alignment` edge per aligned sentence pair, from the
+  sentence span on this side to the sentence span on the other.
+
+Every other provider leaves the table empty.
 
 ### Label conventions
 
-The UI's outgoing-destinations list uses `label` as the link text
-when present, falling back to the destination markdown's title.
-Producers should therefore set `label` to whatever the user should
-read in that list — a short human-readable handle, not an
-edge-taxonomy tag. The destination doc title appears as a hover
-tooltip so it stays discoverable.
+The destinations list at the top of a document uses `label` as the link
+text when present, then the destination's title, then its bare uuid.
+When both label and title are set and differ, the title follows in
+parentheses; the title is also the link's hover tooltip. So set `label`
+to what a person should read in that list — a short handle, not a
+taxonomy tag.
 
-Span-source edges (`src_anchor_uuid != null`) don't appear in the
-list — they show as inline clickable spans inside the body — so
-their `label` is free to be metadata (`bilingual-alignment` for
-perseus today) without UI implications.
+Span-source edges (`src_anchor_uuid` set) are not listed; they show as
+clickable spans in the body, so their `label` can be metadata
+(`bilingual-alignment`).
 
-Other providers leave the table empty; a document that emits no edges
-simply contributes no rows here.
+## Consumers
 
-## Consumers today
+- `GET /applet/unified_index/chat/{markdown_uuid}` returns
+  `outgoing_edges`, each joined with the destination's title
+  (`dst_title`).
+- `DocCard.ce.vue` lists the whole-doc outgoing edges at the top of the
+  preview.
+- `ChatBody.ce.vue` marks every `[data-section-uuid]` that matches an
+  edge's `src_anchor_uuid` with `.edge-source`. A click opens the
+  destination card with `dst_anchor_uuid` as the scroll-and-highlight
+  target; hovering lights the destination span in any open card that
+  shows it.
 
-- The backend includes `outgoing_edges` in every
-  `GET /applet/unified_index/chat/{markdown_uuid}` response (joined with the
-  destination markdown's title for direct rendering).
-- `DocCard.ce.vue` shows whole-doc outgoing edges as a list at the top
-  of the preview.
-- `ChatBody.ce.vue` decorates every `[data-section-uuid]` whose value
-  matches an edge's `src_anchor_uuid` with `.edge-source` (subtle
-  background, deeper on hover) and a click handler that opens the
-  destination column with `dst_anchor_uuid` seeded as the
-  scroll-and-highlight target.
+## Limitations
 
-## Limitations (current)
+1. **Overlapping span sources are not handled.** Two decorated spans
+   whose text overlaps are each decorated on their own, and the nested
+   styling may look odd. Producers should avoid overlap.
+2. **One edge per source span.** `ChatBody` keeps the first edge per
+   `src_anchor_uuid` in `outgoing_edges` order, and the query has no
+   `ORDER BY`, so which one wins is unspecified. A span with several
+   outgoing edges links to one of them.
+3. **`label` drives nothing but the link text.** No filtering, grouping
+   or icon is keyed off it.
+4. **No incoming-edges view.** The data is there
+   (`WHERE dst_markdown_uuid = ?`), but no endpoint or card reads it.
 
-These are knowingly punted for the proof of concept:
-
-1. **Overlapping span sources are not specially handled.** If the
-   renderer emits two `<span data-section-uuid="X">` and
-   `<span data-section-uuid="Y">` whose text content overlaps, both
-   get decorated independently — the resulting nested CSS may look
-   odd. Producers (today: only perseus) are expected to avoid
-   overlap; future producers should too.
-2. **Multiple outgoing edges per source span: only the first is
-   exposed.** `ChatBody`'s lookup is `(src_anchor_uuid → first
-   matching EdgeOut)`. If a single span uuid carries two outgoing
-   edges, the user sees a click handler for one of them. The picker
-   is "first in `outgoing_edges` array order"; the backend orders by
-   insertion, which for perseus is currently doc-level then
-   bilingual-alignment.
-3. **`label` is stored but not rendered.** The doc-level destination
-   list shows it as a parenthetical when present, but there's no
-   filtering, grouping, or icon-mapping behavior keyed off it yet.
-4. **No incoming-edges view.** `outgoing_edges` is computed by
-   `src_markdown_uuid`; we don't currently surface "who points at this
-   doc" in the UI. The data is there — query
-   `WHERE dst_markdown_uuid = ?` — but no consumer is wired up.
-
-When extending this, please update the bullets above so the next
-contributor can see what's still missing.
+Update this list when you lift one of these.

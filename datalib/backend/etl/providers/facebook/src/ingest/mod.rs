@@ -15,6 +15,7 @@ use datalib_etl::blob_cas::{cas_path_for, load_blake3_index, BlobCas, CasEdgeAcc
 use datalib_etl::bulk::BulkUpsertable as _;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::{self as dr};
+use datalib_etl::export_files::files_with_extension;
 use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
@@ -153,7 +154,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
     let mut by_table: Tables = BTreeMap::new();
 
-    for path in discover_json(&opts.input_path) {
+    for path in files_with_extension(&opts.input_path, "json") {
         let rel = relative(&opts.input_path, &path);
         let table = canonical_table(&rel);
         match read_records(&path) {
@@ -405,29 +406,6 @@ fn row_id(table: &str, record: &Value) -> String {
     Uuid::new_v5(&facebook_ns(), recipe.as_bytes())
         .as_hyphenated()
         .to_string()
-}
-
-fn discover_json(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-            {
-                out.push(p);
-            }
-        }
-    }
-    out.sort();
-    out
 }
 
 fn relative(root: &Path, path: &Path) -> String {

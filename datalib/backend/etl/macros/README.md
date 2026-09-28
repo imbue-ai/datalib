@@ -1,8 +1,9 @@
 # `datalib-etl-macros` — the derive reference
 
-Four derives, one per table shape. Each turns a row struct into the DDL, the
-column metadata and the write plumbing, so a provider's `schema_raw.rs` is
-the struct and its attribute and nothing else.
+Four table derives, one per table shape. Each turns a row struct into the
+DDL, the column metadata and the write plumbing, so a provider's
+`schema_raw.rs` is the struct and its attribute and nothing else. A fifth,
+`RawStoreHandle`, is not about tables; it is at the end.
 
 | derive | for |
 |---|---|
@@ -21,6 +22,7 @@ the struct and its attribute and nothing else.
 | `Option<i64>` | `INTEGER NULL` |
 | `f64` | `REAL NOT NULL` |
 | `Option<f64>` | `REAL NULL` |
+| `bool` | `INTEGER NOT NULL` (0 or 1) |
 
 Any other field type is a compile error pointing at the field. Add support
 here when a new shape comes up; keeping the universe narrow keeps the bind
@@ -112,9 +114,10 @@ pub struct SlackAttachmentRow {
 }
 ```
 
-emits the table DDL, two index DDLs, the `BulkUpsertable` impl, and the
-`blob_cas::CasEdgeRow` impl with `OWNING_COLUMN = "message_uuid"` and
-`REF_COLUMN = "file_id"`.
+emits the `BulkUpsertable` impl and the `blob_cas::CasEdgeRow` impl with
+`OWNING_COLUMN = "message_uuid"` and `REF_COLUMN = "file_id"`. The trait
+supplies the rest from those two names: the table DDL, an index on each of
+the owning and ref columns, and the synth-PK recipe.
 
 ## `PortableTable`
 
@@ -179,3 +182,13 @@ for an integer one**: `BulkUpsertable` keys on one column by contract
 store's `log` on `seq`, an `INTEGER` the store assigns as the rowid.
 Such a table still gets its DDL and column metadata; it just keeps
 writing itself.
+
+## `RawStoreHandle`
+
+Not a table derive. On a struct that holds a store's handles it
+implements `datalib_etl::store_handle::RawStoreHandle` by listing every
+`SqlitePool` and `BlobCas` field (an `Option` of either included, and a
+nested `EntityStore` / `CasEntityStore` contributing its own), in
+declaration order, so `close_all` closes every one of them. The point is
+that nothing hand-kept can forget a store: a handle that grows a second
+pool closes it without anyone editing a list.

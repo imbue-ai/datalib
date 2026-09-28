@@ -39,7 +39,7 @@ const props = defineProps<{
    * `data-edge-id="…"` so the user-visible styling + click handler
    * pick it up. Limitations: only the FIRST edge per source anchor
    * is used; spans whose source anchors overlap inside the body are
-   * not specially handled (see `docs/edges.md`).
+   * not specially handled (see `docs/dev/edges.md`).
    */
   outgoingEdges?: EdgeOut[];
   /**
@@ -141,7 +141,7 @@ async function onCopyClick(ev: MouseEvent) {
  * Build a (src_anchor_uuid → first matching EdgeOut) lookup over the
  * outgoing edges that have a span-level source (`src_anchor_uuid !==
  * null`). When the renderer baked the same anchor uuid into multiple
- * edges, we keep only the first — see docs/edges.md, "Limitations".
+ * edges, we keep only the first — see docs/dev/edges.md, "Limitations".
  */
 const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
   const m = new Map<string, EdgeOut>();
@@ -218,7 +218,7 @@ function onBodyMouseOut(ev: MouseEvent) {
  * Mark the hover destination (if any) on the body. Adds `.hover-dst`
  * to the matching `[data-section-uuid="X"]` so CSS can style it as
  * an incoming-edge target. Single-target by design — overlapping
- * spans are out of scope (see docs/edges.md).
+ * spans are out of scope (see docs/dev/edges.md).
  */
 function applyHoverDst() {
   if (!root.value) return;

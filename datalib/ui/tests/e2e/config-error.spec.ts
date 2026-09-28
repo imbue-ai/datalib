@@ -153,9 +153,10 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   await page.locator("#cfg-editor").fill(original);
   await page.getByRole("button", { name: "Save config" }).click();
 
-  // The gate lifts by itself — no reload. This direction is the one
-  // that is easy to get wrong, and the one an agent fixing the config
-  // depends on.
+  // The gate lifts by itself — no reload — on the save's own refetch,
+  // which does not wait for the file watcher to report the write. This
+  // direction is the one that is easy to get wrong: the cards behind the
+  // gate have to come back as they were.
   await expect(gate(page)).toHaveCount(0);
   await expect(tabs(page)).toBeVisible();
   await expect(

@@ -159,15 +159,25 @@
   width: 100%;
   height: 100%;
 }
+/* The present value and its change over the window, over the line. The
+   same in a Manage cell and in the status bar's data-root total. */
 .tg-plot-label {
   position: relative;
-  display: block;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
   line-height: 18px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--datalib-fg);
   text-shadow: 0 0 3px var(--datalib-bg);
+}
+/* In the colour of the line that shows it. Not green: growth is not
+   good news and shrinkage is not bad — the sign is the whole message. */
+.tg-plot-delta {
+  color: var(--datalib-accent);
 }
 /* `vector-effect: non-scaling-stroke` is load-bearing: the svg is
    stretched from its 120-unit box to the column's width. */

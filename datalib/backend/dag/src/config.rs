@@ -49,8 +49,8 @@ pub struct DagConfig {
     /// a request for its prefix arrives. Empty is normal.
     #[serde(default)]
     pub applets: Vec<AppletEntry>,
-    /// Named locks steps hold, beside the three every config has
-    /// (`supervisor::locks`).
+    /// Named locks steps hold, beside the ones every config has
+    /// (`supervisor::locks::defaults`).
     #[serde(default)]
     pub locks: Vec<LockEntry>,
     /// How often a step seals what it has written, so a consumer can see it
@@ -349,8 +349,9 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
-    /// The named locks it holds while it runs. `None` holds the one lock
-    /// its shape gives it: `network`, `cpu` or `index`.
+    /// The named locks it holds while it runs. `None` holds one default:
+    /// a built-in qmd step's own lock, else the one its shape gives it
+    /// (`supervisor::locks::default_for`).
     pub locks: Option<StepLocks>,
     /// How it reads its inputs. `None` is at a pinned commit, but for the
     /// built-in steps that read files (`UNPINNED_BUILTINS`).

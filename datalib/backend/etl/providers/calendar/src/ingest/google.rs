@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::download_problems::{self, RunProblem};
 use datalib_etl::http::{
-    default_retryability, latchkey_curl_classified, HttpRequest, HttpResponse, HttpService,
-    LatchkeySettings, Retryability,
+    default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
+    HttpService, LatchkeySettings, Retryability,
 };
 use datalib_etl::progress::Progress;
 use serde_json::Value;
@@ -117,7 +117,7 @@ pub(crate) fn primary_id(list: &[Value]) -> Option<String> {
 pub fn calendar_list_url(page: Option<&str>) -> String {
     let mut url = format!("{BASE}/users/me/calendarList?maxResults=250&showHidden=true");
     if let Some(p) = page {
-        url.push_str(&format!("&pageToken={}", encode(p)));
+        url.push_str(&format!("&pageToken={}", percent_encode(p)));
     }
     url
 }
@@ -203,11 +203,14 @@ pub fn windowed_events_url(calendar_id: &str, window: &Window, page: Option<&str
     if let Some(start) = window.start {
         url.push_str(&format!(
             "&timeMin={}",
-            encode(&format!("{start}T00:00:00Z"))
+            percent_encode(&format!("{start}T00:00:00Z"))
         ));
     }
     if let Some(end) = window.end {
-        url.push_str(&format!("&timeMax={}", encode(&format!("{end}T00:00:00Z"))));
+        url.push_str(&format!(
+            "&timeMax={}",
+            percent_encode(&format!("{end}T00:00:00Z"))
+        ));
     }
     url
 }
@@ -215,13 +218,13 @@ pub fn windowed_events_url(calendar_id: &str, window: &Window, page: Option<&str
 pub fn events_url(calendar_id: &str, sync_token: Option<&str>, page: Option<&str>) -> String {
     let mut url = format!(
         "{BASE}/calendars/{}/events?maxResults=2500&showDeleted=true&singleEvents=false",
-        encode(calendar_id)
+        percent_encode(calendar_id)
     );
     if let Some(t) = sync_token {
-        url.push_str(&format!("&syncToken={}", encode(t)));
+        url.push_str(&format!("&syncToken={}", percent_encode(t)));
     }
     if let Some(p) = page {
-        url.push_str(&format!("&pageToken={}", encode(p)));
+        url.push_str(&format!("&pageToken={}", percent_encode(p)));
     }
     url
 }
@@ -353,21 +356,6 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-/// Percent-encode a path segment or query value. Calendar ids carry
-/// `@` and `#` (`en.usa#holiday@group.v.calendar.google.com`).
-pub fn encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

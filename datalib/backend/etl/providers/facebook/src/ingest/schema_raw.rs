@@ -41,39 +41,11 @@ pub fn media_ddl() -> Vec<String> {
 }
 
 /// The raw table for an export file, from its path relative to the
-/// export root: lowercase, every non-alphanumeric run collapsed to `_`,
-/// the extension dropped, and a trailing `_<digits>` dropped too — that
-/// is the chunk index Facebook splits a long file on
+/// export root. The trailing `_<digits>` it drops is the chunk index
+/// Facebook splits a long file on
 /// (`your_posts__check_ins__photos_and_videos_1.json`, `album/0.json`),
 /// and every chunk belongs in the one table.
-pub fn canonical_table(rel: &str) -> String {
-    let stem = std::path::Path::new(rel)
-        .with_extension("")
-        .to_string_lossy()
-        .to_lowercase();
-    let mut out = String::new();
-    let mut prev_us = false;
-    for ch in stem.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            prev_us = false;
-        } else if !prev_us {
-            out.push('_');
-            prev_us = true;
-        }
-    }
-    let mut t = out.trim_matches('_').to_string();
-    if let Some((head, last)) = t.rsplit_once('_') {
-        if !head.is_empty() && !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) {
-            t = head.to_string();
-        }
-    }
-    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("t_{t}")
-    } else {
-        t
-    }
-}
+pub use datalib_etl::export_files::table_name as canonical_table;
 
 pub fn facebook_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"facebook.datalib")

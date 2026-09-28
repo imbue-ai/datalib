@@ -108,26 +108,29 @@ the inline handlers and cap us at one DACTAL card per app (shared globals). The
 iframe gives each card its own window and engine.
 
 ### The sandbox
-The iframe is also a **security boundary**, in two layers that agree
-(issue #146). The card mounts it with `sandbox="allow-scripts"` and no
-`allow-same-origin`, and the server sends the page with
-`Content-Security-Policy: sandbox allow-scripts` — the header form, because
-`sandbox` is ignored in a `<meta>` policy (`datalib/backend/http/src/embed.rs`).
+The iframe is also a **security boundary**, in two layers that agree.
+The card mounts it with `sandbox="allow-scripts"` and no
+`allow-same-origin`, and the server sends every HTML document under
+`/dactal/` with `Content-Security-Policy: sandbox allow-scripts
+allow-downloads` (`DOCUMENT_SANDBOX_CSP` in
+`datalib/backend/http/src/embed.rs`) — the header form, because `sandbox`
+is ignored in a `<meta>` policy.
 Either way the document runs in an *opaque origin*: it has no cookie, its
 `fetch` of `/api/*` is cross-origin and answered by nobody, it cannot read
 or navigate the window that holds it, and it has no IndexedDB or
 localStorage. That is why its rows come from the host by `postMessage`
 (`dactalView.ts` ⇄ `bridge.js`), why the host does the fetching, and why
-the page opened on its own — a top-level navigation with `?dq=` — shows
-one line and evaluates nothing: it waits for a host that never comes.
+the page opened on its own — a top-level navigation, `?dq=` or not — shows
+one line and evaluates nothing (`hosted` in `bridge.js`).
 
 Two consequences of the opaque origin shape the plumbing. The page's
 static files are served **without the API token** (`auth.rs::is_public`,
-prefix `/dactal/`): a sandboxed frame's module load is a CORS request from
-origin `null` and carries no session, so they had to be public, and they
-can be — identical bytes on every install, and inert without a host. And
-they carry `Access-Control-Allow-Origin: *` for that same module load.
-An unknown path under `/dactal/` is a 404, never the SPA fallback.
+`embed::PUBLIC_PREFIX`, `/dactal/`): a sandboxed frame's module load is a
+CORS request from origin `null` and carries no session, so they have to
+be public, and they can be — identical bytes on every install, and inert
+without a host. They carry `Access-Control-Allow-Origin: *` for that same
+module load. An unknown path under `/dactal/` is a 404, never the SPA
+fallback.
 
 `allow-scripts` together with `allow-same-origin` would be no sandbox at
 all (the frame could remove its own attribute); do not add the second.
@@ -152,22 +155,22 @@ fallback, which serves the main app instead.
 3. **Two query languages coexist** — Datalib's Gmail-style search vs.
    DACTAL's `.`/`:`/`/`/`#`. A learning curve; scoped as an optional view.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it
-   does not open a Datalib document card. The `postMessage` bridge now
-   exists (see "The sandbox"); wiring "open the chat" is one more message
-   shape (`dactal:open` with a uuid → `ctx.host.openCards(...)`) plus a
-   click affordance in the rendered table (not yet done).
+   does not open a Datalib document card. Wiring "open the chat" would be
+   one more message shape on the bridge (`dactal:open` with a uuid →
+   `ctx.host.openCards(...)`) plus a click affordance in the rendered
+   table.
 5. **The vendored snapshot phones home — and is pinned shut by a CSP.**
    Three functions in `vendor/dactal_utils.js` load code from `dactal.org`
-   at *runtime*: `dactal_ai_init()` (:325) and `loadscript()` (:381) inject
+   at *runtime*: `dactal_ai_init()` and `loadscript()` inject
    `<script src="https://dactal.org/…">`, and `loadscript_namespaced()`
-   (:393) fetches from there and runs the text through `new Function`.
+   fetches from there and runs the text through `new Function`.
 
    Nothing in Datalib calls them — they are **dormant, not active**
    (`dactal_ai_init` is defined and never invoked, and we never write the
    `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` localStorage keys it gates on;
-   the two `loadscript` variants are reached only from inside
-   `dactal_utils.js`, on dataset-declared connectors, which our host page
-   does not use). But they are one call away, and a future dataset — or a
+   the two `loadscript` variants are reached only from inside the vendored
+   scripts, on dataset-declared connectors, which our host page does not
+   use). But they are one call away, and a future dataset — or a
    refresh of the snapshot — could wake them. Fetching at runtime also
    quietly defeats the point of pinning: you would get whatever
    dactal.org serves *today*, with no SRI and no version pin.
@@ -175,23 +178,21 @@ fallback, which serves the main app instead.
    So `public/dactal/index.html` carries a CSP — `script-src 'self'
    'unsafe-eval'; connect-src 'none'` — which makes all three fail closed
    permanently (`'none'` rather than `'self'` because the page makes no
-   request of its own any more: its rows arrive by message). It lives in
+   request of its own: its rows arrive by message). It lives in
    the host page rather than in `vendor/`, which keeps the "unmodified
    pinned copies" property `vendor/PROVENANCE.md` depends on.
    `'unsafe-eval'` has to stay: the query language evaluates expressions
-   through `eval` (`dactal.js:2052`) and `new Function`. The page's own
+   through `eval` (in `dactal.js`) and `new Function`. The page's own
    script is in `main.js`, not inline, precisely so that `script-src` need
-   not allow `'unsafe-inline'` — **do not move it back inline.** Issue
-   #138, mitigation 4. With the sandbox in place, `eval` over row data is
-   what this policy guards; a bypass gets the frame, not the app.
+   not allow `'unsafe-inline'` — **do not move it inline.** With the
+   sandbox in place, `eval` over row data is what this policy guards; a
+   bypass gets the frame, not the app.
 
-6. **Licensing.** Single-author project, static JS from dactal.org; no
-   license is stated in the files or on the site. DACTAL is Imbue's, and
-   the vendored copies are licensed under the repo's MIT license, which
-   `vendor/PROVENANCE.md` says explicitly. What remains is provenance
-   tracking, not a trust-the-author question.
+6. **Licensing.** The files carry no license header and dactal.org
+   states none. DACTAL is Imbue's own work, and `vendor/PROVENANCE.md`
+   licenses the vendored copies under the repo's MIT license.
 
 ### What it adds
 Grouping, annotators (count/total/average/median…), heatmaps, and tag-clouds over
-arbitrary facets — analytical views AG-Grid doesn't offer — as terse, composable,
+arbitrary facets — analytical views the grid doesn't offer — as terse, composable,
 shareable query strings.

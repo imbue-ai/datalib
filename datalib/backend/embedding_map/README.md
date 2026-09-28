@@ -72,8 +72,9 @@ it scattered):
 
 `optimize` here is umap-learn's loop, on one thread with a fixed seed,
 which also makes a layout a pure function of its inputs: the same
-corpus from the same starting map always lays out the same way. The graph construction and
-curve fit we still take from `umap-rs`; they match umap-learn.
+corpus from the same starting map always lays out the same way. The
+graph construction and curve fit we still take from `umap-rs`; they
+match umap-learn.
 
 ## Colours
 

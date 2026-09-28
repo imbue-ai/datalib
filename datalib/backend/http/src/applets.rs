@@ -604,10 +604,7 @@ fn load_entries(
             // whether a step or an applet names it.
             let dir = datalib_dag::config::resolve_binary_dir(&checked.cfg, binary_dir.as_deref());
             // `checked.cfg.applets` is already only the entries that
-            // loaded. This used to be all-or-nothing — one bad applet
-            // entry logged "config rejected, none will load" and the
-            // whole app went dark, which is 00633dd5 and the reason
-            // #209 exists. A dropped entry now costs its own applet.
+            // loaded: a bad entry costs its own applet and no other.
             for d in checked.diagnostics.iter().filter(|d| {
                 d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
                     || d.severity == datalib_dag::Severity::Fatal

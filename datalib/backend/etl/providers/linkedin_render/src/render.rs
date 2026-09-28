@@ -1,8 +1,7 @@
 //! Render LinkedIn's message-shaped feeds into markdown via the shared
 //! chat renderer.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
@@ -12,7 +11,7 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
+use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
 use serde_json::Value;
 
 use crate::ids;
@@ -107,38 +106,9 @@ pub fn render(
         chats.extend(build_chats(source_id, table, rows, account, account_inputs));
     }
 
-    // What to render: the chats the driver found stale, plus the ones a
-    // new or changed row maps to — through the rows just loaded, since
-    // the conversation id lives inside the payload. A removed row's chat
-    // reaches here through the driver, having declared the row.
-    let forward = changed.map(|changed| {
-        let mut keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for chat in &chats {
-            if chat
-                .inputs
-                .iter()
-                .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            {
-                keys.insert(chat.chat_uuid.clone());
-            }
-        }
-        keys
-    });
-    let render = range.narrow(forward.as_ref());
-    let mut outcome = FeedOutcome {
-        new_head: Some(new_head),
-        buckets: render
-            .iter()
-            .flatten()
-            .map(|key| Bucket {
-                key: key.clone(),
-                inputs: Vec::new(),
-            })
-            .collect(),
-    };
-    if let Some(render) = &render {
-        chats.retain(|c| render.contains(&c.chat_uuid));
-    }
+    // The conversation id lives inside the payload, so a changed row
+    // maps to its chat only through the rows just loaded.
+    let mut outcome = narrow_docs(&mut chats, chat_key, changed, range, new_head);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -152,6 +122,40 @@ pub fn render(
     )?;
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
+}
+
+pub(crate) fn chat_key(c: &NormalizedChat) -> (&str, &[Input]) {
+    (c.chat_uuid.as_str(), c.inputs.as_slice())
+}
+
+/// What to render: the documents the driver found stale, plus the ones a
+/// new or changed row maps to through the rows just loaded. A removed
+/// row's document reaches here through the driver, having declared the
+/// row. `docs` keeps only those; the outcome names each with nothing.
+pub(crate) fn narrow_docs<T>(
+    docs: &mut Vec<T>,
+    key_of: impl Fn(&T) -> (&str, &[Input]),
+    changed: Option<HashMap<String, HashSet<String>>>,
+    range: RawRange<'_>,
+    new_head: String,
+) -> FeedOutcome {
+    let forward = changed.map(|changed| keys_reading(&changed, docs.iter().map(&key_of)));
+    let render = range.narrow(forward.as_ref());
+    let outcome = FeedOutcome {
+        new_head: Some(new_head),
+        buckets: render
+            .iter()
+            .flatten()
+            .map(|key| Bucket {
+                key: key.clone(),
+                inputs: Vec::new(),
+            })
+            .collect(),
+    };
+    if let Some(render) = &render {
+        docs.retain(|d| render.contains(key_of(d).0));
+    }
+    outcome
 }
 
 /// Rows as `(row id, payload)`: the id is what the conversation declares
@@ -265,11 +269,11 @@ fn participants(rows: &[&Value]) -> String {
     }
 }
 
-fn field<'a>(p: &'a Value, key: &str) -> &'a str {
+pub(crate) fn field<'a>(p: &'a Value, key: &str) -> &'a str {
     p.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-fn nonempty(s: &str) -> Option<&str> {
+pub(crate) fn nonempty(s: &str) -> Option<&str> {
     let t = s.trim();
     (!t.is_empty()).then_some(t)
 }

@@ -46,9 +46,8 @@ impl ScanResult {
     }
 }
 
-/// One unreadable entry. Surfaced to the caller so it can land in
-/// `<table>_bookkeeping.last_error` per the framework's universal
-/// pattern.
+/// One unreadable entry. The caller logs it and counts it in the run's
+/// summary; fsindex has no bookkeeping sidecar to record it in.
 pub struct WalkerError {
     pub id: String,
     pub message: String,

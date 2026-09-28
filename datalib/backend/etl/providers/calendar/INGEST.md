@@ -22,7 +22,7 @@ calendar added to the list has no token and is listed whole.
 
 ## A window (`since` / `until`)
 
-Measured live on 2026-09-24. Neither service can resume a time-bounded
+Measured live. Neither service can resume a time-bounded
 listing from a sync token — Google refuses `syncToken` beside
 `timeMin`/`timeMax`, and CalDAV's `sync-collection` has no time bound —
 so a windowed calendar is listed whole every run, whatever the listing
@@ -38,7 +38,7 @@ no longer names is dropped, and the calendar's token is cleared.
   the overrides in the window. On Fastmail one week of a busy calendar
   went from 109 overrides to 13 with it.
 
-## Fastmail (CalDAV) — measured against a live account, 2026-09-24
+## Fastmail (CalDAV) — measured against a live account
 
 - **Discovery starts at `https://caldav.fastmail.com/dav/`.** The bare
   host answers a `PROPFIND` with 404; `/.well-known/caldav` 301s to
@@ -61,7 +61,7 @@ no longer names is dropped, and the calendar's token is cleared.
   properties at all — cancelled occurrences are `EXDATE`s. Every
   `TZID` was an IANA name.
 
-## Google Calendar — measured against a live account, 2026-09-24
+## Google Calendar — measured against a live account
 
 latchkey's `google-calendar` service holds the OAuth token
 (`latchkey auth browser google-calendar`). The events call is

@@ -35,25 +35,27 @@ write the one index file under `unified_index/qmd_index/`):
 ```
 <data_root>/
 ├── config.toml                     # the pipeline config (steps format)
-├── <name>/ingest/                  # per-source raw stores
+├── <group>/ingest/                 # per-source raw stores (<group> is the source's id)
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.doltlite_db
-├── <name>/render_markdown/         # per-source markdown tree
+├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.doltlite_db   # the grid_rows SQL index — query this
 │   └── qmd_index/qmd/index.sqlite  # semantic search index
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
+    ├── runs/runs.sqlite            # every run's step states, log lines and metrics (plain SQLite)
     ├── api-token                   # this process's bearer token
     ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
+    ├── remote_media.doltlite_db    # remote media a person let a document load
     └── usage.doltlite_db           # bytes-on-disk timeseries
 ```
 
 The split is by writer: `unified_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state. Canonical
 definition — the constants both sides read — is
-[`datalib/backend/runtime/src/layout.rs`](/datalib/backend/runtime/src/layout.rs).
+[`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
 
 Ten binaries ship in a release: `datalib-dag` (the sync runner),
 `datalib-step` (the built-in step commands), `datalib-http` (API
@@ -67,7 +69,7 @@ directory-tree scanner, also reachable as a step) and
 and `datalib-migrate-config` (rewrites a `config.toml` from a retired
 shape; see below). The authoritative list is the `:dist`
 filegroup in
-[`datalib/backend/BUILD.bazel`](/datalib/backend/BUILD.bazel).
+[`datalib/backend/BUILD.bazel`](../datalib/backend/BUILD.bazel).
 End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
@@ -86,11 +88,9 @@ header, and a step's `params` sub-tables come after its plain keys — a
 - **Per-source knobs and step pairs**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
   — one commented group with its `ingest` + `render_markdown` step pair
-  per supported source, ready to copy. (A `config.toml` whose steps
-  still name a `datalib-step download …` command is rewritten once
-  with `datalib-migrate-config <data_root> --force`, the only program
-  that still knows that shape.
-  Pre-TOML `config.yaml` roots are set up again from the app.)
+  per supported source, ready to copy. A `config.toml` in the retired
+  shape (steps naming a `datalib-step download …` command) is refused;
+  rewrite it once with `datalib-migrate-config <data_root> --force`.
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -114,19 +114,18 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. Exit 0 clean, 1 if the file is not a config at all, 2 if
-some entries were dropped.
+one per typo. Exit 0 when every entry loads, 1 if the file is not a
+config at all (or the root was written by a newer datalib), 2 if some
+entries were dropped.
 
-Useful flags: `--sync <step-id>` (repeatable; runs the named download
-steps and everything downstream of them, and nothing else — pending
-work in other sources waits for a full run), `--parallelism N`,
-`--reset <step-id>[+blobs]` (empties what that step wrote — every row
-of its store, and with `+blobs` an ingest step's blob CAS too — keeping
-its doltlite history, so the
-next run does its work from the start; alone it does nothing else, with
-`--sync` it runs first), `--binary-dir DIR` (where bare `command:` names
-like `datalib-step` resolve; defaults to the directory `datalib-dag`
-itself is in). A sync that fails with "has a shape this build's DDL
+Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
+everything downstream of them, and nothing else — pending work in other
+sources waits for a full run), `--parallelism N`, `--reset
+<step-id>[+blobs]` (see **Resetting** below; alone it does nothing else,
+with `--sync` it runs first), `--binary-dir DIR` (put at the front of
+every step's `PATH`, so a bare `command` like `datalib-step` resolves
+there; defaults to the config's `binary_dir`, else the directory
+`datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
 cannot be reached from by adding columns" is a raw store an older build
 wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `--reset <source>/ingest --sync
@@ -265,10 +264,10 @@ Pick the surface that fits the question:
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
   doltlite recipes (history, diffs, a crashed writer):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **Markdown** — `<name>/render_markdown/` holds human-readable QMD
+- **Markdown** — `<group>/render_markdown/` holds human-readable QMD
   markdown per conversation/document. Read files directly, or serve
   them via `GET /applet/unified_index/chat/{markdown_uuid}`. The raw per-source
-  doltlite stores under `<name>/ingest/` keep full wire fidelity when the
+  doltlite stores under `<group>/ingest/` keep full wire fidelity when the
   rendered form isn't enough.
 - **Semantic search** — the qmd index:
 
@@ -292,9 +291,9 @@ Pick the surface that fits the question:
   columns in turn. `GET /applet/unified_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
   one group), `GET /api/log?q=…` (the
-  runner's log lines in the same grammar — keys `run:`, `process_id:`,
-  `step:`, `attempt:`,
-  `level:`, `stream:`, `target:`, `thread:`, `msg:`; free text is a
+  runner's log lines in the same grammar — keys `run:`, `process:`,
+  `process_id:`, `step:`, `attempt:`, `level:`, `stream:`, `target:`,
+  `thread:`, `msg:`, and `commit:` by prefix; free text is a
   substring of the line; `run:`, `process_id:`, `step:` and `attempt:`
   narrow it to a run, a process or a step's attempt; the newest `limit=`
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
@@ -317,7 +316,7 @@ Pick the surface that fits the question:
   caching the value; `DATALIB_TOKEN=<value>` pins it. The onboarding
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
   are readable without it. Design notes:
-  [`datalib/backend/http/src/auth.rs`](/datalib/backend/http/src/auth.rs).
+  [`datalib/backend/http/src/auth.rs`](../datalib/backend/http/src/auth.rs).
 
 ## Extending datalib
 
@@ -333,8 +332,9 @@ Pick the surface that fits the question:
   rules behind the scheduler (what makes a step stale, what a dropped
   entry costs) are in
   [`datalib/backend/dag/README.md`](../datalib/backend/dag/README.md).
-- **Custom UI cards** — the web UI can host agent-authored views
-  ("cards", small JS view factories, `PUT /api/lib/{name}`). The
+- **Custom UI cards** — the web UI can host agent-authored components
+  (ES modules whose default export is a card factory, saved with
+  `PUT /api/lib/{name}`). The
   server serves its own guide for this at **`GET /agent/cards.md`**
   (and one for config-editing agents at **`GET /agent/config.md`**);
   source reference: [`docs/dev/cards.md`](dev/cards.md).
@@ -374,12 +374,11 @@ document.
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
-  `diagnostics` and writes nothing. A data root still holding a
-  pre-TOML `config.yaml` reads as unconfigured — set it up again from
-  the app.
+  `diagnostics` and writes nothing. A data root holding a pre-TOML
+  `config.yaml` reads as unconfigured — set it up again from the app.
 - **A step that silently stopped running**: check `diagnostics` on
   `GET /api/config`, or `--check`. A config with one unusable entry
   still loads — that entry is dropped and everything else runs — so a
-  source can leave the pipeline without anything failing. The Pipeline
-  table shows such a row as *Not loaded* or *Can't run*, with the
+  source can leave the pipeline without anything failing. The Manage
+  screen shows such a row as *Not loaded* or *Can't run*, with the
   reason; `--check` prints it.
