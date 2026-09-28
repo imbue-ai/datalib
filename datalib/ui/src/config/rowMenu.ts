@@ -85,8 +85,6 @@ export type MenuEntry =
     };
 
 export type MenuOptions = {
-  /// Which column was under the pointer, for the entries a cell adds.
-  column: string;
   /// Whether this host can show a path in its file manager at all; the
   /// entry is absent in a plain browser, as the button is.
   canReveal: boolean;
@@ -177,30 +175,6 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
   const only = targets[0];
   const entries: MenuEntry[] = [];
 
-  // What the cell under the pointer adds, ahead of what the row offers.
-  if (opts.column === "name") {
-    entries.push({
-      action: "rename",
-      name: "Rename…",
-      disabled: !one
-        ? ONE_AT_A_TIME
-        : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
-    });
-    entries.push({
-      action: "copy_id",
-      name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
-      disabled: null,
-    });
-    entries.push({ separator: true });
-  } else if (opts.column === "bytes") {
-    entries.push({
-      action: "copy_path",
-      name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
-      disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
-    });
-    entries.push({ separator: true });
-  }
-
   entries.push({
     action: "browse",
     name: browseLabel(only),
@@ -229,20 +203,35 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
     name: off === targets.length ? "Turn on" : "Turn off",
     disabled: firstBlocked(targets, notSwitchableReason),
   });
+  entries.push({ separator: true });
+
   entries.push({
     action: "edit",
     name: "Edit settings…",
     disabled: !one ? ONE_AT_A_TIME : only.editBlocked,
   });
   entries.push({
-    action: "compare",
-    name: "Compare two syncs…",
-    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+    action: "rename",
+    name: "Rename…",
+    disabled: !one
+      ? ONE_AT_A_TIME
+      : (notInConfig(only) ?? (only.kind !== "group" ? "Only a group has a name" : null)),
   });
   entries.push({ separator: true });
+
+  entries.push({
+    action: "history",
+    name: "Show commit history",
+    disabled: firstBlocked(targets, noStoreReason),
+  });
+  entries.push({
+    action: "compare",
+    name: "Compare two versions…",
+    disabled: !one ? ONE_AT_A_TIME : notComparableReason(only),
+  });
   entries.push({
     action: "log",
-    name: "Show log",
+    name: "Show step log",
     disabled: !one
       ? ONE_AT_A_TIME
       : only.kind === "applet"
@@ -253,11 +242,8 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
             ? "No step under this group has run yet"
             : null,
   });
-  entries.push({
-    action: "history",
-    name: "Show commit history",
-    disabled: firstBlocked(targets, noStoreReason),
-  });
+  entries.push({ separator: true });
+
   if (opts.canReveal) {
     entries.push({
       action: "reveal",
@@ -265,7 +251,18 @@ export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
       disabled: firstBlocked(targets, (t) => t.revealBlocked),
     });
   }
+  entries.push({
+    action: "copy_path",
+    name: one ? "Copy path" : `Copy ${plural(targets.length, "path")}`,
+    disabled: firstBlocked(targets, (t) => (t.revealPath ? null : "Nothing on disk yet")),
+  });
+  entries.push({
+    action: "copy_id",
+    name: one ? "Copy id" : `Copy ${plural(targets.length, "id")}`,
+    disabled: null,
+  });
   entries.push({ separator: true });
+
   entries.push({
     action: "reset",
     name: "Reset (preserve attachments)…",

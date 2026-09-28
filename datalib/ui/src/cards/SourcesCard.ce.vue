@@ -640,9 +640,9 @@ function menuTarget(row: Row): MenuTarget {
   };
 }
 
-function contextMenuItems(anchor: Row, targets: Row[], column: string): MenuEntry[] {
+function contextMenuItems(anchor: Row, targets: Row[]): MenuEntry[] {
   if (targets.length === 0) return [];
-  return rowMenu(targets.map(menuTarget), { column, canReveal, revealLabel }).map((entry) =>
+  return rowMenu(targets.map(menuTarget), { canReveal, revealLabel }).map((entry) =>
     entry.separator
       ? { name: "", separator: true }
       : {
@@ -1090,7 +1090,7 @@ async function onWizardSubmit(payload: {
   closeWizard();
 }
 
-// ── "Compare two syncs…": a diff group written from a source and two
+// ── "Compare two versions…": a diff group written from a source and two
 // commits of its raw store (docs/dev/plans/completed/diff_renderer.md), wired into
 // the fan-ins like any render step, then its render step synced. Not the
 // source: both commits are already in the store, so a download adds

@@ -22,9 +22,7 @@ async function openManager(page: Page) {
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 }
 
-test("a row's menu offers every action, and the cell under the pointer adds its own", async ({
-  page,
-}) => {
+test("a row's menu offers every action, grouped, wherever the pointer is", async ({ page }) => {
   await openManager(page);
   const row = groupRow(page, "unified_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
@@ -35,9 +33,12 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
     "Sync now",
     "Turn off",
     "Edit settings…",
-    "Compare two syncs…",
-    "Show log",
+    "Rename…",
     "Show commit history",
+    "Compare two versions…",
+    "Show step log",
+    "Copy path",
+    "Copy id",
     "Reset (preserve attachments)…",
     "Reset (drop attachments)…",
     "Remove from config, with everything under it",
@@ -46,10 +47,9 @@ test("a row's menu offers every action, and the cell under the pointer adds its 
   await expect(menuEntry(page, "Reset (preserve attachments)…")).toHaveClass(MENU_DISABLED);
   await page.keyboard.press("Escape");
 
-  // The Name cell adds Rename and Copy id ahead of the row's entries.
+  // The Name cell offers the same menu as any other.
   await row.locator('[col-id="name"]').click({ button: "right" });
-  await expect(menuEntries(page).first()).toHaveText("Rename…");
-  await expect(menuEntries(page).nth(1)).toHaveText("Copy id");
+  await expect(menuEntries(page)).toHaveCount(13);
   await page.keyboard.press("Escape");
 });
 
