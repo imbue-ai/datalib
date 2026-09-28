@@ -105,7 +105,11 @@ onUnmounted(() => stop?.());
       @initialized="onInitialized"
     />
     <NewerRootView v-else-if="gate === 'newer-root' && config" :config="config" />
-    <ConfigErrorView v-else-if="gate === 'config-error' && config" :config="config" />
+    <ConfigErrorView
+      v-else-if="gate === 'config-error' && config"
+      :config="config"
+      @saved="refresh"
+    />
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>

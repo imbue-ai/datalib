@@ -11,6 +11,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { checkConfig, saveConfig, type ConfigResponse, type Diagnostic } from "@/api";
 
 const props = defineProps<{ config: ConfigResponse }>();
+const emit = defineEmits<{ (e: "saved"): void }>();
 
 const editor = ref<HTMLTextAreaElement | null>(null);
 const text = ref(props.config.text);
@@ -43,17 +44,31 @@ const worst = computed(
   () => live.value.find((d) => d.severity === "fatal") ?? live.value[0] ?? null,
 );
 
-let checkAt = 0;
+// One check on its way at a time, and the newest text checked when it
+// lands: a request per input event would queue Save behind the rest.
+let checking = false;
+let checkAgain = false;
 async function recheck() {
   dirty.value = true;
-  const mine = ++checkAt;
+  if (checking) {
+    checkAgain = true;
+    return;
+  }
+  checking = true;
   try {
-    const r = await checkConfig(text.value);
-    // Ignore an answer that a later keystroke has already outdated.
-    if (mine === checkAt) live.value = r.diagnostics;
-  } catch {
-    // A failed lint is not worth a message of its own: Save will say
-    // whatever is really wrong, and the stale list is still useful.
+    do {
+      checkAgain = false;
+      const asked = text.value;
+      try {
+        const r = await checkConfig(asked);
+        if (asked === text.value) live.value = r.diagnostics;
+      } catch {
+        // A failed lint is not worth a message of its own: Save will say
+        // whatever is really wrong, and the stale list is still useful.
+      }
+    } while (checkAgain);
+  } finally {
+    checking = false;
   }
 }
 
@@ -80,10 +95,10 @@ async function save() {
       saveError.value = r.error ?? "The config was rejected.";
       return;
     }
-    // Saved clean. Nothing else to do: the write raises
-    // `config_changed`, `App.vue` refetches, `app_ready` comes back
-    // true and this screen goes away by itself.
+    // Saved clean. `App.vue` refetches now rather than on the
+    // `config_changed` the write raises, which waits on the file watcher.
     dirty.value = false;
+    emit("saved");
     await nextTick();
   } catch (e) {
     saveError.value = (e as Error).message;
