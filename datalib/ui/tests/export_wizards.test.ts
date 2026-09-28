@@ -43,6 +43,22 @@ function = "render_markdown"
 inputs = ["s/ingest"]
 `);
 
+/// Each input here is a complete snapshot, so a new source drops what
+/// the next export no longer holds unless someone unticks the box.
+describe("the snapshot switch", () => {
+  it("starts on for every file-backed form, and is written", () => {
+    for (const entry of [
+      byType("google_takeout"),
+      byType("linkedin"),
+      byType("sms_backup_restore"),
+      byType("contacts", "vcf"),
+    ]) {
+      expect(seedFieldValues(entry)["common.always_clear_before_ingest"], entry.label).toBe(true);
+      expect(toml(entry), entry.label).toContain("always_clear_before_ingest = true");
+    }
+  });
+});
+
 describe("the catalog's contacts variants", () => {
   const CONTACTS = CATALOG.filter((e) => e.type === "contacts");
 

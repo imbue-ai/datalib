@@ -859,7 +859,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "bool",
         target: "common.always_clear_before_ingest",
         label: "Treat the folder as the whole address book",
-        default: false,
+        default: true,
         help:
           "Each sync rewrites the mirror from the files in the folder now, so a contact " +
           "whose file is gone drops out (the store's history keeps it).",
@@ -1112,7 +1112,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "bool",
         target: "common.always_clear_before_ingest",
         label: "Treat each export as complete",
-        default: false,
+        default: true,
         help:
           "Each sync rewrites the mirror from the export as it is now, so what a newer " +
           "export no longer holds drops out (the store's history keeps it). Only for a " +
@@ -1183,7 +1183,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "bool",
         target: "common.always_clear_before_ingest",
         label: "Treat each export as complete",
-        default: false,
+        default: true,
         help:
           "Each sync rewrites the mirror from the export as it is now, so a message or " +
           "connection a newer export no longer holds drops out (the store's history keeps " +
@@ -1298,7 +1298,7 @@ export const CATALOG: CatalogEntry[] = [
         kind: "bool",
         target: "common.always_clear_before_ingest",
         label: "Treat the folder as the whole archive",
-        default: false,
+        default: true,
         help:
           "Each sync rewrites the mirror from the backups in the folder now, so a message " +
           "no longer in any of them drops out (the store's history keeps it). Leave it off " +
