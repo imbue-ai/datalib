@@ -481,7 +481,7 @@ async function dataRoot(request: APIRequestContext): Promise<string> {
 }
 
 /// A comparison of the fixture's Slack, written straight into the config
-/// with a tree on disk, as "Compare two syncs…" and its first sync leave
+/// with a tree on disk, as "Compare two versions…" and its first sync leave
 /// one. No inputs, so saving it syncs nothing.
 async function addComparison(page: Page, root: string, id: string, name: string) {
   mkdirSync(`${root}/${id}/render_markdown`, { recursive: true });

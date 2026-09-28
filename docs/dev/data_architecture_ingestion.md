@@ -460,7 +460,7 @@ it at the level of the things the rows make up. A **diff group**
 `params.diff`) is the source's own render step run at both commits and
 subtracted, written as an ordinary render tree — documents with the
 changes marked, `grid_rows` with `diff_status` set — so everything that
-serves a source serves the difference. "Compare two syncs…" on the
+serves a source serves the difference. "Compare two versions…" on the
 Manage screen writes one; [`config_model.md`](config_model.md) has the
 shape and [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) the design
 and what it cost to build.

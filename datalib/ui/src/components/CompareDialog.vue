@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// "Compare two syncs…" on a source: pick two commits of its raw store
+// "Compare two versions…" on a source: pick two commits of its raw store
 // and a name, and a diff group is written between them —
 // docs/dev/plans/completed/diff_renderer.md. The commits come from the source's
 // ingest tree's history; the newest is the default `to` and the one
@@ -118,9 +118,9 @@ function submit() {
 
 <template>
   <div class="cmp-backdrop dialog-backdrop" @click.self="emit('close')" @keydown="onKeydown">
-    <div class="cmp dialog" role="dialog" aria-modal="true" aria-label="Compare two syncs">
+    <div class="cmp dialog" role="dialog" aria-modal="true" aria-label="Compare two versions">
       <header class="cmp-head dialog-head">
-        <h2>Compare two syncs of {{ source.name }}</h2>
+        <h2>Compare two versions of {{ source.name }}</h2>
         <button class="cmp-x dialog-x" aria-label="Close" @click="emit('close')">×</button>
       </header>
       <div class="cmp-body dialog-body">

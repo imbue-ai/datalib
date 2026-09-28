@@ -127,10 +127,17 @@ const stoppingBtn = (page: Page, rowId: string) =>
 
 /// Start a source from its group's row, and wait for its request to have
 /// been written: `click()` resolves when the event is dispatched, not
-/// when the POST behind it returns.
+/// when the POST behind it returns. Waits on the POST itself, not on the
+/// "Queued a sync for" banner, which comes down when the request closes:
+/// a sync nothing holds (the PDF folder, a released tape) can close
+/// before a check for the banner first looks.
 async function start(page: Page, s: Source) {
+  const written = page.waitForResponse(
+    (r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/requests",
+  );
   await syncBtn(page, `group:${s.id}`).click();
-  await expect(page.getByText(/Queued a sync for/)).toBeVisible();
+  const response = await written;
+  expect(response.ok(), `the sync request for ${s.id}: ${response.status()}`).toBe(true);
 }
 
 /// A row's status icon reading `word`, as a locator to wait on.

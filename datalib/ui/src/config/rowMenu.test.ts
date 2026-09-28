@@ -19,7 +19,7 @@ const target = (over: Partial<MenuTarget> = {}): MenuTarget => ({
   ...over,
 });
 
-const opts = { column: "status", canReveal: true, revealLabel: "Reveal in Finder" };
+const opts = { canReveal: true, revealLabel: "Reveal in Finder" };
 
 function entry(menu: MenuEntry[], action: string) {
   const e = menu.find((m) => !m.separator && m.action === action);
@@ -28,18 +28,25 @@ function entry(menu: MenuEntry[], action: string) {
 }
 
 describe("rowMenu", () => {
-  it("offers every row action, enabled, for one ordinary group", () => {
+  it("offers every row action, enabled, for one ordinary group, grouped by what it touches", () => {
     const menu = rowMenu([target()], opts);
-    const actions = menu.filter((m) => !m.separator).map((m) => !m.separator && m.action);
+    const actions = menu.map((m) => (m.separator ? "—" : m.action));
     expect(actions).toEqual([
       "browse",
       "sync",
       "turn_off",
+      "—",
       "edit",
+      "rename",
+      "—",
+      "history",
       "compare",
       "log",
-      "history",
+      "—",
       "reveal",
+      "copy_path",
+      "copy_id",
+      "—",
       "reset",
       "reset_blobs",
       "remove",
@@ -181,26 +188,19 @@ describe("rowMenu", () => {
     );
   });
 
-  it("adds the cell's own entries ahead of the row's", () => {
-    const name = rowMenu([target()], { ...opts, column: "name" });
-    expect(name[0]).toMatchObject({ action: "rename", disabled: null });
-    expect(name[1]).toMatchObject({ action: "copy_id", name: "Copy id" });
-    expect(name[2]).toEqual({ separator: true });
-    expect(
-      entry(rowMenu([target({ kind: "step" })], { ...opts, column: "name" }), "rename").disabled,
-    ).toBe("Only a group has a name");
-    const bytes = rowMenu([target(), target({ id: "b", name: "B", revealPath: null })], {
-      ...opts,
-      column: "bytes",
-    });
-    expect(bytes[0]).toMatchObject({
-      action: "copy_path",
+  it("offers Rename and the copies wherever the pointer is, and says why not", () => {
+    expect(entry(rowMenu([target({ kind: "step" })], opts), "rename").disabled).toBe(
+      "Only a group has a name",
+    );
+    expect(entry(rowMenu([target(), target({ id: "b" })], opts), "rename").disabled).toBe(
+      "One row at a time",
+    );
+    const two = rowMenu([target(), target({ id: "b", name: "B", revealPath: null })], opts);
+    expect(entry(two, "copy_path")).toMatchObject({
       name: "Copy 2 paths",
       disabled: "B: Nothing on disk yet",
     });
-    expect(rowMenu([target()], opts).some((m) => !m.separator && m.action === "rename")).toBe(
-      false,
-    );
+    expect(entry(two, "copy_id")).toMatchObject({ name: "Copy 2 ids", disabled: null });
   });
 
   it("omits Reveal where the host cannot reveal", () => {
