@@ -86,9 +86,6 @@ Every table's schema is a hand-written struct in `datalib_schema` with
 `#[derive(PortableTable)]` deriving the DDL, so the same struct defines
 what a renderer writes and what the index reads.
 
-Grid index reads that store — **it never re-parses markdown**. The
-markdown is for humans; the store is the machine-readable projection.
-
 This part of the pipeline aspires to the same properties as download:
 
   - **Monitorable**: the same progress-bar contract as download, though
@@ -156,10 +153,9 @@ then goes away; `plans/multimodal_retrieval.md` §4 measured the same
 text already stored five times on a real data root.
 
 Whatever the medium, the *contract* holds: render emits a human
-artifact and a separate machine-readable projection, the projection is
-never recovered by parsing the markdown, and the index reads the
-projection — AGENTS.md's "QMDs are write-only", which holds whatever
-database the markdown sits in.
+artifact and a separate machine-readable projection, and the index
+reads the projection — **it never re-parses markdown** (AGENTS.md's
+"QMDs are write-only"), whatever database the markdown sits in.
 
 ## 3. The projection
 
@@ -313,11 +309,9 @@ render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
 rather than going through `datalib-time` alone. The retrofit is in
 [`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
-**P4 — Parse reads the raw store and nothing else.** The stage contract
-from §2, restated here because parse is where the temptation appears:
-a file-backed provider's `input_path` is *download's* input, not
-parse's, and reaching for it makes the projection unreproducible
-offline.
+**P4 — Parse reads the raw store and nothing else** (§2). Parse is
+where the temptation appears: a file-backed provider's `input_path` is
+*download's* input, not parse's.
 
 **P5 — Parse produces the provider's shape; render produces the shared
 one.** The seam matters. `render/parse.rs` deserializes into types that
@@ -416,19 +410,15 @@ it safe is that the upstream's own word survives in
 `upstream_entity_kind`. Collapse for the consumer; keep the original
 for the record.
 
-**U5 — Unify at render, never at parse, and never in the raw store.**
-Where the seams are: the raw store keeps each provider's tables
-separate and faithful; parse produces the provider's own shape (P5);
-render projects onto the shared one. A provider that finds itself
-unifying inside `parse.rs` is usually about to teach a shared type
-something only it knows.
+**U5 — Unify at render, never at parse (P5), and never in the raw
+store.** A provider that finds itself unifying inside `parse.rs` is
+usually about to teach a shared type something only it knows.
 
 **When not to unify at all.** A shape that does not fit an existing
-family should not be forced into it — that is what the family list
-above means by "opening one should be deliberate." The tell is a
-provider inventing `kind` values that mean something different from
-every other member's, or needing a column no sibling would ever set.
-Two families are cheaper than one family with an exception in it.
+family should not be forced into it. The tell is a provider inventing
+`kind` values that mean something different from every other member's,
+or needing a column no sibling would ever set. Two families are
+cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
@@ -805,14 +795,9 @@ is the design record.
 
 ## 6. Timestamps
 
-If [object identity](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That global ordering is what makes the UI's union grid time-sortable, what makes `before:` / `after:` queries mean the same thing across Slack and GitHub and Notion, and what lets a sync delta be "what happened in the last week" instead of "what happened to be at the top of each provider's result list."
+If [object identity](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal sibling: **timestamps give global temporal ordering** across every provider that has a time-shape to its data. That ordering is what makes the union grid time-sortable and makes `before:` / `after:` mean the same thing across Slack and GitHub and Notion.
 
-The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** There are two of them, and they mean different ends of the thing:
-
-- **`created_at`** is when the thing came into being — a Slack message's `ts`, a PR's `created_at`, a page's `created_time`. For a document row (the thread, the conversation, the PR) it is the earliest moment in the document: the first message, not the last. It is the global sort key.
-- **`modified_at`** is when it last changed — the last message or reaction in a thread, a PR's `updated_at`, a page's `last_edited_time`, a vCard's `REV`. For a row inside a document it is the edit stamp where the source keeps one and **null** otherwise; null means "not known to have changed since it was created", never a copy of `created_at`.
-
-The per-provider table is in [`grid_rows.md`](grid_rows.md#created_at-and-modified_at). Concretely, for either stamp:
+The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** What `created_at`, `modified_at` and `touched_at` each mean, for a document row and for a row inside one, is in [`grid_rows.md`](grid_rows.md#created_at-modified_at-and-touched_at). For any of them:
 
 - **Real upstream timestamp when one exists.** Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
@@ -825,20 +810,21 @@ documented in
 [the ingestion doc](data_architecture_ingestion.md#single-source-of-truth-datalib-time).
 
 ### No fabricated timestamps
-A logical corollary of the broader "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)" principle, called out here because timestamps are the easiest place to accidentally violate it:
+A corollary of "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)", called out because timestamps are the easiest place to violate it:
 
 - When upstream gives us no timestamp and we can't pick one up from a parent (no `bump_micros` source), `created_at` is **null**. Not "epoch," not "now," not "midnight UTC of the row's date."
-- When upstream's timestamp string is naive and we haven't audited that feed, parsing returns an error — surfaced as a warning in the per-run summary, not silently rescued.
+- When upstream sends a stamp that will not parse, the row's stamp is null and the failure is a `problems` row (`own_stamp_ms` in `chat-common`, `GridRowBuilder::build_or_record`), so an empty time is never mistaken for a record that had none.
 - Fallback paths that synthesize a value when upstream is silent are anti-patterns even when they "look plausible." They mask incompleteness in ways the consumer can't tell apart from real data.
+
+Perseus breaks this rule: it stamps each section 2026-01-01 plus an offset derived from its locator (`render_synth_ts` in `perseus_render`), to give the text an order.
 
 ### Entities without a time-shape
 Some upstream object types genuinely don't have a meaningful timestamp:
 
 - **Contacts (vCards).** A person doesn't have a creation event; they exist. The vCard's `REV` field is sometimes set, but most contacts lack one.
-- **Perseus texts and other immutable corpora.** The corpus is upstream-frozen; per-section "timestamps" would be nonsense.
-- **Workspace/account metadata** (Slack `team`, GitHub `org`): arguably has a creation date, but it isn't shown in any time-ordered view.
+- **Immutable corpora** such as a classical text: the corpus is upstream-frozen, and per-section "timestamps" would be nonsense.
 
-For these `created_at` is **null** and the consumer query filters them out of time-ordered views — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
+For these `created_at` is **null**, and `before:`/`after:` exclude the row — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
 
 ## See also
 

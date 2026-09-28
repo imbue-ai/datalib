@@ -106,24 +106,12 @@ cursor and digest together — into memory, and `fswalk::decide` compares
 each entry against them, skipping the `read(2)` + `blake3` on
 unchanged files.
 
-A reset (`datalib-dag --reset`) empties the store but not this host's
+A reset (`datalib-dag --reset <group>/ingest`) empties the store but not this host's
 cache, which lives outside it; to force a full rehash, drop the cache
 file.
 
-Caveat: the `<t>_bookkeeping` sidecars get truncated along with
-the entity tables, so the running `attempt_count` visible at HEAD
-resets to 1 on every scan. The per-commit history is NOT lost —
-dolt preserves every prior commit's bookkeeping rows, queryable
-via `dolt_at_<t>_bookkeeping('HEAD~N')` and the
-`dolt_diff_<t>_bookkeeping` virtual table — so "did this row error on
-the previous scan?"
-is still answerable, just not via a single SELECT against HEAD.
-What's gone is the running-total semantic ("this row has failed
-across 5 sync runs" as a single column value). For fsindex this
-is acceptable because the upstream is the local filesystem —
-there's no API quota to protect or transient-failure budget to
-track across scans. A future provider where the running total
-matters would need a different reconciliation strategy.
+`files` and `dirs` carry no bookkeeping sidecar; `scan_meta` is the one
+table with one, recording when the root was last scanned.
 
 ## The fast-rescan trick
 
@@ -135,8 +123,7 @@ For each known path, before opening the file:
    hash that went with them from this host's fingerprint cache.
 3. If `stamp_kind = inode` and `(mtime, size, inode, dev)` all match
    the live stat, the cached digest is still valid — no rehash, no
-   file read. `attempt_count` does not bump (we didn't attempt
-   anything).
+   file read.
 4. If anything mismatched, open the file, rehash, and write the new
    `files` row and the new cache entry.
 
@@ -308,11 +295,10 @@ part of any tree-hash; see §"Stamping policy".
 - No JSONL wire-event tape. There is no upstream wire to mirror; the
   filesystem itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
-  succeeds or it's a real error; we don't have an upstream API
-  with 5xx behavior to reason about. Unreadable entries get
-  `attempt_count` and `last_error` in the `_bookkeeping` sidecar
-  per the framework's universal pattern, and a future scan picks
-  them up if they become readable.
+  succeeds or it's a real error. An unreadable entry is logged
+  (`fsindex_entry_error`) and counted in the `fsindex_phase_breakdown`
+  event (`stat_errors`, `read_errors`, `non_utf8_paths`); nothing about
+  it is written to the store, and the next scan simply tries it again.
 
 ## Open follow-ups
 
