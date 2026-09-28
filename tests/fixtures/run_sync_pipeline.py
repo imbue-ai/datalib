@@ -737,7 +737,9 @@ def _run_pipeline_twice_and_diff(
     driver.sync(chains)
 
 
-def _latest_problem_counts(workspace: Path, steps: list[str]) -> dict[str, dict[str, int]]:
+def _latest_problem_counts(
+    workspace: Path, steps: list[str]
+) -> dict[str, dict[str, int]]:
     """`step -> {labels: value}`: each step's newest `problems` sample,
     picked the way `datalib_runs::latest_metric` picks what the Manage
     screen's Problems cell shows."""
