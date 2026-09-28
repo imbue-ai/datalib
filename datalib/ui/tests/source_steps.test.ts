@@ -27,6 +27,7 @@ import {
   readersOf,
   removedWith,
   setQmdSteps,
+  qmdIndexingOf,
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
@@ -92,7 +93,9 @@ describe("listSteps", () => {
     expect(by.get("slack/render_markdown")).toBe("render");
     expect(by.get("unified_index/grid_index")).toBe("index");
     expect(by.get("unified_index/qmd_aggregator")).toBe("index");
-    const qmd = new Map(listSteps(setQmdSteps(PAIR, "slack", true)).map((s) => [s.id, s]));
+    const qmd = new Map(
+      listSteps(setQmdSteps(PAIR, "slack", "keyword_and_embed")).map((s) => [s.id, s]),
+    );
     expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.name).toBe("Work Slack (embeddings)");
@@ -906,7 +909,7 @@ inputs = ["unified_index/qmd_aggregator"]
   /// source's reads the aggregator: a step downstream of a fan-in that
   /// waits on every source would finish only when the slowest does.
   it("adds the two steps, each reading what it follows, and wires both into the aggregator", () => {
-    const next = setQmdSteps(MAPPED, "slack", true);
+    const next = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
     expect(inputsOf(next, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
     expect(inputsOf(next, "slack/embed")).toEqual(["slack/keyword_index"]);
     expect(inputsOf(next, "unified_index/qmd_aggregator")).toEqual([
@@ -914,18 +917,54 @@ inputs = ["unified_index/qmd_aggregator"]
       "slack/embed",
     ]);
     expect(inputsOf(next, "unified_index/embedding_map")).toEqual(["unified_index/qmd_aggregator"]);
-    expect(setQmdSteps(next, "slack", true)).toBe(next);
+    expect(setQmdSteps(next, "slack", "keyword_and_embed")).toBe(next);
+    expect(qmdIndexingOf(listSteps(next), "slack")).toBe("keyword_and_embed");
+  });
+
+  /// Keyword search without the slow embeddings: the embed step and the
+  /// aggregator's edge to it go, the keyword index and its edge stay.
+  /// Ticking embeddings back on restores both.
+  it("keeps the keyword index when only the embeddings go", () => {
+    const both = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
+    const keyword = setQmdSteps(both, "slack", "keyword");
+    expect(inputsOf(keyword, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
+    expect(inputsOf(keyword, "slack/embed")).toBeUndefined();
+    expect(inputsOf(keyword, "unified_index/qmd_aggregator")).toEqual(["slack/keyword_index"]);
+    expect(qmdIndexingOf(listSteps(keyword), "slack")).toBe("keyword");
+    expect(setQmdSteps(keyword, "slack", "keyword")).toBe(keyword);
+    const back = setQmdSteps(keyword, "slack", "keyword_and_embed");
+    expect(inputsOf(back, "slack/embed")).toEqual(["slack/keyword_index"]);
+    expect(inputsOf(back, "unified_index/qmd_aggregator")).toEqual([
+      "slack/keyword_index",
+      "slack/embed",
+    ]);
+  });
+
+  /// A step reading the embeddings would name an input that no longer
+  /// exists, which the loader drops it for, so it goes with them.
+  it("takes a step that reads the embeddings with them", () => {
+    const reader = `${setQmdSteps(MAPPED, "slack", "keyword_and_embed")}
+[[steps]]
+group = "slack"
+function = "cluster"
+command = "my-clusterer"
+inputs = ["slack/embed"]
+`;
+    const keyword = setQmdSteps(reader, "slack", "keyword");
+    expect(inputsOf(keyword, "slack/cluster")).toBeUndefined();
+    expect(inputsOf(keyword, "slack/keyword_index")).toBeDefined();
   });
 
   /// Turning search off for a source takes its steps and the
   /// aggregator's edges to them; the grid keeps the source.
   it("takes both steps and every edge to them back out", () => {
-    const off = setQmdSteps(setQmdSteps(MAPPED, "slack", true), "slack", false);
+    const off = setQmdSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"), "slack", "none");
     expect(inputsOf(off, "slack/keyword_index")).toBeUndefined();
     expect(inputsOf(off, "slack/embed")).toBeUndefined();
     expect(inputsOf(off, "unified_index/qmd_aggregator")).toEqual([]);
     expect(inputsOf(off, "unified_index/embedding_map")).toEqual(["unified_index/qmd_aggregator"]);
     expect(inputsOf(off, "unified_index/grid_index")).toEqual(["slack/render_markdown"]);
+    expect(qmdIndexingOf(listSteps(off), "slack")).toBe("none");
   });
 
   /// Without the aggregator search is off, and nothing would retire what
@@ -935,7 +974,9 @@ inputs = ["unified_index/qmd_aggregator"]
       PAIR,
       listSteps(PAIR).filter((s) => s.id === "unified_index/qmd_aggregator"),
     );
-    expect(inputsOf(setQmdSteps(noQmd, "slack", true), "slack/keyword_index")).toBeUndefined();
+    expect(
+      inputsOf(setQmdSteps(noQmd, "slack", "keyword_and_embed"), "slack/keyword_index"),
+    ).toBeUndefined();
   });
 
   /// A render is wired into the grid index and never into the aggregator
@@ -952,7 +993,7 @@ inputs = ["unified_index/qmd_aggregator"]
   /// Removing a source's ingest takes everything that reads it, however
   /// far down. A fan-in only loses the edge.
   it("finds every step reading a removed one, but no fan-in", () => {
-    const all = listSteps(setQmdSteps(MAPPED, "slack", true));
+    const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
     expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual([
       "slack/render_markdown",
       "slack/keyword_index",
@@ -963,7 +1004,7 @@ inputs = ["unified_index/qmd_aggregator"]
   /// Removing the aggregator turns search off, so every source's qmd
   /// steps go with it — though none of them reads it.
   it("takes every source's qmd steps with the aggregator", () => {
-    const all = listSteps(setQmdSteps(MAPPED, "slack", true));
+    const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
     expect(readersOf(["unified_index/qmd_aggregator"], all)).toEqual([]);
     expect(removedWith(["unified_index/qmd_aggregator"], all).map((s) => s.id)).toEqual([
       "slack/keyword_index",

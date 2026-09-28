@@ -180,7 +180,7 @@ pub fn rewrite(text: &str) -> Result<String> {
     if !blocks.is_empty() {
         out = format!("{}\n", out.trim_end());
         out.push_str(
-            "\n# Added by datalib-migrate-config: each source's own qmd steps, which\n\
+            "\n# Added by the config migration: each source's own qmd steps, which\n\
              # `unified_index/qmd_aggregator` reads.\n",
         );
         for b in blocks {

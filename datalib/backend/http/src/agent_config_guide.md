@@ -161,7 +161,11 @@ writes no other. A config in the retired shape (steps with a
 refused, and the diagnostic says so; tell the user to rewrite it once
 with
 `datalib-migrate-config <data_root> --force`. There is no API for it,
-and you should not try to translate the file yourself.
+and you should not try to translate the file yourself. A `qmd_index`
+step is different: the server rewrites it into `qmd_aggregator` and each
+source's own `keyword_index` and `embed` steps as soon as it reads the
+file, keeping the old one as `config.toml.bak`, so re-read the config
+after writing one.
 
 ## Adding your own step commands
 

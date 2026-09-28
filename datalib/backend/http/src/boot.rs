@@ -80,6 +80,11 @@ pub async fn build_state(
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
     crate::watch::spawn((*root).clone(), root_tx.clone());
 
+    // Before the loop, so its first read is of the current shape.
+    let data_root = (*root).clone();
+    tokio::task::spawn_blocking(move || crate::config_upgrade::upgrade(&data_root)).await?;
+    crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
+
     let sync = supervisor::SyncControl::new(root.clone());
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),

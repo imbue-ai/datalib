@@ -28,12 +28,13 @@ const renderToggle = (page: Page) =>
   wizard(page).locator(
     '.wiz-field:has(> .wiz-label:text-is("Render this source into markdown")) input.wiz-bool',
   );
-/// The Rendering section's second toggle: whether this source has its
-/// own qmd steps, and so is reachable by free-text search.
-const qmdToggle = (page: Page) =>
-  wizard(page).locator(
-    '.wiz-field:has(> .wiz-label:text-is("Index the markdown for free-text search")) input.wiz-bool',
-  );
+/// The Rendering section's qmd toggles: whether this source has its own
+/// `keyword_index` step, and so is reachable by free-text search, and
+/// whether it also has the `embed` step that reads it.
+const toggle = (page: Page, caption: string) =>
+  wizard(page).locator(`.wiz-field:has(> .wiz-label:text-is("${caption}")) input.wiz-bool`);
+const keywordToggle = (page: Page) => toggle(page, "Keyword-index the markdown");
+const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning");
 
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
@@ -46,6 +47,11 @@ function fanInInputs(config: string, fn: string): string[] {
     .map((t) => t.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
 }
+/// A step's own table in the config text. Its id is never written — it is
+/// composed from these two keys — so the id alone appears only where
+/// another step names it as an input.
+const stepBlock = (group: string, fn: string) =>
+  new RegExp(`group = "${group}"\nfunction = "${fn}"\n`);
 const idField = (page: Page) => field(page, "Id");
 /// The step-role mark. It rides after the name — there is no Step
 /// column any more — and `aria-label` is the only place the word
@@ -262,8 +268,11 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   const editor = page.locator(".m2-editor");
   await pickClaude(page);
   await nameField(page).fill("Rows Only");
-  await expect(qmdToggle(page)).toBeChecked();
-  await qmdToggle(page).uncheck();
+  await expect(keywordToggle(page)).toBeChecked();
+  await expect(embedToggle(page)).toBeChecked();
+  await keywordToggle(page).uncheck();
+  // The embeddings read the keyword index, so they cannot be kept alone.
+  await expect(embedToggle(page)).toBeDisabled();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Rows Only.")).toBeVisible();
 
@@ -271,22 +280,39 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   const added = await editor.inputValue();
   expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
   expect(fanInInputs(added, "qmd_aggregator")).not.toContain("rows-only/keyword_index");
-  expect(added).not.toContain("rows-only/keyword_index");
+  expect(added).not.toMatch(stepBlock("rows-only", "keyword_index"));
 
   // Reopening reads the answer back off the config, not off a default.
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
-  await expect(qmdToggle(page)).not.toBeChecked();
+  await expect(keywordToggle(page)).not.toBeChecked();
   // Rendering off leaves nothing to index, so the question cannot be
   // answered — and answering it would write an input naming a step
   // that no longer exists.
   await renderToggle(page).uncheck();
-  await expect(qmdToggle(page)).toBeDisabled();
+  await expect(keywordToggle(page)).toBeDisabled();
+  await expect(embedToggle(page)).toBeDisabled();
   await renderToggle(page).check();
 
-  await qmdToggle(page).check();
+  // Keyword search alone: the keyword index, and no embed step.
+  await keywordToggle(page).check();
+  await embedToggle(page).uncheck();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
+  await expect(editor).toHaveValue(stepBlock("rows-only", "keyword_index"));
+  const keywordOnly = await editor.inputValue();
+  expect(keywordOnly).not.toMatch(stepBlock("rows-only", "embed"));
+  expect(fanInInputs(keywordOnly, "qmd_aggregator")).toContain("rows-only/keyword_index");
+  expect(fanInInputs(keywordOnly, "qmd_aggregator")).not.toContain("rows-only/embed");
+
+  await expandGroup(page, "rows-only");
+  await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
+  await expect(keywordToggle(page)).toBeChecked();
+  await expect(embedToggle(page)).not.toBeChecked();
+  await embedToggle(page).check();
+  await wizard(page).getByRole("button", { name: "Save changes" }).click();
+  // Not the toast: the first save's may still be on screen.
+  await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
   expect(fanInInputs(saved, "qmd_aggregator")).toEqual(
     expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),

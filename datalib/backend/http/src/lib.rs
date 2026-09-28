@@ -30,6 +30,7 @@ pub mod applets;
 pub mod auth;
 pub mod binaries;
 pub mod boot;
+pub mod config_upgrade;
 pub mod connect;
 mod embed;
 pub mod frontend;
@@ -922,24 +923,8 @@ async fn put_config(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    // One temp name per write, or two PUTs landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    if let Err(e) = write_owner_only(&tmp, req.text.as_bytes()) {
-        tracing::error!("put_config: write {}: {e}", tmp.display());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        tracing::error!("put_config: rename {}: {e}", path.display());
+    if let Err(e) = replace_config(&path, &req.text) {
+        tracing::error!("put_config: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     reload_applets(&s).await;
@@ -1024,6 +1009,25 @@ fn owner_only_options() -> std::fs::OpenOptions {
         opts.mode(0o600);
     }
     opts
+}
+
+/// Replace the config in one rename, so no reader sees half a file.
+fn replace_config(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    // One temp name per write, or two writes landing together write one
+    // file and the second rename finds it gone. The `.tmp` suffix is what
+    // the root watcher ignores, so it stays.
+    let tmp = path.with_file_name(format!(
+        "config.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    write_owner_only(&tmp, text.as_bytes())?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Create (or truncate) `path` owner-only and write `bytes` to it. A

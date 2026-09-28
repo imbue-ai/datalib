@@ -274,7 +274,12 @@ re-rendering reruns that source's two steps and nobody else's. A
 `keyword_index` the aggregator does not name is warned about: each
 aggregation retires what it indexed. Removing the aggregator turns
 free-text search off; the Manage screen takes every source's qmd steps
-with it.
+with it. A `qmd_index` step is the shape from before the aggregator,
+when that fan-in fed the per-source steps or did their work itself; the
+loader refuses it, and `datalib-http` rewrites it as soon as it reads such
+a file, at boot or on any change to it, keeping the old text as
+`config.toml.bak` (`http/src/config_upgrade.rs`).
+`datalib-migrate-config` makes the same rewrite from a terminal.
 
 So the lists are what decides which indexes a source reaches. A render
 step named by neither fan-in renders and reaches nothing. Named by
@@ -288,12 +293,13 @@ off just its `embed` step keeps keyword search.
 The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
 render step is removed, and `setQmdSteps` for the Rendering section's
-"Index the markdown for free-text search" tickbox, which adds or
-removes the source's two steps and their edges into `qmd_aggregator`.
-Removing any step takes every step that reads it (a fan-in loses the
-input instead), and removing the aggregator takes every source's qmd
-steps (`removedWith`). A hand edit has to remember, and the Manage
-screen flags a render step nothing consumes.
+two qmd tickboxes. "Keyword-index the markdown" adds or removes the
+source's `keyword_index` and its edge into `qmd_aggregator`; "Embed it
+for search by meaning", which needs the first, does the same for its
+`embed`. Removing any step takes every step that reads it (a fan-in loses
+the input instead), and removing the aggregator every source's qmd
+steps (`removedWith`). A hand edit has
+to remember, and the Manage screen flags a render step nothing consumes.
 
 ## What the Manage screen and the wizard make of it
 
@@ -325,9 +331,9 @@ one place an earlier config shape is understood: `datalib-step
 download …` command lines become groups and command-less steps,
 retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
-their own `path` (`convert.rs`, a value-level rewrite, so comments do
-not survive); and a `unified_index/qmd_index` step becomes
-`qmd_aggregator`, downstream of each source's own qmd steps
-(`qmd_steps.rs`, a text edit that keeps comments). The loader and
-`datalib-step` recognize the old shapes only well enough to name the
-tool.
+their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
+survive. The loader and `datalib-step` recognize the old shapes only
+well enough to name the tool. The one rewrite made without asking is the
+qmd steps', a text edit that keeps comments: `datalib-http` makes it
+through `upgrade_qmd_steps`, which refuses a result that would drop an
+entry the original ran.

@@ -936,26 +936,39 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
   return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
 }
 
-/// Give a source its qmd steps — those it lacks — and a place in the
-/// aggregator's inputs; or, with `searched` false, take both away. Only
-/// where the config has the aggregator: search is off without one, and
-/// the aggregator is what retires a source's collection once it goes.
-export function setQmdSteps(text: string, group: string, searched: boolean): string {
-  const steps = buildQmdSteps(group);
+/// How far into qmd a source's markdown goes: not at all, a keyword
+/// index, or a keyword index and the embeddings that read it. There is
+/// no embeddings-only: the embed step reads the keyword index.
+export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
+
+/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
+export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+  const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
+  if (!has("keyword_index")) return "none";
+  return has("embed") ? "keyword_and_embed" : "keyword";
+}
+
+/// Give a source the qmd steps `indexing` asks for — those it lacks — and
+/// a place in the aggregator's inputs, and take away the ones it does not
+/// ask for, with every step that reads them. Only where the config has the
+/// aggregator: search is off without one, and the aggregator is what
+/// retires a source's collection once it goes.
+export function setQmdSteps(text: string, group: string, indexing: QmdIndexing): string {
+  const [keyword, embed] = buildQmdSteps(group);
   const all = listSteps(text);
   const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
-  if (searched && aggregated) {
-    const missing = steps.filter((b) => !all.some((s) => s.id === b.id));
-    let next = missing.length ? appendSource(text, missing.map((b) => b.body).join("\n\n")) : text;
-    for (const b of steps) next = wireIntoFanIns(next, b.id, "qmd_aggregator");
-    return next;
+  const wanted =
+    !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
+  const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
+  const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
+  let next = gone.length ? removeSteps(text, gone) : text;
+  const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
+  if (missing.length) next = appendSource(next, missing.map((b) => b.body).join("\n\n"));
+  for (const b of [keyword, embed]) {
+    next = wanted.includes(b)
+      ? wireIntoFanIns(next, b.id, "qmd_aggregator")
+      : unwireFromFanIns(next, b.id, "qmd_aggregator");
   }
-  const ids = new Set(steps.map((b) => b.id));
-  let next = removeSteps(
-    text,
-    all.filter((s) => ids.has(s.id)),
-  );
-  for (const b of steps) next = unwireFromFanIns(next, b.id, "qmd_aggregator");
   return next;
 }
 
