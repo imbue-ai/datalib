@@ -1,8 +1,8 @@
 # What does a doltlite write cost, and does committing often make it worse?
 
-The question this started from: a step that checkpoints every 15 s
-(`datalib_etl::checkpointer`) makes many commits where it used to make
-one. Same rows at the end — what does the extra history cost?
+The question: a step that checkpoints every 15 s
+(`datalib_etl::checkpointer`) makes a commit per checkpoint rather than
+one per run. Same rows at the end — what does the extra history cost?
 
 `scripts/doltlite_commit_cost.py` builds the same 100k-row table six ways against the
 Bazel-built doltlite CLI and reports the file size before and after
@@ -14,7 +14,11 @@ bazelisk build //third-party/doltlite:doltlite
 python3 scripts/doltlite_commit_cost.py
 ```
 
-## Results — doltlite 0.50.3, 2026-09-20
+## Results — doltlite 0.50.3
+
+Measured on doltlite 0.50.3; the pin is `DOLTLITE_VERSION` in
+`third-party/doltlite/BUILD.bazel`, and a doltlite bump is the time to
+re-run the script.
 
 ```
 random keys, 200 txns, commit once                   commits=   3  before gc  430.1 MB  after gc   14.8 MB

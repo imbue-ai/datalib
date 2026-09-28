@@ -2,7 +2,7 @@
 
 Facts about how this tree came to be that a reader cannot recover from
 `git log` alone. Add a note here when you learn one; keep each to a
-paragraph. Dated audits live in their own `audit_*.md` files.
+paragraph. Dated audits live in [`audits/`](audits/).
 
 ## Two placeholder git identities
 

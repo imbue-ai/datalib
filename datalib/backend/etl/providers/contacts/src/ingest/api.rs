@@ -116,6 +116,33 @@ pub async fn report(
 
 // vCard utility helpers
 
+/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
+/// blocks. Tolerates CRLF / LF / mixed line endings and case-
+/// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
+/// case-insensitive in practice every server emits uppercase, but
+/// stay defensive).
+pub fn split_vcards(body: &str) -> Vec<String> {
+    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
+            current = Some(String::new());
+        }
+        if let Some(buf) = current.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+        if trimmed.eq_ignore_ascii_case("END:VCARD") {
+            if let Some(buf) = current.take() {
+                out.push(buf);
+            }
+        }
+    }
+    out
+}
+
 /// Pull the `UID` line out of a vCard. RFC 6350 §6.7.6 mandates it,
 /// but we tolerate its absence and return `None` so the caller can
 /// synthesize a stable id from `(addressbook_id, href)` instead.

@@ -35,7 +35,7 @@ tells you.
 
 **Discovery.** Two modes.
 
-With `sync.roots` empty — the default — the mirror is the whole
+With `api.roots` empty — the default — the mirror is the whole
 workspace, discovered through `POST /v1/search` sorted
 `last_edited_time` descending, 100 at a time, **stopping at the first
 result older than where the last run finished**. Page objects come back
@@ -59,8 +59,8 @@ ordinary page objects, so the walk queues nothing but `object: "page"`
 and never queries a data source for its rows. The data-source objects
 search also returns are containers, and are skipped.
 
-It is stored per source as `sync_scope_state.last_seen_at`, alongside a
-config blob, so widening `refresh_window_days` re-examines that window
+It is stored per source as `sync_scope_state.last_seen_at_utc`, alongside a
+config blob (`sync_scope_config`), so widening `refresh_window_days` re-examines that window
 instead of being suppressed by a point recorded under the narrower
 setting. It is written only after the pages land — a point recorded over
 a failed pass would skip that window forever.
@@ -68,23 +68,20 @@ a failed pass would skip that window forever.
 Do not confuse it with `start_cursor` / `next_cursor`, which page
 *within* one walk and do not survive it.
 
-With `sync.roots` set, the mirror is those pages and everything under
+With `api.roots` set, the mirror is those pages and everything under
 them, walked through the `<page>` and `<database>` links in each body.
 No search, and no resume cursor: the walk is the enumeration.
 
-**Per page**, two requests where the block walk needed one per container
-block:
+**Per page**, two requests:
 
 1. `GET /v1/pages/{id}` — properties, parent, icon, cover, `in_trash`.
 2. `GET /v1/pages/{id}/markdown` — the body, already rendered.
 
-Plus `GET /v1/comments?block_id={page_id}` when comments are enabled;
-one call returns the page's whole discussion set, including threads
-anchored to blocks inside it.
-
-Measured over 12 pages of a real workspace: the old block walk needed a
-median of 11 requests per page (≥60 on the deepest), 241 in total
-against 36 for the same pages now.
+Plus `GET /v1/comments?block_id={page_id}` when `api.comments` is on
+(the default); one call returns the page's whole discussion set,
+including threads anchored to blocks inside it. A page whose
+`last_edited_time` has not moved since the stored row is not fetched
+again, but the walk still descends into its stored child pages.
 
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
@@ -161,14 +158,15 @@ document.
 ## Rate limits
 
 ~3 requests/second per connection, plus a workspace-wide limit that
-scales with plan. `429`/`5xx` retry with `Retry-After` is handled
-centrally in `latchkey_curl`. Expect roughly one empty-body response per
-130 requests on a long walk — retry covers it, but a naive loop would
-silently truncate.
+scales with plan. `429` and `502`–`504` are retried, honouring
+`Retry-After`, by the shared HTTP layer
+(`datalib_etl::http::default_retryability`). Expect roughly one
+empty-body response per 130 requests on a long walk; a loop that read
+one as the end of a listing would silently truncate.
 
 ## Schema
 
-`<root>/<name>/ingest/entities.doltlite_db`:
+`<data_root>/<group>/ingest/entities.doltlite_db`:
 
 | table | holds |
 |---|---|
@@ -224,13 +222,11 @@ the run.
 What this narrows is the **render** — writing files, building
 `grid_rows`, hashing — which is where the cost is. It does not narrow
 the read: the store's rows are still walked once and filtered in
-memory. If that read ever dominates, it is the thing to fix, and this
-paragraph is the honest description of what is and is not incremental
-today.
+memory.
 
 ## Deletions
 
-Render no longer walks everything, so absence from a run means nothing
+Render does not walk everything, so absence from a run means nothing
 and a deletion has to be **named**. Two passes, because a page and its
 threads are separate documents with separate `conversation_uuid`s:
 
@@ -245,13 +241,10 @@ Both ask the store rather than inferring from what the parse returned.
 parse result may simply be one whose body has not arrived yet; deleting
 on that reading would destroy a live document.
 
-## Not built yet
-
-- A trash pass (`filter: {in_trash: true}`) — deletions are currently
-  noticed by absence from the render sweep rather than by asking Notion
-  what it trashed.
-- Data-source schema, and the `entity_id_str` port (see
-  `docs/dev/entity_ids.md`, which still lists notion as pending).
+The ingest itself never deletes a page or a comment, so a page deleted
+or trashed in Notion stays in the mirror. `pages.in_trash` is stored
+when a trashed page is seen, and render does not read it. A trash pass
+(`filter: {in_trash: true}`) is not built, nor is a data-source schema.
 
 Every number above was measured against a live workspace, not read off
 Notion's documentation.

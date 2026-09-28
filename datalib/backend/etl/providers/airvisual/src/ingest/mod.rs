@@ -12,7 +12,6 @@ pub mod schema_raw;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::SqlitePool;
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
@@ -23,8 +22,6 @@ use datalib_etl::file_checkpoint;
 use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan::{self, ScannedFile};
 use datalib_etl::progress::Progress;
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 
@@ -37,27 +34,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 const HISTORY_SUFFIX: &str = "_AirVisual_values.txt";
 const LATEST_JSON: &str = "latest_config_measurements.json";
 
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-}
-
-impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
-    }
-
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-}
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
 pub struct FetchOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -255,9 +232,9 @@ async fn fetch_device(
     Ok(())
 }
 
-/// Write the device row only when it would change: an upsert stamps
-/// the bookkeeping sidecar, and a stamp on an unchanged run is a commit
-/// on an unchanged store, which makes the render re-run for nothing.
+/// Write the device row only when it would change, so a run that finds
+/// nothing new leaves the store as it was and the render has nothing
+/// to redo.
 async fn upsert_device(
     tx: &mut Transaction<'_, Sqlite>,
     who: &Identity,
@@ -358,21 +335,10 @@ async fn ingest_one(
     ))
 }
 
-fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSampleRow {
+fn sample_row(device: &str, sample: parse::Sample, source_file: &str) -> AirvisualSampleRow {
     AirvisualSampleRow {
         device_id: device.to_string(),
-        ts_ms: s.ts_ms,
-        pm25_ugm3: s.pm25_ugm3,
-        pm10_ugm3: s.pm10_ugm3,
-        pm1_ugm3: s.pm1_ugm3,
-        aqi_us: s.aqi_us,
-        aqi_cn: s.aqi_cn,
-        outdoor_aqi_us: s.outdoor_aqi_us,
-        outdoor_aqi_cn: s.outdoor_aqi_cn,
-        temperature_c: s.temperature_c,
-        humidity_pct: s.humidity_pct,
-        co2_ppm: s.co2_ppm,
-        voc_ppb: s.voc_ppb,
+        sample,
         source_file: source_file.to_string(),
     }
 }
@@ -380,6 +346,7 @@ fn sample_row(device: &str, s: parse::Sample, source_file: &str) -> AirvisualSam
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::SqlitePool;
     use std::path::PathBuf;
 
     const HEADER: &str = "Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM1(ug/m3);Outdoor AQI(US);Outdoor AQI(CN);Temperature(C);Temperature(F);Humidity(%RH);CO2(ppm);\n";

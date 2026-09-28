@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
+use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
 use datalib_etl_chat_common::render::{
     render_all as cc_render_all, Buckets, RenderProfile, ENTITY_KIND_CONVERSATION,
 };
@@ -621,16 +622,6 @@ fn filter_nonempty(s: String) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// Parse an ISO-8601 timestamp to unix millis; `None` on anything
-/// unparseable — the caller records that through `own_stamp_ms` before
-/// falling back to a bumped previous time, and to `None` when there is
-/// no previous time either.
-fn iso_to_ms(s: &str) -> Option<i64> {
-    datalib_time::parse_strict(s)
-        .ok()
-        .map(|t| t.to_unix_millis())
-}
-
 // Block / attachment rendering (the markdown that becomes item.text).
 
 pub(crate) fn block_identity(
@@ -805,26 +796,6 @@ fn json_is_empty(v: &Value) -> bool {
     }
 }
 
-fn json_pretty_sorted(v: &Value) -> String {
-    serde_json::to_string_pretty(&canonicalize(v)).unwrap_or_default()
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
 fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     let raw_obj = at.raw_json.as_object();
     let id = raw_obj
@@ -857,41 +828,9 @@ fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
     format!("**[attachment: {header_label}]**\n{quoted}")
 }
 
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut out: String = c.to_uppercase().collect();
-            for rest in chars {
-                out.extend(rest.to_lowercase());
-            }
-            out
-        }
-    }
-}
-
 #[cfg(test)]
 mod project_doc_tests {
     use super::*;
-
-    /// The parse helper must answer `None` for anything it cannot read,
-    /// so the caller falls through to inheriting the previous item's
-    /// stamp and — when there is none — to a null `created_at`.
-    #[test]
-    fn iso_to_ms_refuses_to_invent_a_timestamp() {
-        assert_eq!(
-            iso_to_ms("2026-04-14T09:15:00-07:00"),
-            Some(1_776_183_300_000)
-        );
-        for bad in ["", "not a date", "2026-04-14", "2026-04-14T09:15:00"] {
-            assert_eq!(
-                iso_to_ms(bad),
-                None,
-                "iso_to_ms({bad:?}) fabricated a stamp"
-            );
-        }
-    }
 
     #[test]
     fn short_docs_are_untouched() {

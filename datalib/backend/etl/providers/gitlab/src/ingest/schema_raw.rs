@@ -1,6 +1,7 @@
 //! Raw-store schema for the GitLab provider.
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl_forge_ingest_common::{numeric_id, opt_str};
 use datalib_etl_macros::WirePayloadRow;
 use serde_json::Value;
 
@@ -30,24 +31,14 @@ pub struct SelfIdentityRow {
 
 impl SelfIdentityRow {
     pub fn from_payload(payload: &Value) -> anyhow::Result<Self> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("/user response missing id"))?;
+        let id = numeric_id(payload, "/user response")?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id,
                 payload: serde_json::to_string(payload)?,
             },
-            username: payload
-                .get("username")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            web_url: payload
-                .get("web_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            username: opt_str(payload, "username"),
+            web_url: opt_str(payload, "web_url"),
         })
     }
 }
@@ -84,42 +75,15 @@ impl MergeRequestRow {
             },
             project_full_path: project_full_path.to_string(),
             mr_iid: mr_iid as i64,
-            state: payload
-                .get("state")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            web_url: payload
-                .get("web_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            head_sha: diff_refs
-                .and_then(|d| d.get("head_sha"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            base_sha: diff_refs
-                .and_then(|d| d.get("base_sha"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            start_sha: diff_refs
-                .and_then(|d| d.get("start_sha"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            source_branch: payload
-                .get("source_branch")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            target_branch: payload
-                .get("target_branch")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            updated_at: payload
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            merged_at: payload
-                .get("merged_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            state: opt_str(payload, "state"),
+            web_url: opt_str(payload, "web_url"),
+            head_sha: diff_refs.and_then(|d| opt_str(d, "head_sha")),
+            base_sha: diff_refs.and_then(|d| opt_str(d, "base_sha")),
+            start_sha: diff_refs.and_then(|d| opt_str(d, "start_sha")),
+            source_branch: opt_str(payload, "source_branch"),
+            target_branch: opt_str(payload, "target_branch"),
+            updated_at: opt_str(payload, "updated_at"),
+            merged_at: opt_str(payload, "merged_at"),
         })
     }
 }

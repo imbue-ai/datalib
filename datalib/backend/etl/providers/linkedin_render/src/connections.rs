@@ -8,7 +8,7 @@ use datalib_etl_contact_common::{
     NormalizedContact,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Inputs};
+use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
 use serde_json::Value;
 
 use crate::ids;
@@ -17,7 +17,7 @@ use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
 
-use crate::render::RENDER_VERSION;
+use crate::render::{narrow_docs, RENDER_VERSION};
 use datalib_schema::providers::Provider;
 
 /// Human label + grouping for every LinkedIn connection.
@@ -102,36 +102,7 @@ pub fn render_connections(
         })
         .collect();
 
-    // What to render: the contacts the driver found stale, plus the ones
-    // a new or changed row maps to through the rows just loaded. A
-    // removed row's contact reaches here through the driver, having
-    // declared the row.
-    let forward = changed.map(|changed| {
-        contacts
-            .iter()
-            .filter(|c| {
-                c.inputs
-                    .iter()
-                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            })
-            .map(|c| c.contact_uuid.clone())
-            .collect::<std::collections::HashSet<String>>()
-    });
-    let render = range.narrow(forward.as_ref());
-    let mut outcome = FeedOutcome {
-        new_head: Some(new_head),
-        buckets: render
-            .iter()
-            .flatten()
-            .map(|key| Bucket {
-                key: key.clone(),
-                inputs: Vec::new(),
-            })
-            .collect(),
-    };
-    if let Some(render) = &render {
-        contacts.retain(|c| render.contains(&c.contact_uuid));
-    }
+    let mut outcome = narrow_docs(&mut contacts, contact_key, changed, range, new_head);
     let profile = ContactRenderProfile {
         provider: Provider::Linkedin,
         source_label: "LinkedIn".to_string(),
@@ -150,6 +121,10 @@ pub fn render_connections(
     )?;
     outcome.buckets.extend(s.buckets);
     Ok(outcome)
+}
+
+fn contact_key(c: &NormalizedContact) -> (&str, &[Input]) {
+    (c.contact_uuid.as_str(), c.inputs.as_slice())
 }
 
 fn to_contact(source_id: &str, p: &Value) -> NormalizedContact {

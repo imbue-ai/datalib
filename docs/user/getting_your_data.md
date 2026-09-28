@@ -18,7 +18,7 @@ that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
 one the datalib installer put on your `PATH` (it runs on the Node
-runtime bundled in the same tarball). Adjust paths to taste and
+runtime `datalib-step pull-runtime` fetches; see the first-time guide). Adjust paths to taste and
 point the matching source in your config at them. Wherever a command
 takes a secret, it is written as `$(pbpaste)`: copy the secret to your
 clipboard, then run the command. Your shell history keeps the harmless
@@ -264,7 +264,7 @@ mirror.
 
 - **A `.vcf` export.** Most address books export vCards; point
   `vcf.path` at a directory of them. No credentials. The directory is
-  the whole address book, so the sample config sets
+  the whole address book, so `all_sources.toml` sets
   `always_clear_before_ingest = true` to let a missing `.vcf` mean a
   missing contact.
 - **A CardDAV server.** Credentials go in latchkey under a service
@@ -516,9 +516,9 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory. Each export is complete, so the
-sample config sets `always_clear_before_ingest = true` to let a newer
-export drop what LinkedIn stopped including.
+Point `export.path` at that directory. Each export is complete, so
+`all_sources.toml` sets `always_clear_before_ingest = true` to let a
+newer export drop what LinkedIn stopped including.
 
 ## Local files
 

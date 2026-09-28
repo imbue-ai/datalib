@@ -2,8 +2,10 @@
 //! `-`-prefixed exclusion. The daemon sends the text as is to qmd's
 //! lexical search and without that syntax to its vector search.
 
+use datalib_query::tokenize;
+
 pub fn has_lex_syntax(s: &str) -> bool {
-    tokenize_query(s)
+    tokenize(s)
         .iter()
         .any(|t| t.starts_with('"') || t.starts_with('-'))
 }
@@ -13,7 +15,7 @@ pub fn has_lex_syntax(s: &str) -> bool {
 /// quotes from phrases, and rejoin with single spaces. Returns an empty
 /// string if every token is an exclusion.
 pub fn strip_lex_syntax(s: &str) -> String {
-    tokenize_query(s)
+    tokenize(s)
         .into_iter()
         .filter(|t| !t.starts_with('-'))
         .map(|t| strip_outer_quotes(&t).to_string())
@@ -28,38 +30,4 @@ fn strip_outer_quotes(s: &str) -> &str {
     } else {
         s
     }
-}
-
-fn tokenize_query(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    let mut escape = false;
-    for ch in s.chars() {
-        if escape {
-            cur.push(ch);
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_quote => {
-                cur.push('\\');
-                escape = true;
-            }
-            '"' => {
-                cur.push('"');
-                in_quote = !in_quote;
-            }
-            c if c.is_whitespace() && !in_quote => {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
-                }
-            }
-            c => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
 }

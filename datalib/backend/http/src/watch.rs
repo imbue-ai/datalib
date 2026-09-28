@@ -612,24 +612,43 @@ fn watcher_for(
 ) -> notify::Result<notify::RecommendedWatcher> {
     notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(ev) = res else { return };
-        // Reading something is not changing it, and on Linux this is not a
-        // nicety — it is the difference between a push channel and a
-        // feedback loop.
-        if matches!(ev.kind, EventKind::Access(_)) {
-            return;
+        if ev.need_rescan() {
+            tracing::info!(
+                "watch: the OS dropped file events ({}); reporting every watched file as moved",
+                ev.info().unwrap_or("no reason given")
+            );
         }
-        for path in &ev.paths {
-            if let Some(moved) = classify(&root, path) {
-                if moved == Moved::Config {
-                    use datalib_dag::supervisor::announce::{
-                        announce, CONFIG_CHANGED, FROM_SERVER,
-                    };
-                    announce(&listeners, FROM_SERVER, CONFIG_CHANGED);
-                }
-                let _ = raw_tx.send(moved);
+        for moved in moved_by(&root, &ev) {
+            if moved == Moved::Config {
+                use datalib_dag::supervisor::announce::{announce, CONFIG_CHANGED, FROM_SERVER};
+                announce(&listeners, FROM_SERVER, CONFIG_CHANGED);
             }
+            let _ = raw_tx.send(moved);
         }
     })
+}
+
+/// The files one filesystem event says moved. A rescan is the OS saying
+/// it dropped events (FSEvents falling behind, inotify's queue
+/// overflowing) and names a directory, not a file, so every file the
+/// watch covers is reported: `expand` diffs the stores, and a spurious
+/// `config_changed` costs a refetch where a lost one leaves the page stale.
+fn moved_by(root: &Path, ev: &notify::Event) -> Vec<Moved> {
+    if ev.need_rescan() {
+        return vec![
+            Moved::Config,
+            Moved::RunStore,
+            Moved::Frontend,
+            Moved::GridIndex,
+        ];
+    }
+    // Reading something is not changing it, and on Linux this is not a
+    // nicety — it is the difference between a push channel and a
+    // feedback loop.
+    if matches!(ev.kind, EventKind::Access(_)) {
+        return Vec::new();
+    }
+    ev.paths.iter().filter_map(|p| classify(root, p)).collect()
 }
 
 /// A watcher on the grid index's directory, once there is one.
@@ -894,6 +913,31 @@ mod tests {
     fn the_temp_half_of_an_atomic_write_is_not_a_change() {
         let root = Path::new("/data");
         assert_eq!(classify(root, &root.join("config.tmp")), None);
+    }
+
+    /// A rescan names a directory, which `classify` ignores; dropped, the
+    /// change it stands for is never reported, and a config save would
+    /// leave the config-error screen up over a fixed config.
+    #[test]
+    fn a_rescan_reports_every_watched_file() {
+        use notify::event::Flag;
+        let root = Path::new("/data");
+        let rescan = notify::Event::new(EventKind::Other)
+            .set_flag(Flag::Rescan)
+            .add_path(root.to_path_buf());
+        let moved: HashSet<Moved> = moved_by(root, &rescan).into_iter().collect();
+        assert_eq!(
+            moved,
+            HashSet::from([
+                Moved::Config,
+                Moved::RunStore,
+                Moved::Frontend,
+                Moved::GridIndex
+            ])
+        );
+        // The same event without the flag is a directory, which is nothing.
+        let plain = notify::Event::new(EventKind::Other).add_path(root.to_path_buf());
+        assert_eq!(moved_by(root, &plain), Vec::new());
     }
 
     /// A watch's clocks at zero, so a test waits on nothing but what it

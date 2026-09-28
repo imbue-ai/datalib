@@ -12,7 +12,7 @@ use datalib_etl::fingerprint_cache::FingerprintCache;
 use datalib_etl::fsscan;
 use datalib_etl::progress::Progress;
 
-use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
+use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
 use super::schema_raw::{synthesized_name_uid, ContactRow};
 
@@ -240,28 +240,6 @@ fn relative_href(root: &Path, file: &Path) -> String {
         })
 }
 
-fn split_vcards(body: &str) -> Vec<String> {
-    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-    let mut out: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
-            current = Some(String::new());
-        }
-        if let Some(buf) = current.as_mut() {
-            buf.push_str(line);
-            buf.push('\n');
-        }
-        if trimmed.eq_ignore_ascii_case("END:VCARD") {
-            if let Some(buf) = current.take() {
-                out.push(buf);
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::db::db_path_for;
@@ -275,6 +253,24 @@ mod tests {
     async fn test_cache() -> FingerprintCache {
         let d = Box::leak(Box::new(tempfile::tempdir().unwrap()));
         FingerprintCache::open(&d.path().join("fpcache.sqlite"))
+            .await
+            .unwrap()
+    }
+
+    fn options(db: &RawDb, input: &Path, cache: FingerprintCache) -> FetchOptions {
+        FetchOptions {
+            db: db.clone(),
+            input_path: input.to_path_buf(),
+            cache,
+            account_id_override: None,
+            progress: Progress::default(),
+            control: DownloadControl::default(),
+        }
+    }
+
+    async fn contact_count(db: &RawDb) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
+            .fetch_one(db.pool())
             .await
             .unwrap()
     }
@@ -307,16 +303,9 @@ mod tests {
         // Open the db where the processor would: the entity db inside the dir.
         let entity_db = db_path_for(&source_dir);
         let db = RawDb::open(&entity_db).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            input_path: export.path().to_path_buf(),
-            cache: test_cache().await,
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
+        let summary = fetch(options(&db, export.path(), test_cache().await))
+            .await
+            .unwrap();
         assert_eq!(summary.contacts_new, 1);
 
         assert!(
@@ -342,23 +331,13 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let summary = fetch(opts()).await.unwrap();
         assert_eq!(summary.contacts_new, 2);
         assert_eq!(summary.addressbooks, 1);
         assert_eq!(summary.files_skipped, 0);
 
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+        let n = contact_count(&db).await;
         assert_eq!(n, 2);
 
         // Second run over the unchanged file skips it via the resume
@@ -382,14 +361,7 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let first = fetch(opts()).await.unwrap();
         assert_eq!(first.contacts_new, 1);
 
@@ -441,14 +413,7 @@ mod tests {
         let db_path = dir.path().join("c.doltlite_db");
         let cache = test_cache().await;
         let db = RawDb::open(&db_path).await.unwrap();
-        let opts = || FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: cache.clone(),
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        };
+        let opts = || options(&db, dir.path(), cache.clone());
         let first = fetch(opts()).await.unwrap();
         assert_eq!(first.contacts_new, 1);
 
@@ -465,10 +430,7 @@ mod tests {
         assert_eq!(second.contacts_new, 0);
         assert_eq!(second.contacts_updated, 1);
 
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+        let n = contact_count(&db).await;
         assert_eq!(n, 1, "edited contact stayed one row, not two");
         db.close().await;
     }
@@ -487,22 +449,12 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: test_cache().await,
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
-        assert_eq!(summary.addressbooks, 1);
-
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
+        let summary = fetch(options(&db, dir.path(), test_cache().await))
             .await
             .unwrap();
+        assert_eq!(summary.addressbooks, 1);
+
+        let n = contact_count(&db).await;
         assert_eq!(n, 1, "same-name cards share a synthesized id");
         db.close().await;
     }
@@ -520,22 +472,12 @@ mod tests {
         .unwrap();
         let db_path = dir.path().join("c.doltlite_db");
         let db = RawDb::open(&db_path).await.unwrap();
-        let summary = fetch(FetchOptions {
-            db: db.clone(),
-            input_path: dir.path().to_path_buf(),
-            cache: test_cache().await,
-            account_id_override: None,
-            progress: Progress::default(),
-            control: DownloadControl::default(),
-        })
-        .await
-        .unwrap();
-        assert_eq!(summary.contacts_new, 2);
-
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
-            .fetch_one(db.pool())
+        let summary = fetch(options(&db, dir.path(), test_cache().await))
             .await
             .unwrap();
+        assert_eq!(summary.contacts_new, 2);
+
+        let n = contact_count(&db).await;
         assert_eq!(n, 2, "two nameless cards stayed distinct rows");
         db.close().await;
     }

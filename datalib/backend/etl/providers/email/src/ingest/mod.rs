@@ -506,11 +506,7 @@ async fn sync_mailboxes(
         json!({"accountId": account_id, "ids": null}),
     )
     .await?;
-    let list = resp
-        .get("list")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let list = jmap_list(&resp);
     summary.mailboxes_upserted += list.len();
     upsert_mailboxes(db, now, account_id, &list).await?;
     if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
@@ -547,11 +543,7 @@ async fn incremental_mailboxes(
                 json!({"accountId": account_id, "ids": to_fetch}),
             )
             .await?;
-            let list = resp
-                .get("list")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let list = jmap_list(&resp);
             summary.mailboxes_upserted += list.len();
             upsert_mailboxes(db, now, account_id, &list).await?;
         }
@@ -703,11 +695,7 @@ async fn incremental_emails(
                 return Ok(());
             }
             let resp = email_get(session, account_id, batch).await?;
-            let list = resp
-                .get("list")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let list = jmap_list(&resp);
             ingest_email_list(
                 db,
                 now,
@@ -857,11 +845,7 @@ async fn full_enumerate_emails(
                 return Ok(());
             }
             let getresp = email_get(session, account_id, batch).await?;
-            let list = getresp
-                .get("list")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let list = jmap_list(&getresp);
             ingest_email_list(
                 db,
                 now,
@@ -970,11 +954,7 @@ async fn sync_threads(
             json!({"accountId": account_id, "ids": batch}),
         )
         .await?;
-        let list = resp
-            .get("list")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let list = jmap_list(&resp);
         // Build the whole batch's worth of rows up front, then bulk-
         // upsert in one tx. The per-thread `upsert_thread` call this
         // replaced opened a fresh transaction per row, which made a
@@ -1164,6 +1144,14 @@ struct EmlJob {
 type EmlFetchOutcome = (String, String, Result<(Vec<u8>, Option<String>)>);
 
 // Helpers
+
+/// A JMAP `*/get` response's `list`, empty when it has none.
+fn jmap_list(resp: &Value) -> Vec<Value> {
+    resp.get("list")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
 
 fn string_array(v: &Value, key: &str) -> Vec<String> {
     v.get(key)

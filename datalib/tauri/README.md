@@ -14,9 +14,11 @@ The backend is deliberately **not** linked in-process: the shell is a
 thin process manager, so there is no backend crate graph in this cargo
 workspace, no doltlite static-link plumbing, and no drift between what
 the web and desktop packagings run. `datalib-http`, `datalib-dag`,
-`datalib-step` and the two latchkey curl binaries are Bazel-built (fully
-cached) and shipped under the
-.app's `Contents/Resources/binaries/`; see `tauri.conf.json`'s
+`datalib-step`, `datalib-applet`, `datalib-migrate-config`,
+`datalib-doltlite`, the two latchkey curl binaries and the `latchkey`
+launcher are Bazel-built (fully cached) and shipped under the .app's
+`Contents/Resources/binaries/`, with the Node runtime beside them
+(`stage-runtime.sh`); see `tauri.conf.json`'s
 `beforeBuildCommand` + `bundle.resources` and `resolve_bundled` in
 `src/main.rs`. Port handshake: the child gets
 `DATALIB_BIND=127.0.0.1:0` and `--url-file <tmp>` and announces its
@@ -26,8 +28,9 @@ per-process API token as `?token=…` (every route requires it — see
 `datalib/backend/http/src/auth.rs`); the webview trades it for an
 HttpOnly session cookie on the first load and is redirected to the
 clean URL, so nothing else in the shell has to know about auth. The
-url-file and the child's log both get mode 0600, since both end up
-holding that token in a shared temp dir.
+url-file (tightened by the backend) and the child's log (by the shell)
+are both mode 0600, since both end up holding that token in a shared
+temp dir.
 
 **Not owned by Bazel** — this crate is a standalone cargo workspace (see
 the `[workspace]` table in `Cargo.toml`) so that Bazel's crate_universe,
@@ -83,10 +86,13 @@ roots (`~/.datalib/recent-roots.json`), whether a directory is a data
 library at all, and where "create an empty one" puts it — and is
 written **free of `tauri` and of every dependency but `serde_json`** on
 purpose: it is compiled a second time, as its own crate, by
-`//datalib/tauri:launcher_test`. That Bazel target is the only way any
-of this crate's logic reaches `bazelisk test //...`, since the shell is
-a standalone cargo workspace Bazel does not build. Anything in
-`launcher.rs` that reaches for `tauri` breaks that target.
+`//datalib/tauri:launcher_test`. `src/raw_store.rs` (what Browse does
+with a raw store: open it read-only in DB Browser for SQLite or the
+bundled doltlite shell) is kept free of `tauri` the same way, for
+`//datalib/tauri:raw_store_test`. Those two targets are the only way
+any of this crate's logic reaches `bazelisk test //...`, since the
+shell is a standalone cargo workspace Bazel does not build. Anything in
+either file that reaches for `tauri` breaks its target.
 
 Picking a folder that turns out to be *empty* is not an error here: the
 shell opens it, and the app's own first-run screen
@@ -107,16 +113,14 @@ startup failures quote the log tail in the error dialog.
 `icons/` is generated from `app-icon.png` (placeholder) via
 `pnpm exec tauri icon app-icon.png -o icons`.
 
-## v0 status
+## Behaviour worth knowing
 
-- Full backend available: grid, search, chat preview, sync API all work
-  against the picked data root. Canceling the picker returns to the
-  launcher; the launcher's Quit button exits the app.
-- No blocking model download at startup: the backend pulls qmd models
-  lazily (the sync path warms the shared cache; a cold cache pays a
-  one-time download on the first semantic search). Same behavior as the
-  web packaging — the shell passes nothing besides `--no-open` and the
-  `--url-file` handshake.
-- Deep-link handler (`datalib://` via `tauri-plugin-deep-link`)
-  is not wired yet; it will forward to
-  `datalib/ui/src/router/deeplink.ts`.
+- The full backend runs against the picked data root. Canceling the
+  picker returns to the launcher; the launcher's Quit button exits the
+  app.
+- No blocking model download at startup: qmd's models are fetched on
+  first need by the steps and the search applet (`datalib_qmd_models`),
+  the same as the web packaging — the shell passes nothing besides
+  `--no-open` and the `--url-file` handshake.
+- There is no `datalib://` deep-link handler; the shell does not link
+  `tauri-plugin-deep-link`.

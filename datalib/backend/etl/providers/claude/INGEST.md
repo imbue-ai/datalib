@@ -13,23 +13,16 @@ Both write **the same six tables of the same raw store** — `users`,
 `claude_attachments` — which is the whole point: `render` has one
 input shape to be correct against, and there is exactly one parser.
 
-`claude-ingest` incrementally mirrors `claude.ai` conversations
-into a local JSON cache that matches Anthropic's bulk-export shape so
-the existing translator consumes either source indistinguishably:
-
-```
-<out>/
-  conversations.json    # array of conversations in export shape
-  users.json            # copied from --export-dir if present
-```
+The store is `<data_root>/<group>/ingest/entities.doltlite_db`, with a
+`<table>_bookkeeping` sidecar per table and the blob CAS beside it; the
+schema is `src/ingest/schema_raw.rs`. `claude-ingest --out <dir>` runs
+the `api` method from the command line into `<dir>/entities.doltlite_db`.
 
 ## Why "export shape" if we hit the live API?
 
-The bulk-export format is deprecated upstream, but the on-disk shape
-is stable and the parser layer is already written against it. The
-downloader fetches from `https://claude.ai/api` and runs each
-response through [`normalize::normalize_to_export_shape`](src/ingest/normalize.rs)
-to coerce it into the export format:
+The parser is written against the bulk-export shape, so an API-fetched
+conversation is coerced into it on its way out of the store, by
+[`normalize::normalize_to_export_shape`](src/ingest/normalize.rs):
 
   * Inserts a synthetic `account: { uuid }` (live API omits this).
   * Backfills `message.text` from `content[].text` /
@@ -37,12 +30,11 @@ to coerce it into the export format:
   * Restores `flags: null` on every content block.
   * Adds `_source: { via: "claude.ai/api", org_uuid }` provenance.
 
-That runs at render time, on the way out of the store. What goes *in*
-is the API response with every null-valued object key dropped
-(`canonicalize_conversation_payload`). claude.ai's replicas do not agree
-on whether a field with no value is sent as `null` or left out — the
-same untouched conversation came back both ways five minutes apart on
-the 2026-09-18 bake, on `chat_messages[].content[]` down to
+What goes *in* is the API response with every null-valued object key
+dropped (`canonicalize_conversation_payload`). claude.ai's replicas do
+not agree on whether a field with no value is sent as `null` or left
+out — the same untouched conversation came back both ways five minutes
+apart, on `chat_messages[].content[]` down to
 `display_content.link.*` — and either spelling reads the same
 everywhere here, so storing one of them is what keeps a no-change
 refetch from counting as `modified` and re-rendering. Null array
@@ -51,35 +43,18 @@ as written: one export comes from one serializer.
 
 ## Auth + Cloudflare
 
-The downloader does not handle claude.ai cookies directly. It shells
-out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
-injects the cookies registered under the `claude-ai` service.
+The downloader never handles claude.ai cookies. It shells out to
+[`latchkey curl`](https://github.com/imbue-ai/latchkey), which injects
+the `sessionKey` cookie registered under the `claude-ai` service.
 
-`claude.ai` is fronted by Cloudflare's managed-challenge system. To
-clear the challenge, requests go out through a Chrome-impersonating
-curl — the bundled `curl-impersonate`, reached via the router curl
-(`docs/dev/curl_impersonate.md`). Leave `LATCHKEY_CURL` unset and the
-downloader finds the router itself; to set it by hand, point it at
-the **router**, which brings the impersonator along as a sibling:
-
-```sh
-bazelisk build //third-party/latchkey-curl-shims
-export LATCHKEY_CURL="$(pwd)/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router"
-claude-ingest --out ~/backups/claude_api
-```
-
-### Why no `cf_clearance` cookie?
-
-Cloudflare gates clients in two layers: the TLS fingerprint (JA3/JA4)
-and, when that looks suspect, a JS challenge that issues a
-`cf_clearance` cookie. `curl-impersonate`'s Chrome handshake (patched
-BoringSSL with real-Chrome cipher ordering / ALPN / extensions) keeps us on
-the green path, so `cf_clearance` is never issued — and not needed
-in the latchkey credential set. The `sessionKey` cookie is the full
-auth surface. If a future CF tightening flips us into challenge
-land, grab `cf_clearance` from DevTools → Application → Cookies →
-`claude.ai` (HttpOnly), copy its value to the clipboard, and add it
-via `$(pbpaste)` so the cookie doesn't land in shell history:
+Cloudflare sits in front of `claude.ai`; requests clear its managed
+challenge by going through the bundled curl that impersonates Chrome's
+TLS handshake ([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)
+has the pieces and `LATCHKEY_CURL`). That handshake is never asked for a
+`cf_clearance` cookie, so `sessionKey` is the whole credential. Should
+Cloudflare start demanding one, take `cf_clearance` (HttpOnly) from
+DevTools → Application → Cookies → `claude.ai` and store it via
+`$(pbpaste)`, keeping it out of shell history:
 
 ```sh
 latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
@@ -89,21 +64,27 @@ latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
 
 | Path                                                                | Purpose                            |
 |---------------------------------------------------------------------|------------------------------------|
+| `/account`                                                          | The account the run mirrors        |
 | `/organizations`                                                    | Enumerate orgs the user belongs to |
 | `/organizations/{org}/chat_conversations`                           | Per-org conversation listing       |
 | `/organizations/{org}/chat_conversations/{id}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong` | Full conversation with all blocks  |
 | `/organizations/{org}/projects`                                     | Per-org project listing            |
 | `/organizations/{org}/projects/{id}/docs`                           | One project's knowledge documents  |
 
-`403` on the listing endpoint is treated as "no chat permission for
-this org" — we count it and continue rather than abort. Same for the
-project listing ("no project permission for this org").
+All paths are under `https://claude.ai/api`.
+
+A `403` on the conversation listing means "no chat permission for this
+org": the org is counted (`forbidden_orgs`), reported as one `problems`
+row, and skipped. Same for the project listing. A `403` on a detail
+fetch is retried twice first (0.5 s, then 2 s), because claude.ai
+answers 403 now and then to a detail GET issued right after the
+listing, and the same UUID a moment later returns 200.
 
 ## Projects
 
 Claude Projects ride the same source type, the same credentials and the
-same raw store as conversations. `sync.projects` (default **on**) turns
-the walk on and off; `sync.project_uuids` narrows it to a named set
+same raw store as conversations. `api.projects` (default **on**) turns
+the walk on and off; `api.project_uuids` narrows it to a named set
 (bare UUIDs or paste-able `https://claude.ai/project/<uuid>` URLs) — the
 per-org listing still runs, since that is one request and it is where
 the metadata comes from.
@@ -143,12 +124,12 @@ aged out — worst case one extra request per project per day.
 
 A reset (`datalib-dag --reset`) empties `sync_scope_state` with the
 rest, so the next sync sweeps every project again;
-`tests/reset_and_resync.rs` pins that the rows come back identical.
+`tests/claude_tests/reset_and_resync.rs` pins that the rows come back identical.
 
-**Deletions are not mirrored.** A project or knowledge document removed
-upstream keeps its row (and keeps rendering) — the walk only ever
-upserts what the listing returns, same as conversations. A reset
-(`datalib-dag --reset`) is the way to drop them today. A UUID in
+**Project deletions are not mirrored.** A project or knowledge document
+removed upstream keeps its row (and keeps rendering): the project walk
+only upserts what the listing returns. A reset (`datalib-dag --reset`)
+is the way to drop them. A UUID in
 `api.project_uuids` that matches nothing in any visible org logs
 `claude_project_uuid_not_found` rather than quietly mirroring
 nothing.
@@ -171,27 +152,14 @@ and writes the same rows the API walk writes: `users` from
 `users.json`, `conversations` from `conversations.json`, and each
 project split into a `projects` row plus one `project_docs` row per
 nested knowledge document — the same split the API gets from its two
-separate endpoints. Then render reads the store, exactly as it does for
-the `api` method.
+separate endpoints. Render then reads the store exactly as it does for
+the `api` method, and each run is a `sync_runs` row like any download's.
 
-This replaced a renderer that walked the export tree in place
-(issue #207). What that bought:
-
-  * **One input shape.** There is no second parser to keep in agreement
-    with the doltlite one, and the golden test now exercises the path
-    production actually runs.
-  * **Deletions.** A bulk export is a complete snapshot, so an id it
-    stops mentioning has been deleted upstream. After upserting, the
-    ingest drops the rows the export no longer names. Pruning is
-    per-table and only runs when that table's file was actually present,
-    so a partially-unpacked export can't wipe the store. This is the one
-    place in this provider that removes rows; the API walk deliberately
-    does not (a listing can omit a conversation for reasons other than
-    deletion).
-  * **The ordinary bookkeeping.** A `sync_runs` row per ingest —
-    `started_at` / `finished_at` / `elapsed_ms` / `status`, the
-    `deltas` summary — plus `dolt_diff`-driven incremental render, none
-    of which a directory read in place could provide.
+A bulk export is a complete snapshot, so an id it stops mentioning has
+been deleted upstream: after upserting, the ingest drops the rows the
+export no longer names. Pruning is per table and runs only when that
+table's file is present, so a partially unpacked export can't wipe the
+store.
 
 ### Org columns
 
@@ -216,7 +184,7 @@ them.
 
 A Claude bulk export ships JSON only. `chat_messages[*].files[]` name a
 `preview_url` back on claude.ai, and fetching it needs the credentials
-this source type deliberately does not have;
+the `export` method deliberately does not have;
 `chat_messages[*].attachments[]` carry their text inline and have no
 bytes to fetch at all (see the next section). So there is nothing on
 disk to content-address, and `claude_attachments` stays empty for an
@@ -230,41 +198,21 @@ slots, which Claude exposes as separate JSON arrays. They look
 similar but they are not interchangeable, and the bytes-at-rest
 treatment differs.
 
-| Slot                              | What it carries                                                                                              | Extract action                                                                  | Translate rendering                                                  |
-|-----------------------------------|--------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|----------------------------------------------------------------------|
-| `chat_messages[*].files[]`        | Downloadable upload — image / PDF / etc. Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | Walk via `fetch_files_for` → `download_one_file` → blob CAS (`db.store_blob`). | `BlobBundle::load_many` (a bundle per conversation) + provider-local `attachment_md` → `![alt](blobs/<hash>.<ext>)` for images, `[\[file\] alt](blobs/<hash>.<ext>)` otherwise. |
-| `chat_messages[*].attachments[]`  | **Text** Claude pre-extracted from a user upload. Carries `id`, `file_name`, `file_type`, `file_size`, and `extracted_content`. **No `preview_url`** — the binary is not retained server-side. | **Skipped.** There is no resource to fetch.                                     | `render_extracted_attachment` → inline blockquote with a `**[attachment: <name>]**` header.                          |
+| Slot | What it carries | Ingest | Render |
+|---|---|---|---|
+| `chat_messages[*].files[]` | A downloadable upload — image, PDF, … Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | `fetch_files_for` → `download_one_file` → the blob CAS, with a `claude_attachments` edge from the conversation's `file_uuid` to the bytes. | chat-common materializes it by `file_uuid`: an image inline, anything else as a link. |
+| `chat_messages[*].attachments[]` | **Text** Claude extracted from an upload: `id`, `file_name`, `file_type`, `file_size`, `extracted_content`. **No `preview_url`** — the binary is not retained server-side. | Nothing to fetch; no edge row. | `render_extracted_attachment`: a quoted block headed `**[attachment: <name>]**`. |
 
-This split was confirmed by querying a live raw store with the
-doltlite CLI: every "attachment-not-yet-fetched" placeholder in the
-old goldens turned out to be an `attachments[]` item with
-non-empty `extracted_content` and no download URL — exactly what
-the schema docs describe but easy to miss in code review.
-
-**Why extract doesn't pre-seed `blob_refs` rows for
-`attachments[]`**: `blob_refs` is a cache index over the CAS (see
-[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
-§"Blobs and the CAS split"). The `attachments[]` content lives
-inline in `conversations.payload` as `extracted_content`; there's
-no separate fetch, no skip-check semantics, and no bytes to land
-in the CAS. Same shape as contacts photos
-(§"Why contacts doesn't participate"). The id is per-message
-slot bookkeeping, not a cache key.
-
-**Future-work note**: if Claude ever starts retaining the original
-binaries for `attachments[]` items (i.e. a download URL appears in
-the payload), the durable-evidence pattern would have us pre-seed
-a `blob_refs` row per attachments[] id with `blake3=NULL` and
-`last_error="no_download_url"`, so a later "rescan when bytes
-become available" pass has something to walk. Until then,
-recording these in `blob_refs` would muddy the cache-index
-semantics for zero benefit.
+An `attachments[]` item has no CAS edge because there are no bytes to
+address: its content is already in `conversations.payload`. If Claude
+ever starts keeping those binaries (a download URL appears in the
+payload), they would get edges like `files[]`.
 
 ## Resume + prioritization
 
 There is no checkpoint file. On each run the downloader classifies
 every listing item. Items whose listing `updated_at` predates the
-configured `since` (config `sync.since:` / CLI `--since`; RFC 3339 or
+configured `since` (`api.since` / CLI `--since`; RFC 3339 or
 `YYYY-MM-DD`, assumed UTC) are out of scope: they are never
 detail-fetched and are invisible to overlap selection. The filter only
 gates fetching — already-stored rows are untouched — so moving `since`
@@ -280,14 +228,17 @@ further back later backfills the newly-in-scope conversations as
   3. **up to date** — stored `updated_at` matches the listing's. Skipped.
 
 The per-org work queue is `missing` first, then `stale`, so genuinely
-new conversations are fetched first.
+new conversations are fetched first. The comparison is against the
+`conversations` table and nothing else, which is what makes
+bootstrapping from an export work (next section).
 
-The comparison is against the `conversations` table and nothing else,
-which is what makes bootstrapping from an export work (next section).
-An earlier version of this list described a four-way split over "the
-API cache" and a separate "export seed" — two different stores, from
-the design that predates the doltlite raw store. There is one store
-now, and one `updated_at` column.
+`/chat_conversations` returns an org's whole list in one response, so a
+conversation the store holds for that org that the listing does not
+name was deleted on claude.ai, and the walk deletes it
+(`prune_org_conversations`; the row stays in doltlite history). The
+prune reads the unfiltered listing, not the `since`-narrowed one, and
+never touches a row whose `org_uuid` is NULL (an export-ingested one)
+or an org whose listing was refused.
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 
@@ -307,10 +258,10 @@ of this already works:
     not changed since the export was taken — the first API run fetches
     only what actually moved, not the whole account.
   * **Identity survives the switch.** `grid_rows.uuid` is minted from
-    Anthropic's own conversation UUID and is deliberately *not* scoped
-    by our source name (`docs/dev/entity_ids.md`), so a conversation
-    keeps the same id, the same rendered path, and its feedback history
-    when the API takes over from the export.
+    Anthropic's own conversation UUID under the group id
+    (`docs/dev/entity_ids.md`), and neither changes when the ingest step
+    swaps `export` for `api`, so a conversation keeps the same id, the
+    same rendered path, and its feedback history.
 
 Two things stay half-filled, and both come from the same root: a row is
 only ever enriched when the API *detail-fetches* it, and the whole point
@@ -338,35 +289,31 @@ the export is the only writer. It is destructive once the API has added
 conversations the export predates: re-running the export ingest over
 that store would delete exactly the rows the API just fetched.
 
-So today the bootstrap is a one-way door — ingest the export, then
+So the bootstrap is a one-way door — ingest the export, then
 replace the ingest step's `export` table with `api` and don't run the
 export ingest against that store again. (The step refuses a config
 naming both, which is what keeps the door one-way.)
 
-Making it a supported configuration means teaching the prune whose rows
-it owns. The discriminator already exists: an export-ingested
-conversation has a NULL `org_uuid` and an API-fetched one does not, so
-the prune could be narrowed to rows it wrote. That is not implemented,
-and `users` / `projects` / `project_docs` would need their own answer.
+Making it a supported configuration means teaching the export prune
+whose rows it owns. The API prune already does: it leaves NULL-`org_uuid`
+rows alone. The export prune has no such limit, and `users` /
+`projects` / `project_docs` would need their own answer.
 
-## Single-conversation mode
+## Named conversations
 
-Pass `--conv-uuid <UUID>` to fetch one specific conversation instead
-of walking the listing. Each org is tried in turn; `403`/`HTTP 404`
-on `get_conversation` are treated as "wrong org, continue". The
-result is merged into the existing `conversations.json`, so prior
-cache entries are preserved.
-
-```sh
-claude-ingest --out ~/backups/claude_api \
-    --conv-uuid 12345678-90ab-cdef-1234-567890abcdef
-```
+`api.conv_uuids` (CLI `--conv-uuid`, once per target; bare UUIDs or
+`https://claude.ai/chat/<uuid>` URLs) fetches exactly those
+conversations instead of walking the listing, and prunes nothing. Each
+org is tried in turn; a `404`, or a `403` that outlasts the retries,
+means "wrong org, try the next". The rows are upserted beside what the
+store already holds.
 
 ## Rate limits
 
-`claude.ai` doesn't 429 us in practice today, so `api::ClaudeClient`
-is a single-shot shell-out without a backoff loop. If that ever
-changes, model the loop on `chatgpt/src/ingest/api.rs`.
+Every request goes through the shared `latchkey_curl` chokepoint, which
+retries a `429` or `502`–`504`, honoring `Retry-After`, within the
+source's `download_params` give-up bounds. When it gives up, the
+request fails as `ClaudeError::Permanent`, like any other error.
 
 ## Sample data
 

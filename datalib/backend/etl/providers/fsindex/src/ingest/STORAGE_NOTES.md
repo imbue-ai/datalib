@@ -1,29 +1,21 @@
 # fsindex storage & doltlite scaling notes
 
-This file records what we learned pushing fsindex toward its design
-scale (tens of millions of files) on doltlite, and *how* we learned it,
-so the schema decisions in [`schema_raw.rs`](schema_raw.rs) don't look
-arbitrary later. Everything here was measured with the stock `doltlite`
-CLI (a sqlite3-drop-in) and the `fsindex` binary; the repro snippets are
-small enough to re-run.
-
-doltlite version during this work: **v0.11.9 → v0.11.12**.
+Measurements behind the schema decisions in [`schema_raw.rs`](schema_raw.rs),
+taken pushing fsindex toward its design scale (tens of millions of
+files). Everything here was measured with the `doltlite` CLI and the
+`fsindex` binary on doltlite v0.11.9–v0.11.12 unless a section says
+otherwise; the tree now pins a much later doltlite, so treat the sizes
+as orders of magnitude.
 
 ## TL;DR — the load-bearing facts
 
-1. **A column `DEFAULT` clause made `dolt_commit` O(n²)** — *fixed
-   upstream in v0.11.13; no longer a constraint, see below.* This was
-   the single biggest gotcha at the time; it made commits of ~100k+
-   rows take minutes and a million effectively never finish. Worked
-   around by removing the `DEFAULT 0` from the bookkeeping schema;
-   filed upstream as
-   [dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424).
+1. **`DEFAULT` clauses are fine.** One made `dolt_commit` O(n²) on
+   doltlite before v0.11.13; see §1.
 2. **The path dominates the on-disk size**, and doltlite does not yet
    compress chunks, so a 60-char path costs ~181 B/row stored (~3×).
-   It used to be stored twice — `file_stats` keyed by path as well —
-   until the cursor moved out (§3).
-3. **The cursor lives outside this store entirely** (see §3), which is
-   cross-tree dedup**, not just for clean `dolt diff`. Keep it.
+3. **The rescan cursor lives outside this store entirely** (§3), so two
+   scans of identical content dedup across trees and branches, and
+   `dolt diff` shows only content.
 4. **`dolt_commit` must run before `dolt_gc`** on a connection, and gc
    needs ~2× the db size in free disk.
 5. **The store carries zero secondary indexes** — only the two path
@@ -33,46 +25,14 @@ doltlite version during this work: **v0.11.9 → v0.11.12**.
 
 ## 1. The `DEFAULT`-clause O(n²) commit bug
 
-**Symptom.** Rescans of a real `~/` "hung." Tracing showed they were
-stuck in `dr::open`'s rescue commit, not the load or the walk. A
-`dolt_commit` of a ~100k-row working set took minutes; 1M never
-finished.
-
-**How we found it.** Bisected a pure-CLI repro down to a single column:
-
-```sql
--- SLOW: commit ~1.3s at 40k rows, never finishes at 100k (O(n²))
-CREATE TABLE t (id TEXT PRIMARY KEY, a INTEGER DEFAULT 0);
--- FAST: identical data, commit ~0.02s at every size
-CREATE TABLE t (id TEXT PRIMARY KEY, a INTEGER NOT NULL);
-```
-
-`INSERT` and `dolt_gc` stay O(n) and fast; only `dolt_commit` blows up,
-and only when *some* column has a `DEFAULT`. `NOT NULL` alone is fine;
-even inserting explicit values into the defaulted column is still slow —
-it's the schema declaration, not the data.
-
-**Consequence for us.** The framework's `bookkeeping_ddl_for` used
-`attempt_count INTEGER NOT NULL DEFAULT 0`. We dropped the `DEFAULT`
-(every writer already binds `attempt_count` explicitly, so it was a
-no-op) — see the comment in
-[`doltlite_raw::bookkeeping_ddl_for`](../../../../src/doltlite_raw.rs).
-fsindex then dropped the bookkeeping sidecars entirely (below), so it
-sidesteps the bug regardless.
-
-Reported: [dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424).
-
-**Resolved.** Upstream closed #1424 on 2026-06-15 and shipped the fix in
-v0.11.13 — published about a minute later, and the version this
-investigation's conclusions were adopted against, so the workaround was
-already unnecessary by the time it landed. Re-measured during the
-v0.11.50 bump (2026-08) by re-running the bisected repro above against
-both v0.11.13 and v0.11.50: commit time is flat at ~3-10ms through 80k
-rows, with and without the `DEFAULT`, where quadratic would have
-predicted ~5s at 80k. Nothing above needs to constrain new schemas —
-`DEFAULT` clauses are fine. The remaining points (path size, the
-two-table split, commit-before-gc, no secondary indexes) were not
-re-measured and still stand as written.
+On doltlite before v0.11.13, any column with a `DEFAULT` clause made
+`dolt_commit` quadratic in the working set: ~1.3 s at 40k rows, never
+finishing at 100k, where the same table without the `DEFAULT` committed
+in ~0.02 s at every size. It was the schema declaration, not the data.
+Upstream fixed it in v0.11.13
+([dolthub/doltlite#1424](https://github.com/dolthub/doltlite/issues/1424));
+the repro, re-run on v0.11.50, commits in ~3–10 ms through 80k rows
+with and without the `DEFAULT`.
 
 ## 2. Where the bytes go (and why ~1 GB / 10M is hard today)
 
@@ -118,13 +78,14 @@ Reading this:
   size. Re-adding any is a one-line `CREATE INDEX` if a SQL-side,
   too-big-for-RAM workload ever materializes.
 
-The current fsindex schema (`files` + `dirs` + `scan_meta`, no secondary
+The fsindex schema (`files` + `dirs` + `scan_meta`, no secondary
 indexes) lands at **~340 B/file** on realistic paths → **~3.4 GB / 10M**.
 (Measured before directories had their own table; they are 1–5% of the
 rows, so the per-file figure stands.)
 
-Net of all three storage changes (blake3 BLOB, no bookkeeping sidecars,
-no secondary indexes): 1M synth db **453 MB → ~215 MB**.
+Net of blake3 as a BLOB, no bookkeeping sidecars on the entry tables and
+no secondary indexes: a 1M-row synthetic db went from **453 MB to
+~215 MB**.
 
 ### Measured index cost (why we dropped the last one)
 
@@ -155,9 +116,9 @@ rows, compresses ~near the corpus ratio, stays content-addressed
 (deterministic), and decompresses transparently so row-level diff is
 intact. doltlite doesn't do this yet; it's an open upstream issue:
 [dolthub/doltlite#655 "Add per-chunk compression (snappy)"](https://github.com/dolthub/doltlite/issues/655).
-**When that lands, our ~5.5 GB / 10M should shrink toward the ~1 GB
-target for free, with no schema change.** That's the bet — we're not
-doing an app-level path-compression or tree-restructure now.
+**When that lands, ~3.4 GB / 10M should shrink toward the ~1 GB
+target with no schema change.** That's the bet; there is no app-level
+path compression or tree restructure.
 
 (SQLite itself has no built-in column compression; `zipvfs`/CEROD are
 proprietary, and `sqlite-zstd` is moot because doltlite isn't stock
@@ -165,63 +126,42 @@ SQLite.)
 
 ## 3. Why the cursor is not in this store at all
 
-**Superseded.** This section used to argue that splitting the Unison
-cursor into a sibling `file_stats` table (rather than merging it into
-`files`) was load-bearing, because inodes in the content row would stop
-two scans of identical content from deduping. That reasoning was right
-and the conclusion has been taken further: the cursor now lives outside
-the doltlite store entirely, in a host-local plain-SQLite cache
-(`datalib_etl::fingerprint_cache`). `file_stats` is gone.
-
-The original measurement (300k rows, two commits with identical content
-and different inodes) still explains why:
+The Unison cursor `(mtime, size, inode, dev)` lives in a host-local
+plain-SQLite cache (`datalib_etl::fingerprint_cache`), not in the
+doltlite store. Inodes in a content row stop two scans of identical
+content from deduping; measured at 300k rows, two commits with identical
+content and different inodes:
 
 | | tree A | tree B (same content, diff inodes) | B added |
 |---|---|---|---|
-| **split** (`files` content + `file_stats` inode) | 72 MB | 99 MB | **27 MB** |
-| **merged** (inode in the content row) | 47 MB | 94 MB | **47 MB** |
+| cursor in a sibling table (`files` content + `file_stats` inode) | 72 MB | 99 MB | **27 MB** |
+| cursor in the content row | 47 MB | 94 MB | **47 MB** |
 
-Splitting kept `files` byte-identical across the two so its chunks
-deduped. Moving the cursor out completes that: nothing host-specific
-reaches the store, so **B adds nothing at all** beyond genuinely new
-content.
+With the cursor out of the store entirely, nothing host-specific reaches
+it, so tree B adds nothing beyond genuinely new content. It also saves
+the sibling table's own copy of every path — measured at 100k entries,
+`files` + `file_stats` was 29.1 MB (291 B/row) against 14.8 MB
+(**148 B/row**) for `files` alone: the cursor was 49% of the store.
 
-It also removes the "remaining inefficiency" this section used to end
-on — `file_stats` re-storing the full path as its own primary key.
-Measured at 100k entries:
-
-| | gc'd size | per row |
-|---|---|---|
-| `files` + `file_stats` (before) | 29.1 MB | 291 B |
-| `files` alone (now) | 14.8 MB | **148 B** |
-
-**The cursor was 49% of the store.**
-
-Three further reasons, none of them about size:
-
-- **An inode means nothing on another machine.** A branch fetched from
-  elsewhere carried a cursor that could never match, so every file
-  rehashed — and nothing recorded which host a cursor came from, so you
-  could not even detect it.
-- **Branching a cursor is a category error.** It describes the live
-  filesystem, which has no history; rolling a branch back does not
-  un-modify the disk.
-- **A fresh branch lost it.** Measured on 8000 files / 64 MB: a rescan
-  onto a brand-new branch used to rehash all 65.5 MB (1.6s) and now
-  reuses everything (0.63s) — as does a scan into an entirely different
-  `.doltlite_db` on the same host.
-
+Why the cursor is host state and not versioned at all is in
+[`etl/README.md`](../../../../README.md) §"The fingerprint cache is host
+state, and deliberately not versioned". One measurement belongs here:
+on 8000 files / 64 MB, a rescan onto a brand-new branch with the cursor
+in the store rehashed all 65.5 MB (1.6 s); with the host cache it reuses
+everything (0.63 s) — as does a scan into an entirely different
+`.doltlite_db` on the same host.
 
 ## 4. Commit / gc operational rules
 
 - **`dolt_commit` before `dolt_gc`, on the same connection.** The reverse
   (gc then commit) fails with `failed to flush` at scale (reproduced at
-  1M rows; fine at 100k). So the fsindex binary does write → `dolt_commit`
-  → `dolt_gc`.
+  1M rows; fine at 100k). So the standalone fsindex binary does write →
+  `dolt_commit` → `dolt_gc` (`src/bin/fsindex.rs`).
 - **One sqlite transaction OOMs at multi-million-row scale** (doltlite
   buffers an open transaction's working-set delta in memory). So we
-  write in batches (one sqlite tx per `BATCH_SIZE` rows) and seal with a
-  single `dolt_commit`. `BATCH_SIZE` is the memory-vs-amplification knob.
+  write in batches (one sqlite tx per `BATCH_SIZE` rows, 100 000 in
+  `walker.rs`) and seal with a single `dolt_commit`. `BATCH_SIZE` is the
+  memory-vs-amplification knob.
 - **gc needs ~2× the db size in free disk.** Per-batch transactions
   create chunk "novelty" that only gc reclaims; on a near-full disk a
   large un-gc'd store (tens of GB) can fail to gc (`gc sweep phase

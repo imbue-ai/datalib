@@ -136,11 +136,8 @@ case "${1:-}" in
     # Offline pre-flight: parse the config, build the graph, and round-trip
     # every step's params against the provider schemas. No network, no creds,
     # seconds not minutes. Worth running before any live invocation.
-    #
-    # Caveat: this is not a complete guard. Render params are
-    # deny_unknown_fields and so are most download configs, but `email`,
-    # `fsindex`, `linkedin` and `sms_backup_restore` are permissive — a
-    # misplaced knob on those parses clean here and fails during the live run.
+    # Every provider config is deny_unknown_fields, so a misplaced knob
+    # fails here rather than during the live run.
     exec bazel test //datalib/backend/datalib_step:datalib_step_unittests \
       --test_arg=--ignored \
       --test_arg=manual_e2e_config_loads_and_plans \

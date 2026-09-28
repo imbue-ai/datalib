@@ -12,7 +12,6 @@ rust_library(
     deps = [
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/id:datalib_id",
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:serde_json",
     ],
 )

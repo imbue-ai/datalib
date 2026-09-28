@@ -22,8 +22,8 @@ is the chunked multi-row upsert, and one device's files all go in one
 transaction with its device row and its cursor stamps: a full re-read
 is a minute, so the per-file durability `contacts` and `google_takeout`
 buy with a transaction per file would cost a tree rewrite per file
-here for nothing (1,597 dead chunks per cold run, against 174). Measured on 2026-09-14 over both real
-Pros (384,622 samples from 24 MB of history text): the store went from
+here for nothing (1,597 dead chunks per cold run, against 174). Measured
+over two real Pros (384,622 samples from 24 MB of history text): the store went from
 275 MB with payload and sidecar to 80 MB without, 66 MB after
 `dolt_gc()`; the same rows as plain SQLite are 44 MB (33 MB of rows,
 11 MB of primary-key index), the rest being doltlite's chunk format.
@@ -41,7 +41,7 @@ read, archive folders included.
 
 The Pro keeps every sample it ever took on its own flash — IQAir says
 five years — and the share is the only free route to that history. The
-cloud alternatives were measured on 2026-09-14 and are recorded in
+cloud alternatives were measured and are recorded in
 [`docs/dev/plans/airvisual.md`](../../../../../docs/dev/plans/airvisual.md):
 the no-credential device API (`device.iqair.com/v2/<id>`) keeps only
 trailing windows and only for *published* devices, and the dashboard's
@@ -51,8 +51,8 @@ window and no endpoint to be turned off.
 
 ## What is on the share
 
-Measured on one Pro (firmware `1.1937`, system `KBG66F85`) on
-2026-09-14: 31 history files, 8.5 MB, 125,487 lines from 2025-01-06.
+Measured on one Pro (firmware `1.1937`, system `KBG66F85`): 31 history
+files, 8.5 MB, 125,487 lines from 2025-01-06.
 
 ```
 202607_AirVisual_values.txt         the current months, at the root
@@ -123,11 +123,11 @@ synthesizes inodes; on a filesystem without them the cursor falls back
 to `(mtime, size)`, and the worst case after a remount is a re-hash of
 8.5 MB, never a re-ingest.
 
-A reset (`datalib-dag --reset`) empties the three tables and the
-cursor; the next run re-reads everything from the share.
+A reset (`datalib-dag --reset <group>/ingest`) empties the store, the
+cursor with it; the next run re-reads everything from the share.
 
-**Where the time goes is the share, not the parse.** Measured on
-2026-09-14 over two mounted Pros (91 files, 384,657 lines): a 1,400-line
+**Where the time goes is the share, not the parse.** Measured over two
+mounted Pros (91 files, 384,657 lines): a 1,400-line
 file costs read 0 ms, parse 18 ms, upsert 29 ms; the cold run's 3
 minutes were the scan hashing 24 MB over Wi-Fi. The same 31-file scan
 took 8.2 s, 16.7 s and 1.3 s on three consecutive warm runs, with
@@ -140,8 +140,9 @@ reads when it was bad) — and 1.5 s then 0.1 s on the other. The
 
 A device's **identity is its serial number** — IQAir issues one per
 unit, the device reports it in `latest_config_measurements.json`
-(`serial_number`), and it keys every sample (`{serial}#{ts_ms}`), every
-file cursor, and the device's `grid_rows` uuid. Its **name** is what a
+(`serial_number`), and it is the `device_id` in every sample's
+`(device_id, ts_ms)` key, the name of its file cursor, and the seed of
+the device's `grid_rows` uuid. Its **name** is what a
 person calls it: `settings.node_name` from the same file, the name on
 the device's screen and in the app. The two are the id/name split the
 runbook makes for sources, for the same reason — the name can change
@@ -152,9 +153,9 @@ the folder says; `serial` is required for a copied folder that lacks
 the JSON, and a device with no serial from either place fails alone
 while the others ingest. The same file also gives `model`,
 `mac_address`, `app_version`, `system_version` and `timezone`, kept on
-the device row. The row is rewritten only when one of those changes:
-an upsert stamps the bookkeeping sidecar, and a stamp on an unchanged
-run would commit an unchanged store and re-render its page.
+the device row, which is written only when one of those changes
+(`upsert_device`), so an unchanged run writes nothing and re-renders
+nothing.
 
 ## The TNG fixture
 

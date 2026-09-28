@@ -13,7 +13,7 @@ use datalib_etl_chat_common::types::{
     NormalizedDoc, UpstreamRef,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
+use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
 use serde_json::Value;
 
 use crate::ids;
@@ -21,7 +21,7 @@ use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
 
-use crate::render::{parse_date_ms, RENDER_VERSION};
+use crate::render::{chat_key, field, narrow_docs, nonempty, parse_date_ms, RENDER_VERSION};
 use datalib_schema::providers::Provider;
 
 /// Author label for the export owner. Every share and comment in these
@@ -96,36 +96,7 @@ pub fn render_posts(
 
     let mut chats = build_post_chats(source_id, &shares, &comments, account, account_inputs);
 
-    // What to render: the threads the driver found stale, plus the ones a
-    // new or changed row maps to through the rows just loaded. A removed
-    // row's thread reaches here through the driver, having declared the
-    // row.
-    let forward = changed.map(|changed| {
-        chats
-            .iter()
-            .filter(|c| {
-                c.inputs
-                    .iter()
-                    .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
-            })
-            .map(|c| c.chat_uuid.clone())
-            .collect::<std::collections::HashSet<String>>()
-    });
-    let render = range.narrow(forward.as_ref());
-    let mut outcome = FeedOutcome {
-        new_head: Some(new_head),
-        buckets: render
-            .iter()
-            .flatten()
-            .map(|key| Bucket {
-                key: key.clone(),
-                inputs: Vec::new(),
-            })
-            .collect(),
-    };
-    if let Some(render) = &render {
-        chats.retain(|c| render.contains(&c.chat_uuid));
-    }
+    let mut outcome = narrow_docs(&mut chats, chat_key, changed, range, new_head);
 
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     let s = cc_render_all(
@@ -413,15 +384,6 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
-}
-
-fn field<'a>(p: &'a Value, key: &str) -> &'a str {
-    p.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-fn nonempty(s: &str) -> Option<&str> {
-    let t = s.trim();
-    (!t.is_empty()).then_some(t)
 }
 
 #[cfg(test)]

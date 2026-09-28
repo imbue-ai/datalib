@@ -9,9 +9,6 @@
 
 pub mod schema_raw;
 
-use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_macros::RawStoreHandle;
-use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -24,7 +21,6 @@ use tracing::{info, warn};
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::control::DownloadControl;
-use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
@@ -141,31 +137,13 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
 
 // ── doltlite store ──────────────────────────────────────────────────
 
-/// Thin wrapper around the doltlite pool — open + reset is all the
-/// sync runner consumes externally. Everything else stays inline in
-/// [`fetch`].
-#[derive(Clone, Debug, RawStoreHandle)]
-pub struct RawDb {
-    pool: SqlitePool,
-}
-
-impl RawDb {
-    pub async fn open(db_path: &Path) -> Result<Self> {
-        let owned = full_ddl();
-        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
-    }
-    /// Release every store this handle opened, and wait for the
-    /// connections to go away. Dropping only schedules that.
-    pub async fn close(self) {
-        self.close_all().await;
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-}
+datalib_etl::raw_db!(
+    /// Thin wrapper around the doltlite pool — open + reset is all the
+    /// sync runner consumes externally. Everything else stays inline in
+    /// [`fetch`].
+    pub RawDb: EntityStore,
+    full_ddl()
+);
 
 /// UPSERT one window's worth of readings through the shared
 /// [`bulk_upsert_in_tx`] helper. Same per-tx batching every other

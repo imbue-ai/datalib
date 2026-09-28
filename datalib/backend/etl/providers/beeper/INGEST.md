@@ -1,13 +1,13 @@
-# Beeper provider — Extract
+# Beeper provider — ingest
 
 > **Poorly supported.** Nobody is using this source, so it does not get
 > the attention the others do. In particular it does not notice when
-> something disappears upstream, and it is deliberately excluded from
-> `common.always_clear_before_ingest`: `index.db` is a cache the desktop
-> app *evicts* from — which is the whole reason the megabridge pass
-> exists — so absence there does not mean deletion, and wiping before
-> each ingest would throw away real history. Fixing that properly means
-> reconciling against the megabridge files too. Expect rough edges.
+> something disappears upstream. Don't set
+> `common.always_clear_before_ingest` on it: `index.db` is a cache the
+> desktop app *evicts* from, so absence there does not mean deletion, and
+> wiping before each ingest would throw away real history. Fixing that
+> properly means reconciling against the megabridge files too. Expect
+> rough edges.
 
 Beeper Texts (the desktop app) keeps a unified per-account message
 cache at:
@@ -21,9 +21,9 @@ This provider reads those directly. **No network. No auth. No
 Beeper API calls.** The desktop app has already pulled the data
 from Beeper Cloud (for cloud bridges like Slack, Google Chat),
 linked local megabridges (Signal, WhatsApp), and the network's own
-servers — and it stores everything locally in a stable
-bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
-`events` / `blobs` doltlite tables.
+servers, and it stores everything locally in a bridge-agnostic
+schema. We re-shape that into our `rooms` / `users` / `events` tables
+and the blob CAS.
 
 ## Setup
 
@@ -44,135 +44,116 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
    [steps.params.texts]
    sources = ["signal", "googlechat"]
    media = true
+   # path = "~/Library/Application Support/BeeperTexts"   # the default
 
    [[steps]]
    group = "beeper"
    function = "render_markdown"
    inputs = ["beeper/ingest"]
+   # [steps.params]
+   # period = "month"   # or "day", "year", "all"
    ```
-
-That's it.
 
 ## What lands on disk
 
-`beeper-ingest` (or `datalib-sync` with a `beeper` source)
-writes a single doltlite file at
-`<data_root>/ingest/<name>/entities.doltlite_db`. Tables:
+The ingest step writes `<data_root>/<group>/ingest/entities.doltlite_db`
+(schema in `src/ingest/schema_raw.rs`) and its blob CAS beside it:
 
-- `rooms` — one row per Beeper "thread" matching the configured
-  networks. `bridge_network` is the canonical network name
-  (`signal`, `googlechat`, …), normalized so the underlying
-  bridge version (`slackgo`, `discordgo`, …) doesn't leak.
-- `users` — one row per participant we've seen. `full_name` /
-  `display_name` from `participants`, `payload` carries the full
-  participant row.
-- `events` — one row per message AND one row per reaction. The
-  `event_type` column carries Beeper's own taxonomy (`TEXT`,
-  `IMAGE`, `FILE`, `REACTION`, `MEMBERSHIP`, …) so translators
-  don't have to reconstruct it from raw Matrix shapes.
-- `blobs` — cached media bytes. Each blob row's `kind` is
-  `beeper_media`, `owning_id` is the originating event's UUID, and
-  `slot` is the attachment filename. Files that haven't been
-  downloaded by the desktop app yet (cache miss) produce a
-  metadata-only row with `last_error` set.
+- `rooms` — one row per Beeper thread matching the configured
+  networks, keyed by the Matrix room id. `network` is the canonical
+  network name (`signal`, `googlechat`, …), normalized so the underlying
+  bridge (`slackgo`, `discordgo`, …) doesn't leak.
+- `users` — one row per participant, keyed by the Matrix user id:
+  `display_name` and `full_name` from index.db's `participants`.
+- `events` — one row per message **and** one per reaction, keyed by the
+  Matrix event id. `event_type` carries Beeper's own taxonomy (`TEXT`,
+  `IMAGE`, `FILE`, `REACTION`, `HIDDEN`, …), so render does not have to
+  reconstruct it from raw Matrix shapes. `external_event_id` is the
+  bridge's own id, filled in by the megabridge pass below.
+- `beeper_media_attachments` — one edge per attachment slot, from its
+  event to the bytes in the blob CAS. A file the desktop app has not
+  cached yet (or any file, with `media = false`) gets an edge with a
+  NULL `blake3`, and render draws a "(not yet fetched)" placeholder.
 
-The shared `sync_runs` / `sync_scope_state` tables that every
-doltlite raw store carries are present but unused for Beeper, since
-we don't have a remote endpoint to checkpoint against.
+Every run is a `sync_runs` row; `sync_scope_state` is unused, since
+there is no remote endpoint to checkpoint against.
 
-## Three Beeper runtimes — only one currently covered
+## The megabridge pass
 
-Beeper actually has three different bridge models per chat network.
-This provider covers the first two (because they both land in
-index.db); the third is a separate code path that's not yet
-implemented:
+After the `index.db` pass, the ingest walks every
+`local-<bridge>/megabridge.db` for a configured network and joins its
+`message` table on `mxid` to fill `events.external_event_id` with the
+bridge's own id (`src/ingest/megabridge.rs`). It adds no rows: a
+megabridge message with no matching event is only counted, as
+`events_orphaned`. Cloud bridges have no local file and are skipped.
+
+## Three Beeper runtimes — only two covered
 
 | Runtime | Examples | Where the data lives | This provider? |
 |---|---|---|---|
-| Cloud bridge | Slack (`slackgo`), Google Chat, Telegram, WhatsApp (cloud) | `matrix.beeper.com` on Beeper's servers, *and* cached locally in `index.db` | ✅ via index.db |
-| Local megabridge | Signal, WhatsApp (local mode) | `local-*/megabridge.db` on your machine, *and* cached in `index.db` | ✅ via index.db |
-| Platform-SDK | iMessage | `~/Library/Messages/chat.db` (macOS) — read live by Beeper Texts using its Full Disk Access grant. **Not** cached in `index.db`. | ❌ not yet |
+| Cloud bridge | Slack (`slackgo`), Google Chat, Telegram, WhatsApp (cloud) | `matrix.beeper.com` on Beeper's servers, *and* cached locally in `index.db` | yes, via index.db |
+| Local megabridge | Signal, WhatsApp (local mode) | `local-*/megabridge.db` on your machine, *and* cached in `index.db` | yes, via index.db |
+| Platform-SDK | iMessage | `~/Library/Messages/chat.db` (macOS), read live by Beeper Texts with its Full Disk Access grant. **Not** cached in `index.db`. | no |
 
-For iMessage we'd add a separate reader for `chat.db`. Beeper Texts
-has Full Disk Access; this provider, run from a terminal, does not
-by default — so the binary would surface a clear error if FDA
-hasn't been granted to the parent process.
+iMessage is covered by the separate `apple_messages` source, which
+mirrors `chat.db` itself.
 
 ## Filtering
 
-`BeeperSync.sources` is a list of canonical network names. Each
-maps to the right `accountID` prefixes inside `index.db.threads`:
+`texts.sources` is a list of canonical network names. Each matches
+index.db `threads` rows whose `accountID` equals one of these patterns
+or starts with one followed by `.` or `_`
+(`account_patterns_for` in `src/ingest/index_db.rs`):
 
-| `sources:` entry | matches `accountID` prefixes |
+| `sources` entry | `accountID` patterns |
 |---|---|
-| `signal` | `local-signal_…` |
-| `googlechat` | `googlechat`, `googlechat.…` |
-| `slack` | `slackgo.…`, `slackgo_…`, `slack.…` |
-| `whatsapp` | `whatsapp.…`, `local-whatsapp_…` |
-| `telegram` | `telegram.…`, `local-telegram_…` |
-| `discord` | `discordgo.…`, `local-discord_…` |
-| `linkedin` | `linkedin.…`, `local-linkedin_…` |
-| `twitter` | `twitter.…`, `local-twitter_…` |
-| `instagram` | `instagramgo.…`, `local-instagram_…` |
-| `facebook` | `facebookgo.…`, `local-facebook_…` |
-| `sms` | `gmessages.…`, `local-gmessages_…` |
-| `imessage` | `imessage_…` *(no effect today — index.db doesn't carry iMessage data)* |
+| `signal` | `local-signal` |
+| `googlechat` | `googlechat`, `local-googlechat` |
+| `slack` | `slackgo`, `local-slack`, `slack` |
+| `whatsapp` | `whatsapp`, `local-whatsapp` |
+| `telegram` | `telegram`, `local-telegram` |
+| `discord` | `discordgo`, `local-discord`, `discord` |
+| `linkedin` | `linkedin`, `local-linkedin` |
+| `twitter` | `twitter`, `local-twitter` |
+| `instagram` | `instagramgo`, `local-instagram`, `instagram` |
+| `facebook` | `facebookgo`, `local-facebook`, `facebook` |
+| `sms` | `gmessages`, `local-gmessages` |
+| `imessage` | `imessage`, `local-imessage` *(no effect: index.db carries no iMessage data)* |
 
-Only `signal` and `googlechat` are explicitly tested at the
-moment. The others should work but haven't been exercised.
+Only `signal` and `googlechat` have been exercised against a real
+install.
 
-## Why this reader shells out to `sqlite3` instead of using sqlx
+## Why this reader shells out to `sqlite3`
 
-Our workspace links `sqlx` against **doltlite** (a SQLite fork with
-record-format extensions, used so the doltlite files we *write*
-gain version-control superpowers). That's fine for reading our
-own output, but it makes doltlite the wrong engine for reading
-*other apps'* SQLite files: doltlite misinterprets some
-stock-SQLite record-type bytes.
-
-Empirically observed against `BeeperTexts/index.db.threads`:
+Our workspace links `sqlx` against **doltlite**, and Cargo's
+`links = "sqlite3"` rule allows only one SQLite-linking crate in a
+graph, so a second, stock SQLite (`rusqlite` with `bundled`) cannot be
+added beside it. Measured against `BeeperTexts/index.db`'s `threads`
+through our doltlite-linked binary:
 
 | Column     | stock SQLite (`sqlite3` CLI) | our doltlite-linked binary |
 |------------|------------------------------|----------------------------|
-| `accountID` | `"slackgo.TSTHRQ7MY-U06LVPXQD9B"` (text) | `"4374"` (integer — actually `length(thread)`!) |
+| `accountID` | `"slackgo.TSTHRQ7MY-U06LVPXQD9B"` (text) | `"4374"` (integer — actually `length(thread)`) |
 | `thread`   | full JSON (text)              | `NULL` |
 
-`typeof(accountID)` returns `"text"` to stock and `"integer"` to
-doltlite. Forcing `CAST(accountID AS TEXT) AS alias` doesn't help
-(the underlying value is already mis-typed). Copying the file +
-running `PRAGMA wal_checkpoint(TRUNCATE)` on our private copy
-doesn't help either, so the original "doltlite isn't applying the
-WAL" theory was wrong — the WAL is irrelevant; doltlite's record
-decoder differs from stock SQLite's even on the main btree pages.
+`CAST(accountID AS TEXT)` does not help, and neither does checkpointing
+the WAL on a private copy: the record decoding differs on the main
+btree pages. The `sqlite_mirror` engine behind `apple_messages`,
+`apple_photos`, `lightroom` and `whatsapp` reads other apps' SQLite
+files through the same sqlx, so whether this still reproduces with the
+current doltlite is worth re-measuring before relying on it.
 
-We can't add a second SQLite-linking crate (`rusqlite` with
-`bundled`, or another `libsqlite3-sys` consumer) because Cargo's
-`links = "sqlite3"` rule allows only one in a graph.
-
-**Workaround**: shell out to the system `sqlite3` CLI in
-`-json -readonly` mode. macOS ships with stock SQLite at
-`/usr/bin/sqlite3`. We use a `file:...?immutable=1` URI so the live
-Beeper Texts writer can't be blocked by our reads. Throughput
-overhead is small for the row volumes we deal with (hundreds of
-threads, tens of thousands of messages).
-
-If we ever switch the workspace off of doltlite (or doltlite
-catches up to stock's record-format quirks), this reader can be
-flipped back to in-process sqlx with no schema change.
-
-## Concurrent access with Beeper Texts
-
-The `sqlite3 -readonly` invocation opens `index.db` with
-`file:...?immutable=1` so a live writer (Beeper Texts) can't block
-us and we can't block it. Stock SQLite handles concurrent
-readers-with-a-writer cleanly in WAL mode, which is what Beeper
-Texts uses.
+So both readers run the system `sqlite3` CLI (or `BEEPER_SQLITE3`) as
+`sqlite3 -json -readonly <path>`, with the SQL on stdin. They open the
+plain path, not a `file:…?immutable=1` URI: `immutable=1` ignores the
+WAL, and Beeper Texts is a live writer whose newest rows are still in
+it. `-readonly` reads through the WAL without taking a write lock.
 
 ## Media path resolution
 
-Attachments inside `mx_room_messages.message` carry an `id` field
-that's an `mxc://` or `localmxc://` URI. We map those to on-disk
-paths under `media/`:
+Attachments inside `mx_room_messages.message` carry an `id` that is an
+`mxc://` or `localmxc://` URI. We map those to on-disk paths under
+`media/`:
 
 | URI | On-disk path |
 |---|---|
@@ -181,6 +162,6 @@ paths under `media/`:
 | `localmxc://local-signal/<id>` | `media/localhostlocal-signal/<id>` |
 
 Beeper Texts decrypts content before caching, so the on-disk files
-are plaintext. Files that haven't been viewed in the desktop app
-yet may not exist on disk; in that case we record metadata + URL
-only and move on (`blob_errors` counter increments).
+are plaintext. A file that has not been viewed in the desktop app may
+not exist on disk; its edge is recorded with no bytes and a later run
+with the file present fills it in.

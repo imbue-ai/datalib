@@ -41,11 +41,9 @@ published from a local machine — the tag is the trigger.
 
 0. Run the release's own steps on Linux before anything is bumped —
    `release.yml` runs the tag's tree, so a bug in a step costs a
-   release (v0.35.0, v0.35.1 and v0.36.0 each lost their tarballs that
-   way — and v0.36.0 got through a green step 0, because the test
-   staged `:bin_unstamped`, which lacks the read-only `git-hash` the
-   release overwrites; a green step 0 is only as good as what the
-   test's tree has in it):
+   release. A green step 0 is only as good as what the test's tree has
+   in it (`tools/check_stage_tarball.sh` stages a read-only `git-hash`
+   because the release overwrites one):
 
    ```sh
    bazelisk run //tools:release_steps_docker
@@ -71,7 +69,7 @@ published from a local machine — the tag is the trigger.
    the old version (the script's header comment tells the war story).
 5. Refresh the tauri lockfile:
    `(cd datalib/tauri && cargo metadata --format-version=1 >/dev/null)`.
-   Usually a no-op since the shell stopped depending on backend crates.
+   Usually a no-op: the shell depends on no backend crate.
 6. Verify:
    `CARGO_BAZEL_REPIN=1 bazel test //datalib/backend:version_consistency_test //datalib/backend:cargo_lock_versions_test`.
    (A one-off "FAILED TO BUILD" from bazel's test-xml generator is a
@@ -95,8 +93,7 @@ published from a local machine — the tag is the trigger.
    repin run says `1` and every ordinary build afterwards rewrites it to
    `\0` — leaving a dirty file in every developer's tree and tripping
    `lint_repo`'s check 3. Commit the state a plain build produces, which
-   is the one almost every build will produce. v0.31.0 shipped the `1`
-   state; that is what this second line exists to prevent.
+   is the one almost every build will produce.
 
    A lock left in the `1` state is worse than a dirty file: CI runs
    `--lockfile_mode=error`, so it aborts during module resolution before
@@ -117,17 +114,15 @@ published from a local machine — the tag is the trigger.
 
    Don't be alarmed by its size: it is a **3-line** diff that prints as
    ~360 KB, because one of those lines is a 17 KB single-line generated
-   blob. That is also why it falls straight through a targeted `git add`
-   — the release bumps `d5f2aa47`, `75abc2a7`, `786b628f` and
-   `71c315d4` all shipped without it, leaving the lock stuck on the
-   v0.25.0 state until it was refreshed wholesale. A miss is no longer
-   silent — CI runs `--lockfile_mode=error` and `scripts/lint_repo.py`'s
-   check 3 fails locally — but neither of those is the version test you
-   just ran, so stage it whenever that command prints anything.
+   blob. That is also why it falls straight through a targeted `git add`.
+   A miss is not silent — CI runs `--lockfile_mode=error` and
+   `scripts/lint_repo.py`'s check 3 fails locally — but neither of those
+   is the version test you just ran, so stage it whenever that command
+   prints anything.
 7. Commit as `chore(release): bump version X.Y.Z → X.Y'.Z'` with a
    short summary of what the release carries (see commits `835946a9`
    and `c05fa424` for the shape). Expected files: `Cargo.toml`,
-   `Cargo.lock`, the two `BUILD.bazel`, and
+   `Cargo.lock`, the three `BUILD.bazel`, and
    `MODULE.bazel.lock` (per step 6 — expect it, don't treat it as a
    surprise), plus possibly `datalib/tauri/Cargo.lock`.
    Sanity-check before pushing: re-run step 6's *second* (env-var-free)
@@ -167,23 +162,21 @@ published from a local machine — the tag is the trigger.
 12. Bump the pin in the published inspiration repo,
     `qi-imbue/datalib-inspiration`. Only after step 11 — every pin there
     is a tag-relative URL that has to resolve for a fresh mind to boot.
-    This step is the one that gets dropped: v0.30.x and v0.31.x both
-    shipped without it, so start by checking what the repo actually
-    pins (`git log -1` there) rather than assuming it is one behind.
+    This step is the one that gets dropped, so start by checking what
+    the repo actually pins (`git log -1` there) rather than assuming it
+    is one behind.
 
 ## Updating the inspiration repo
 
-`qi-imbue/datalib-inspiration` is a Minds template (their v2 format,
-since 2026-09-15: `template.md` + `template.toml` + `template.svg`
-over a default-workspace-template base) whose agent mirrors your data
+`qi-imbue/datalib-inspiration` is a Minds template (their v2 format:
+`template.md` + `template.toml` + `template.svg` over a
+default-workspace-template base) whose agent mirrors your data
 with datalib. An env.d unit installs the fully-static musl binaries
 from a pinned tag at boot, and the `datalib` skill sends the agent to
 that same tag's `docs/agent_user.md` — deliberately, so the tools an
 agent has and the guide it reads can't drift apart.
 
-1. Get a current clone. Don't assume one is already on the machine —
-   this step used to name `~/on/datalib-inspiration`, a path that
-   existed only for whoever wrote it (#166):
+1. Get a current clone. Don't assume one is already on the machine:
 
    ```sh
    gh repo clone qi-imbue/datalib-inspiration   # or, in an existing clone:
@@ -198,8 +191,7 @@ agent has and the guide it reads can't drift apart.
    v..." prose in the skill, the README and the template's "How it
    works". Find them by grepping the whole repo for the literal old
    version rather than for a URL shape — the pins are spelled several
-   different ways, and this file list has changed shape once already
-   (the v1 `inspiration-datalib.md` and `system/apps/data/` are gone):
+   different ways:
 
    ```sh
    git grep -n v<old> -- ':!system/vendor' ':!*/changelog/*'
@@ -226,10 +218,9 @@ agent has and the guide it reads can't drift apart.
    store lives, what needs a recent Minds app), so a change to any of
    that lands here even when nothing about the install moved.
 5. Commit as `datalib inspiration: bump pinned version to vX.Y.Z`
-   and open the PR from a branch on the repo itself — `thad-imbue`
-   has push access there (`gh api repos/qi-imbue/datalib-inspiration
-   --jq .permissions` says so; the cross-fork detour of v0.28–v0.35.1
-   is over):
+   and open the PR from a branch on the repo itself — check push
+   access with `gh api repos/qi-imbue/datalib-inspiration --jq
+   .permissions`:
 
    ```sh
    git checkout -b bump-datalib-vX.Y.Z && git push -u origin bump-datalib-vX.Y.Z
@@ -238,7 +229,5 @@ agent has and the guide it reads can't drift apart.
    ```
 
    Check that the previous bump's PR was actually merged before
-   assuming the pin moved (v0.28.0's #2, v0.31.1's #3 and v0.32.0's #4
-   were all still open when v0.33.0's was opened — #4 against the v1
-   layout, so it could no longer merge at all). Close a superseded one
-   when you open its successor.
+   assuming the pin moved — earlier bumps have sat open for several
+   releases. Close a superseded one when you open its successor.

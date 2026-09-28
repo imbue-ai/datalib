@@ -380,3 +380,48 @@ pub async fn prune_children(
     }
     Ok(gone.len())
 }
+
+/// The account the store was synced as: its one `self_identity` row.
+pub async fn load_self_identity(
+    pool: &SqlitePool,
+    reads: datalib_etl::pin::Reads<'_>,
+) -> Result<Option<Value>> {
+    use anyhow::Context as _;
+    use sqlx::Row as _;
+    // Audited: the only interpolation is a table name this handle
+    // chose -- a literal, or that literal behind `pinned_`.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT json(payload) AS payload FROM {} \
+         WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
+        reads.table("self_identity")
+    )))
+    .fetch_optional(pool)
+    .await
+    .context("select self_identity")?;
+    let Some(row) = row else { return Ok(None) };
+    let payload: Option<String> = row.try_get("payload").ok();
+    Ok(payload.and_then(|s| serde_json::from_str(&s).ok()))
+}
+
+/// A loaded row's `payload` column, parsed; `None` for a row the load
+/// steps over.
+pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Option<Value> {
+    use sqlx::Row as _;
+    let payload: String = row.try_get("payload").ok()?;
+    serde_json::from_str(&payload).ok()
+}
+
+/// A payload's string field, owned. For the promoted columns of a raw row.
+pub fn opt_str(payload: &Value, key: &str) -> Option<String> {
+    payload.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
+/// A payload's numeric `id`, as the text a raw row keys on. `what` names
+/// the payload in the error.
+pub fn numeric_id(payload: &Value, what: &str) -> Result<String> {
+    payload
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .map(|n| n.to_string())
+        .ok_or_else(|| anyhow::anyhow!("{what} missing id"))
+}

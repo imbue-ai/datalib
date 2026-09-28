@@ -1,6 +1,6 @@
 # The Node runtime: bundled or fetched on first use
 
-**Reference, current as of 2026-09-18.** The code is
+The code is
 `datalib/backend/runtime/src/node_runtime.rs` (where a runtime is looked
 for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
 (the fetch), `scripts/stage_runtime.sh` (what a runtime holds) and the
@@ -23,8 +23,9 @@ which finds the runtime in one of three places, in this order:
 | `~/.cache/datalib/runtime/<sha12>/`, fetched on first use | a release tarball install |
 
 The fourth option, `DATALIB_ALLOW_NPX=1`, runs the tool through
-`npx -y` from the live registry. It is a dev escape hatch that warns on
-every use and is never a default.
+`npx -y` from the live registry. It is a dev escape hatch that warns
+once per process per package, so every step log shows it, and is never
+a default.
 
 ## Why the tarballs fetch
 
@@ -37,8 +38,8 @@ hour, and still left the musl tarballs — what Minds installs — with no
 runtime at all, because the Node in it is a glibc build. A first-use
 fetch is as safe as a bundle when the bytes are pinned before they are
 fetched, nothing executes during the install, a miss fails loudly, and
-the bytes come from our own release. qmd's GGUF models already work
-that way (`datalib_qmd_models`); the runtime now does too.
+the bytes come from our own release. qmd's GGUF models work the same
+way (`datalib_qmd_models`).
 
 ## The assets
 
@@ -67,13 +68,13 @@ staged Node.
 The musl tarballs have no runtime of their own: their manifest names
 the gnu asset of the same arch, which the glibc host they almost always
 run on is fine with. A musl host (Alpine) is refused with the reason
-named, which is the same outcome as before with a better message.
+named (`refuse_musl_host` in `datalib/backend/fetch/src/runtime.rs`).
 
 ## The manifest
 
 (`git-hash`, the other file beside the binaries, is not the runtime's:
 it is the commit they came from, for the log view's source links —
-`docs/dev/step_protocol.md` § "Where a line came from".)
+[`logging.md`](logging.md) § "Every line has an author".)
 
 The `build` job writes `runtime.manifest` beside the binaries, reading
 each asset's sha256 back from the sidecar the `runtime` job published
@@ -87,8 +88,7 @@ cuda runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  <sha256> <bytes> https://…
 The binaries tarball is what `scripts/install.sh` verifies against its
 own `.sha256`, so the manifest is as pinned as the binaries, and the URL
 is the release's own, versioned, never `latest`. A checkout build has no
-manifest and behaves exactly as before: a miss names the candidates and
-the fixes.
+manifest: a miss names the candidates and the fixes.
 
 ## The fetch
 
@@ -115,9 +115,8 @@ once per process; a failed fetch is reported, not retried by the next
 
 The cache directory is `$XDG_CACHE_HOME/datalib/runtime`, else
 `~/.cache/datalib/runtime`, beside qmd's model cache, and carries a
-`CACHEDIR.TAG`. A cache directory rather than the data root, which the
-plan first proposed, because two data roots on one machine then share
-one copy and the `latchkey` launcher can find it without a data root in
+`CACHEDIR.TAG`. A cache directory rather than the data root, because
+two data roots on one machine then share one copy and the `latchkey` launcher can find it without a data root in
 hand (it looks there after the two sibling candidates).
 
 `datalib-step pull-runtime` runs the same path ahead of time and prints
@@ -155,8 +154,7 @@ wanted.
 
 ## Measured
 
-Staged on an M-series mac at the pins of 2026-09-18 (Node 108 MB, the
-qmd tree 179 MB of which node-llama-cpp's llama.cpp source bundle is 33
-MB, latchkey 11 MB): 299 MB unpacked, 102 MB as `.tar.gz`. The Linux
-numbers land in the release the first time it runs; expect the x86_64
-CPU asset to be near the mac one and the CUDA overlay near 500 MB.
+Staged on an M-series mac (Node 108 MB, the qmd tree 179 MB of which
+node-llama-cpp's llama.cpp source bundle is 33 MB, latchkey 11 MB):
+299 MB unpacked, 102 MB as `.tar.gz`. The Linux assets' sizes are on
+each release's page.
