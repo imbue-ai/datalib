@@ -92,6 +92,7 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
         G::SourceLabel,
         G::CreatedAt,
         G::ModifiedAt,
+        G::TouchedAt,
         G::IsDocument,
         G::Author,
         G::Account,
@@ -170,6 +171,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
         sender: author.clone(),
         created_at: r.try_get::<Option<String>, _>("created_at").ok().flatten(),
         modified_at: r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
+        touched_at: r.try_get::<Option<String>, _>("touched_at").ok().flatten(),
         is_document: r
             .try_get::<bool, _>(G::IsDocument.as_str())
             .unwrap_or(false),

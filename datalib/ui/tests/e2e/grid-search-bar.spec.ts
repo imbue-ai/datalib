@@ -34,10 +34,10 @@ const topRows = (page: Page, n: number) =>
 /// A shift-click adds a second column to the sort, and the server orders
 /// the whole search by both, the first breaking ties by the second.
 test("a shift-click sorts by a second column too", async ({ page, request }) => {
-  const expected = await searchUuids(request, "q=&limit=10&sort=kind:asc,created_at:asc");
+  const expected = await searchUuids(request, "q=&limit=10&sort=kind:asc,touched_at:asc");
   await openGrid(page);
   await searchHeader(page, "kind").click();
-  await searchHeader(page, "created_at").click({ modifiers: ["Shift"] });
+  await searchHeader(page, "touched_at").click({ modifiers: ["Shift"] });
   await expect.poll(() => topRows(page, 10)).toEqual(expected);
   await gridSettled(page);
   expect(await topRows(page, 10)).toEqual(expected);
@@ -75,31 +75,30 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
 });
 
 /// Every column but Score and Contents has a search key, so a cell's
-/// right-click can keep only its value: here Created, which had none
-/// while the grid kept its own list of the columns that could.
+/// right-click can keep only its value: here Touched, a stamp.
 test("a cell's right-click keeps only its value, in any column", async ({ page }) => {
   await openGrid(page);
   const uuid = await firstRowUuid(page);
-  const created = await page.evaluate(
+  const touched = await page.evaluate(
     (u) =>
       (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().find((r) => r.uuid === u)!
-        .created_at as string,
+        .touched_at as string,
     uuid,
   );
   await actOnRowByUuid(
     page,
     uuid,
-    (row) => row.locator('[col-id="created_at"]').click({ button: "right", timeout: 3_000 }),
-    "created_at",
+    (row) => row.locator('[col-id="touched_at"]').click({ button: "right", timeout: 3_000 }),
+    "touched_at",
   );
-  await searchMenuItem(page, /Keep only Created=/).click();
-  await expect(page.getByTestId("search-input")).toHaveValue(`created_at:"${created}"`);
+  await searchMenuItem(page, /Keep only Touched=/).click();
+  await expect(page.getByTestId("search-input")).toHaveValue(`touched_at:"${touched}"`);
   await gridSettled(page);
   const held = await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.created_at),
+    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.touched_at),
   );
   expect(held.length).toBeGreaterThan(0);
-  expect(new Set(held)).toEqual(new Set([created]));
+  expect(new Set(held)).toEqual(new Set([touched]));
 });
 
 /// The top row's right-click asks for the page above it, and the grid
@@ -120,13 +119,13 @@ test("a page landing while the menu is open leaves it open", async ({ page }) =>
   await actOnRowByUuid(
     page,
     uuid,
-    (row) => row.locator('[col-id="created_at"]').click({ button: "right", timeout: 3_000 }),
-    "created_at",
+    (row) => row.locator('[col-id="touched_at"]').click({ button: "right", timeout: 3_000 }),
+    "touched_at",
   );
   await expect(page.locator(SEARCH_MENU)).toBeVisible();
   expect(held.length, "the page above the top row was asked for").toBeGreaterThan(0);
   holding = false;
   for (const r of held.splice(0)) await r.continue();
   await gridSettled(page);
-  await expect(searchMenuItem(page, /Keep only Created=/)).toBeVisible();
+  await expect(searchMenuItem(page, /Keep only Touched=/)).toBeVisible();
 });

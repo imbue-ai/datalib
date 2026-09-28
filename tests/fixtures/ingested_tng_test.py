@@ -42,6 +42,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tomllib
 import unittest
 import uuid as uuidlib
 from datetime import datetime
@@ -283,6 +284,10 @@ def _argv():
 # plus five minutes, same day, so anything the driver keys on the date
 # (garmin's window) agrees between the runs.
 FIVE_MINUTES_ON = "2369-04-15T00:05:00+00:00"
+# Run 3's: later again, as a real clock would be. The Manage screen takes
+# a step's newest count by its run's start, so a reset stamped before
+# run 2 would lose to run 2's count however right its own was.
+TEN_MINUTES_ON = "2369-04-15T00:10:00+00:00"
 
 
 # A full pipeline run prints ~0.5 MB of runner events, and bazel drops a
@@ -323,6 +328,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         cls.fixture_paths = argv[7:]
 
         cls.workspace = Path(os.environ["TEST_TMPDIR"]) / "sync_workspace"
+        cls._after_reset_file = Path(os.environ["TEST_TMPDIR"]) / "after_reset.json"
         cls.workspace.mkdir(parents=True, exist_ok=True)
 
         runfiles_root = os.environ.get("TEST_SRCDIR")
@@ -332,6 +338,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
             cls.cwd = Path.cwd()
 
     # ── doltlite store access ───────────────────────────────────────
+
+    def _ingest_steps(self) -> list[str]:
+        """Every download step the pipeline's config declares."""
+        config = tomllib.loads((self.workspace / "dag.toml").read_text())
+        return sorted(
+            f"{s['group']}/ingest"
+            for s in config.get("steps", [])
+            if s.get("function") == "ingest"
+        )
 
     @property
     def _index_db(self) -> Path:
@@ -830,8 +845,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         env = {**os.environ}
         if reset:
             env["INGESTED_TNG_RESET"] = "1"
+            env["INGESTED_TNG_AFTER_RESET"] = str(self._after_reset_file)
         else:
             env.pop("INGESTED_TNG_RESET", None)
+            env.pop("INGESTED_TNG_AFTER_RESET", None)
         argv = [
             sys.executable,
             self.driver_script,
@@ -1364,7 +1381,19 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ingested_backups row, so the cursor MUST NOT short-circuit. (If
         # the reset were silently dropped, this run would behave like
         # run 2.)
-        run3 = self._run_pipeline(reset=True)
+        run3 = self._run_pipeline(reset=True, now=TEN_MINUTES_ON)
+        # Between the reset and the sync: every download store is empty,
+        # so every Problems cell must read zero. A reset that reported no
+        # count left the one from before it standing — claude-api's and
+        # facebook's fetch warnings here — until the step's next run.
+        after_reset = json.loads(self._after_reset_file.read_text())
+        zero = {"severity=error": 0, "severity=warning": 0}
+        self.assertEqual(
+            {step: after_reset.get(step) for step in self._ingest_steps()},
+            {step: zero for step in self._ingest_steps()},
+            "right after a reset, each download's Problems cell counts its "
+            "emptied store",
+        )
         self.assertNotIn(
             EV_SIGNAL_ALREADY_INGESTED,
             run3.stderr,

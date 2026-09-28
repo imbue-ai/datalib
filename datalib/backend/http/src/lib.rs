@@ -20,6 +20,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_dag::config::{owner_only_options, replace_config};
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1004,49 +1005,6 @@ async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigRespons
     }
 }
 
-/// `OpenOptions` for a file only this user may read. The config holds
-/// every source's credentials, so it is never left at the umask's mercy.
-fn owner_only_options() -> std::fs::OpenOptions {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts
-}
-
-/// Replace the config in one rename, so no reader sees half a file.
-fn replace_config(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    // One temp name per write, or two writes landing together write one
-    // file and the second rename finds it gone. The `.tmp` suffix is what
-    // the root watcher ignores, so it stays.
-    let tmp = path.with_file_name(format!(
-        "config.{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    write_owner_only(&tmp, text.as_bytes())?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
-}
-
-/// Create (or truncate) `path` owner-only and write `bytes` to it. A
-/// file that already exists keeps its mode: `mode` applies at creation.
-fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut f = owner_only_options()
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    f.write_all(bytes)
-}
-
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path();
     Json(ConfigResponse {
@@ -1398,9 +1356,10 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
 /// rendered markdown feeds. Non-empty on purpose — the two index steps
 /// are source-independent and belong in every pipeline. They start with
 /// no inputs, which is a valid graph that indexes nothing; adding a
-/// source appends its render step's id here (the UI's "Add a source"
-/// flow does that for you). `data_root` is omitted: it defaults to this
-/// file's own directory, keeping the root self-contained.
+/// source adds its render step's id here (the UI's "Add a source"
+/// flow does that for you, and writes the source above this block).
+/// `data_root` is omitted: it defaults to this file's own directory,
+/// keeping the root self-contained.
 fn scaffold_toml() -> String {
     "\
 # ── the unified index ──────────────────────────────────────────────────
@@ -1410,6 +1369,14 @@ fn scaffold_toml() -> String {
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. A step with no `command` is one of
 # datalib's own.
+#
+# Sources go above this block: a [[groups]] entry with a `type`, then
+# its steps. The file then reads in the order data flows, each step
+# below the steps it reads, which is where the Sources screen writes
+# them and the order it lists them in. The runner follows `inputs`,
+# not the file. Anything above the first [[…]] header is a top-level
+# key (data_root, binary_dir), not part of an entry. See
+# <origin>/agent/config.md.
 
 [[groups]]
 id = \"unified_index\"
@@ -1435,12 +1402,6 @@ inputs = []
 group = \"unified_index\"
 id = \"unified_index\"
 command = \"datalib-applet unified_index\"
-
-# Sources go below: a [[groups]] entry with a `type`, then its steps.
-# Anything you add above the first [[…]] header is a top-level key
-# (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
-# ───────────────────────────────────────────────────────────────────────
 "
     .to_string()
 }

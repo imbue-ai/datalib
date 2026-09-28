@@ -247,7 +247,7 @@ Pick the surface that fits the question:
 - **SQL over everything** — the `grid_rows` union table in
   `unified_index/grid_index/db.doltlite_db`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
-  `created_at`, `modified_at`, `author`, `channel`, `conversation_uuid`,
+  `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
   is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
   picks the one row per rendered document — the thread, the

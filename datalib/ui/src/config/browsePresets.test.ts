@@ -71,6 +71,29 @@ describe("browseColumns", () => {
     expect(browseColumns("claude")).toContain("org_name");
     expect(browseColumns("slack")).not.toContain("org_name");
   });
+
+  /// One stamp per browse: when a document was last touched, except a
+  /// calendar's, whose created_at is when the event happens.
+  it("shows Touched, and Created only for a calendar", () => {
+    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of"]) {
+      const cols = browseColumns(type)!;
+      expect(cols).not.toContain("modified_at");
+      if (type === "calendar") {
+        expect(cols).toContain("created_at");
+        expect(cols).not.toContain("touched_at");
+      } else {
+        expect(cols).toContain("touched_at");
+        expect(cols).not.toContain("created_at");
+      }
+    }
+  });
+
+  /// A Slack thread's conversation name is its channel's name.
+  it("gives Slack one place", () => {
+    const slack = browseColumns("slack")!;
+    expect(slack).toContain("channel");
+    expect(slack).not.toContain("conversation_name");
+  });
 });
 
 describe("browseQuery", () => {

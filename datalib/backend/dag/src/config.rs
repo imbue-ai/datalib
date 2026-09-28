@@ -455,6 +455,49 @@ pub fn root_config_path(data_root: &Path) -> PathBuf {
     data_root.join(CONFIG_FILE_NAME)
 }
 
+/// `OpenOptions` for a file only this user may read. The config holds
+/// every source's credentials, so it is never left at the umask's mercy.
+pub fn owner_only_options() -> std::fs::OpenOptions {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
+}
+
+/// Replace the config in one rename, so no reader sees half a file.
+pub fn replace_config(path: &Path, text: &str) -> std::io::Result<()> {
+    // One temp name per write, or two writes landing together write one
+    // file and the second rename finds it gone. The `.tmp` suffix is what
+    // the root watcher ignores, so it stays.
+    let tmp = path.with_file_name(format!(
+        "config.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    write_owner_only(&tmp, text.as_bytes())?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Create (or truncate) `path` owner-only and write `bytes` to it. A
+/// file that already exists keeps its mode: `mode` applies at creation.
+pub fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = owner_only_options()
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    f.write_all(bytes)
+}
+
 /// The canonical config filename.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
