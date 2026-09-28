@@ -410,3 +410,18 @@ pub fn row_payload(row: &sqlx::sqlite::SqliteRow) -> Option<Value> {
     let payload: String = row.try_get("payload").ok()?;
     serde_json::from_str(&payload).ok()
 }
+
+/// A payload's string field, owned. For the promoted columns of a raw row.
+pub fn opt_str(payload: &Value, key: &str) -> Option<String> {
+    payload.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
+/// A payload's numeric `id`, as the text a raw row keys on. `what` names
+/// the payload in the error.
+pub fn numeric_id(payload: &Value, what: &str) -> Result<String> {
+    payload
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .map(|n| n.to_string())
+        .ok_or_else(|| anyhow::anyhow!("{what} missing id"))
+}

@@ -1,6 +1,7 @@
 //! Raw-store schema for the GitHub provider.
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use datalib_etl_forge_ingest_common::{numeric_id, opt_str};
 use datalib_etl_macros::WirePayloadRow;
 use serde_json::Value;
 
@@ -29,24 +30,14 @@ pub struct SelfIdentityRow {
 
 impl SelfIdentityRow {
     pub fn from_payload(payload: &Value) -> anyhow::Result<Self> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("/user response missing id"))?;
+        let id = numeric_id(payload, "/user response")?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id,
                 payload: serde_json::to_string(payload)?,
             },
-            login: payload
-                .get("login")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            html_url: payload
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            login: opt_str(payload, "login"),
+            html_url: opt_str(payload, "html_url"),
         })
     }
 }
@@ -85,38 +76,14 @@ impl PullRequestRow {
             },
             repo_full_name: repo.to_string(),
             pr_number: num as i64,
-            state: payload
-                .get("state")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            html_url: payload
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            head_sha: head
-                .and_then(|h| h.get("sha"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            base_sha: base
-                .and_then(|b| b.get("sha"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            head_ref: head
-                .and_then(|h| h.get("ref"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            base_ref: base
-                .and_then(|b| b.get("ref"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            updated_at: payload
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            merged_at: payload
-                .get("merged_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            state: opt_str(payload, "state"),
+            html_url: opt_str(payload, "html_url"),
+            head_sha: head.and_then(|h| opt_str(h, "sha")),
+            base_sha: base.and_then(|b| opt_str(b, "sha")),
+            head_ref: head.and_then(|h| opt_str(h, "ref")),
+            base_ref: base.and_then(|b| opt_str(b, "ref")),
+            updated_at: opt_str(payload, "updated_at"),
+            merged_at: opt_str(payload, "merged_at"),
         })
     }
 }
@@ -146,11 +113,7 @@ pub struct IssueCommentRow {
 
 impl IssueCommentRow {
     pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("issue_comment missing id"))?;
+        let id = numeric_id(payload, "issue_comment")?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id,
@@ -158,23 +121,10 @@ impl IssueCommentRow {
             },
             repo_full_name: repo.to_string(),
             pr_number: num as i64,
-            html_url: payload
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            user_login: payload
-                .get("user")
-                .and_then(|u| u.get("login"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            created_at: payload
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            updated_at: payload
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            html_url: opt_str(payload, "html_url"),
+            user_login: payload.get("user").and_then(|u| opt_str(u, "login")),
+            created_at: opt_str(payload, "created_at"),
+            updated_at: opt_str(payload, "updated_at"),
         })
     }
 }
@@ -206,11 +156,7 @@ pub struct PrReviewRow {
 
 impl PrReviewRow {
     pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("pr_review missing id"))?;
+        let id = numeric_id(payload, "pr_review")?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id,
@@ -218,27 +164,11 @@ impl PrReviewRow {
             },
             repo_full_name: repo.to_string(),
             pr_number: num as i64,
-            state: payload
-                .get("state")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            commit_id: payload
-                .get("commit_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            user_login: payload
-                .get("user")
-                .and_then(|u| u.get("login"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            submitted_at: payload
-                .get("submitted_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            html_url: payload
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            state: opt_str(payload, "state"),
+            commit_id: opt_str(payload, "commit_id"),
+            user_login: payload.get("user").and_then(|u| opt_str(u, "login")),
+            submitted_at: opt_str(payload, "submitted_at"),
+            html_url: opt_str(payload, "html_url"),
         })
     }
 }
@@ -274,11 +204,7 @@ pub struct PrReviewCommentRow {
 
 impl PrReviewCommentRow {
     pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("pr_review_comment missing id"))?;
+        let id = numeric_id(payload, "pr_review_comment")?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id,
@@ -290,37 +216,15 @@ impl PrReviewCommentRow {
             pull_request_review_id: payload
                 .get("pull_request_review_id")
                 .and_then(|v| v.as_i64()),
-            html_url: payload
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            user_login: payload
-                .get("user")
-                .and_then(|u| u.get("login"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            path: payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            html_url: opt_str(payload, "html_url"),
+            user_login: payload.get("user").and_then(|u| opt_str(u, "login")),
+            path: opt_str(payload, "path"),
             line: payload.get("line").and_then(|v| v.as_i64()),
             original_line: payload.get("original_line").and_then(|v| v.as_i64()),
-            commit_id: payload
-                .get("commit_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            original_commit_id: payload
-                .get("original_commit_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            created_at: payload
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            updated_at: payload
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            commit_id: opt_str(payload, "commit_id"),
+            original_commit_id: opt_str(payload, "original_commit_id"),
+            created_at: opt_str(payload, "created_at"),
+            updated_at: opt_str(payload, "updated_at"),
         })
     }
 }

@@ -1,7 +1,8 @@
 # chat-common — one markdown layout for every chat provider
 
-Ten providers hand this crate a `NormalizedChat` and get back a
-rendered `.md` plus the `grid_rows` that go with it. This file covers
+Fourteen providers' render crates hand this crate a `NormalizedChat`
+and get back a rendered `.md` plus the `grid_rows` that go with it
+(`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
 
 ## The message header
@@ -86,8 +87,7 @@ to a screenful with a "Show more" pill, pins its `##` header to the top
 of the pane while you are inside it, and puts ▲ / ▼ in that pinned
 header for "start of this message" and "start of the next one".
 
-Two constraints, both learned the hard way and both easy to undo by
-accident:
+Three constraints, each easy to undo by accident:
 
 - **A clamped card cannot have a sticky header.** The clamp is
   `overflow: hidden`, and an `overflow: hidden` ancestor disables
@@ -97,8 +97,8 @@ accident:
 - **Selecting into a clamped or collapsed section has to open it
   first.** `applySelection` removes the clamp and opens every enclosing
   `<details>` before it scrolls, or a grid-row click highlights
-  something nobody can see. Two e2e specs assert the selected message is
-  actually visible; they are what catches this.
+  something nobody can see. `ui/tests/e2e/row-click-scroll.spec.ts`
+  asserts the selected message is actually on screen.
 - **A height measured before the pane has a width is nonsense.** In a
   column that has not been laid out — a hidden tab, the frame before
   first paint — every line wraps into a zero-width box, so a one-line
@@ -126,9 +126,9 @@ worth knowing about before you invent a fourth:
   reaction to a March message belongs in the March document however
   late it arrived, and beeper's parse resolves that against every event
   in the store. What is left is the case nothing can place: the target
-  was never downloaded. Only beeper produces these today, and the TNG
-  fixture has none, so this is the one path here that nothing
-  exercises.
+  was never downloaded. Only beeper produces these, and the TNG fixture
+  has none; the one test that renders one is
+  `every_timestamp_carries_the_full_instant` in `src/render.rs`.
 
 One `NormalizedChat` per *bucket* rather than per chat is the idiom for
 a period-bucketed source (beeper, signal): attachment bundles are keyed
@@ -140,10 +140,11 @@ either way, and the chat-level grid row was already one per document.
 
 **Bump `LAYOUT_VERSION` whenever you change what `render_markdown`
 writes.** Every chat provider declares it through
-`RenderProcessor::render_params` (`layout_params()`), so one edit
-changes every provider's render params and the driver re-renders all
-of them. Bumping the eight by hand is the alternative, and the one
-you forget is the one that keeps serving the old layout forever.
+`RenderProcessor::render_params` (`layout_params()`, or
+`layout_params_with(…)` beside its own knobs), so one edit changes every
+provider's render params and the driver re-renders all of them. Bumping
+fourteen render versions by hand is the alternative, and the one you
+forget is the one that keeps serving the old layout forever.
 
 It stays out of the *stored* `render_version`, which is the provider's
 alone: `datalib_step`'s render step checks that every version on disk

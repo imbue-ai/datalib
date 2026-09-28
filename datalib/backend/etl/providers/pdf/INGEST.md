@@ -63,9 +63,9 @@ the engine provides:
    0.4% and 26%; a floor around 60% separates them with enormous margin,
    and catches what `ocr_confidence` misses.
 
-The seam for that work is `render::convert::RENDER_VERSION`, which
-participates in the render cache key: bumping it re-renders every
-affected document with no migration.
+The seam for that work is `RENDER_VERSION` in
+`../pdf_render/src/render/convert.rs`: bumping it re-renders every
+document with no migration.
 
 ### `needs_ocr` is a work list, not a verdict on the document
 
@@ -151,7 +151,7 @@ unreadable as a grid cell either way. The full value stays in
 
 ## Known limitations
 
-- **Browser print chrome is only partly removed.** `render::convert`
+- **Browser print chrome is only partly removed.** `pdf_render`'s `render::convert`
   strips running heads/feet that repeat on their own line, but the
   extractor fuses roughly 80% of them into a body line instead
   (measured: 40 of 48 surviving instances across 4 print-to-PDF

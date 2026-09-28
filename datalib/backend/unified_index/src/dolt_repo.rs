@@ -288,7 +288,12 @@ impl DoltRepo {
 type GroupKey = (Vec<Option<String>>, u64, String);
 
 // Pairs each group with its sample, which the caller read in key order.
-fn grouping<R>(keys: Vec<GroupKey>, samples: Vec<R>, truncated: bool, commit: String) -> Grouping<R> {
+fn grouping<R>(
+    keys: Vec<GroupKey>,
+    samples: Vec<R>,
+    truncated: bool,
+    commit: String,
+) -> Grouping<R> {
     let groups = keys
         .into_iter()
         .zip(samples)
