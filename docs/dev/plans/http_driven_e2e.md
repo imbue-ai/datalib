@@ -21,7 +21,7 @@ Two tests, one harness.
    the render contract, the Playwright suite — then rests on the
    server's path, not only the terminal's.
 2. **A fuzzer pounds on that server.** Random clicks — sync one source
-   or all of them, Stop, Pause, Resume, Reset — interleaved with random
+   or all of them, Stop, turn a step off or on, Reset — interleaved with random
    process deaths, and at the end one plain sync to completion. Then a
    reset of every source and a sync from scratch, and the two must
    agree. A step that resumed by skipping a page, fetching one twice, or
@@ -68,8 +68,8 @@ replays.
 | sync everything | `POST /api/requests {}` | 200 |
 | sync a few sources | `POST /api/requests {roots}` | 200 |
 | Stop | `POST /api/requests/<open id>/stop` | 204 |
-| Pause a step | `POST /api/steps/<id>/pause` | 204 |
-| Resume | `POST /api/steps/<paused id>/resume` | 204 |
+| Turn a step off | `POST /api/steps/<id>/turn_off` | 204 |
+| Turn it on | `POST /api/steps/<turned-off id>/turn_on` | 204 |
 | Reset some sources | `POST /api/reset {targets: [<id>+blobs…]}` | 204, or 409 while a sync runs |
 | Save the config unchanged | `PUT /api/config` | 200, `ok` |
 
@@ -91,7 +91,7 @@ about sleeping applies to ordering, and nothing here is ordered.
 event killed it; every request `GET /api/requests` shows is open or
 closed with an outcome.
 
-**At the end**: resume every pause, let every open request close, sync
+**At the end**: turn every step back on, let every open request close, sync
 everything and require it `done`. Snapshot every table of every store
 and every document, with stamps, commit hashes and clock-minted (v7)
 uuids masked. Then reset every ingest step `+blobs` and every render

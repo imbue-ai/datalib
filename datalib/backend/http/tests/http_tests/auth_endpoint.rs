@@ -199,7 +199,7 @@ async fn an_unknown_api_path_is_not_found_rather_than_the_app_shell() {
     };
     for req in [
         Request::get("/api/no/such/thing"),
-        Request::post("/api/steps/slack/ingest/pause"),
+        Request::post("/api/steps/slack/ingest/turn_off"),
     ] {
         let req = authed(req);
         let what = format!("{} {}", req.method(), req.uri());

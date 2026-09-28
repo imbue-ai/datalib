@@ -5,8 +5,8 @@ nothing.
 Each case prepares the TNG workspace (`run_sync_pipeline.prepare`),
 builds its config through `datalib-http` the way the wizard does, and
 plays a seeded schedule of events against the server: the Manage
-screen's verbs, and SIGKILLs of the steps it runs. Then it resumes every
-pause, syncs everything to completion and snapshots every store; resets
+screen's verbs, and SIGKILLs of the steps it runs. Then it turns every
+step back on, syncs everything to completion and snapshots every store; resets
 every source, syncs again and snapshots again. The two must agree. A
 step that resumed by skipping a page, fetched one twice, or trusted a
 half-written store lands different rows, and the diff names them.
@@ -51,7 +51,7 @@ EVENTS = int(os.environ.get("TNG_FUZZ_EVENTS", "40"))
 # a wait for anything: nothing here is ordered, so no sleep orders it.
 GAPS = [0.0, 0.0, 0.05, 0.2, 0.5, 1.0]
 SETTLE_DEADLINE_SECS = 5 * 60
-# A paused step or a stopped request can leave nothing to start; then
+# A turned-off step or a stopped request can leave nothing to start; then
 # the kill is skipped rather than waited for.
 VICTIM_DEADLINE_SECS = 3
 # After a step is found: at once, mid-write, or near its end.
@@ -98,7 +98,7 @@ class Case:
     config_text: str
     rng: random.Random
     log: list[str] = field(default_factory=list)
-    paused: set[str] = field(default_factory=set)
+    turned_off: set[str] = field(default_factory=set)
 
     def note(self, line: str) -> None:
         self.log.append(line)
@@ -126,18 +126,18 @@ def stop_a_request(c: Case):
     return c.driver.request("POST", f"/api/requests/{rid}/stop")[0], {204}
 
 
-def pause_a_step(c: Case):
+def turn_off_a_step(c: Case):
     step = c.rng.choice(c.ingest_ids + c.render_ids)
-    c.paused.add(step)
-    return c.driver.request("POST", f"/api/steps/{q(step)}/pause")[0], {204}
+    c.turned_off.add(step)
+    return c.driver.request("POST", f"/api/steps/{q(step)}/turn_off")[0], {204}
 
 
-def resume_a_step(c: Case):
-    if not c.paused:
+def turn_on_a_step(c: Case):
+    if not c.turned_off:
         return None, set()
-    step = c.rng.choice(sorted(c.paused))
-    c.paused.discard(step)
-    return c.driver.request("POST", f"/api/steps/{q(step)}/resume")[0], {204}
+    step = c.rng.choice(sorted(c.turned_off))
+    c.turned_off.discard(step)
+    return c.driver.request("POST", f"/api/steps/{q(step)}/turn_on")[0], {204}
 
 
 def reset_some(c: Case):
@@ -201,8 +201,8 @@ EVENTS_BY_WEIGHT = [
     (sync_everything, 3),
     (sync_a_few, 4),
     (stop_a_request, 3),
-    (pause_a_step, 2),
-    (resume_a_step, 2),
+    (turn_off_a_step, 2),
+    (turn_on_a_step, 2),
     (reset_some, 1),
     (save_config_unchanged, 1),
     (kill_a_step, 2),
@@ -376,9 +376,9 @@ class FuzzTest(unittest.TestCase):
             time.sleep(c.rng.choice(GAPS))
 
     def settle(self, c: Case) -> None:
-        """Lift every pause, let what is open finish, and sync everything."""
+        """Turn every step back on, let what is open finish, and sync everything."""
         for step in c.ingest_ids + c.render_ids:
-            c.driver.call("POST", f"/api/steps/{q(step)}/resume")
+            c.driver.call("POST", f"/api/steps/{q(step)}/turn_on")
         wait_all_closed(c.driver)
         c.note("settled; sync everything")
         c.driver.sync()
