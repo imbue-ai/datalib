@@ -134,7 +134,6 @@ export function sparkTrack(
 
 export function renderIdentity(
   v: Identity | null | undefined,
-  isTreeColumn: boolean,
   isParent: boolean,
   badges: { field: string; chips: Chip[] } | null = null,
 ): HTMLElement {
@@ -158,16 +157,6 @@ export function renderIdentity(
   text.title = v.detail ? `${v.id} — ${v.detail}` : v.id;
   wrap.appendChild(text);
   if (badges?.chips.length) wrap.appendChild(renderBadges(badges.field, badges.chips));
-  // A tree parent's own id, where the label hides it. A child's is its
-  // parent's plus what its label and glyph already say, so it is left
-  // to the hover.
-  if (isTreeColumn && isParent && v.id !== v.label) {
-    const id = document.createElement("span");
-    id.className = "tg-id";
-    id.textContent = v.id;
-    id.title = `Id — stored in ${v.id}/ under the data root`;
-    wrap.appendChild(id);
-  }
   return wrap;
 }
 

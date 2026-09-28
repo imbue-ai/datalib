@@ -122,13 +122,13 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Personal Claude.")).toBeVisible();
 
-  // One row for the source: the group's name, with the id muted
-  // beside it. The steps are under it, and folded until asked for —
-  // which is the whole point of the row.
+  // One row for the source: the group's name, its id only on hover.
+  // The steps are under it, and folded until asked for — which is the
+  // whole point of the row.
   const group = groupRow(page, "personal-claude");
   const groupName = nameCell(page, "group:personal-claude");
-  await expect(groupName).toContainText("Personal Claude");
-  await expect(groupName.locator(".tg-id")).toHaveText("personal-claude");
+  await expect(groupName).toHaveText("Personal Claude");
+  await expect(groupName.locator(".tg-label")).toHaveAttribute("title", /^personal-claude/);
   await expect(row(page, "personal-claude/ingest")).toHaveCount(0);
 
   // Opened, the two steps are labelled by what they do; the group owns

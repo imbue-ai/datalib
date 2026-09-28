@@ -248,7 +248,6 @@ export function typedColumns<T extends Record<string, unknown>>(
           const inner: Formatter<T> = (_r, _c, _v, _col, row) =>
             renderIdentity(
               row?.[f] as Identity | null,
-              isTreeColumn,
               !!row?.__hasChildren,
               badges ? { field: badges, chips: (row?.[badges] as Chip[] | null) ?? [] } : null,
             );
