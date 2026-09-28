@@ -205,7 +205,7 @@ The first sync from a given source is often very long (hours to days, many GB, s
 
 - Every binary flattens [`obs::ObsArgs`](/datalib/backend/obs/src/lib.rs) into its clap parser, so every stage takes the same logging / OTLP flags. On a TTY, pretty log lines on stderr; otherwise JSON. Log emissions route through an `IndicatifWriter` coordinating with the shared `MultiProgress` (`datalib_obs::shared_multi()`) so progress bars don't get stomped by log lines. Where each log line goes and how to read it: [`logging.md`](logging.md).
 - `--otlp-endpoint http://host:4317` exports spans + events via OTLP, so a single Tempo/Jaeger collector can ingest every stage. (See [the privacy-boundary unresolved question](/docs/dev/data_architecture_ingestion_practices.md#observability-and-the-privacy-boundary) for the contract that constrains what may be in those spans.)
-- A provider's standalone download binary ends with a `*_download_complete` event (`slack_download_complete`, `jmap_download_complete`, …) carrying its `FetchSummary`, which is `Serialize`, so a consumer can read the final stats provider-agnostically.
+- A provider's standalone download binary ends with a `*_download_complete` event (`slack_download_complete`, `jmap_download_complete`, …) carrying the counts from its `FetchSummary`.
 - Long-running operations must report something visible every few seconds; a download that walks 100k items silently for an hour is a bug.
 
 ## Stoppable and resumable

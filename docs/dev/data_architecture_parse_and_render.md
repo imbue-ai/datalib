@@ -274,7 +274,9 @@ record's* problem, not the step's. Parse reports what it could not read
 and keeps going; only a systemically wrong input (§4's R2 third
 category) may fail the step. Concretely this means the parse of a
 collection returns the records it got **and** the problems it hit, not
-one or the other — see R1's sink.
+one or the other — see R1's sink. Today the parses of chatgpt, email
+and slack do this (`Unparsed`, reported through
+`RenderCtx::report_unparsed`).
 
 **P2 — Declare the type you expect, and what happens when it isn't
 that.** Every field parse reads has a declared coercion. A value the
@@ -430,11 +432,11 @@ Two families are cheaper than one family with an exception in it.
 
 ## 4. Data-quality rules
 
-**Status: R1's sink is built for every stage — fetch, parse, render
-and grid row — and on screen, though most providers do not yet route
-a per-record fetch failure into it; R2's middle category is what the
-sink makes possible and is followed where the sink is wired; R3–R7 are
-adopted in principle and not built.** The sink is the `problems` table
+R1's sink is built for every stage — fetch, parse, render and grid row
+— and on screen, though most providers do not yet route a per-record
+fetch failure into it (chatgpt, claude, garmin and notion do). R2's
+middle category is followed where the sink is wired. R3–R7 are adopted
+in principle and not built. The sink is the `problems` table
 (`datalib_problems`), one row per problem per record: a fetch problem
 starts in the source's raw store, everything else in its render
 store, and the render store carries the raw store's rows forward so
@@ -462,15 +464,13 @@ The design and what is still open are
 audit that produced it is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
-They come from reading the `data-pipeline-builder` skill in
-[`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534),
-which is unusually good on exactly the stage we had documented least.
-Several of the formulations below are close to theirs on purpose —
-they said it better than our first attempt did.
+Several of the rules below are phrased after the `data-pipeline-builder`
+skill in
+[`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534).
 
 ### R1 — Drop, count, log; never abort, never hide
 
-The headline, and their phrasing. Every problem goes through one sink,
+Every problem goes through one sink,
 and the sink has a taxonomy first — what was lost — and a severity
 second, derived from it unless the writer says otherwise:
 
@@ -488,9 +488,9 @@ deterministic id, swept when its document is next rendered.
 
 Every one emits `{source, stage, key_or_path, field, reason, sample}`,
 where `sample` is the first 80 characters. Never a count without a
-reason, never a reason without a sample. The test of the design is
-their sentence for it: **run once, read the log, fix the projection for
-every reason it lists, re-render.** If reading the log doesn't tell you
+reason, never a reason without a sample. The test of the design: **run
+once, read the log, fix the projection for every reason it lists,
+re-render.** If reading the log doesn't tell you
 what to change, the sink is wrong.
 
 ### R2 — Three failure categories, not two
@@ -514,7 +514,7 @@ thousand Slack messages has a field we did not expect."
 
 ### R3 — Any rule that turns a non-null source value into null is a judgment call
 
-Their sentence, kept whole. It follows that every such rule gets a row
+It follows that every such rule gets a row
 in a per-provider table: the rule, the contract line that justifies it,
 and **the number of records it affected on the last run**, generated
 from R1's counts rather than hand-maintained. If we cannot generate the
@@ -544,19 +544,15 @@ back to the raw payload it came from, **sharing no code with the
 projection**. Goldens stay — they are good at catching *unintended*
 change — but a golden asserts that output matches what it matched last
 time, so a field dropped the day a provider landed passes forever.
-`AGENTS.md` says the general form in its own voice: a false
-test-quality claim is self-concealing.
 
-The failure mode this catches is worth naming in the skill's words: a
-projection bug **corrupts attribution while every count still looks
-right.** Row counts, provider coverage, uuid uniqueness — all the
+The failure mode this catches: a projection bug **corrupts attribution
+while every count still looks right.** Row counts, provider coverage, uuid uniqueness — all the
 things our fixture test already checks — are exactly the signals that
 stay green when a field is silently wrong.
 
 ### R6 — Findings are for the consumer, not fixes for the projection
 
-The best idea in the skill and the one that most needs saying here,
-because we are the ones with a viewer team. Store and emit raw values;
+Store and emit raw values;
 **grouping normalization, axis clamping and null bucketing belong to
 the layer that displays the data**, not to the projection. When
 profiling turns up that a group-by field has forty spelling variants
@@ -584,20 +580,16 @@ in a `.doltlite_db` reclaims no disk today (see
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
 The *stating* half is not blocked.
 
-**A reclaim mechanism is deliberately deferred**, and the reasoning has
-a condition attached so it can be revisited rather than inherited.
-Derived intermediates are cheap to reclaim by hand — delete the store
-and rebuild it, which costs a re-render and never a re-fetch — and
-while the schemas are still changing often enough that intermediates
-get deleted and rebuilt anyway, a built mechanism would automate
-something the churn already does. The condition to watch is the schema
-settling: once a derived store starts living a long time, this needs
-building. The raw store is a separate question and is *not* covered by
-that argument, because it is the copy we cannot re-fetch. Documents a
-source no longer produces are not part of the problem: §5's sweep
-removes their rows and their `.md` files in the run that stops
-producing them. What stays is the store's *history* of them, which is
-doltlite's to reclaim.
+**A reclaim mechanism is deliberately deferred.** A derived store is
+cheap to reclaim by hand — delete it and rebuild, which costs a
+re-render and never a re-fetch — and while schemas change often enough
+that derived stores are rebuilt anyway, a mechanism would automate what
+the churn already does. Once a derived store starts living a long time,
+it needs building. The raw store is not covered by that argument: it is
+the copy we cannot re-fetch. Documents a source no longer produces are
+not part of the problem — §5's sweep removes their rows and `.md` files
+in the run that stops producing them; only the store's *history* of
+them stays.
 
 ## 5. Incrementality and deletion
 
@@ -605,11 +597,10 @@ Incremental render answers one question: *given the raw rows that
 changed since the last render, which documents need rendering again?*
 Deletion is the other half of the same question — a document whose
 inputs are gone re-renders to nothing. Both are answered from one
-record, and the record is why the render step driver never infers a
-deletion from a document's *absence*: absence has three meanings
-(gone, not looked at, could not look), and a mechanism that reads it
-as "gone" has deleted a live source here more than once. The rule the
-whole section rests on:
+record, and the render step driver never infers a deletion from a
+document's *absence*: absence has three meanings (gone, not looked at,
+could not look), and reading it as "gone" deletes live data. The rule
+the whole section rests on:
 
 > **`dolt_diff` between two commits of our own raw store reports every
 > row that left. Render never infers a deletion from anything else.**
@@ -779,8 +770,8 @@ removes.
    in between is `unchanged` or `modified`, which is the right answer.
 
 6. **Concurrent renders.** Two render steps on one source are two
-   writers on one doltlite file, which AGENTS.md's "One open per
-   doltlite file" rules out; the runner never schedules it.
+   writers on one doltlite file, which AGENTS.md's "Doltlite: one
+   writer per file" rules out; the runner never schedules it.
 
 7. **No doltlite extension.** A build without `dolt_hashof` reads the
    same as a store with no commit to pin (case 3): nothing to read,
@@ -807,22 +798,10 @@ render must be a pure function of the raw rows at a pin (no per-run
 stamp in a row), every row and section must carry a stable uuid, and
 the renderer must say what its sections are (`RenderedMarkdown.sections`,
 concatenated they are the `.md`) rather than leaving the driver to
-parse them back — the one thing a renderer written before diff groups
-may lack, and the degradation is documented: its documents diff as one
-block. [`plans/diff_renderer.md`](plans/completed/diff_renderer.md) is the
-design record.
-
-### Render-side partial-progress visibility
-
-**Desired principle**: a long-running render pass — first run after
-a big initial download, or a version bump that invalidates every
-document — must be as monitorable and as stoppable-resumable as
-download is. The user sees "rendered 12,347 / 89,201" with an ETA;
-^C-then-rerun resumes from 12,347 not 0.
-
-**Open**: the per-batch checkpoints *do* give resumability (see §2),
-but render-side progress reporting is less developed than
-download-side. Worth measuring.
+parse them back. A renderer that declares no sections has its
+documents diff as one block.
+[`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md)
+is the design record.
 
 ## 6. Timestamps
 
