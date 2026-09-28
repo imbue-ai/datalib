@@ -54,7 +54,7 @@ import { subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { keepExcludeEntries, withToken, type FilterEntry } from "@/grid/query";
-import { perOpening } from "@/grid/menu";
+import { onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { keepActiveOnRecord } from "@/grid/activeCell";
@@ -1570,11 +1570,7 @@ function gridOptions(): GridOption {
     contextMenu: {
       commandItems: menuItems,
       onBeforeMenuShow: scopes.onBeforeMenuShow,
-      // The grid opens the menu below the row, or above it when there is
-      // more room there, but never shrinks it: taller than both, it ran
-      // off the window and its first entries could not be reached. The
-      // larger side always holds this much; past it, the menu scrolls.
-      maxHeight: "40vh",
+      onAfterMenuShow: onAfterMenuShowFit,
     },
   };
 }
